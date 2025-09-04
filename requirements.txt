@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+httpx
+feedparser
+readability-lxml
+lxml_html_clean
+psycopg[binary]
+python-dotenv

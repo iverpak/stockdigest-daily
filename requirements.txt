@@ -6,3 +6,4 @@ readability-lxml
 lxml_html_clean
 psycopg[binary]
 python-dotenv
+jinja2

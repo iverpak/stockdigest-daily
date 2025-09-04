@@ -217,13 +217,46 @@ async def admin_test_openai(req: Request):
             return {"ok": False, "err": "OPENAI_API_KEY missing"}
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
-        r = client.responses.create(
-            model=OPENAI_MODEL,
-            input="Say OK."
-        )
+        r = client.responses.create(model=OPENAI_MODEL, input="Say OK.")
         return {"ok": True, "model": OPENAI_MODEL, "sample": (r.output_text or "").strip()[:100]}
     except Exception as e:
         return {"ok": False, "model": OPENAI_MODEL, "err": str(e)}
+
+@app.post("/admin/resummarize")
+async def admin_resummarize(req: Request):
+    if req.headers.get("x-admin-token") != ADMIN_TOKEN:
+        raise HTTPException(401, "bad token")
+    q = req.query_params
+    hours = int(q.get("hours", "48"))
+    limit = int(q.get("limit", "150"))
+
+    with db() as con:
+        cur = con.execute("""
+          select a.id, a.title, coalesce(a.clean_text, '')
+          from article a
+          where a.created_at > now() - (%s || ' hours')::interval
+          order by a.id desc
+          limit %s
+        """, (hours, limit))
+        rows = cur.fetchall()
+
+    done = 0
+    for aid, title, text in rows:
+        try:
+            summary = await summarize_article(aid, title or "", text or "")
+            with db() as con:
+                con.execute("""
+                  insert into article_nlp(article_id, stance, summary)
+                  values (%s, %s, %s)
+                  on conflict (article_id) do update
+                    set stance = excluded.stance,
+                        summary = excluded.summary
+                """, (aid, "Neutral", summary))
+            done += 1
+        except Exception as e:
+            print(f"[resummarize] failed for {aid}: {e}")
+
+    return {"ok": True, "resummarized": done, "hours": hours, "limit": limit}
 
 # ---------- fetch & parse ----------
 async def fetch_text(url: str):
@@ -400,7 +433,6 @@ async def cron_ingest(req: Request):
             return {"ok": False, "msg":"TLN not seeded"}
         tln_id = row[0]
         feeds = [r[0] for r in con.execute("select url from source_feed where equity_id=%s and active", (tln_id,))]
-        # latest active rules (optional)
         cur = con.execute("""
             select r.query_bool, r.domain_allowlist, r.domain_blocklist, r.include_keywords, r.exclude_keywords
             from gdelt_filter_set s
@@ -417,7 +449,7 @@ async def cron_ingest(req: Request):
             "exclude_keywords": r[4] if r else [],
         }
 
-    # IR feeds (if provided)
+    # IR feeds (if any)
     for f in feeds:
         try:
             await ingest_ir_feed(f)
@@ -437,14 +469,13 @@ async def cron_ingest(req: Request):
         g_urls = google_news_rss_urls(q, max_items=50)
         new_urls.update(g_urls)
 
-    # Upsert / tag (limit to avoid spam)
+    # Upsert / tag (limit to avoid spam) and skip exact duplicates
     inserted=0
     with db() as con:
         cur_existing = con.execute("select sha256 from article")
         existing_hashes = {row[0] for row in cur_existing.fetchall()}
     for u in list(new_urls)[:30]:
         try:
-            # avoid refetching exact duplicate URLs we've already normalized
             if sha256(normalize_url(u)) in existing_hashes:
                 continue
             ok = await upsert_article(u, tln_id, "company")
@@ -453,25 +484,32 @@ async def cron_ingest(req: Request):
         except Exception:
             pass
 
-    # Summarize any new/unsummarized
-    summarized=0
+    # Summarize recent articles (UPSERT so you always get content)
+    summarized = 0
     with db() as con:
         cur = con.execute("""
-          select a.id,a.title,coalesce(a.clean_text,'') from article a
-          left join article_nlp n on n.article_id=a.id
-          where n.article_id is null
-          order by a.id desc limit 50
+          select a.id, a.title, coalesce(a.clean_text, '')
+          from article a
+          where a.created_at > now() - interval '3 days'
+          order by a.id desc
+          limit 100
         """)
         rows = cur.fetchall()
-    for aid,title,text in rows:
+
+    for aid, title, text in rows:
         try:
             summary = await summarize_article(aid, title or "", text or "")
             with db() as con:
-                con.execute("insert into article_nlp(article_id,stance,summary) values (%s,%s,%s)",
-                            (aid, "Neutral", summary))
+                con.execute("""
+                  insert into article_nlp(article_id, stance, summary)
+                  values (%s, %s, %s)
+                  on conflict (article_id) do update
+                    set stance = excluded.stance,
+                        summary = excluded.summary
+                """, (aid, "Neutral", summary))
             summarized += 1
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ingest summarize] failed for {aid}: {e}")
 
     return {"ok": True, "found_urls": len(new_urls), "inserted": inserted, "summarized": summarized}
 
@@ -513,17 +551,41 @@ async def cron_digest(req: Request):
 
     none_found = not company_items
 
-    with open("email_template.html","r",encoding="utf-8") as f:
-        tpl = Template(f.read())
-    html = tpl.render(
-        run_date=str(run_date),
-        end_local=end.strftime("%Y-%m-%d %H:%M"),
-        ticker=ticker,
-        company_name=company_name,
-        company_items=company_items,
-        none_found=none_found
-    )
+    # Load email template (fallback inline if file missing)
+    html = ""
+    try:
+        with open("email_template.html","r",encoding="utf-8") as f:
+            tpl = Template(f.read())
+        html = tpl.render(
+            run_date=str(run_date),
+            end_local=end.strftime("%Y-%m-%d %H:%M"),
+            ticker=ticker,
+            company_name=company_name,
+            company_items=company_items,
+            none_found=none_found
+        )
+    except Exception:
+        # simple fallback template
+        items_html = "".join(
+            f"<li><a href='{i['url']}'><b>{i.get('title') or i['url']}</b></a>"
+            f"<div style='font-size:12px;color:#666'>{i.get('publisher','')}"
+            f"{' — ' + str(i.get('published_at')) if i.get('published_at') else ''}</div>"
+            f"<div>{(i.get('summary') or '').replace('\n','<br>')}</div></li>"
+            for i in company_items
+        )
+        html = f"""
+        <html><body style="font-family:Arial,Helvetica,sans-serif;color:#111;">
+          <h2>QuantBrief Daily — {run_date}</h2>
+          <div style="font-size:13px;color:#666;margin-bottom:18px;">
+            Window: last 24h ending {end.strftime("%Y-%m-%d %H:%M")}
+          </div>
+          <h3>Company — {company_name} ({ticker})</h3>
+          <ul>{items_html or '<li>No items found in the last 24 hours.</li>'}</ul>
+          <hr><div style="font-size:12px;color:#666;">Sources are links only. We don’t republish paywalled content.</div>
+        </body></html>
+        """
 
+    # send via Mailgun
     async with httpx.AsyncClient(auth=("api", MAILGUN_API_KEY), timeout=25) as h:
         r = await h.post(f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages", data={
             "from": MAILGUN_FROM,

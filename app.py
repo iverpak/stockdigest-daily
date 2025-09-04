@@ -359,9 +359,10 @@ async def cron_ingest(req: Request):
             c = 0
 
     # GDELT (last 60m)
+    minutes = int(req.query_params.get("minutes", "60"))
     if rules:
         try:
-            urls = await gdelt_search_from_rules(rules, minutes=60)
+            urls = await gdelt_search_from_rules(rules, minutes=minutes)
             new_urls.update(urls)
         except Exception:
             pass
@@ -416,9 +417,9 @@ async def cron_digest(req: Request):
         equity_id, ticker, company_name = wl[0]
 
     # window: last 24h until 08:30 local
-    today = dt.date.today()
-    end = dt.datetime.combine(today, dt.time(12,30))  # 08:30 ET ~ depends on DST; keep simple
-    start = end - dt.timedelta(days=1)
+    end = now_toronto()                 # use current time
+    start = end - dt.timedelta(days=1)  # last 24h rolling window
+    today = end.date()                  # keep the date label
 
     with db() as con:
         cur = con.execute("""

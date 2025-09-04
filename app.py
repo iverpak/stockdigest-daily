@@ -1,4 +1,4 @@
-import os, re, json, datetime as dt
+import os, re, json, traceback, datetime as dt
 from typing import List
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, quote_plus
 
@@ -208,6 +208,23 @@ async def admin_set_gdelt_filter(req: Request):
         """,(set_id,))
     return {"ok": True}
 
+@app.get("/admin/test_openai")
+async def admin_test_openai(req: Request):
+    if req.headers.get("x-admin-token") != ADMIN_TOKEN:
+        raise HTTPException(401, "bad token")
+    try:
+        if not OPENAI_API_KEY:
+            return {"ok": False, "err": "OPENAI_API_KEY missing"}
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        r = client.responses.create(
+            model=OPENAI_MODEL,
+            input="Say OK."
+        )
+        return {"ok": True, "model": OPENAI_MODEL, "sample": (r.output_text or "").strip()[:100]}
+    except Exception as e:
+        return {"ok": False, "model": OPENAI_MODEL, "err": str(e)}
+
 # ---------- fetch & parse ----------
 async def fetch_text(url: str):
     """Return (title, publisher, clean_text, published_at, final_url)."""
@@ -224,7 +241,7 @@ async def fetch_text(url: str):
         title = (m.group(1).strip() if m else "")
     content_html = doc.summary(html_partial=True)
     publisher = urlparse(final_url).hostname or ""
-    published_at = now_utc()  # fallback (safe)
+    published_at = now_utc()  # fallback
     clean = re.sub("<[^<]+?>"," ", content_html)
     clean = re.sub(r"\s+"," ", clean).strip()
     return title, publisher, clean, published_at, final_url
@@ -284,8 +301,8 @@ async def gdelt_search(q: str, minutes: int=60, maxrecords: int=50) -> List[str]
     return uniq
 
 async def gdelt_urls_from_rules(rules: dict, minutes: int=60) -> List[str]:
-    q = rules.get("query_bool") or ""
-    if rules.get("include_keywords"):
+    q = (rules or {}).get("query_bool") or ""
+    if (rules or {}).get("include_keywords"):
         inc = " OR ".join([f'"{k}"' for k in rules["include_keywords"]])
         q = f"({q}) AND ({inc})" if q else inc
     urls = await gdelt_search(q, minutes=minutes, maxrecords=75)
@@ -294,12 +311,10 @@ async def gdelt_urls_from_rules(rules: dict, minutes: int=60) -> List[str]:
 # ---------- Google News RSS (fallback; no key) ----------
 def google_news_rss_urls(query: str, max_items: int=40) -> List[str]:
     """Return article links from Google News RSS for a query."""
-    # RSS endpoint
     rss = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
     parsed = feedparser.parse(rss)
     urls=[]
     for e in parsed.entries[:max_items]:
-        # e.link is a Google News redirect; fetch_text() follows redirects anyway
         link = e.get("link")
         if link:
             urls.append(normalize_url(link))
@@ -334,13 +349,22 @@ async def upsert_article(url: str, equity_id: int, tag_kind: str):
             pass
     return True
 
+def fallback_summary(title: str, text: str) -> str:
+    blob = (text or "").strip()
+    parts = re.split(r'(?<=[.!?])\s+', blob)
+    gist = " ".join(parts[:3]).strip()
+    if not gist:
+        gist = (title or "No content")
+    return f"• What matters — {gist}\n• Stance — Neutral"
+
 async def summarize_article(aid: int, title: str, text: str) -> str:
     if not OPENAI_API_KEY:
-        return "• What matters — (no OpenAI key configured)\n• Stance — Neutral"
-    from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    system = "You are an equity analyst. Be terse, factual, skeptical."
-    prompt = f"""Title: {title}
+        return fallback_summary(title, text)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        system = "You are an equity analyst. Be terse, factual, skeptical."
+        prompt = f"""Title: {title}
 
 Source text (truncated):
 {text[:8000]}
@@ -348,12 +372,18 @@ Source text (truncated):
 Return exactly:
 • What matters — 2–3 short bullets (include numbers if present).
 • Stance — Positive, Negative, or Neutral."""
-    r = client.responses.create(
-        model=OPENAI_MODEL,
-        input=[{"role":"system","content":system},{"role":"user","content":prompt}],
-        max_output_tokens=280
-    )
-    return r.output_text.strip()
+        r = client.responses.create(
+            model=OPENAI_MODEL,
+            input=[{"role":"system","content":system},
+                   {"role":"user","content":prompt}],
+            max_output_tokens=280
+        )
+        out = (r.output_text or "").strip()
+        return out or fallback_summary(title, text)
+    except Exception as e:
+        print(f"[summarize_article] OpenAI failed for article {aid}: {e}")
+        traceback.print_exc()
+        return fallback_summary(title, text)
 
 # ---------- CRON: INGEST ----------
 @app.get("/cron/ingest")
@@ -401,24 +431,29 @@ async def cron_ingest(req: Request):
     except Exception:
         pass
 
-    # 2) Google News RSS fallback (guaranteed to return something)
+    # 2) Google News RSS fallback (guarantee some items)
     if len(new_urls) < 5:
-        # company + industry keywords
         q = '("Talen Energy" OR TLN OR "independent power" OR PJM OR ERCOT OR "power purchase agreement" OR "data center")'
         g_urls = google_news_rss_urls(q, max_items=50)
         new_urls.update(g_urls)
 
-    # Upsert / tag (limit so we don't spam)
+    # Upsert / tag (limit to avoid spam)
     inserted=0
+    with db() as con:
+        cur_existing = con.execute("select sha256 from article")
+        existing_hashes = {row[0] for row in cur_existing.fetchall()}
     for u in list(new_urls)[:30]:
         try:
+            # avoid refetching exact duplicate URLs we've already normalized
+            if sha256(normalize_url(u)) in existing_hashes:
+                continue
             ok = await upsert_article(u, tln_id, "company")
             if ok:
                 inserted += 1
         except Exception:
             pass
 
-    # Summarize any new
+    # Summarize any new/unsummarized
     summarized=0
     with db() as con:
         cur = con.execute("""

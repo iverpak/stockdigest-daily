@@ -1,6 +1,6 @@
 import os, re, json, traceback, datetime as dt
-from typing import List
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, quote_plus
+from typing import List, Tuple
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, quote_plus, unquote
 
 import httpx, feedparser, psycopg
 from fastapi import FastAPI, Request, HTTPException
@@ -128,7 +128,7 @@ def normalize_url(u: str) -> str:
     p = urlparse(u)
     q = [(k,v) for k,v in parse_qsl(p.query, keep_blank_values=True)
          if not k.lower().startswith('utm_') and k.lower() not in ('gclid','fbclid')]
-    new = p._replace(query=urlencode(q, doseq=True))
+    new = p._replace(query=urlencode(q, doseq=True), fragment="")
     return urlunparse(new)
 
 def sha256(s: str) -> str:
@@ -140,6 +140,24 @@ def now_utc() -> dt.datetime:
 
 def now_local() -> dt.datetime:
     return dt.datetime.now().astimezone()
+
+def is_gnews(u: str) -> bool:
+    host = urlparse(u).hostname or ""
+    return host.endswith("news.google.com")
+
+def unwrap_gnews_url(u: str) -> str:
+    """Try to pull the publisher URL out of a Google News redirect link."""
+    if not is_gnews(u):
+        return u
+    p = urlparse(u)
+    q = dict(parse_qsl(p.query))
+    # Most RSS items carry the real article in ?url=
+    if "url" in q and q["url"]:
+        return unquote(q["url"])
+    # Sometimes it's in ?q=
+    if "q" in q and q["q"].startswith("http"):
+        return unquote(q["q"])
+    return u
 
 # ---------- admin ----------
 @app.post("/admin/init")
@@ -258,25 +276,89 @@ async def admin_resummarize(req: Request):
 
     return {"ok": True, "resummarized": done, "hours": hours, "limit": limit}
 
+@app.post("/admin/repair_gnews")
+async def admin_repair_gnews(req: Request):
+    """Unwrap previously saved Google News links -> publisher; re-fetch & refresh article fields."""
+    if req.headers.get("x-admin-token") != ADMIN_TOKEN:
+        raise HTTPException(401, "bad token")
+    q = req.query_params
+    hours = int(q.get("hours", "72"))
+    fixed = 0
+    with db() as con:
+        cur = con.execute("""
+          select id, url, canonical_url from article
+          where (publisher ilike '%%news.google.com%%' or url ilike '%%news.google.com%%' or canonical_url ilike '%%news.google.com%%')
+            and created_at > now() - (%s || ' hours')::interval
+          order by id desc
+          limit 300
+        """, (hours,))
+        rows = cur.fetchall()
+    for aid, u, cu in rows:
+        try:
+            target = unwrap_gnews_url(cu or u)
+            title, publisher, clean, published_at, final_url = await fetch_text(target)
+            canon = normalize_url(final_url)
+            with db() as con:
+                con.execute("""
+                  update article
+                     set url=%s, canonical_url=%s, title=%s, publisher=%s, published_at=%s, clean_text=%s
+                   where id=%s
+                """, (target, canon, title, publisher, published_at, clean, aid))
+            fixed += 1
+        except Exception as e:
+            print(f"[repair_gnews] {aid} failed: {e}")
+    return {"ok": True, "fixed": fixed, "hours": hours}
+
 # ---------- fetch & parse ----------
-async def fetch_text(url: str):
-    """Return (title, publisher, clean_text, published_at, final_url)."""
-    headers = {"User-Agent":"QuantBriefBot/1.0 (+https://quantbrief.ca)"}
+async def fetch_text(url: str, depth: int = 0) -> Tuple[str,str,str,dt.datetime,str]:
+    """Return (title, publisher, clean_text, published_at, final_url). Follows gNews wrappers."""
+    if depth > 2:
+        # stop infinite loops
+        return ("", urlparse(url).hostname or "", "", now_utc(), url)
+
+    url = unwrap_gnews_url(url)
+
+    headers = {
+        "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 QuantBriefBot/1.1",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     async with httpx.AsyncClient(follow_redirects=True, timeout=25) as h:
         r = await h.get(url, headers=headers)
         r.raise_for_status()
         html = r.text
         final_url = str(r.url)
+
+    # If we still landed on gNews, try extracting ?url= from HTML and refetch once
+    if is_gnews(final_url):
+        # Look for a percent-encoded 'url=' target
+        m = re.search(r'(?:[?&]url=)(https?%3A%2F%2F[^&"\'<> ]+)', html)
+        if m:
+            target = unquote(m.group(1))
+            return await fetch_text(target, depth+1)
+        # Or any obvious external link
+        m2 = re.search(r'href="(https?://[^"]+)"', html)
+        if m2 and not is_gnews(m2.group(1)) and "google." not in urlparse(m2.group(1)).hostname:
+            return await fetch_text(m2.group(1), depth+1)
+
     doc = Document(html)
     title = (doc.short_title() or "").strip()
     if not title:
-        m = re.search(r"<title>(.*?)</title>", html, re.I|re.S)
-        title = (m.group(1).strip() if m else "")
+        t = re.search(r"<title>(.*?)</title>", html, re.I|re.S)
+        title = (t.group(1).strip() if t else "")
+
     content_html = doc.summary(html_partial=True)
     publisher = urlparse(final_url).hostname or ""
-    published_at = now_utc()  # fallback
-    clean = re.sub("<[^<]+?>"," ", content_html)
+    published_at = now_utc()  # fallback (safe; RSS handlers set real times separately if used)
+    clean = re.sub("<[^<]+?>"," ", content_html or "")
     clean = re.sub(r"\s+"," ", clean).strip()
+
+    # Fallback to og:description if readability got nothing
+    if not clean:
+        og = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+        if og:
+            clean = og.group(1).strip()
+
     return title, publisher, clean, published_at, final_url
 
 def rss_time(entry) -> dt.datetime:
@@ -291,7 +373,8 @@ async def ingest_ir_feed(feed_url: str) -> int:
     new_count=0
     with db() as con:
         for e in parsed.entries[:50]:
-            url = normalize_url(e.link)
+            raw = e.link
+            url = normalize_url(unwrap_gnews_url(raw))
             key = sha256(url)
             published_at = rss_time(e)
             title = getattr(e, "title", "") or ""
@@ -323,9 +406,10 @@ async def gdelt_search(q: str, minutes: int=60, maxrecords: int=50) -> List[str]
         data = r.json()
     out=[]
     for row in data.get("articles", []):
-        u = normalize_url(row.get("url",""))
-        if u:
-            out.append(u)
+        u = row.get("url","")
+        if not u: continue
+        u = normalize_url(unwrap_gnews_url(u))
+        out.append(u)
     # de-dup
     seen=set(); uniq=[]
     for u in out:
@@ -343,14 +427,15 @@ async def gdelt_urls_from_rules(rules: dict, minutes: int=60) -> List[str]:
 
 # ---------- Google News RSS (fallback; no key) ----------
 def google_news_rss_urls(query: str, max_items: int=40) -> List[str]:
-    """Return article links from Google News RSS for a query."""
+    """Return publisher links from Google News RSS by unwrapping ?url=."""
     rss = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
     parsed = feedparser.parse(rss)
     urls=[]
     for e in parsed.entries[:max_items]:
         link = e.get("link")
-        if link:
-            urls.append(normalize_url(link))
+        if not link: continue
+        link = normalize_url(unwrap_gnews_url(link))
+        urls.append(link)
     # de-dup
     seen=set(); out=[]
     for u in urls:
@@ -360,6 +445,7 @@ def google_news_rss_urls(query: str, max_items: int=40) -> List[str]:
 
 # ---------- Upsert & summarize ----------
 async def upsert_article(url: str, equity_id: int, tag_kind: str):
+    url = normalize_url(unwrap_gnews_url(url))
     title, publisher, clean, published_at, final_url = await fetch_text(url)
     canon = normalize_url(final_url)
     key = sha256(canon)
@@ -387,10 +473,11 @@ def fallback_summary(title: str, text: str) -> str:
     parts = re.split(r'(?<=[.!?])\s+', blob)
     gist = " ".join(parts[:3]).strip()
     if not gist:
-        gist = (title or "No content")
+        gist = (title or "Headline only")
     return f"• What matters — {gist}\n• Stance — Neutral"
 
 async def summarize_article(aid: int, title: str, text: str) -> str:
+    # If text is extremely short (e.g., headline only), we still attempt OpenAI; otherwise fallback will handle
     if not OPENAI_API_KEY:
         return fallback_summary(title, text)
     try:
@@ -463,7 +550,7 @@ async def cron_ingest(req: Request):
     except Exception:
         pass
 
-    # 2) Google News RSS fallback (guarantee some items)
+    # 2) Google News RSS fallback
     if len(new_urls) < 5:
         q = '("Talen Energy" OR TLN OR "independent power" OR PJM OR ERCOT OR "power purchase agreement" OR "data center")'
         g_urls = google_news_rss_urls(q, max_items=50)
@@ -476,13 +563,14 @@ async def cron_ingest(req: Request):
         existing_hashes = {row[0] for row in cur_existing.fetchall()}
     for u in list(new_urls)[:30]:
         try:
-            if sha256(normalize_url(u)) in existing_hashes:
+            canon_key = sha256(normalize_url(unwrap_gnews_url(u)))
+            if canon_key in existing_hashes:
                 continue
             ok = await upsert_article(u, tln_id, "company")
             if ok:
                 inserted += 1
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ingest upsert] failed for {u}: {e}")
 
     # Summarize recent articles (UPSERT so you always get content)
     summarized = 0
@@ -567,7 +655,7 @@ async def cron_digest(req: Request):
     except Exception:
         # simple fallback template
         items_html = "".join(
-            f"<li><a href='{i['url']}'><b>{i.get('title') or i['url']}</b></a>"
+            f"<li><a href='{i['url']}'><b>{(i.get('title') or i['url']).strip()}</b></a>"
             f"<div style='font-size:12px;color:#666'>{i.get('publisher','')}"
             f"{' — ' + str(i.get('published_at')) if i.get('published_at') else ''}</div>"
             f"<div>{(i.get('summary') or '').replace('\n','<br>')}</div></li>"

@@ -1,16 +1,13 @@
-import os, re, json, asyncio, datetime as dt
-from typing import List, Optional
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+import os, re, json, datetime as dt
+from typing import List
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, quote_plus
 
 import httpx, feedparser, psycopg
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
 from jinja2 import Template
 from readability import Document
 
-# ---------------- ENV ----------------
-TZ = os.getenv("TZ_DEFAULT", "America/Toronto")
-
+# ---------- ENV ----------
 DATABASE_URL    = os.getenv("DATABASE_URL")
 MAILGUN_DOMAIN  = os.getenv("MAILGUN_DOMAIN")
 MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
@@ -22,10 +19,10 @@ ADMIN_TOKEN     = os.getenv("ADMIN_TOKEN", "")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL missing")
 
-# ---------------- APP ----------------
+# ---------- APP ----------
 app = FastAPI()
 
-# ---------------- SQL ----------------
+# ---------- SQL ----------
 DDL = """
 create table if not exists app_user (
   id serial primary key,
@@ -126,7 +123,7 @@ create table if not exists delivery_log (
 def db():
     return psycopg.connect(DATABASE_URL, autocommit=True)
 
-# ------------- utils -------------
+# ---------- utils ----------
 def normalize_url(u: str) -> str:
     p = urlparse(u)
     q = [(k,v) for k,v in parse_qsl(p.query, keep_blank_values=True)
@@ -138,14 +135,13 @@ def sha256(s: str) -> str:
     import hashlib
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
-def now_utc():
+def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
-def now_local():
-    # naive tz handling; good enough for email label
+def now_local() -> dt.datetime:
     return dt.datetime.now().astimezone()
 
-# ------------- admin -------------
+# ---------- admin ----------
 @app.post("/admin/init")
 async def admin_init(req: Request):
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
@@ -212,36 +208,32 @@ async def admin_set_gdelt_filter(req: Request):
         """,(set_id,))
     return {"ok": True}
 
-# ----------- fetch & parse ----------
+# ---------- fetch & parse ----------
 async def fetch_text(url: str):
+    """Return (title, publisher, clean_text, published_at, final_url)."""
     headers = {"User-Agent":"QuantBriefBot/1.0 (+https://quantbrief.ca)"}
     async with httpx.AsyncClient(follow_redirects=True, timeout=25) as h:
         r = await h.get(url, headers=headers)
         r.raise_for_status()
         html = r.text
+        final_url = str(r.url)
     doc = Document(html)
     title = (doc.short_title() or "").strip()
     if not title:
         m = re.search(r"<title>(.*?)</title>", html, re.I|re.S)
         title = (m.group(1).strip() if m else "")
     content_html = doc.summary(html_partial=True)
-    publisher = urlparse(url).hostname or ""
-    # crude: if we can't parse date, use fetch time
-    published_at = now_utc()
-    # strip tags -> plaintext
+    publisher = urlparse(final_url).hostname or ""
+    published_at = now_utc()  # fallback (safe)
     clean = re.sub("<[^<]+?>"," ", content_html)
     clean = re.sub(r"\s+"," ", clean).strip()
-    return title, publisher, clean, published_at
+    return title, publisher, clean, published_at, final_url
 
 def rss_time(entry) -> dt.datetime:
-    # robustly turn feedparser time into UTC
-    t = None
     for k in ("published_parsed","updated_parsed","created_parsed"):
-        if getattr(entry, k, None):
-            t = getattr(entry, k)
-            break
-    if t:
-        return dt.datetime(*t[:6], tzinfo=dt.timezone.utc)
+        t = getattr(entry, k, None)
+        if t:
+            return dt.datetime(*t[:6], tzinfo=dt.timezone.utc)
     return now_utc()
 
 async def ingest_ir_feed(feed_url: str) -> int:
@@ -264,7 +256,7 @@ async def ingest_ir_feed(feed_url: str) -> int:
                 pass
     return new_count
 
-# ----------- GDELT ----------
+# ---------- GDELT ----------
 async def gdelt_search(q: str, minutes: int=60, maxrecords: int=50) -> List[str]:
     params = {
         "query": q,
@@ -292,56 +284,56 @@ async def gdelt_search(q: str, minutes: int=60, maxrecords: int=50) -> List[str]
     return uniq
 
 async def gdelt_urls_from_rules(rules: dict, minutes: int=60) -> List[str]:
-    # Primary query
-    q = rules["query_bool"] or ""
+    q = rules.get("query_bool") or ""
     if rules.get("include_keywords"):
         inc = " OR ".join([f'"{k}"' for k in rules["include_keywords"]])
         q = f"({q}) AND ({inc})" if q else inc
     urls = await gdelt_search(q, minutes=minutes, maxrecords=75)
+    return urls[:40]
 
-    # If too few hits, run a **fallback** broad query to guarantee material
-    if len(urls) < 5:
-        fallback_q = '("Talen Energy" OR ("TLN" NEAR/3 (energy OR power)) OR "independent power" OR PJM OR ERCOT)'
-        more = await gdelt_search(fallback_q, minutes=min(minutes, 1440), maxrecords=75)
-        # prepend fallback (will dedupe later)
-        urls = more + urls
-
-    # optional allow/block
-    allow = rules.get("domain_allowlist") or []
-    block = set((rules.get("domain_blocklist") or []))
-    out=[]
+# ---------- Google News RSS (fallback; no key) ----------
+def google_news_rss_urls(query: str, max_items: int=40) -> List[str]:
+    """Return article links from Google News RSS for a query."""
+    # RSS endpoint
+    rss = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
+    parsed = feedparser.parse(rss)
+    urls=[]
+    for e in parsed.entries[:max_items]:
+        # e.link is a Google News redirect; fetch_text() follows redirects anyway
+        link = e.get("link")
+        if link:
+            urls.append(normalize_url(link))
+    # de-dup
+    seen=set(); out=[]
     for u in urls:
-        host = urlparse(u).hostname or ""
-        if host in block: 
-            continue
-        if allow and host not in allow:
-            # if allowlist provided, keep reputable defaults too
-            if host not in ("reuters.com","marketwatch.com","seekingalpha.com","finance.yahoo.com","utilitydive.com","bloomberg.com"):
-                continue
-        out.append(u)
-    # cap
-    return out[:40] if out else urls[:20]
+        if u not in seen:
+            out.append(u); seen.add(u)
+    return out
 
+# ---------- Upsert & summarize ----------
 async def upsert_article(url: str, equity_id: int, tag_kind: str):
-    title, publisher, clean, published_at = await fetch_text(url)
-    key = sha256(normalize_url(url))
+    title, publisher, clean, published_at, final_url = await fetch_text(url)
+    canon = normalize_url(final_url)
+    key = sha256(canon)
     with db() as con:
         try:
             con.execute("""
               insert into article(url,canonical_url,title,publisher,published_at,sha256,raw_html,clean_text)
               values (%s,%s,%s,%s,%s,%s,%s,%s)
-            """,(url, url, title, publisher, published_at, key, None, clean))
+            """,(url, canon, title, publisher, published_at, key, None, clean))
         except Exception:
             pass
         cur = con.execute("select id from article where sha256=%s",(key,))
-        aid = cur.fetchone()[0]
+        row = cur.fetchone()
+        if not row:
+            return False
+        aid = row[0]
         try:
             con.execute("insert into article_tag(article_id,equity_id,tag_kind) values (%s,%s,%s)", (aid,equity_id,tag_kind))
         except Exception:
             pass
     return True
 
-# ----------- Summarizer -----------
 async def summarize_article(aid: int, title: str, text: str) -> str:
     if not OPENAI_API_KEY:
         return "• What matters — (no OpenAI key configured)\n• Stance — Neutral"
@@ -363,7 +355,7 @@ Return exactly:
     )
     return r.output_text.strip()
 
-# ----------- CRON: INGEST ----------
+# ---------- CRON: INGEST ----------
 @app.get("/cron/ingest")
 async def cron_ingest(req: Request):
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
@@ -378,61 +370,62 @@ async def cron_ingest(req: Request):
             return {"ok": False, "msg":"TLN not seeded"}
         tln_id = row[0]
         feeds = [r[0] for r in con.execute("select url from source_feed where equity_id=%s and active", (tln_id,))]
+        # latest active rules (optional)
         cur = con.execute("""
-            select r.query_bool, r.domain_allowlist, r.domain_blocklist, r.include_keywords, r.exclude_keywords, r.entity_aliases
+            select r.query_bool, r.domain_allowlist, r.domain_blocklist, r.include_keywords, r.exclude_keywords
             from gdelt_filter_set s
             join gdelt_filter_rule r on r.set_id=s.id
             where s.scope='company' and s.is_active
             order by r.version desc limit 1
         """)
-        rules = None
-        if r := cur.fetchone():
-            rules = {
-                "query_bool": r[0] or "",
-                "domain_allowlist": r[1] or [],
-                "domain_blocklist": r[2] or [],
-                "include_keywords": r[3] or [],
-                "exclude_keywords": r[4] or [],
-                "entity_aliases": r[5] or {},
-            }
+        r = cur.fetchone()
+        rules = {
+            "query_bool": r[0] if r else '',
+            "domain_allowlist": r[1] if r else [],
+            "domain_blocklist": r[2] if r else [],
+            "include_keywords": r[3] if r else [],
+            "exclude_keywords": r[4] if r else [],
+        }
 
-    # IR feeds (if any)
+    # IR feeds (if provided)
     for f in feeds:
         try:
             await ingest_ir_feed(f)
         except Exception:
             pass
 
-    # GDELT search (with fallback)
-    if rules:
-        try:
-            urls = await gdelt_urls_from_rules(rules, minutes=minutes)
-            new_urls.update(urls)
-        except Exception:
-            pass
-    # If still empty, last-resort broad search (guarantee some hits)
-    if not new_urls:
-        try:
-            urls = await gdelt_search('PJM OR ERCOT OR "independent power" OR "power purchase agreement"', minutes=min(minutes,1440), maxrecords=50)
-            new_urls.update(urls)
-        except Exception:
-            pass
+    # 1) GDELT
+    try:
+        urls = await gdelt_urls_from_rules(rules, minutes=minutes)
+        new_urls.update(urls)
+    except Exception:
+        pass
 
-    # Upsert / tag
+    # 2) Google News RSS fallback (guaranteed to return something)
+    if len(new_urls) < 5:
+        # company + industry keywords
+        q = '("Talen Energy" OR TLN OR "independent power" OR PJM OR ERCOT OR "power purchase agreement" OR "data center")'
+        g_urls = google_news_rss_urls(q, max_items=50)
+        new_urls.update(g_urls)
+
+    # Upsert / tag (limit so we don't spam)
+    inserted=0
     for u in list(new_urls)[:30]:
         try:
-            await upsert_article(u, tln_id, "company")
+            ok = await upsert_article(u, tln_id, "company")
+            if ok:
+                inserted += 1
         except Exception:
             pass
 
-    # Summarize new ones
+    # Summarize any new
     summarized=0
     with db() as con:
         cur = con.execute("""
           select a.id,a.title,coalesce(a.clean_text,'') from article a
           left join article_nlp n on n.article_id=a.id
           where n.article_id is null
-          order by a.id desc limit 40
+          order by a.id desc limit 50
         """)
         rows = cur.fetchall()
     for aid,title,text in rows:
@@ -445,9 +438,9 @@ async def cron_ingest(req: Request):
         except Exception:
             pass
 
-    return {"ok": True, "found_urls": len(new_urls), "summarized": summarized}
+    return {"ok": True, "found_urls": len(new_urls), "inserted": inserted, "summarized": summarized}
 
-# ----------- CRON: DIGEST ----------
+# ---------- CRON: DIGEST ----------
 @app.get("/cron/digest")
 async def cron_digest(req: Request):
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
@@ -468,7 +461,6 @@ async def cron_digest(req: Request):
         if not wl: return {"ok": False, "msg":"watchlist empty"}
         equity_id, ticker, company_name = wl[0]
 
-    # rolling 24h up to now
     end = now_local()
     start = end - dt.timedelta(days=1)
     run_date = end.date()
@@ -486,14 +478,17 @@ async def cron_digest(req: Request):
 
     none_found = not company_items
 
-    # render email
     with open("email_template.html","r",encoding="utf-8") as f:
         tpl = Template(f.read())
-    html = tpl.render(run_date=str(run_date), end_local=end.strftime("%Y-%m-%d %H:%M"),
-                      ticker=ticker, company_name=company_name,
-                      company_items=company_items, none_found=none_found)
+    html = tpl.render(
+        run_date=str(run_date),
+        end_local=end.strftime("%Y-%m-%d %H:%M"),
+        ticker=ticker,
+        company_name=company_name,
+        company_items=company_items,
+        none_found=none_found
+    )
 
-    # send via Mailgun
     async with httpx.AsyncClient(auth=("api", MAILGUN_API_KEY), timeout=25) as h:
         r = await h.post(f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages", data={
             "from": MAILGUN_FROM,
@@ -508,7 +503,7 @@ async def cron_digest(req: Request):
                     (user_id, run_date, json.dumps({"company": [c["url"] for c in company_items]})))
     return {"ok": True, "sent_to": owner_email, "items": len(company_items)}
 
-# ------------- health -------------
+# ---------- health ----------
 @app.get("/")
 def health():
     return {"ok": True}

@@ -4,11 +4,11 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 import httpx, feedparser, psycopg
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
 from jinja2 import Template
 from readability import Document
 
-# ----------- ENV -----------
+# ---------------- ENV ----------------
 TZ = os.getenv("TZ_DEFAULT", "America/Toronto")
 
 DATABASE_URL    = os.getenv("DATABASE_URL")
@@ -22,10 +22,10 @@ ADMIN_TOKEN     = os.getenv("ADMIN_TOKEN", "")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL missing")
 
-# ----------- APP -----------
+# ---------------- APP ----------------
 app = FastAPI()
 
-# ----------- SQL helpers -----------
+# ---------------- SQL ----------------
 DDL = """
 create table if not exists app_user (
   id serial primary key,
@@ -48,7 +48,7 @@ create table if not exists equity (
 create table if not exists user_watchlist (
   user_id int references app_user(id),
   equity_id int references equity(id),
-  scope text not null default 'company', -- 'company'|'company+peers'|'full' (industry later)
+  scope text not null default 'company',
   primary key (user_id, equity_id)
 );
 
@@ -126,25 +126,26 @@ create table if not exists delivery_log (
 def db():
     return psycopg.connect(DATABASE_URL, autocommit=True)
 
-# ----------- Utilities -----------
+# ------------- utils -------------
 def normalize_url(u: str) -> str:
-    """Remove tracking params, normalize scheme/host."""
     p = urlparse(u)
-    q = [(k,v) for k,v in parse_qsl(p.query, keep_blank_values=True) if not k.lower().startswith('utm_')]
+    q = [(k,v) for k,v in parse_qsl(p.query, keep_blank_values=True)
+         if not k.lower().startswith('utm_') and k.lower() not in ('gclid','fbclid')]
     new = p._replace(query=urlencode(q, doseq=True))
-    if new.scheme in ("http", "https"):
-        return urlunparse(new)
-    return u
+    return urlunparse(new)
 
 def sha256(s: str) -> str:
     import hashlib
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
-def now_toronto():
-    # naive but fine for scheduling window computations
-    return dt.datetime.now(dt.timezone.utc).astimezone()
+def now_utc():
+    return dt.datetime.now(dt.timezone.utc)
 
-# ----------- Admin endpoints -----------
+def now_local():
+    # naive tz handling; good enough for email label
+    return dt.datetime.now().astimezone()
+
+# ------------- admin -------------
 @app.post("/admin/init")
 async def admin_init(req: Request):
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
@@ -159,9 +160,11 @@ async def admin_seed_tln(req: Request):
         raise HTTPException(401, "bad token")
     body = await req.json()
     owner_email = body.get("owner_email")
-    ir_feed_url = body.get("ir_feed_url")  # paste TLN IR RSS URL if you have one; can add later
+    ir_feed_url = body.get("ir_feed_url","")
     with db() as con:
-        cur = con.execute("insert into app_user(email,role) values (%s,'owner') on conflict (email) do update set role='owner' returning id", (owner_email,))
+        cur = con.execute(
+            "insert into app_user(email,role) values (%s,'owner') on conflict (email) do update set role='owner' returning id",
+            (owner_email,))
         owner_id = cur.fetchone()[0]
         cur = con.execute("""
             insert into equity(ticker,name,sector,industry,peers)
@@ -170,9 +173,11 @@ async def admin_seed_tln(req: Request):
             returning id
         """)
         equity_id = cur.fetchone()[0]
-        con.execute("insert into user_watchlist(user_id,equity_id,scope) values (%s,%s,'company') on conflict do nothing", (owner_id,equity_id))
+        con.execute("insert into user_watchlist(user_id,equity_id,scope) values (%s,%s,'company') on conflict do nothing",
+                    (owner_id,equity_id))
         if ir_feed_url:
-            con.execute("insert into source_feed(equity_id,kind,url) values (%s,'ir_press',%s) on conflict do nothing", (equity_id, ir_feed_url))
+            con.execute("insert into source_feed(equity_id,kind,url) values (%s,'ir_press',%s) on conflict do nothing",
+                        (equity_id, ir_feed_url))
     return {"ok": True, "owner_id": owner_id}
 
 @app.post("/admin/set_gdelt_filter")
@@ -193,93 +198,134 @@ async def admin_set_gdelt_filter(req: Request):
             returning id
         """,(owner_id,name))
         set_id = cur.fetchone()[0]
-        # Version 1 rules (edit later via SQL/UI)
         con.execute("""
           insert into gdelt_filter_rule(set_id,version,query_bool,domain_allowlist,domain_blocklist,include_keywords,exclude_keywords,entity_aliases)
           values (
             %s,1,
             '("Talen Energy" OR ("Talen" NEAR/2 Energy) OR "Brandon Shores" OR "H.A. Wagner")',
-            ARRAY['pjm.com','ercot.com','eia.gov','ferc.gov','businesswire.com','globenewswire.com','prnewswire.com','reuters.com','utilitydive.com'],
+            ARRAY[]::text[],
             ARRAY['x.com','facebook.com'],
-            ARRAY['PPA','data center','hyperscale','capacity auction','interconnect','outage','coal transition','transmission','FERC','PJM','ERCOT'],
+            ARRAY['PJM','ERCOT','IPP','data center','hyperscale','capacity auction','interconnect','outage','FERC','transmission'],
             ARRAY['gaming','fashion','esports','music'],
             '{"company_aliases":["Talen Energy","TLN"]}'::jsonb
           )
         """,(set_id,))
     return {"ok": True}
 
-# ----------- Ingest: IR RSS + GDELT -----------
-async def fetch_text(url: str) -> tuple[str,str,str,dt.datetime]:
-    """Return (title, publisher, clean_text, published_at) for a URL."""
-    headers = {"User-Agent":"QuantBriefBot/1.0"}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=20) as h:
+# ----------- fetch & parse ----------
+async def fetch_text(url: str):
+    headers = {"User-Agent":"QuantBriefBot/1.0 (+https://quantbrief.ca)"}
+    async with httpx.AsyncClient(follow_redirects=True, timeout=25) as h:
         r = await h.get(url, headers=headers)
         r.raise_for_status()
         html = r.text
-        doc = Document(html)
-        title = (doc.short_title() or "").strip() or (re.search(r"<title>(.*?)</title>", html, re.I|re.S) or ["",""]).__getitem__(1).strip()
-        content_html = doc.summary(html_partial=True)
-        publisher = urlparse(r.url).hostname or ""
-        # crude date fallback: now
-        published_at = now_toronto()
-        # strip tags -> plaintext
-        clean = re.sub("<[^<]+?>"," ", content_html)
-        clean = re.sub(r"\s+"," ", clean).strip()
-        return title, publisher, clean, published_at
+    doc = Document(html)
+    title = (doc.short_title() or "").strip()
+    if not title:
+        m = re.search(r"<title>(.*?)</title>", html, re.I|re.S)
+        title = (m.group(1).strip() if m else "")
+    content_html = doc.summary(html_partial=True)
+    publisher = urlparse(url).hostname or ""
+    # crude: if we can't parse date, use fetch time
+    published_at = now_utc()
+    # strip tags -> plaintext
+    clean = re.sub("<[^<]+?>"," ", content_html)
+    clean = re.sub(r"\s+"," ", clean).strip()
+    return title, publisher, clean, published_at
+
+def rss_time(entry) -> dt.datetime:
+    # robustly turn feedparser time into UTC
+    t = None
+    for k in ("published_parsed","updated_parsed","created_parsed"):
+        if getattr(entry, k, None):
+            t = getattr(entry, k)
+            break
+    if t:
+        return dt.datetime(*t[:6], tzinfo=dt.timezone.utc)
+    return now_utc()
 
 async def ingest_ir_feed(feed_url: str) -> int:
     parsed = feedparser.parse(feed_url)
     new_count=0
     with db() as con:
-        for e in parsed.entries[:30]:
+        for e in parsed.entries[:50]:
             url = normalize_url(e.link)
             key = sha256(url)
+            published_at = rss_time(e)
+            title = getattr(e, "title", "") or ""
+            publisher = urlparse(url).hostname or ""
             try:
-                con.execute("insert into article(url,canonical_url,title,publisher,published_at,sha256) values (%s,%s,%s,%s,%s,%s)",
-                            (url,url,e.get("title") or "", urlparse(url).hostname, dt.datetime.fromtimestamp(e.get("published_parsed").tm_sec if e.get("published_parsed") else dt.datetime.now().timestamp()), key))
-                new_count+=1
+                con.execute("""
+                  insert into article(url,canonical_url,title,publisher,published_at,sha256)
+                  values (%s,%s,%s,%s,%s,%s)
+                """,(url,url,title,publisher,published_at,key))
+                new_count += 1
             except Exception:
                 pass
     return new_count
 
-async def gdelt_search_from_rules(rules: dict, minutes: int=60) -> List[str]:
-    """Return list of URLs from GDELT DOC 2.0 ArtList for the time window."""
-    # Basic DOC 2.0 call. We keep it simple: timespan window + boolean.
-    q = rules["query_bool"]
-    # Include keywords appended (simple)
-    if rules.get("include_keywords"):
-        inc = " OR ".join([f'"{k}"' for k in rules["include_keywords"]])
-        q = f"({q}) AND ({inc})"
+# ----------- GDELT ----------
+async def gdelt_search(q: str, minutes: int=60, maxrecords: int=50) -> List[str]:
     params = {
         "query": q,
         "mode": "ArtList",
         "format":"json",
         "timespan": f"{minutes}m",
-        "maxrecords":"50",
-        "sort":"DateDesc"
+        "maxrecords": str(maxrecords),
+        "sort": "DateDesc",
     }
-    # NOTE: GDELT has no API key; be gentle with frequency.
     url = "https://api.gdeltproject.org/api/v2/doc/doc"
-    async with httpx.AsyncClient(timeout=20) as h:
+    async with httpx.AsyncClient(timeout=25) as h:
         r = await h.get(url, params=params)
         r.raise_for_status()
         data = r.json()
-    urls=[]
-    for row in data.get("articles",[]):
+    out=[]
+    for row in data.get("articles", []):
         u = normalize_url(row.get("url",""))
+        if u:
+            out.append(u)
+    # de-dup
+    seen=set(); uniq=[]
+    for u in out:
+        if u not in seen:
+            uniq.append(u); seen.add(u)
+    return uniq
+
+async def gdelt_urls_from_rules(rules: dict, minutes: int=60) -> List[str]:
+    # Primary query
+    q = rules["query_bool"] or ""
+    if rules.get("include_keywords"):
+        inc = " OR ".join([f'"{k}"' for k in rules["include_keywords"]])
+        q = f"({q}) AND ({inc})" if q else inc
+    urls = await gdelt_search(q, minutes=minutes, maxrecords=75)
+
+    # If too few hits, run a **fallback** broad query to guarantee material
+    if len(urls) < 5:
+        fallback_q = '("Talen Energy" OR ("TLN" NEAR/3 (energy OR power)) OR "independent power" OR PJM OR ERCOT)'
+        more = await gdelt_search(fallback_q, minutes=min(minutes, 1440), maxrecords=75)
+        # prepend fallback (will dedupe later)
+        urls = more + urls
+
+    # optional allow/block
+    allow = rules.get("domain_allowlist") or []
+    block = set((rules.get("domain_blocklist") or []))
+    out=[]
+    for u in urls:
         host = urlparse(u).hostname or ""
-        if rules.get("domain_allowlist") and host not in rules["domain_allowlist"]:
+        if host in block: 
             continue
-        if rules.get("domain_blocklist") and host in rules["domain_blocklist"]:
-            continue
-        urls.append(u)
-    return urls
+        if allow and host not in allow:
+            # if allowlist provided, keep reputable defaults too
+            if host not in ("reuters.com","marketwatch.com","seekingalpha.com","finance.yahoo.com","utilitydive.com","bloomberg.com"):
+                continue
+        out.append(u)
+    # cap
+    return out[:40] if out else urls[:20]
 
 async def upsert_article(url: str, equity_id: int, tag_kind: str):
     title, publisher, clean, published_at = await fetch_text(url)
     key = sha256(normalize_url(url))
     with db() as con:
-        # insert article if new
         try:
             con.execute("""
               insert into article(url,canonical_url,title,publisher,published_at,sha256,raw_html,clean_text)
@@ -287,19 +333,18 @@ async def upsert_article(url: str, equity_id: int, tag_kind: str):
             """,(url, url, title, publisher, published_at, key, None, clean))
         except Exception:
             pass
-        # get id
         cur = con.execute("select id from article where sha256=%s",(key,))
         aid = cur.fetchone()[0]
-        # tag it
         try:
             con.execute("insert into article_tag(article_id,equity_id,tag_kind) values (%s,%s,%s)", (aid,equity_id,tag_kind))
         except Exception:
             pass
     return True
 
+# ----------- Summarizer -----------
 async def summarize_article(aid: int, title: str, text: str) -> str:
     if not OPENAI_API_KEY:
-        return "- What matters: (no OpenAI key configured)\n- Stance: Neutral"
+        return "• What matters — (no OpenAI key configured)\n• Stance — Neutral"
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
     system = "You are an equity analyst. Be terse, factual, skeptical."
@@ -318,20 +363,21 @@ Return exactly:
     )
     return r.output_text.strip()
 
-# ----------- Cron endpoints -----------
+# ----------- CRON: INGEST ----------
 @app.get("/cron/ingest")
 async def cron_ingest(req: Request):
-    """Hourly: read IR RSS + GDELT (company scope), insert+tag articles, summarize new ones."""
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
         raise HTTPException(401,"bad token")
-    # find TLN equity
+    minutes = int(req.query_params.get("minutes", "60"))
+    new_urls=set()
+
     with db() as con:
         cur = con.execute("select id from equity where ticker='TLN'")
         row = cur.fetchone()
-        if not row: return {"ok": False, "msg":"TLN not seeded"}
+        if not row:
+            return {"ok": False, "msg":"TLN not seeded"}
         tln_id = row[0]
         feeds = [r[0] for r in con.execute("select url from source_feed where equity_id=%s and active", (tln_id,))]
-        # get gdelt rules (version max)
         cur = con.execute("""
             select r.query_bool, r.domain_allowlist, r.domain_blocklist, r.include_keywords, r.exclude_keywords, r.entity_aliases
             from gdelt_filter_set s
@@ -340,42 +386,47 @@ async def cron_ingest(req: Request):
             order by r.version desc limit 1
         """)
         rules = None
-        if row := cur.fetchone():
+        if r := cur.fetchone():
             rules = {
-                "query_bool": row[0],
-                "domain_allowlist": row[1] or [],
-                "domain_blocklist": row[2] or [],
-                "include_keywords": row[3] or [],
-                "exclude_keywords": row[4] or [],
-                "entity_aliases": row[5] or {},
+                "query_bool": r[0] or "",
+                "domain_allowlist": r[1] or [],
+                "domain_blocklist": r[2] or [],
+                "include_keywords": r[3] or [],
+                "exclude_keywords": r[4] or [],
+                "entity_aliases": r[5] or {},
             }
 
-    new_urls=set()
-    # IR feeds
+    # IR feeds (if any)
     for f in feeds:
         try:
-            c = await ingest_ir_feed(f)
+            await ingest_ir_feed(f)
         except Exception:
-            c = 0
+            pass
 
-    # GDELT (last 60m)
-    minutes = int(req.query_params.get("minutes", "60"))
+    # GDELT search (with fallback)
     if rules:
         try:
-            urls = await gdelt_search_from_rules(rules, minutes=minutes)
+            urls = await gdelt_urls_from_rules(rules, minutes=minutes)
+            new_urls.update(urls)
+        except Exception:
+            pass
+    # If still empty, last-resort broad search (guarantee some hits)
+    if not new_urls:
+        try:
+            urls = await gdelt_search('PJM OR ERCOT OR "independent power" OR "power purchase agreement"', minutes=min(minutes,1440), maxrecords=50)
             new_urls.update(urls)
         except Exception:
             pass
 
-    # Insert/tag/summarize
-    summarized=0
+    # Upsert / tag
     for u in list(new_urls)[:30]:
         try:
             await upsert_article(u, tln_id, "company")
         except Exception:
             pass
 
-    # summarize any article without article_nlp
+    # Summarize new ones
+    summarized=0
     with db() as con:
         cur = con.execute("""
           select a.id,a.title,coalesce(a.clean_text,'') from article a
@@ -386,7 +437,7 @@ async def cron_ingest(req: Request):
         rows = cur.fetchall()
     for aid,title,text in rows:
         try:
-            summary = await summarize_article(aid, title, text)
+            summary = await summarize_article(aid, title or "", text or "")
             with db() as con:
                 con.execute("insert into article_nlp(article_id,stance,summary) values (%s,%s,%s)",
                             (aid, "Neutral", summary))
@@ -394,19 +445,20 @@ async def cron_ingest(req: Request):
         except Exception:
             pass
 
-    return {"ok": True, "summarized": summarized}
+    return {"ok": True, "found_urls": len(new_urls), "summarized": summarized}
 
+# ----------- CRON: DIGEST ----------
 @app.get("/cron/digest")
 async def cron_digest(req: Request):
-    """Daily 08:30 ET: compile last 24h for the owner and email via Mailgun."""
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
         raise HTTPException(401,"bad token")
-    # who is owner?
+
     with db() as con:
-        cur = con.execute("select id,email from app_user where role='owner' limit 1")
-        user = cur.fetchone()
-        if not user: return {"ok": False, "msg":"no owner"}
-        user_id, owner_email = user
+        cur = con.execute("select id,email,tz from app_user where role='owner' limit 1")
+        row = cur.fetchone()
+        if not row: return {"ok": False, "msg":"no owner"}
+        user_id, owner_email, user_tz = row
+
         cur = con.execute("""
           select e.id,e.ticker,e.name from equity e
           join user_watchlist w on w.equity_id=e.id
@@ -416,10 +468,10 @@ async def cron_digest(req: Request):
         if not wl: return {"ok": False, "msg":"watchlist empty"}
         equity_id, ticker, company_name = wl[0]
 
-    # window: last 24h until 08:30 local
-    end = now_toronto()                 # use current time
-    start = end - dt.timedelta(days=1)  # last 24h rolling window
-    today = end.date()                  # keep the date label
+    # rolling 24h up to now
+    end = now_local()
+    start = end - dt.timedelta(days=1)
+    run_date = end.date()
 
     with db() as con:
         cur = con.execute("""
@@ -432,34 +484,31 @@ async def cron_digest(req: Request):
         """,(equity_id, start, end))
         company_items = [dict(zip([d.name for d in cur.description], r)) for r in cur.fetchall()]
 
-        # (Peers/Industry later; we keep it simple for first run)
-        peer_items=[]
-        industry_items=[]
-
-    none_found = not(company_items or peer_items or industry_items)
+    none_found = not company_items
 
     # render email
-    with open("email_template.html","r") as f:
+    with open("email_template.html","r",encoding="utf-8") as f:
         tpl = Template(f.read())
-    html = tpl.render(run_date=str(today), ticker=ticker, company_name=company_name,
-                      company_items=company_items, peer_items=peer_items,
-                      industry_items=industry_items, none_found=none_found)
+    html = tpl.render(run_date=str(run_date), end_local=end.strftime("%Y-%m-%d %H:%M"),
+                      ticker=ticker, company_name=company_name,
+                      company_items=company_items, none_found=none_found)
 
     # send via Mailgun
-    async with httpx.AsyncClient(auth=("api", MAILGUN_API_KEY), timeout=20) as h:
+    async with httpx.AsyncClient(auth=("api", MAILGUN_API_KEY), timeout=25) as h:
         r = await h.post(f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages", data={
             "from": MAILGUN_FROM,
             "to": owner_email,
-            "subject": f"QuantBrief Daily — {today} — {ticker}",
+            "subject": f"QuantBrief Daily — {run_date} — {ticker}",
             "html": html
         })
         r.raise_for_status()
 
     with db() as con:
         con.execute("insert into delivery_log(user_id,run_date,items_json) values (%s,%s,%s::jsonb) on conflict do nothing",
-                    (user_id, today, json.dumps({"company": [c["url"] for c in company_items]})))
+                    (user_id, run_date, json.dumps({"company": [c["url"] for c in company_items]})))
     return {"ok": True, "sent_to": owner_email, "items": len(company_items)}
-    
+
+# ------------- health -------------
 @app.get("/")
 def health():
     return {"ok": True}

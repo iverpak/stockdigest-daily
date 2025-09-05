@@ -9,12 +9,15 @@ requests==2.32.3
 feedparser==6.0.11
 python-dateutil==2.9.0.post0
 
-# Content extraction (pin lxml <5.2.0 to satisfy trafilatura)
+# Content extraction
 trafilatura==1.9.0
 lxml==5.1.0
 
 # Templates
 jinja2==3.1.4
 
-# OpenAI SDK (proxy-safe, works fine with gpt-5-mini)
+# Networking pin to keep OpenAI client happy with proxies=
+httpx==0.27.2
+
+# OpenAI SDK
 openai==1.51.0

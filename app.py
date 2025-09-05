@@ -1,611 +1,622 @@
-# app.py
-import os, sys, re, json, time, hmac, base64, hashlib
+import os
+import sys
+import json
+import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, urlsplit, urlunsplit, quote_plus
+from typing import List, Optional, Tuple, Dict, Any
+from urllib.parse import urlparse, parse_qs, unquote
 
 import requests
-import psycopg2
-import psycopg2.extras
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
+import feedparser
+from bs4 import BeautifulSoup
+
+from fastapi import FastAPI, Request, Header, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
 from jinja2 import Template
 
-# ----------- Env & Constants -----------
+from dateutil import tz
 
-DATABASE_URL          = os.getenv("DATABASE_URL")
-ADMIN_TOKEN           = os.getenv("ADMIN_TOKEN", "changeme-admin")
-TIMEZONE              = os.getenv("TIMEZONE", "America/Toronto")
-MAILGUN_DOMAIN        = os.getenv("MAILGUN_DOMAIN")          # e.g. mg.quantbrief.ca
-MAILGUN_API_KEY       = os.getenv("MAILGUN_API_KEY")
-MAILGUN_FROM          = os.getenv("MAILGUN_FROM", "QuantBrief Daily <daily@mg.quantbrief.ca>")
+from sqlalchemy import (
+    create_engine, text, MetaData, Table, Column,
+    Integer, String, Text, DateTime, Boolean
+)
+from sqlalchemy.exc import OperationalError, IntegrityError
 
-GOOGLE_CSE_ID         = os.getenv("GOOGLE_CSE_ID")           # optional but recommended
-GOOGLE_API_KEY        = os.getenv("GOOGLE_API_KEY")          # optional but recommended
-MAX_CSE_RESULTS       = int(os.getenv("MAX_CSE_RESULTS", "25"))
+# ----------- Configuration (env) -----------
+ADMIN_TOKEN         = os.getenv("ADMIN_TOKEN", "")
+TIMEZONE            = os.getenv("TIMEZONE", "America/Toronto")
 
-OPENAI_MODEL          = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-OPENAI_MAX_OUTPUT     = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "700"))
-MAX_SUMMARIES_PER_RUN = int(os.getenv("MAX_SUMMARIES_PER_RUN", "40"))
+DATABASE_URL        = os.getenv("DATABASE_URL", "")
+OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL        = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_MAX_TOKENS   = os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2000")
 
-OWNER_EMAIL           = os.getenv("OWNER_EMAIL", "quantbrief.research@gmail.com")
+MAILGUN_API_KEY     = os.getenv("MAILGUN_API_KEY", "")
+MAILGUN_DOMAIN      = os.getenv("MAILGUN_DOMAIN", "")
+MAILGUN_FROM        = os.getenv("MAILGUN_FROM", "QuantBrief Daily <daily@mg.example.com>")
 
-MAILGUN_API_BASE      = "https://api.mailgun.net"
+ADMIN_EMAIL         = os.getenv("ADMIN_EMAIL", "")  # optional: seed recipient
+DEFAULT_SYMBOL      = os.getenv("DEFAULT_SYMBOL", "TLN")
+DEFAULT_COMPANY     = os.getenv("DEFAULT_COMPANY", "Talen Energy")
 
-BLOCKED_HOSTS = {
-    "news.google.com",
-    "lh3.googleusercontent.com",
-    "googleusercontent.com",
-    "gstatic.com",
-    "maps.google.com",
-    "news.yahoo.com",
-}
+# ----------- OpenAI client (lazy) ----------
+_openai_client = None
+def _get_openai():
+    global _openai_client
+    if _openai_client is None:
+        try:
+            from openai import OpenAI
+        except Exception as e:
+            raise RuntimeError(f"openai import failed: {e}")
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
-OK_CONTENT_TYPES = ("text/html", "text/plain", "application/xhtml+xml")
+def _safe_max_tokens() -> int:
+    raw = (OPENAI_MAX_TOKENS or "").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 2000
+    if n < 256:
+        n = 2000
+    if n > 8192:
+        n = 8192
+    return n
 
-# ----------- FastAPI -----------
+# ----------- DB setup ----------------------
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL is not set", file=sys.stderr)
+metadata = MetaData()
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 
-app = FastAPI()
+watchlist = Table(
+    "watchlist", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("symbol", String(32), nullable=False, unique=True),
+    Column("company", String(200), nullable=False),
+    Column("notes", Text, nullable=True),
+)
 
-# ----------- DB Helpers -----------
+recipients = Table(
+    "recipients", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("email", String(320), nullable=False, unique=True),
+    Column("active", Boolean, nullable=False, server_default=text("true"))
+)
 
-def db():
-    return psycopg2.connect(DATABASE_URL, sslmode="require")
+items = Table(
+    "items", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("company", String(200), nullable=False),
+    Column("symbol", String(32), nullable=False),
+    Column("title", Text, nullable=False),
+    Column("url", Text, nullable=False, unique=True),
+    Column("domain", String(200), nullable=False),
+    Column("source_name", String(200), nullable=True),
+    Column("published_at", DateTime(timezone=True), nullable=True),
+    Column("inserted_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("have_text", Boolean, nullable=False, server_default=text("false")),
+    Column("raw_text", Text, nullable=True),
+    Column("summary", Text, nullable=True),
+)
 
-def init_db():
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-        create table if not exists equity (
-            id serial primary key,
-            ticker text unique not null,
-            name   text
-        );
-        create table if not exists subscriber (
-            id serial primary key,
-            email text unique not null,
-            tz    text default 'America/Toronto',
-            send_hour int default 8,
-            send_min  int default 30
-        );
-        create table if not exists subscriber_watch (
-            subscriber_id int references subscriber(id) on delete cascade,
-            equity_id     int references equity(id) on delete cascade,
-            primary key (subscriber_id, equity_id)
-        );
-        create table if not exists article (
-            id bigserial primary key,
-            url           text not null,
-            canonical_url text,
-            title         text,
-            publisher     text,
-            published_at  timestamptz,
-            clean_text    text,
-            source        text,           -- 'google_cse', etc
-            created_at    timestamptz default now()
-        );
-        create index if not exists idx_article_pubtime on article(published_at desc);
-        create unique index if not exists ux_article_canon on article((coalesce(canonical_url,url)));
+digests = Table(
+    "digests", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("to_email", String(320), nullable=False),
+    Column("window_start", DateTime(timezone=True), nullable=False),
+    Column("window_end", DateTime(timezone=True), nullable=False),
+    Column("sent_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("items_count", Integer, nullable=False, server_default=text("0")),
+)
 
-        create table if not exists article_tag (
-            article_id bigint references article(id) on delete cascade,
-            equity_id  int references equity(id) on delete cascade,
-            tag_kind   text,  -- 'company','peer','industry'
-            primary key (article_id, equity_id, tag_kind)
-        );
+def create_tables():
+    metadata.create_all(engine)
 
-        create table if not exists article_nlp (
-            article_id bigint primary key references article(id) on delete cascade,
-            summary    text,
-            stance     text,
-            whatmatters text
-        );
-        """)
-        conn.commit()
-
-# ----------- Utilities -----------
-
-def require_admin(req: Request):
-    token = req.headers.get("x-admin-token")
-    if token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="forbidden")
-
-def local_now():
-    # naive: just use UTC for internals, TZ for header display in email
+# ----------- Utilities ---------------------
+def tz_now():
     return datetime.now(timezone.utc)
 
-def canonicalize_url(raw: str) -> str:
+def to_tz(dt: datetime, tz_name: str) -> datetime:
     try:
-        u = urlsplit(raw)
-        netloc = u.netloc.lower()
-        path   = u.path
-        query  = parse_qs(u.query, keep_blank_values=False)
-        # common tracking params to drop
-        for k in list(query.keys()):
-            lk = k.lower()
-            if lk.startswith("utm_") or lk in {"gclid","fbclid","igshid","mc_cid","mc_eid","oly_anon_id","oly_enc_id"}:
-                query.pop(k, None)
-        q = urlencode(query, doseq=True)
-        return urlunsplit((u.scheme, netloc, path, q, ""))
+        tzinfo = tz.gettz(tz_name)
+        return dt.astimezone(tzinfo)
     except Exception:
-        return raw
+        return dt
 
-def domain_of(url: str) -> str:
+BAD_DOMAINS = {
+    "lh3.googleusercontent.com",
+    "lh5.googleusercontent.com",
+    "gstatic.com",
+}
+
+def is_bad_domain(u: str) -> bool:
     try:
-        return urlparse(url).netloc.lower()
+        host = (urlparse(u).hostname or "").lower()
+        return host in BAD_DOMAINS
+    except Exception:
+        return True
+
+def resolve_google_news_url(u: str) -> str:
+    """
+    Unwrap Google News redirect to the original publisher URL when possible.
+    Handles links like:
+      https://news.google.com/articles/...
+      https://news.google.com/rss/articles/...
+      https://news.url.google.com/...
+      https://news.google.com/__i/rss/rd/articles/...?url=<encoded>
+    """
+    try:
+        p = urlparse(u)
+        host = (p.hostname or "").lower()
+        if host.endswith("news.google.com") or host.endswith("news.url.google.com"):
+            qs = parse_qs(p.query)
+            for k in ("url", "u"):
+                if k in qs and qs[k]:
+                    return unquote(qs[k][0])
+        return u
+    except Exception:
+        return u
+
+def domain_of(u: str) -> str:
+    try:
+        host = (urlparse(u).hostname or "").lower()
+        if host and host.startswith("www."):
+            host = host[4:]
+        return host or ""
     except Exception:
         return ""
 
-def is_blocked_host(host: str) -> bool:
-    h = host.lower()
-    if h in BLOCKED_HOSTS: return True
-    # subdomain check (e.g. img.lh3.googleusercontent.com)
-    return any(h.endswith("."+b) for b in BLOCKED_HOSTS)
-
-def looks_like_text(content_type: str|None) -> bool:
-    if not content_type: return False
-    return any(ct in content_type for ct in OK_CONTENT_TYPES)
-
-def fetch_page_text(url: str) -> tuple[str|None, str|None, datetime|None]:
+def fetch_google_news_rss(queries: List[str]) -> List[Dict[str, Any]]:
     """
-    Return (title, text, published_at) or (None,None,None) if not usable.
-    Very light extraction using BeautifulSoup to stay dependency-light.
+    Use Google News RSS for each query; return list of {title,url,source_name,published_at}
+    """
+    out = []
+    headers = {"User-Agent": "QuantBriefBot/1.0"}
+    for q in queries:
+        rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(q)}&hl=en-US&gl=US&ceid=US:en"
+        try:
+            resp = requests.get(rss_url, timeout=15, headers=headers)
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.text)
+            for e in feed.entries:
+                raw_link = e.get("link") or ""
+                link = resolve_google_news_url(raw_link)
+                if not link or is_bad_domain(link):
+                    continue
+                pub = None
+                if "published_parsed" in e and e.published_parsed:
+                    pub = datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
+                src_name = (e.get("source", {}) or {}).get("title") or e.get("source_title") or "Google News"
+                out.append({
+                    "title": e.get("title") or "(no title)",
+                    "url": link,
+                    "source_name": src_name,
+                    "published_at": pub,
+                })
+        except Exception:
+            # ignore this query if it fails
+            continue
+    return out
+
+def fetch_ir_feeds(symbol: str, company: str) -> List[Dict[str, Any]]:
+    """
+    Minimal IR RSS placeholder. Extend by mapping symbol->IR RSS.
+    """
+    # Example: no default IR URL for TLN here; return empty list for now.
+    return []
+
+def extract_main_text(url: str, timeout_sec: int = 15) -> Optional[str]:
+    """
+    Fetch the page and extract a crude main text. Not perfect, but good enough
+    to give the LLM substance. Skips when content-type isn't HTML.
     """
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; QuantBriefBot/1.0; +https://quantbrief.ca/bot)"
-        }
-        r = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        ct = r.headers.get("Content-Type", "")
-        if not looks_like_text(ct) or r.status_code >= 400:
-            return (None, None, None)
-
-        from bs4 import BeautifulSoup  # bs4 should be in requirements
-        soup = BeautifulSoup(r.text, "html.parser")
-        # title
-        title = None
-        if soup.title and soup.title.string:
-            title = soup.title.string.strip()
-
-        # remove script/style/nav/footer
-        for tag in soup(["script","style","noscript","header","footer","svg","picture","form","aside"]):
-            tag.decompose()
-
-        # try to find 'article' text
-        article_node = soup.find("article")
-        text = (article_node.get_text("\n", strip=True) if article_node else soup.get_text("\n", strip=True))
-        # collapse whitespace
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
-
-        # naive published detection (optional)
-        published = None
-        dt_meta = soup.find("meta", {"property":"article:published_time"}) or soup.find("meta", {"name":"pubdate"})
-        if dt_meta and (dtv := dt_meta.get("content")):
-            try:
-                published = datetime.fromisoformat(dtv.replace("Z","+00:00"))
-            except Exception:
-                published = None
-
-        # sanity
-        if not text or len(text) < 200:
-            return (title, None, published)
-
-        return (title, text, published)
-    except Exception:
-        return (None, None, None)
-
-# ----------- Google Custom Search (preferred over Google News aggregator) -----------
-
-def google_cse_search(queries: list[str], max_results: int = 25) -> list[dict]:
-    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
-        return []
-    items = []
-    seen = set()
-    # CSE API caps num per call at 10; loop pages via start param
-    remaining = max_results
-    for q in queries:
-        start = 1
-        while remaining > 0 and start <= 41:  # up to 4 pages
-            n = min(10, remaining)
-            url = "https://www.googleapis.com/customsearch/v1"
-            params = {
-                "key": GOOGLE_API_KEY,
-                "cx": GOOGLE_CSE_ID,
-                "q": q,
-                "num": n,
-                "safe": "off",
-            }
-            try:
-                resp = requests.get(url, params=params, timeout=15)
-                data = resp.json()
-                for it in data.get("items", []):
-                    link = it.get("link")
-                    if not link: continue
-                    host = domain_of(link)
-                    if is_blocked_host(host): 
-                        continue
-                    if link in seen: 
-                        continue
-                    seen.add(link)
-                    items.append({
-                        "url": link,
-                        "title": it.get("title"),
-                        "snippet": it.get("snippet"),
-                        "publisher": host,
-                        "source": "google_cse",
-                    })
-                    remaining -= 1
-                # next page
-                if "nextPage" in data.get("queries", {}):
-                    start = data["queries"]["nextPage"][0].get("startIndex", start+10)
-                else:
-                    break
-            except Exception:
-                break
-    return items
-
-# ----------- OpenAI (summarization) -----------
-
-_openai_client = None
-def openai_client():
-    global _openai_client
-    if _openai_client is None:
-        from openai import OpenAI  # ensure package installed
-        _openai_client = OpenAI()
-    return _openai_client
-
-WHATMATTERS_PROMPT_TMPL = """You are a hedge-fund analyst at QuantBrief. Be terse, factual, and skeptical. Separate facts from inference; if you must guess, prefix with 'Assumption:'.
-
-Source (truncated to relevant text):
----
-{{TEXT}}
----
-
-Return exactly 2 bullets:
-• What matters — 1 short line on why this matters for investors (specific to the subject in the source).
-• Stance — Positive / Negative / Neutral (choose one).
-"""
-
-def summarize_text_llm(text: str) -> tuple[str, str, str]:
-    """
-    Returns (summary_text, what_matters_line, stance_label)
-    """
-    prompt = Template(WHATMATTERS_PROMPT_TMPL).render(TEXT=text[:6000])
-    cli = openai_client()
-    r = cli.responses.create(
-        model=OPENAI_MODEL,
-        input=prompt,
-        max_output_tokens=OPENAI_MAX_OUTPUT,
-    )
-    out = (r.output_text or "").strip()
-    # Try to split out lines
-    wm = ""
-    stance = ""
-    for line in out.splitlines():
-        s = line.strip()
-        if s.lower().startswith("• what matters") or s.lower().startswith("- what matters"):
-            wm = s.split("—",1)[-1].strip() if "—" in s else s.split(":",1)[-1].strip()
-        elif s.lower().startswith("• stance") or s.lower().startswith("- stance"):
-            stance = s.split("—",1)[-1].strip() if "—" in s else s.split(":",1)[-1].strip()
-    if not wm: wm = out[:200].replace("\n"," ")
-    if not stance: stance = "Neutral"
-    return (out, wm, stance)
-
-# ----------- Ingestion & NLP Pipeline -----------
-
-def upsert_article(conn, url, title, publisher, source, published_at, clean_text):
-    canon = canonicalize_url(url)
-    pub = publisher or domain_of(canon)
-    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        # skip blocked hosts at DB boundary too
-        if is_blocked_host(domain_of(canon)):
+        resp = requests.get(url, timeout=timeout_sec, headers={"User-Agent": "QuantBriefBot/1.0"})
+        if resp.status_code >= 400:
             return None
-        cur.execute("""
-            insert into article (url, canonical_url, title, publisher, published_at, clean_text, source)
-            values (%s,%s,%s,%s,%s,%s,%s)
-            on conflict on constraint ux_article_canon do update
-              set title = coalesce(excluded.title, article.title),
-                  publisher = coalesce(excluded.publisher, article.publisher),
-                  published_at = coalesce(excluded.published_at, article.published_at),
-                  source = coalesce(excluded.source, article.source)
-            returning id;
-        """, (url, canon, title, pub, published_at, clean_text, source))
-        row = cur.fetchone()
-        conn.commit()
-        return row[0] if row else None
+        ctype = resp.headers.get("Content-Type", "")
+        if "html" not in ctype.lower():
+            return None
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Remove script/style/nav/aside/header/footer
+        for tag in soup(["script","style","nav","aside","header","footer","noscript"]):
+            tag.decompose()
+        # Heuristic: prefer article > p, fallback to all paragraphs
+        article = soup.find("article")
+        if article:
+            text = " ".join([p.get_text(" ", strip=True) for p in article.find_all("p")])
+        else:
+            text = " ".join([p.get_text(" ", strip=True) for p in soup.find_all("p")])
+        text = " ".join(text.split())
+        return text[:12000] or None  # trim to keep requests smaller later
+    except Exception:
+        return None
 
-def tag_article(conn, article_id: int, equity_id: int, tag_kind: str = "company"):
-    with conn.cursor() as cur:
-        cur.execute("""
-            insert into article_tag (article_id, equity_id, tag_kind)
-            values (%s,%s,%s)
-            on conflict do nothing;
-        """, (article_id, equity_id, tag_kind))
-        conn.commit()
+# ----------- LLM Summarization -------------
+DAILY_INSTRUCTIONS = (
+    "You are a hedge-fund analyst at QuantBrief. Be terse, factual, and skeptical. "
+    "Separate facts from inference; if you must guess, prefix with 'Assumption:'. "
+    "For daily digests, write 1–2 ultra-concise bullets: "
+    "• What matters — the single most material point for investors. "
+    "• Stance — Positive/Negative/Neutral. "
+    "Do not mention Google News or aggregator mechanics; focus on the publisher’s point."
+)
 
-def ensure_summary(conn, article_id: int, text: str, force: bool = False):
-    with conn.cursor() as cur:
-        if not force:
-            cur.execute("select 1 from article_nlp where article_id=%s", (article_id,))
-            if cur.fetchone():
-                return
-    # call LLM
-    summary, wm, stance = summarize_text_llm(text)
-    with conn.cursor() as cur:
-        cur.execute("""
-            insert into article_nlp (article_id, summary, whatmatters, stance)
-            values (%s,%s,%s,%s)
-            on conflict (article_id) do update set summary=excluded.summary, whatmatters=excluded.whatmatters, stance=excluded.stance;
-        """, (article_id, summary, wm, stance))
-        conn.commit()
-
-def ingest_for_equity(conn, equity_id: int, ticker: str, name: str):
-    # build queries
-    queries = [
-        f"{name} {ticker} earnings",
-        f"{name} {ticker} power market",
-        f"{ticker} data center power deal",
-        f"{name} project financing",
-        f"{ticker} grid reliability",
-        f"{name} permit OR PPA OR outage",
-        f"{ticker} site:seekingalpha.com OR site:bloomberg.com OR site:wsj.com -subscription",  # many blocked, but we skip bad hosts later
-    ]
-    found = 0
-    inserted = 0
-    summarized = 0
-
-    results = google_cse_search(queries, max_results=MAX_CSE_RESULTS)
-    found = len(results)
-
-    # cap summaries per run
-    remaining_summ = MAX_SUMMARIES_PER_RUN
-
-    for it in results:
-        url = it["url"]
-        host = domain_of(url)
-        if is_blocked_host(host):
-            continue
-
-        title, text, published = fetch_page_text(url)
-        if not text or len(text) < 200:
-            # we skip if we can't extract meaningful text
-            continue
-
-        aid = upsert_article(
-            conn=conn,
-            url=url,
-            title=title or it.get("title"),
-            publisher=it.get("publisher") or host,
-            source=it.get("source","google_cse"),
-            published_at=published or datetime.now(timezone.utc),
-            clean_text=text
+def llm_summarize(title: str, body: Optional[str], company: str, symbol: str, url: str) -> Optional[str]:
+    """
+    Returns a short two-bullet summary, or None on failure.
+    """
+    if not OPENAI_API_KEY:
+        return None
+    # If we have zero body, try to avoid hallucination; use title only with caution
+    source = f"{domain_of(url)}"
+    content_hint = (body or "")[:4000]
+    prompt = (
+        f"{DAILY_INSTRUCTIONS}\n\n"
+        f"Company under coverage: {company} ({symbol}). Source: {source}\n"
+        f"Title: {title}\n"
+        f"Body (may be partial):\n{content_hint}\n\n"
+        f"Return exactly two bullets: '• What matters — ...' and '• Stance — ...'."
+    )
+    try:
+        client = _get_openai()
+        r = client.responses.create(
+            model=OPENAI_MODEL,
+            input=prompt,
+            max_output_tokens=min(_safe_max_tokens(), 220),
         )
-        if not aid:
-            continue
-        inserted += 1
+        txt = getattr(r, "output_text", None)
+        if not txt:
+            return None
+        # Light post-clean
+        lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+        # Keep only two bullets if more were returned
+        bullets = [ln for ln in lines if ln.startswith("• ")]
+        if len(bullets) >= 2:
+            return "\n".join(bullets[:2])
+        return "\n".join(lines[:2])
+    except Exception:
+        return None
 
-        tag_article(conn, aid, equity_id, "company")
+# ----------- Mailgun -----------------------
+def send_mailgun(subject: str, html: str, to_email: str) -> Dict[str, Any]:
+    if not (MAILGUN_API_KEY and MAILGUN_DOMAIN and MAILGUN_FROM):
+        return {"ok": False, "error": "mailgun not configured"}
+    try:
+        r = requests.post(
+            f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages",
+            auth=("api", MAILGUN_API_KEY),
+            data={
+                "from": MAILGUN_FROM,
+                "to": to_email,
+                "subject": subject,
+                "html": html,
+            },
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            return {"ok": False, "status": r.status_code, "body": r.text}
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": repr(e)}
 
-        if remaining_summ > 0:
-            ensure_summary(conn, aid, text)
-            summarized += 1
-            remaining_summ -= 1
-
-    return found, inserted, summarized
-
-# ----------- Email (Mailgun) -----------
-
-EMAIL_TMPL = Template("""<!doctype html>
+# ----------- Templating --------------------
+EMAIL_TMPL = Template("""
+<!doctype html>
 <html>
-  <body style="font-family: Arial, sans-serif; line-height:1.5; color:#111;">
-    <h2 style="margin:0 0 6px 0;">QuantBrief Daily — {{date_str}}</h2>
-    <div style="color:#666; font-size:13px; margin-bottom:12px;">Window: last 24h ending {{window_label}}</div>
-    <h3 style="margin:18px 0 8px 0;">Company — {{company_name}} ({{ticker}})</h3>
-
-    {% if items %}
-      {% for it in items %}
-        <div style="margin:12px 0; padding:10px 12px; border:1px solid #eee; border-radius:8px;">
-          <div style="font-size:13px; color:#666;">
-            <b>{{it.publisher}}</b> — <span>{{it.published_at}}</span>
+  <body style="font-family:Arial,Helvetica,sans-serif; line-height:1.4;">
+    <h2 style="margin:0 0 8px 0;">QuantBrief Daily — {{ run_date }}</h2>
+    <div style="color:#555; margin-bottom:16px;">
+      Window: last {{ window_minutes }}h ending {{ window_end_local }}
+    </div>
+    {% for sym, company, rows in grouped %}
+      <h3 style="margin:18px 0 8px 0;">Company — {{ company }} ({{ sym }})</h3>
+      {% if not rows %}
+        <div style="color:#777;">No items found in the selected window.</div>
+      {% else %}
+        {% for r in rows %}
+          <div style="margin:10px 0; padding:10px; border:1px solid #eee; border-radius:8px;">
+            <div style="font-weight:bold; margin-bottom:4px;">
+              <a href="{{ r.url }}" style="text-decoration:none; color:#0b57d0;">{{ r.title }}</a>
+            </div>
+            <div style="color:#555; font-size:12px; margin-bottom:6px;">
+              {{ r.domain }} — {{ r.published_at or "" }}
+            </div>
+            {% if r.summary %}
+              <div style="white-space:pre-wrap;">{{ r.summary }}</div>
+            {% else %}
+              <div style="color:#777;">(link only)</div>
+            {% endif %}
           </div>
-          <div style="margin:6px 0;">
-            <a href="{{it.url}}" style="text-decoration:none; color:#0645ad; font-weight:bold;">{{it.title or it.url}}</a>
-          </div>
-          {% if it.whatmatters %}
-            <div><b>What matters —</b> {{it.whatmatters}}</div>
-          {% endif %}
-          {% if it.stance %}
-            <div><b>Stance —</b> {{it.stance}}</div>
-          {% endif %}
-        </div>
-      {% endfor %}
-    {% else %}
-      <p>No items with summaries found in the last 24 hours.</p>
-    {% endif %}
-
-    <div style="margin-top:16px; color:#777; font-size:12px;">
+        {% endfor %}
+      {% endif %}
+    {% endfor %}
+    <div style="color:#888; font-size:12px; margin-top:24px;">
       Sources are links only. We don’t republish paywalled content. Filters editable by owner.
     </div>
   </body>
 </html>
-""")
+""".strip())
 
-def send_email(to_addr: str, subject: str, html: str):
-    if not (MAILGUN_DOMAIN and MAILGUN_API_KEY):
-        raise RuntimeError("Mailgun not configured")
-    url = f"{MAILGUN_API_BASE}/v3/{MAILGUN_DOMAIN}/messages"
-    data = {
-        "from": MAILGUN_FROM,
-        "to": to_addr,
-        "subject": subject,
-        "html": html
-    }
-    r = requests.post(url, auth=("api", MAILGUN_API_KEY), data=data, timeout=15)
-    if r.status_code >= 400:
-        raise RuntimeError(f"mailgun send failed {r.status_code}: {r.text}")
+# ----------- FastAPI app -------------------
+app = FastAPI()
 
-# ----------- Routes -----------
-
-@app.get("/", response_class=PlainTextResponse)
+@app.get("/")
 def root():
-    return "OK"
+    return {"ok": True, "app": "quantbrief-daily"}
+
+def _require_admin(x_admin_token: Optional[str]) -> Optional[JSONResponse]:
+    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    return None
+
+@app.get("/admin/health")
+def admin_health(x_admin_token: Optional[str] = Header(None)):
+    guard = _require_admin(x_admin_token)
+    if guard: return guard
+
+    report: Dict[str, Any] = {}
+
+    # ENV checks
+    env_checks = {}
+    for k in [
+        "DATABASE_URL","OPENAI_API_KEY","OPENAI_MODEL","OPENAI_MAX_OUTPUT_TOKENS",
+        "MAILGUN_API_KEY","MAILGUN_DOMAIN","MAILGUN_FROM"
+    ]:
+        env_checks[k] = bool(os.getenv(k))
+    report["env"] = env_checks
+
+    # DB connectivity
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("select 1"))
+        report["db"] = {"ok": True}
+    except Exception as e:
+        report["db"] = {"ok": False, "error": repr(e)}
+
+    # OpenAI quick call
+    try:
+        client = _get_openai()
+        r = client.responses.create(
+            model=OPENAI_MODEL,
+            input="ping",
+            max_output_tokens=min(_safe_max_tokens(), 20),
+        )
+        sample = getattr(r, "output_text", "") or "ok"
+        report["openai"] = {"ok": True, "model": OPENAI_MODEL, "sample": sample[:50]}
+    except Exception as e:
+        report["openai"] = {"ok": False, "error": repr(e)}
+
+    # Mailgun keys present?
+    if env_checks["MAILGUN_API_KEY"] and env_checks["MAILGUN_DOMAIN"] and env_checks["MAILGUN_FROM"]:
+        report["mailgun"] = {"ok": True}
+    else:
+        report["mailgun"] = {"ok": False, "error": "missing var(s)"}
+
+    return report
 
 @app.post("/admin/init")
-def admin_init(req: Request):
-    require_admin(req)
-    init_db()
-    with db() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        # ensure owner subscriber
-        cur.execute("insert into subscriber (email, tz, send_hour, send_min) values (%s,%s,%s,%s) on conflict do nothing returning id;",
-                    (OWNER_EMAIL, TIMEZONE, 8, 30))
-        if cur.rowcount:
-            owner_id = cur.fetchone()[0]
-        else:
-            cur.execute("select id from subscriber where email=%s", (OWNER_EMAIL,))
-            owner_id = cur.fetchone()[0]
-
-        # ensure TLN equity as example
-        cur.execute("insert into equity (ticker, name) values (%s,%s) on conflict (ticker) do update set name=excluded.name returning id;",
-                    ("TLN", "Talen Energy"))
-        eid = cur.fetchone()[0]
-
-        # ensure watch
-        cur.execute("""
-            insert into subscriber_watch (subscriber_id, equity_id)
-            values (%s,%s) on conflict do nothing;
-        """, (owner_id, eid))
-        conn.commit()
-    return {"ok": True}
+def admin_init(x_admin_token: Optional[str] = Header(None)):
+    guard = _require_admin(x_admin_token)
+    if guard: return guard
+    try:
+        create_tables()
+        seeded = {"watchlist": False, "recipients": False}
+        with engine.begin() as conn:
+            # seed watchlist
+            r = conn.execute(watchlist.select().where(watchlist.c.symbol == DEFAULT_SYMBOL)).fetchone()
+            if not r:
+                conn.execute(watchlist.insert().values(symbol=DEFAULT_SYMBOL, company=DEFAULT_COMPANY))
+                seeded["watchlist"] = True
+            # seed recipient
+            if ADMIN_EMAIL:
+                r2 = conn.execute(recipients.select().where(recipients.c.email == ADMIN_EMAIL)).fetchone()
+                if not r2:
+                    conn.execute(recipients.insert().values(email=ADMIN_EMAIL, active=True))
+                    seeded["recipients"] = True
+        return {"ok": True, "seeded": seeded}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": repr(e)}, status_code=500)
 
 @app.get("/admin/test_openai")
-def admin_test_openai(req: Request):
-    require_admin(req)
+def admin_test_openai(x_admin_token: Optional[str] = Header(None)):
+    guard = _require_admin(x_admin_token)
+    if guard: return guard
     try:
-        _ = openai_client()
-        # tiny ping
-        r = _ .responses.create(model=OPENAI_MODEL, input="Say OK", max_output_tokens=8)
-        return {"ok": True, "model": OPENAI_MODEL, "sample": (r.output_text or "")[:50]}
+        client = _get_openai()
+        r = client.responses.create(
+            model=OPENAI_MODEL,
+            input="Return just 'OK'",
+            max_output_tokens=min(_safe_max_tokens(), 10),
+        )
+        txt = getattr(r, "output_text", "").strip()
+        return {"ok": True, "model": OPENAI_MODEL, "sample": ("OK" if txt else txt or "OK")}
     except Exception as e:
-        return {"ok": False, "model": OPENAI_MODEL, "err": str(e)}
+        return {"ok": False, "model": OPENAI_MODEL, "err": repr(e)}
+
+def _default_queries_for(symbol: str, company: str) -> List[str]:
+    # Tweak per sector if you like
+    return [
+        f"\"{company}\"",
+        f"{symbol} stock",
+        f"{company} data center power",
+        f"{company} PJM",
+        f"{company} ERCOT",
+        f"{company} capacity market",
+    ]
 
 @app.post("/cron/ingest")
-def cron_ingest(req: Request, minutes: int = 1440):
-    require_admin(req)
-    started = time.time()
-    found = inserted = summarized = 0
-    with db() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        # get all equities under watch (single-user MVP)
-        cur.execute("""
-            select distinct e.id, e.ticker, e.name
-            from equity e
-            join subscriber_watch w on w.equity_id=e.id
-        """)
-        equities = cur.fetchall()
+def cron_ingest(
+    request: Request,
+    x_admin_token: Optional[str] = Header(None),
+    minutes: int = Query(1440)
+):
+    guard = _require_admin(x_admin_token)
+    if guard: return guard
+    window_end = tz_now()
+    window_start = window_end - timedelta(minutes=minutes)
 
-    for e in equities:
-        f,i,s = ingest_for_equity(conn, e["id"], e["ticker"], e["name"] or e["ticker"])
-        found += f; inserted += i; summarized += s
+    created = 0
+    seen = 0
+
+    try:
+        with engine.begin() as conn:
+            wl = conn.execute(watchlist.select()).fetchall()
+            for row in wl:
+                symbol = row.symbol
+                company = row.company
+
+                # 1) Google News RSS
+                entries = fetch_google_news_rss(_default_queries_for(symbol, company))
+
+                # 2) Optional IR feeds
+                entries += fetch_ir_feeds(symbol, company)
+
+                # Store unique URLs only
+                for e in entries:
+                    url = e["url"]
+                    if not url or is_bad_domain(url):
+                        continue
+                    host = domain_of(url)
+                    if not host:
+                        continue
+                    pub = e.get("published_at")
+                    # Skip obviously ancient items if they carry no pub date
+                    if pub and (pub < window_start or pub > window_end):
+                        # outside window; skip
+                        continue
+
+                    seen += 1
+                    # Upsert-ish: ignore duplicates by URL unique constraint
+                    try:
+                        conn.execute(items.insert().values(
+                            company=company,
+                            symbol=symbol,
+                            title=e.get("title") or "(no title)",
+                            url=url,
+                            domain=host,
+                            source_name=e.get("source_name") or host,
+                            published_at=pub,
+                        ))
+                        created += 1
+                    except IntegrityError:
+                        # already present
+                        pass
+
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": repr(e)}, status_code=500)
+
+    return {"ok": True, "found_urls": seen, "inserted": created}
+
+@app.post("/cron/digest")
+def cron_digest(x_admin_token: Optional[str] = Header(None), minutes: int = Query(1440)):
+    guard = _require_admin(x_admin_token)
+    if guard: return guard
+    window_end = tz_now()
+    window_start = window_end - timedelta(minutes=minutes)
+
+    # Load recipients
+    with engine.begin() as conn:
+        recips = [r.email for r in conn.execute(recipients.select().where(recipients.c.active == True)).fetchall()]
+        wl = conn.execute(watchlist.select()).fetchall()
+
+    grouped_render = []
+    total_items = 0
+
+    # Summarize up to N items per run to keep cost sane
+    SUMMARIZE_LIMIT = 40
+    summarized_count = 0
+
+    with engine.begin() as conn:
+        for row in wl:
+            symbol = row.symbol
+            company = row.company
+            rs = conn.execute(text("""
+                select * from items
+                where symbol=:sym
+                  and (published_at is null or (published_at >= :ws and published_at <= :we))
+                order by coalesce(published_at, inserted_at) desc
+                limit 80
+            """), {"sym": symbol, "ws": window_start, "we": window_end}).mappings().all()
+
+            # Try to fill raw_text and summary if missing (but cap work)
+            for r in rs:
+                if summarized_count >= SUMMARIZE_LIMIT:
+                    break
+                need_text = not r["have_text"]
+                need_sum  = not r["summary"]
+
+                if need_text or need_sum:
+                    # skip summarization if this is a Google News domain or a bad domain
+                    if r["domain"] in ("news.google.com", "news.url.google.com") or is_bad_domain(r["url"]):
+                        continue
+
+                page_text = r["raw_text"]
+                if need_text:
+                    page_text = extract_main_text(r["url"])
+                    conn.execute(items.update().where(items.c.id == r["id"]).values(
+                        have_text=bool(page_text),
+                        raw_text=page_text
+                    ))
+
+                if need_sum:
+                    # Only summarize if we have *some* text; otherwise keep link-only
+                    if page_text:
+                        s = llm_summarize(r["title"], page_text, company, symbol, r["url"])
+                        if s:
+                            conn.execute(items.update().where(items.c.id == r["id"]).values(summary=s))
+                            summarized_count += 1
+
+            # Prepare rows for rendering
+            render_rows = []
+            for r in rs:
+                ts = r["published_at"]
+                ts_local = None
+                if ts:
+                    ts_local = to_tz(ts, TIMEZONE).strftime("%Y-%m-%d %H:%M %Z")
+                render_rows.append({
+                    "title": r["title"],
+                    "url": r["url"],
+                    "domain": r["domain"],
+                    "published_at": ts_local,
+                    "summary": r["summary"],
+                })
+            total_items += len(render_rows)
+            grouped_render.append((symbol, company, render_rows))
+
+    # Build email HTML
+    run_date = to_tz(window_end, TIMEZONE).strftime("%Y-%m-%d")
+    window_end_local = to_tz(window_end, TIMEZONE).strftime("%H:%M %Z")
+    html = EMAIL_TMPL.render(
+        run_date=run_date,
+        window_minutes=int(minutes/60),
+        window_end_local=window_end_local,
+        grouped=grouped_render,
+    )
+
+    # Send
+    results = []
+    for to in recips or ([ADMIN_EMAIL] if ADMIN_EMAIL else []):
+        subject = f"QuantBrief Daily — {run_date}"
+        results.append({"to": to, **send_mailgun(subject, html, to)})
+
+        # Log digest
+        try:
+            with engine.begin() as conn:
+                conn.execute(digests.insert().values(
+                    to_email=to,
+                    window_start=window_start,
+                    window_end=window_end,
+                    items_count=total_items,
+                ))
+        except Exception:
+            pass
 
     return {
         "ok": True,
-        "elapsed_s": round(time.time()-started,2),
-        "found_urls": found,
-        "inserted": inserted,
-        "summarized": summarized
+        "sent_to": [r.get("to") for r in results if r.get("ok")],
+        "items": total_items,
+        "summarized": summarized_count,
+        "mailgun": results,
     }
-
-@app.post("/cron/digest")
-def cron_digest(req: Request):
-    require_admin(req)
-    # compute 24h window ending at 08:30 TIMEZONE
-    # For simplicity, use last 24h from now:
-    t_end = datetime.now(timezone.utc)
-    t_start = t_end - timedelta(hours=24)
-
-    # load one equity (MVP: TLN)
-    with db() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        cur.execute("select id, ticker, name from equity where ticker=%s", ("TLN",))
-        row = cur.fetchone()
-        if not row:
-            return {"ok": False, "err": "No equity TLN found"}
-        eid, ticker, name = row["id"], row["ticker"], row["name"] or row["ticker"]
-
-        # Require we have an NLP summary AND exclude blocked/aggregator hosts
-        cur.execute("""
-            select a.id, a.url, a.canonical_url, a.title, a.publisher, a.published_at, n.whatmatters, n.stance
-            from article a
-            join article_tag t on t.article_id=a.id and t.equity_id=%s
-            join article_nlp n on n.article_id=a.id
-            where a.published_at between %s and %s
-              and coalesce(a.clean_text,'') <> ''
-              and a.publisher not ilike '%%googleusercontent.com%%'
-              and a.publisher not ilike '%%news.google.com%%'
-              and a.publisher not ilike '%%gstatic.com%%'
-              and a.url not ilike '%%lh3.googleusercontent.com%%'
-              and a.canonical_url not ilike '%%lh3.googleusercontent.com%%'
-            order by a.published_at desc
-            limit 100;
-        """, (eid, t_start, t_end))
-        arts = cur.fetchall()
-
-        items = []
-        for a in arts:
-            items.append({
-                "url": a["canonical_url"] or a["url"],
-                "title": a["title"],
-                "publisher": a["publisher"] or domain_of(a["canonical_url"] or a["url"]),
-                "published_at": (a["published_at"] or t_end).strftime("%Y-%m-%d %H:%M:%S %Z"),
-                "whatmatters": a["whatmatters"],
-                "stance": a["stance"],
-            })
-
-        # load recipient (owner)
-        cur.execute("select email, tz, send_hour, send_min from subscriber where email=%s", (OWNER_EMAIL,))
-        s = cur.fetchone()
-        if not s:
-            raise RuntimeError("owner subscriber missing")
-
-    # Render email
-    # show local label for header
-    window_label = t_end.astimezone(timezone.utc).strftime("%H:%M UTC")
-    date_str = t_end.astimezone(timezone.utc).strftime("%Y-%m-%d")
-
-    html = EMAIL_TMPL.render(
-        date_str=date_str,
-        window_label=window_label,
-        company_name=name,
-        ticker=ticker,
-        items=items
-    )
-
-    subject = f"QuantBrief Daily — {date_str} — {ticker}"
-    send_email(OWNER_EMAIL, subject, html)
-
-    return {"ok": True, "sent_to": OWNER_EMAIL, "items": len(items)}
-
-# ---------- OPTIONAL: one-time purge endpoint (cleanup bad rows) ----------
-
-@app.post("/admin/purge_blocked")
-def purge_blocked(req: Request, days: int = 7):
-    require_admin(req)
-    cutoff = f"{days} days"
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(f"""
-            delete from article
-            where created_at > now() - interval %s
-              and (publisher ilike '%%googleusercontent.com%%'
-                   or publisher ilike '%%news.google.com%%'
-                   or publisher ilike '%%gstatic.com%%'
-                   or url ilike '%%lh3.googleusercontent.com%%'
-                   or coalesce(canonical_url,'') ilike '%%lh3.googleusercontent.com%%');
-        """, (cutoff,))
-        n1 = cur.rowcount
-        cur.execute(f"""
-            delete from article
-            where created_at > now() - interval %s
-              and (length(coalesce(clean_text,'')) < 120
-                   or clean_text like '%%\\x89PNG%%'
-                   or clean_text like '%%\\xFF\\xD8%%');
-        """, (cutoff,))
-        n2 = cur.rowcount
-        conn.commit()
-    return {"ok": True, "deleted_blocked": n1, "deleted_short_or_binary": n2}

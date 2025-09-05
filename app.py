@@ -66,11 +66,22 @@ def require_admin(request: Request):
     if not token or not hmac.compare_digest(token, ADMIN_TOKEN):
         raise HTTPException(status_code=403, detail="Forbidden")
 
+DB_DRIVER = "psycopg3"
+try:
+    import psycopg  # v3
+except ModuleNotFoundError:
+    DB_DRIVER = "psycopg2"
+    import psycopg2 as psycopg  # type: ignore
+
 def get_db():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set")
-    # psycopg3 connection with autocommit
-    return psycopg.connect(DATABASE_URL, autocommit=True)
+    if DB_DRIVER == "psycopg3":
+        return psycopg.connect(DATABASE_URL, autocommit=True)
+    # psycopg2 fallback
+    conn = psycopg.connect(DATABASE_URL, sslmode=os.getenv("PGSSLMODE", "require"))
+    conn.autocommit = True
+    return conn
 
 def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()

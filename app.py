@@ -1,5 +1,5 @@
 import os, re, json, traceback, datetime as dt, html as html_lib
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, quote_plus, unquote
 
 import httpx, feedparser, psycopg
@@ -20,6 +20,32 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL missing")
 
 app = FastAPI()
+
+# ---------- BLOCK/ALLOW LISTS ----------
+BLOCKED_HOSTS = {
+    "news.google.com",
+    "lh3.googleusercontent.com",
+    "googleusercontent.com",
+    "gstatic.com",
+    "feedproxy.google.com",
+    "consent.google.com",
+    "accounts.google.com",
+    "images.google.com",
+}
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico")
+
+def is_blocked_host(host: Optional[str]) -> bool:
+    if not host:
+        return True
+    host = host.lower()
+    return any(host == h or host.endswith("." + h) for h in BLOCKED_HOSTS)
+
+def is_image_url(u: str) -> bool:
+    p = urlparse(u)
+    if is_blocked_host(p.hostname):
+        return True
+    path = (p.path or "").lower()
+    return path.endswith(IMAGE_EXT)
 
 # ---------- SQL ----------
 DDL = """
@@ -118,11 +144,10 @@ create table if not exists delivery_log (
   unique (user_id, run_date)
 );
 
--- First-class Google News query storage
 create table if not exists gnews_query (
   id serial primary key,
   equity_id int references equity(id),
-  scope text not null default 'industry', -- 'company' | 'industry' | 'peer'
+  scope text not null default 'industry',
   query text not null,
   active boolean default true,
   weight int default 10,
@@ -161,11 +186,18 @@ def unwrap_gnews_url(u: str) -> str:
         return u
     p = urlparse(u)
     q = dict(parse_qsl(p.query))
-    if "url" in q and q["url"]:
-        return unquote(q["url"])
-    if "q" in q and q["q"].startswith("http"):
-        return unquote(q["q"])
+    # Primary param Google uses
+    for key in ("url","u","link","q"):
+        if key in q and q[key].startswith("http"):
+            return unquote(q[key])
     return u
+
+def looks_garbled(s: str) -> bool:
+    if not s: return True
+    if "\x89PNG" in s or "\xFF\xD8\xFF" in s:
+        return True
+    bad = s.count("�")
+    return bad > 10 or len(s) < 120
 
 # ---------- admin: init/seed/config ----------
 @app.post("/admin/init")
@@ -226,7 +258,7 @@ async def admin_set_gdelt_filter(req: Request):
             %s,1,
             '("Talen Energy" OR ("Talen" NEAR/2 Energy) OR "Brandon Shores" OR "H.A. Wagner")',
             ARRAY[]::text[],
-            ARRAY['x.com','facebook.com'],
+            ARRAY['x.com','facebook.com','news.google.com','lh3.googleusercontent.com','googleusercontent.com','gstatic.com'],
             ARRAY['PJM','ERCOT','IPP','data center','hyperscale','capacity auction','interconnect','outage','FERC','transmission'],
             ARRAY['gaming','fashion','esports','music'],
             '{"company_aliases":["Talen Energy","TLN"]}'::jsonb
@@ -240,7 +272,7 @@ async def admin_set_gnews_queries(req: Request):
         raise HTTPException(401, "bad token")
     body = await req.json()
     ticker  = body["ticker"]
-    queries = body["queries"]        # list of {scope, query, weight?}
+    queries = body["queries"]
     with db() as con:
         cur = con.execute("select id from equity where ticker=%s", (ticker,))
         row = cur.fetchone()
@@ -306,6 +338,8 @@ async def admin_resummarize(req: Request):
     done = 0
     for aid, title, text in rows:
         try:
+            if looks_garbled(text):
+                continue
             summary = await summarize_article(aid, title or "", text or "")
             with db() as con:
                 con.execute("""
@@ -323,7 +357,6 @@ async def admin_resummarize(req: Request):
 
 @app.post("/admin/repair_gnews")
 async def admin_repair_gnews(req: Request):
-    """Unwrap previously saved Google News links -> publisher; re-fetch & refresh article fields."""
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
         raise HTTPException(401, "bad token")
     q = req.query_params
@@ -332,16 +365,22 @@ async def admin_repair_gnews(req: Request):
     with db() as con:
         cur = con.execute("""
           select id, url, canonical_url from article
-          where (publisher ilike '%%news.google.com%%' or url ilike '%%news.google.com%%' or canonical_url ilike '%%news.google.com%%')
+          where (publisher ilike '%%news.google.com%%' or url ilike '%%news.google.com%%' or canonical_url ilike '%%news.google.com%%'
+                 or url ilike '%%lh3.googleusercontent.com%%' or canonical_url ilike '%%lh3.googleusercontent.com%%')
             and created_at > now() - (%s || ' hours')::interval
           order by id desc
-          limit 500
+          limit 800
         """, (hours,))
         rows = cur.fetchall()
     for aid, u, cu in rows:
         try:
             target = unwrap_gnews_url(cu or u)
+            if is_image_url(target) or is_blocked_host(urlparse(target).hostname):
+                continue
             title, publisher, clean, published_at, final_url = await fetch_text(target)
+            host = urlparse(final_url).hostname or ""
+            if is_blocked_host(host) or looks_garbled(clean):
+                continue
             canon = normalize_url(final_url)
             with db() as con:
                 con.execute("""
@@ -356,15 +395,18 @@ async def admin_repair_gnews(req: Request):
 
 # ---------- fetch & parse ----------
 async def fetch_text(url: str, depth: int = 0) -> Tuple[str,str,str,dt.datetime,str]:
-    """Return (title, publisher, clean_text, published_at, final_url). Follows gNews wrappers aggressively."""
+    """Return (title, publisher, clean_text, published_at, final_url)."""
     if depth > 3:
         return ("", urlparse(url).hostname or "", "", now_utc(), url)
 
+    # unwrap & pre-filter
     url = unwrap_gnews_url(url)
+    if is_image_url(url) or is_blocked_host((urlparse(url).hostname or "")):
+        return ("", urlparse(url).hostname or "", "", now_utc(), url)
 
     headers = {
         "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 QuantBriefBot/1.2",
+                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 QuantBriefBot/1.3",
         "Accept-Language": "en-US,en;q=0.9",
     }
     async with httpx.AsyncClient(follow_redirects=True, timeout=25) as h:
@@ -373,39 +415,48 @@ async def fetch_text(url: str, depth: int = 0) -> Tuple[str,str,str,dt.datetime,
         html = r.text
         final_url = str(r.url)
 
-    # If still on gNews, aggressively extract an external link and refetch
-    if is_gnews(final_url):
-        m = re.search(r'(?:[?&]url=)(https?%3A%2F%2F[^&"\'<> ]+)', html)
-        if m:
-            return await fetch_text(unquote(m.group(1)), depth+1)
-        m = re.search(r'data-n-au="(https?://[^"]+)"', html)
-        if m and "google." not in (urlparse(m.group(1)).hostname or ""):
-            return await fetch_text(m.group(1), depth+1)
-        for m in re.finditer(r'"url"\s*:\s*"(https?://[^"]+)"', html):
-            cand = m.group(1)
-            if "google." not in (urlparse(cand).hostname or ""):
-                return await fetch_text(cand, depth+1)
-        for m in re.finditer(r'href="(https?://[^"]+)"', html):
-            cand = m.group(1)
-            host = urlparse(cand).hostname or ""
-            if "google." not in host and not host.endswith("gstatic.com"):
-                return await fetch_text(cand, depth+1)
+    host = urlparse(final_url).hostname or ""
+    if is_blocked_host(host):
+        return ("", host, "", now_utc(), final_url)
 
-    # Parse article page
+    # If still on gNews, aggressively extract external link and refetch
+    if is_gnews(final_url):
+        # try ?url= inside the HTML
+        for pat in [
+            r'(?:[?&]url=)(https?%3A%2F%2F[^&"\'<> ]+)',
+            r'data-n-au="(https?://[^"]+)"',
+            r'"url"\s*:\s*"(https?://[^"]+)"',
+            r'href="(https?://[^"]+)"'
+        ]:
+            m = re.search(pat, html)
+            if m:
+                cand = unquote(m.group(1))
+                if not is_blocked_host(urlparse(cand).hostname or ""):
+                    return await fetch_text(cand, depth+1)
+
+    # Parse article DOM
     doc = Document(html)
     title = (doc.short_title() or "").strip()
     if not title:
         t = re.search(r"<title>(.*?)</title>", html, re.I|re.S)
         title = (t.group(1).strip() if t else "")
-    content_html = doc.summary(html_partial=True)
-    publisher = urlparse(final_url).hostname or ""
+
+    content_html = doc.summary(html_partial=True) or ""
+    publisher = host
     published_at = now_utc()
-    clean = re.sub("<[^<]+?>"," ", content_html or "")
+    clean = re.sub("<[^<]+?>"," ", content_html)
     clean = re.sub(r"\s+"," ", clean).strip()
+
+    # fallbacks
     if not clean:
         og = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
         if og:
             clean = og.group(1).strip()
+
+    # filter aggregator/gibberish
+    if looks_garbled(clean) or "Comprehensive up-to-date news coverage" in clean:
+        return (title, publisher, "", published_at, final_url)
+
     return title, publisher, clean, published_at, final_url
 
 def rss_time(entry) -> dt.datetime:
@@ -421,7 +472,11 @@ async def ingest_ir_feed(feed_url: str) -> int:
     with db() as con:
         for e in parsed.entries[:50]:
             raw = e.link
+            if is_image_url(raw) or is_blocked_host(urlparse(raw).hostname or ""):
+                continue
             url = normalize_url(unwrap_gnews_url(raw))
+            if is_image_url(url) or is_blocked_host(urlparse(url).hostname or ""):
+                continue
             key = sha256(url)
             published_at = rss_time(e)
             title = getattr(e, "title", "") or ""
@@ -456,6 +511,8 @@ async def gdelt_search(q: str, minutes: int=60, maxrecords: int=50) -> List[str]
         u = row.get("url","")
         if not u: continue
         u = normalize_url(unwrap_gnews_url(u))
+        if is_image_url(u) or is_blocked_host(urlparse(u).hostname or ""):
+            continue
         out.append(u)
     seen=set(); uniq=[]
     for u in out:
@@ -471,36 +528,56 @@ async def gdelt_urls_from_rules(rules: dict, minutes: int=60) -> List[str]:
     urls = await gdelt_search(q, minutes=minutes, maxrecords=75)
     return urls[:40]
 
-# ---------- Google News RSS (aggressive unwrap) ----------
+# ---------- Google News RSS (stricter unwrap) ----------
 def google_news_rss_urls(query: str, max_items: int=40) -> List[str]:
     rss = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
     parsed = feedparser.parse(rss)
     urls=[]
     for e in parsed.entries[:max_items]:
-        link = e.get("link") or ""
-        # 1) Standard unwrap if ?url= present
-        u = normalize_url(unwrap_gnews_url(link))
-        if not is_gnews(u):
-            urls.append(u)
-            continue
-        # 2) Try entry.links for direct publisher
+        # Prefer links that are HTML pages
+        picked = None
         for L in e.get("links", []):
             href = L.get("href") or ""
-            if href and not is_gnews(href) and "google." not in (urlparse(href).hostname or ""):
-                urls.append(normalize_url(href))
-                break
-        else:
-            # 3) Try summary/description HTML
+            typ  = (L.get("type") or "").lower()
+            if not href: continue
+            if typ and not ("html" in typ):
+                continue
+            if is_image_url(href) or is_blocked_host(urlparse(href).hostname or ""):
+                continue
+            if "google." in (urlparse(href).hostname or ""):
+                continue
+            picked = href
+            break
+
+        if not picked:
+            # Try entry.link
+            link = e.get("link") or ""
+            if link and not is_image_url(link):
+                picked = unwrap_gnews_url(link)
+
+        if not picked:
+            # Try summary HTML anchors
             summ = e.get("summary") or e.get("description") or ""
             summ = html_lib.unescape(summ)
-            m = re.search(r'href="(https?://[^"]+)"', summ)
-            if m:
-                href = m.group(1)
-                if not is_gnews(href) and "google." not in (urlparse(href).hostname or ""):
-                    urls.append(normalize_url(href))
+            for m in re.finditer(r'href="(https?://[^"]+)"', summ):
+                cand = m.group(1)
+                if is_image_url(cand): 
                     continue
-            # 4) Fall back to gNews link (we'll try again in fetch_text)
-            urls.append(u)
+                host = urlparse(cand).hostname or ""
+                if "google." in host or is_blocked_host(host):
+                    continue
+                picked = cand
+                break
+
+        if not picked:
+            # last resort: keep the gNews link; fetch_text() will try to unwrap
+            picked = e.get("link") or ""
+
+        if picked:
+            picked = normalize_url(unwrap_gnews_url(picked))
+            if not is_image_url(picked) and not is_blocked_host(urlparse(picked).hostname or ""):
+                urls.append(picked)
+
     # de-dup
     seen=set(); out=[]
     for u in urls:
@@ -509,17 +586,27 @@ def google_news_rss_urls(query: str, max_items: int=40) -> List[str]:
     return out
 
 # ---------- Upsert & summarize ----------
-async def upsert_article(url: str, equity_id: int, tag_kind: str):
+async def upsert_article(url: str, equity_id: int, tag_kind: str) -> bool:
     url = normalize_url(unwrap_gnews_url(url))
+    if is_image_url(url) or is_blocked_host(urlparse(url).hostname or ""):
+        return False
+
     title, publisher, clean, published_at, final_url = await fetch_text(url)
+    host = urlparse(final_url).hostname or ""
+
+    # Drop if blocked/garbled/empty
+    if is_blocked_host(host) or looks_garbled(clean):
+        return False
+
     canon = normalize_url(final_url)
     key = sha256(canon)
+
     with db() as con:
         try:
             con.execute("""
               insert into article(url,canonical_url,title,publisher,published_at,sha256,raw_html,clean_text)
               values (%s,%s,%s,%s,%s,%s,%s,%s)
-            """,(url, canon, title, publisher, published_at, key, None, clean))
+            """,(url, canon, title, host, published_at, key, None, clean))
         except Exception:
             pass
         cur = con.execute("select id from article where sha256=%s",(key,))
@@ -542,7 +629,7 @@ def fallback_summary(title: str, text: str) -> str:
     return f"• What matters — {gist}\n• Stance — Neutral"
 
 async def summarize_article(aid: int, title: str, text: str) -> str:
-    if not OPENAI_API_KEY:
+    if not OPENAI_API_KEY or looks_garbled(text):
         return fallback_summary(title, text)
     try:
         from openai import OpenAI
@@ -619,7 +706,7 @@ async def cron_ingest(req: Request):
     except Exception:
         pass
 
-    # 2) Google News RSS (first-class via saved queries)
+    # 2) Google News RSS (from saved queries)
     with db() as con:
         cur = con.execute("select scope, query, weight from gnews_query where equity_id=%s and active order by weight desc, id",
                           (tln_id,))
@@ -668,14 +755,14 @@ async def cron_ingest(req: Request):
           from article a
           where a.created_at > now() - interval '3 days'
           order by a.id desc
-          limit 140
+          limit 160
         """)
         rows = cur.fetchall()
 
     for aid, title, text in rows:
         try:
-            # Optional: skip ultra-thin pages
-            # if len((text or "")) < 400: continue
+            if looks_garbled(text):
+                continue
             summary = await summarize_article(aid, title or "", text or "")
             with db() as con:
                 con.execute("""
@@ -728,7 +815,9 @@ async def cron_digest(req: Request):
           from article a
           left join article_nlp n on n.article_id=a.id
           join article_tag t on t.article_id=a.id and t.equity_id=%s
-          where a.published_at between %s and %s and t.tag_kind in ('company','industry','peer')
+          where a.published_at between %s and %s
+            and t.tag_kind in ('company','industry','peer')
+            and coalesce(a.clean_text,'') <> ''
           order by a.published_at desc
         """,(equity_id, start, end))
         items = [dict(zip([d.name for d in cur.description], r)) for r in cur.fetchall()]

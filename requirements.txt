@@ -8,3 +8,4 @@ psycopg[binary]
 python-dotenv
 jinja2
 openai
+requests

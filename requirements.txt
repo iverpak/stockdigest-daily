@@ -10,11 +10,11 @@ requests==2.32.3
 httpx==0.27.2
 feedparser==6.0.11
 trafilatura==1.9.0
-# trafilatura 1.9.0 requires lxml < 5.2 on Linux
+# trafilatura 1.9.0 on Linux requires lxml < 5.2
 lxml==5.1.0
 beautifulsoup4==4.12.3
 jinja2==3.1.4
 python-dateutil==2.9.0.post0
 
-# OpenAI SDK — tested path
+# OpenAI SDK — keep this; code works even if Responses is missing
 openai==1.40.0

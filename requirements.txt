@@ -3,16 +3,18 @@ uvicorn[standard]==0.30.6
 
 # DB
 psycopg==3.2.1
-psycopg2-binary==2.9.9
 
-# Feeds + extraction
+# HTTP & feeds
 requests==2.32.3
 feedparser==6.0.11
+python-dateutil==2.9.0.post0
+
+# Content extraction (pin lxml <5.2.0 to satisfy trafilatura)
 trafilatura==1.9.0
 lxml==5.1.0
-beautifulsoup4==4.12.3
-python-dateutil==2.9.0.post0
+
+# Templates
 jinja2==3.1.4
 
-# OpenAI SDK (Chat Completions)
-openai==1.40.0
+# OpenAI SDK (proxy-safe, works fine with gpt-5-mini)
+openai==1.51.0

@@ -29,7 +29,7 @@ log.setLevel(logging.INFO)
 # ----------------------------
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme")
 DATABASE_URL = os.environ["DATABASE_URL"]
-OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "you@example.com")
+OWNER_EMAIL = os.environ.get("OWNER_EMAIL")  # optional; only seed if set
 
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "300"))
@@ -59,6 +59,7 @@ def db() -> psycopg.Connection:
 
 def ensure_schema(conn: psycopg.Connection):
     with conn.cursor() as cur:
+        # Core tables we control
         cur.execute("""
         CREATE TABLE IF NOT EXISTS recipients (
           id BIGSERIAL PRIMARY KEY,
@@ -67,7 +68,8 @@ def ensure_schema(conn: psycopg.Connection):
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
 
-        CREATE TABLE IF NOT EXISTS watchlist (
+        -- Use a namespaced watchlist to avoid collisions with any legacy "watchlist"
+        CREATE TABLE IF NOT EXISTS qb_watchlist (
           id BIGSERIAL PRIMARY KEY,
           ticker TEXT NOT NULL UNIQUE,
           company TEXT,
@@ -107,16 +109,19 @@ def ensure_schema(conn: psycopg.Connection):
         CREATE UNIQUE INDEX IF NOT EXISTS idx_article_url_unique ON article (url);
         """)
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO recipients (email) VALUES (%s) ON CONFLICT DO NOTHING", (OWNER_EMAIL,))
+        # Seed owner if provided
+        if OWNER_EMAIL:
+            cur.execute("INSERT INTO recipients (email) VALUES (%s) ON CONFLICT DO NOTHING", (OWNER_EMAIL,))
+        # Seed a default ticker so you get results out-of-the-box
         cur.execute("""
-            INSERT INTO watchlist (ticker, company)
+            INSERT INTO qb_watchlist (ticker, company)
             VALUES ('TLN','Talen Energy')
             ON CONFLICT (ticker) DO NOTHING
         """)
 
 def get_watchlist(conn: psycopg.Connection) -> List[Dict[str, Any]]:
     with conn.cursor() as cur:
-        cur.execute("SELECT ticker, COALESCE(company, ticker) AS company FROM watchlist ORDER BY ticker")
+        cur.execute("SELECT ticker, COALESCE(company, ticker) AS company FROM qb_watchlist ORDER BY ticker")
         return list(cur.fetchall())
 
 def upsert_article(conn: psycopg.Connection, rec: Dict[str, Any]) -> Optional[int]:
@@ -194,66 +199,60 @@ def get_openai() -> OpenAI:
 def clamp_tokens(n: int) -> int:
     return max(128, min(n, 2000))
 
-def _call_chat(model: str, user_text: str, max_tokens: Optional[int], temperature: float) -> str:
+def temp_for_model(model: str, desired: float) -> Optional[float]:
+    # gpt-5-mini only supports default temp (1), so omit param entirely
+    if model.strip().lower() == "gpt-5-mini":
+        return None
+    return desired
+
+def _call_chat(model: str, user_text: str, max_tokens: Optional[int], temperature: Optional[float]) -> str:
     client = get_openai()
-    kwargs = {
+    kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [
             {"role": "system", "content": "You summarize financial news conservatively and concisely."},
             {"role": "user", "content": user_text},
         ],
-        "temperature": temperature,
     }
     if isinstance(max_tokens, int):
-        kwargs["max_tokens"] = max_tokens  # usual param for Chat Completions
+        kwargs["max_tokens"] = max_tokens
+    if temperature is not None:
+        kwargs["temperature"] = temperature
 
     resp = client.chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "").strip()
 
-def try_chat_or_fallback(model: str, user_text: str, max_tokens: int, temperature: float) -> str:
-    """
-    1) Try Chat Completions with max_tokens (works for many models including past gpt-5-mini behavior).
-    2) If server says to use max_completion_tokens, try Responses.create with max_output_tokens.
-    3) If Responses API is unavailable, retry Chat Completions WITHOUT any max token param and force brevity in the prompt.
-    """
+def try_chat_or_fallback(model: str, user_text: str, max_tokens: int, temperature: Optional[float]) -> str:
     try:
         return _call_chat(model, user_text, max_tokens=max_tokens, temperature=temperature)
     except Exception as e:
         msg = str(e)
-        # If the platform insists on "max_completion_tokens", prefer Responses API if present.
+        # If platform insists on max_completion_tokens, try Responses API (max_output_tokens)
         if ("max_tokens" in msg and "max_completion_tokens" in msg) or "Use 'max_completion_tokens' instead" in msg:
             client = get_openai()
             try:
-                # Use Responses API if available in this SDK version
                 if hasattr(client, "responses") and hasattr(client.responses, "create"):
-                    resp2 = client.responses.create(
-                        model=model,
-                        input=[
+                    kwargs: Dict[str, Any] = {
+                        "model": model,
+                        "input": [
                             {"role": "system", "content": "You summarize financial news conservatively and concisely."},
                             {"role": "user", "content": user_text},
                         ],
-                        max_output_tokens=max_tokens,  # correct param name for Responses
-                        temperature=temperature,
-                    )
+                        "max_output_tokens": max_tokens,
+                    }
+                    if temperature is not None:
+                        kwargs["temperature"] = temperature
+                    resp2 = client.responses.create(**kwargs)
                     return (getattr(resp2, "output_text", None) or "").strip()
-                # If not available, fall back to chat without any token cap, but tighten prompt
                 else:
-                    shortened_user = (
-                        "Return <= 120 tokens total. Use exactly two bullets.\n\n" + user_text
-                    )
+                    shortened_user = "Return <= 120 tokens. Use exactly two bullets.\n\n" + user_text
                     return _call_chat(model, shortened_user, max_tokens=None, temperature=temperature)
             except Exception:
-                # Final fallback: chat without token cap
-                shortened_user = (
-                    "Return <= 120 tokens total. Use exactly two bullets.\n\n" + user_text
-                )
+                shortened_user = "Return <= 120 tokens. Use exactly two bullets.\n\n" + user_text
                 return _call_chat(model, shortened_user, max_tokens=None, temperature=temperature)
         # Any other error: last-ditch prompt-shortening retry
-        try:
-            shortened_user = "Return <= 120 tokens total. Use exactly two bullets.\n\n" + user_text
-            return _call_chat(model, shortened_user, max_tokens=None, temperature=temperature)
-        except Exception as e2:
-            raise e2
+        shortened_user = "Return <= 120 tokens. Use exactly two bullets.\n\n" + user_text
+        return _call_chat(model, shortened_user, max_tokens=None, temperature=temperature)
 
 # ----------------------------
 # Utilities
@@ -405,12 +404,14 @@ def summarize_text(text: str, title: Optional[str]) -> Dict[str, str]:
     prompt = f"Title: {title}\n\n{SUMMARY_PROMPT}" if title else SUMMARY_PROMPT
     user_text = f"{prompt}\n\n---\n{text}\n---"
 
+    temperature = temp_for_model(OPENAI_MODEL, 0.2)
+
     try:
         out = try_chat_or_fallback(
             model=OPENAI_MODEL,
             user_text=user_text,
             max_tokens=max_toks,
-            temperature=0.2,
+            temperature=temperature,
         )
         stance_match = re.search(r"Stance\s*—\s*(Positive|Neutral|Negative)", out, re.IGNORECASE)
         stance = stance_match.group(1).capitalize() if stance_match else "Neutral"
@@ -532,13 +533,12 @@ def admin_health():
             sumd = cur.fetchone()["c"]
             cur.execute("SELECT COUNT(*) c FROM recipients")
             recs = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) c FROM watchlist")
+            cur.execute("SELECT COUNT(*) c FROM qb_watchlist")
             w = cur.fetchone()["c"]
         conn.close()
         counts = f"articles={arts}\nsummarized={sumd}\nrecipients={recs}\nwatchlist={w}\n"
         return PlainTextResponse("env\n---\n" + json.dumps(present, indent=2) + "\n\ncounts\n------\n" + counts)
     except Exception as e:
-        # Return details instead of a hard 500 so you can see the cause in PowerShell
         return PlainTextResponse("env\n---\n" + json.dumps(present, indent=2) + "\n\nerrors\n------\n" + str(e) + "\n")
 
 @app.get("/admin/test_openai", dependencies=[Depends(require_admin)])
@@ -548,7 +548,7 @@ def test_openai():
             model=OPENAI_MODEL,
             user_text="Say OK",
             max_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS),
-            temperature=0.0,
+            temperature=temp_for_model(OPENAI_MODEL, 0.0),
         )
         return PlainTextResponse(f"   ok model      sample\n   -- -----      ------\nTrue {OPENAI_MODEL} {sample}\n")
     except Exception as e:

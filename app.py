@@ -1,4 +1,4 @@
-import os, re, json, traceback, datetime as dt
+import os, re, json, traceback, datetime as dt, html as html_lib
 from typing import List, Tuple
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, quote_plus, unquote
 
@@ -19,7 +19,6 @@ ADMIN_TOKEN     = os.getenv("ADMIN_TOKEN", "")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL missing")
 
-# ---------- APP ----------
 app = FastAPI()
 
 # ---------- SQL ----------
@@ -118,6 +117,17 @@ create table if not exists delivery_log (
   sent_at timestamptz default now(),
   unique (user_id, run_date)
 );
+
+-- First-class Google News query storage
+create table if not exists gnews_query (
+  id serial primary key,
+  equity_id int references equity(id),
+  scope text not null default 'industry', -- 'company' | 'industry' | 'peer'
+  query text not null,
+  active boolean default true,
+  weight int default 10,
+  created_at timestamptz default now()
+);
 """
 
 def db():
@@ -146,20 +156,18 @@ def is_gnews(u: str) -> bool:
     return host.endswith("news.google.com")
 
 def unwrap_gnews_url(u: str) -> str:
-    """Try to pull the publisher URL out of a Google News redirect link."""
+    """Pull the publisher URL out of a Google News redirect link if present."""
     if not is_gnews(u):
         return u
     p = urlparse(u)
     q = dict(parse_qsl(p.query))
-    # Most RSS items carry the real article in ?url=
     if "url" in q and q["url"]:
         return unquote(q["url"])
-    # Sometimes it's in ?q=
     if "q" in q and q["q"].startswith("http"):
         return unquote(q["q"])
     return u
 
-# ---------- admin ----------
+# ---------- admin: init/seed/config ----------
 @app.post("/admin/init")
 async def admin_init(req: Request):
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
@@ -226,6 +234,43 @@ async def admin_set_gdelt_filter(req: Request):
         """,(set_id,))
     return {"ok": True}
 
+@app.post("/admin/set_gnews_queries")
+async def admin_set_gnews_queries(req: Request):
+    if req.headers.get("x-admin-token") != ADMIN_TOKEN:
+        raise HTTPException(401, "bad token")
+    body = await req.json()
+    ticker  = body["ticker"]
+    queries = body["queries"]        # list of {scope, query, weight?}
+    with db() as con:
+        cur = con.execute("select id from equity where ticker=%s", (ticker,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(400, f"unknown ticker {ticker}")
+        equity_id = row[0]
+        con.execute("delete from gnews_query where equity_id=%s", (equity_id,))
+        for q in queries:
+            scope  = q.get("scope","industry")
+            query  = q["query"]
+            weight = int(q.get("weight",10))
+            con.execute(
+                "insert into gnews_query(equity_id,scope,query,weight) values (%s,%s,%s,%s)",
+                (equity_id, scope, query, weight)
+            )
+    return {"ok": True}
+
+@app.get("/admin/list_gnews_queries")
+async def admin_list_gnews_queries(req: Request, ticker: str):
+    if req.headers.get("x-admin-token") != ADMIN_TOKEN:
+        raise HTTPException(401, "bad token")
+    with db() as con:
+        cur = con.execute("""
+          select q.id, e.ticker, q.scope, q.query, q.weight, q.active
+          from gnews_query q join equity e on e.id=q.equity_id
+          where e.ticker=%s order by q.weight desc, q.id
+        """,(ticker,))
+        rows = [dict(zip([d.name for d in cur.description], r)) for r in cur.fetchall()]
+    return {"ok": True, "items": rows}
+
 @app.get("/admin/test_openai")
 async def admin_test_openai(req: Request):
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
@@ -282,7 +327,7 @@ async def admin_repair_gnews(req: Request):
     if req.headers.get("x-admin-token") != ADMIN_TOKEN:
         raise HTTPException(401, "bad token")
     q = req.query_params
-    hours = int(q.get("hours", "72"))
+    hours = int(q.get("hours", "96"))
     fixed = 0
     with db() as con:
         cur = con.execute("""
@@ -290,7 +335,7 @@ async def admin_repair_gnews(req: Request):
           where (publisher ilike '%%news.google.com%%' or url ilike '%%news.google.com%%' or canonical_url ilike '%%news.google.com%%')
             and created_at > now() - (%s || ' hours')::interval
           order by id desc
-          limit 300
+          limit 500
         """, (hours,))
         rows = cur.fetchall()
     for aid, u, cu in rows:
@@ -311,16 +356,15 @@ async def admin_repair_gnews(req: Request):
 
 # ---------- fetch & parse ----------
 async def fetch_text(url: str, depth: int = 0) -> Tuple[str,str,str,dt.datetime,str]:
-    """Return (title, publisher, clean_text, published_at, final_url). Follows gNews wrappers."""
-    if depth > 2:
-        # stop infinite loops
+    """Return (title, publisher, clean_text, published_at, final_url). Follows gNews wrappers aggressively."""
+    if depth > 3:
         return ("", urlparse(url).hostname or "", "", now_utc(), url)
 
     url = unwrap_gnews_url(url)
 
     headers = {
         "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 QuantBriefBot/1.1",
+                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 QuantBriefBot/1.2",
         "Accept-Language": "en-US,en;q=0.9",
     }
     async with httpx.AsyncClient(follow_redirects=True, timeout=25) as h:
@@ -329,36 +373,39 @@ async def fetch_text(url: str, depth: int = 0) -> Tuple[str,str,str,dt.datetime,
         html = r.text
         final_url = str(r.url)
 
-    # If we still landed on gNews, try extracting ?url= from HTML and refetch once
+    # If still on gNews, aggressively extract an external link and refetch
     if is_gnews(final_url):
-        # Look for a percent-encoded 'url=' target
         m = re.search(r'(?:[?&]url=)(https?%3A%2F%2F[^&"\'<> ]+)', html)
         if m:
-            target = unquote(m.group(1))
-            return await fetch_text(target, depth+1)
-        # Or any obvious external link
-        m2 = re.search(r'href="(https?://[^"]+)"', html)
-        if m2 and not is_gnews(m2.group(1)) and "google." not in urlparse(m2.group(1)).hostname:
-            return await fetch_text(m2.group(1), depth+1)
+            return await fetch_text(unquote(m.group(1)), depth+1)
+        m = re.search(r'data-n-au="(https?://[^"]+)"', html)
+        if m and "google." not in (urlparse(m.group(1)).hostname or ""):
+            return await fetch_text(m.group(1), depth+1)
+        for m in re.finditer(r'"url"\s*:\s*"(https?://[^"]+)"', html):
+            cand = m.group(1)
+            if "google." not in (urlparse(cand).hostname or ""):
+                return await fetch_text(cand, depth+1)
+        for m in re.finditer(r'href="(https?://[^"]+)"', html):
+            cand = m.group(1)
+            host = urlparse(cand).hostname or ""
+            if "google." not in host and not host.endswith("gstatic.com"):
+                return await fetch_text(cand, depth+1)
 
+    # Parse article page
     doc = Document(html)
     title = (doc.short_title() or "").strip()
     if not title:
         t = re.search(r"<title>(.*?)</title>", html, re.I|re.S)
         title = (t.group(1).strip() if t else "")
-
     content_html = doc.summary(html_partial=True)
     publisher = urlparse(final_url).hostname or ""
-    published_at = now_utc()  # fallback (safe; RSS handlers set real times separately if used)
+    published_at = now_utc()
     clean = re.sub("<[^<]+?>"," ", content_html or "")
     clean = re.sub(r"\s+"," ", clean).strip()
-
-    # Fallback to og:description if readability got nothing
     if not clean:
         og = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
         if og:
             clean = og.group(1).strip()
-
     return title, publisher, clean, published_at, final_url
 
 def rss_time(entry) -> dt.datetime:
@@ -410,7 +457,6 @@ async def gdelt_search(q: str, minutes: int=60, maxrecords: int=50) -> List[str]
         if not u: continue
         u = normalize_url(unwrap_gnews_url(u))
         out.append(u)
-    # de-dup
     seen=set(); uniq=[]
     for u in out:
         if u not in seen:
@@ -425,17 +471,36 @@ async def gdelt_urls_from_rules(rules: dict, minutes: int=60) -> List[str]:
     urls = await gdelt_search(q, minutes=minutes, maxrecords=75)
     return urls[:40]
 
-# ---------- Google News RSS (fallback; no key) ----------
+# ---------- Google News RSS (aggressive unwrap) ----------
 def google_news_rss_urls(query: str, max_items: int=40) -> List[str]:
-    """Return publisher links from Google News RSS by unwrapping ?url=."""
     rss = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
     parsed = feedparser.parse(rss)
     urls=[]
     for e in parsed.entries[:max_items]:
-        link = e.get("link")
-        if not link: continue
-        link = normalize_url(unwrap_gnews_url(link))
-        urls.append(link)
+        link = e.get("link") or ""
+        # 1) Standard unwrap if ?url= present
+        u = normalize_url(unwrap_gnews_url(link))
+        if not is_gnews(u):
+            urls.append(u)
+            continue
+        # 2) Try entry.links for direct publisher
+        for L in e.get("links", []):
+            href = L.get("href") or ""
+            if href and not is_gnews(href) and "google." not in (urlparse(href).hostname or ""):
+                urls.append(normalize_url(href))
+                break
+        else:
+            # 3) Try summary/description HTML
+            summ = e.get("summary") or e.get("description") or ""
+            summ = html_lib.unescape(summ)
+            m = re.search(r'href="(https?://[^"]+)"', summ)
+            if m:
+                href = m.group(1)
+                if not is_gnews(href) and "google." not in (urlparse(href).hostname or ""):
+                    urls.append(normalize_url(href))
+                    continue
+            # 4) Fall back to gNews link (we'll try again in fetch_text)
+            urls.append(u)
     # de-dup
     seen=set(); out=[]
     for u in urls:
@@ -477,7 +542,6 @@ def fallback_summary(title: str, text: str) -> str:
     return f"• What matters — {gist}\n• Stance — Neutral"
 
 async def summarize_article(aid: int, title: str, text: str) -> str:
-    # If text is extremely short (e.g., headline only), we still attempt OpenAI; otherwise fallback will handle
     if not OPENAI_API_KEY:
         return fallback_summary(title, text)
     try:
@@ -536,12 +600,17 @@ async def cron_ingest(req: Request):
             "exclude_keywords": r[4] if r else [],
         }
 
-    # IR feeds (if any)
+    # IR feeds
     for f in feeds:
         try:
             await ingest_ir_feed(f)
         except Exception:
             pass
+
+    # Existing hashes for dedupe
+    with db() as con:
+        cur_existing = con.execute("select sha256 from article")
+        existing_hashes = {row[0] for row in cur_existing.fetchall()}
 
     # 1) GDELT
     try:
@@ -550,29 +619,48 @@ async def cron_ingest(req: Request):
     except Exception:
         pass
 
-    # 2) Google News RSS fallback
-    if len(new_urls) < 5:
-        q = '("Talen Energy" OR TLN OR "independent power" OR PJM OR ERCOT OR "power purchase agreement" OR "data center")'
-        g_urls = google_news_rss_urls(q, max_items=50)
-        new_urls.update(g_urls)
-
-    # Upsert / tag (limit to avoid spam) and skip exact duplicates
-    inserted=0
+    # 2) Google News RSS (first-class via saved queries)
     with db() as con:
-        cur_existing = con.execute("select sha256 from article")
-        existing_hashes = {row[0] for row in cur_existing.fetchall()}
+        cur = con.execute("select scope, query, weight from gnews_query where equity_id=%s and active order by weight desc, id",
+                          (tln_id,))
+        gq = cur.fetchall()
+
+    gnews_batch = []
+    for scope, qtext, weight in gq:
+        try:
+            urls = google_news_rss_urls(qtext, max_items=30)
+            for u in urls:
+                gnews_batch.append((u, scope, weight))
+        except Exception:
+            pass
+
+    # Rank by weight then upsert unique
+    gnews_batch.sort(key=lambda x: x[2], reverse=True)
+    inserted = 0
+    for u, scope, _w in gnews_batch:
+        try:
+            canon_key = sha256(normalize_url(unwrap_gnews_url(u)))
+            if canon_key in existing_hashes:
+                continue
+            if await upsert_article(u, tln_id, scope):
+                existing_hashes.add(canon_key)
+                inserted += 1
+        except Exception as e:
+            print(f"[ingest gnews upsert] failed for {u}: {e}")
+
+    # Also bring in a limited set from GDELT
     for u in list(new_urls)[:30]:
         try:
             canon_key = sha256(normalize_url(unwrap_gnews_url(u)))
             if canon_key in existing_hashes:
                 continue
-            ok = await upsert_article(u, tln_id, "company")
-            if ok:
+            if await upsert_article(u, tln_id, "company"):
+                existing_hashes.add(canon_key)
                 inserted += 1
         except Exception as e:
             print(f"[ingest upsert] failed for {u}: {e}")
 
-    # Summarize recent articles (UPSERT so you always get content)
+    # Summarize recent articles (UPSERT)
     summarized = 0
     with db() as con:
         cur = con.execute("""
@@ -580,12 +668,14 @@ async def cron_ingest(req: Request):
           from article a
           where a.created_at > now() - interval '3 days'
           order by a.id desc
-          limit 100
+          limit 140
         """)
         rows = cur.fetchall()
 
     for aid, title, text in rows:
         try:
+            # Optional: skip ultra-thin pages
+            # if len((text or "")) < 400: continue
             summary = await summarize_article(aid, title or "", text or "")
             with db() as con:
                 con.execute("""
@@ -599,7 +689,7 @@ async def cron_ingest(req: Request):
         except Exception as e:
             print(f"[ingest summarize] failed for {aid}: {e}")
 
-    return {"ok": True, "found_urls": len(new_urls), "inserted": inserted, "summarized": summarized}
+    return {"ok": True, "found_urls": len(new_urls) + len(gnews_batch), "inserted": inserted, "summarized": summarized}
 
 # ---------- CRON: DIGEST ----------
 @app.get("/cron/digest")
@@ -628,19 +718,24 @@ async def cron_digest(req: Request):
 
     with db() as con:
         cur = con.execute("""
-          select a.id,a.url,a.title,a.publisher,a.published_at,coalesce(n.summary,'') as summary
+          select a.id,
+                 a.url,
+                 a.canonical_url,
+                 a.title,
+                 a.publisher,
+                 a.published_at,
+                 coalesce(n.summary,'') as summary
           from article a
           left join article_nlp n on n.article_id=a.id
           join article_tag t on t.article_id=a.id and t.equity_id=%s
-          where a.published_at between %s and %s and t.tag_kind in ('company')
+          where a.published_at between %s and %s and t.tag_kind in ('company','industry','peer')
           order by a.published_at desc
         """,(equity_id, start, end))
-        company_items = [dict(zip([d.name for d in cur.description], r)) for r in cur.fetchall()]
+        items = [dict(zip([d.name for d in cur.description], r)) for r in cur.fetchall()]
 
-    none_found = not company_items
+    none_found = not items
 
-    # Load email template (fallback inline if file missing)
-    html = ""
+    # Template if available
     try:
         with open("email_template.html","r",encoding="utf-8") as f:
             tpl = Template(f.read())
@@ -649,17 +744,19 @@ async def cron_digest(req: Request):
             end_local=end.strftime("%Y-%m-%d %H:%M"),
             ticker=ticker,
             company_name=company_name,
-            company_items=company_items,
+            company_items=items,
             none_found=none_found
         )
     except Exception:
-        # simple fallback template
         items_html = "".join(
-            f"<li><a href='{i['url']}'><b>{(i.get('title') or i['url']).strip()}</b></a>"
-            f"<div style='font-size:12px;color:#666'>{i.get('publisher','')}"
-            f"{' — ' + str(i.get('published_at')) if i.get('published_at') else ''}</div>"
-            f"<div>{(i.get('summary') or '').replace('\n','<br>')}</div></li>"
-            for i in company_items
+            (
+              lambda href:
+              f"<li><a href='{href}'><b>{(i.get('title') or href).strip()}</b></a>"
+              f"<div style='font-size:12px;color:#666'>{i.get('publisher','')}"
+              f"{' — ' + str(i.get('published_at')) if i.get('published_at') else ''}</div>"
+              f"<div>{(i.get('summary') or '').replace('\n','<br>')}</div></li>"
+            ) (i.get('canonical_url') or i.get('url'))
+            for i in items
         )
         html = f"""
         <html><body style="font-family:Arial,Helvetica,sans-serif;color:#111;">
@@ -673,7 +770,6 @@ async def cron_digest(req: Request):
         </body></html>
         """
 
-    # send via Mailgun
     async with httpx.AsyncClient(auth=("api", MAILGUN_API_KEY), timeout=25) as h:
         r = await h.post(f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages", data={
             "from": MAILGUN_FROM,
@@ -684,9 +780,11 @@ async def cron_digest(req: Request):
         r.raise_for_status()
 
     with db() as con:
-        con.execute("insert into delivery_log(user_id,run_date,items_json) values (%s,%s,%s::jsonb) on conflict do nothing",
-                    (user_id, run_date, json.dumps({"company": [c["url"] for c in company_items]})))
-    return {"ok": True, "sent_to": owner_email, "items": len(company_items)}
+        con.execute(
+            "insert into delivery_log(user_id,run_date,items_json) values (%s,%s,%s::jsonb) on conflict do nothing",
+            (user_id, run_date, json.dumps({"urls": [ (i.get("canonical_url") or i.get("url")) for i in items ]}))
+        )
+    return {"ok": True, "sent_to": owner_email, "items": len(items)}
 
 # ---------- health ----------
 @app.get("/")

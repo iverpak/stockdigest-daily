@@ -24,7 +24,9 @@ app = FastAPI(title="QuantBrief Daily")
 log = logging.getLogger("uvicorn")
 log.setLevel(logging.INFO)
 
-# --- Env ---
+# ----------------------------
+# Environment / constants
+# ----------------------------
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme")
 DATABASE_URL = os.environ["DATABASE_URL"]
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "you@example.com")
@@ -49,7 +51,9 @@ NOISY_DOMAINS = {
     "news.google.com",
 }
 
-# --- DB helpers ---
+# ----------------------------
+# DB helpers
+# ----------------------------
 def db() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, autocommit=True, row_factory=dict_row)
 
@@ -139,8 +143,8 @@ def upsert_article(conn: psycopg.Connection, rec: Dict[str, Any]) -> Optional[in
             return None
 
 def list_unsummarized(conn: psycopg.Connection, window_minutes: int = 1440) -> List[Dict[str, Any]]:
-    # Use safe interval param
     with conn.cursor() as cur:
+        # safe interval parameterization
         cur.execute("""
             SELECT a.*
             FROM article a
@@ -177,7 +181,9 @@ def list_recent_summaries(conn: psycopg.Connection, window_minutes: int = 1440) 
         """, (str(window_minutes),))
         return list(cur.fetchall())
 
-# --- OpenAI client (with compatibility) ---
+# ----------------------------
+# OpenAI helpers (robust to SDK/model quirks)
+# ----------------------------
 _openai_client: Optional[OpenAI] = None
 
 def get_openai() -> OpenAI:
@@ -186,21 +192,58 @@ def get_openai() -> OpenAI:
         _openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     return _openai_client
 
-def has_responses(client: OpenAI) -> bool:
-    try:
-        return hasattr(client, "responses") and hasattr(client.responses, "create")
-    except Exception:
-        return False
-
-def is_new_completion_model(model_name: str) -> bool:
-    # models like gpt-5-*, o4-*, gpt-4.1-* require max_completion_tokens
-    mn = model_name.lower()
-    return mn.startswith("gpt-5") or mn.startswith("o4") or mn.startswith("gpt-4.1")
-
 def clamp_tokens(n: int) -> int:
     return max(128, min(n, 2000))
 
-# --- Utils ---
+def try_chat_or_fallback(model: str, user_text: str, max_tokens: int, temperature: float) -> str:
+    """
+    1) Try Chat Completions with max_tokens (works for gpt-5-mini).
+    2) If API says max_tokens unsupported, try Responses API with max_output_tokens.
+    """
+    client = get_openai()
+
+    # First try: Chat Completions (standard)
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You summarize financial news conservatively and concisely."},
+                {"role": "user", "content": user_text},
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        msg = str(e)
+        # Known model message: suggest max_completion_tokens — which Chat Completions does not accept.
+        # In that case, switch to Responses API with max_output_tokens (if available in the SDK).
+        if "max_tokens" in msg and "max_completion_tokens" in msg:
+            try:
+                if hasattr(client, "responses") and hasattr(client.responses, "create"):
+                    resp2 = client.responses.create(
+                        model=model,
+                        input=[
+                            {"role": "system", "content": "You summarize financial news conservatively and concisely."},
+                            {"role": "user", "content": user_text},
+                        ],
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                    # responses.create offers .output_text convenience
+                    return (resp2.output_text or "").strip()
+                else:
+                    # SDK too old for Responses; bubble original error to be visible in /admin/test_openai
+                    raise RuntimeError("OpenAI SDK lacks Responses API; upgrade openai package.")
+            except Exception as e2:
+                raise e2
+        else:
+            # Any other error: rethrow
+            raise e
+
+# ----------------------------
+# Utilities
+# ----------------------------
 def as_utc(dt_like: Optional[dt.datetime]) -> Optional[dt.datetime]:
     if not dt_like:
         return None
@@ -237,7 +280,9 @@ def extract_readable(url: str) -> Dict[str, Optional[str]]:
     except Exception:
         return {"raw_html": None, "clean_text": None}
 
-# --- Ingestion (GDELT + Google News RSS) ---
+# ----------------------------
+# Ingestion (GDELT + Google News RSS)
+# ----------------------------
 def ingest_gdelt_for_query(query: str, minutes: int = 1440) -> List[Dict[str, Any]]:
     url = "https://api.gdeltproject.org/api/v2/doc/doc"
     params = {"query": query, "timespan": f"{minutes}m", "format": "json", "maxrecords": "100"}
@@ -327,7 +372,9 @@ def ingest_all(minutes: int = 1440) -> Dict[str, Any]:
     conn.close()
     return {"ok": True, "found_urls": found, "inserted": inserted}
 
-# --- Summarize + Mail ---
+# ----------------------------
+# Summarize + Mail
+# ----------------------------
 SUMMARY_PROMPT = """You are a strict buy-side junior PM analyst. Given an article excerpt, produce two fields:
 
 • What matters — 1–2 crisp sentences with the investor takeaway (no fluff).
@@ -336,47 +383,21 @@ SUMMARY_PROMPT = """You are a strict buy-side junior PM analyst. Given an articl
 Return plain text with exactly these two bullets.
 """
 
-def _chat_complete(client: OpenAI, model: str, messages: List[Dict[str, str]], max_tokens: int, temperature: float):
-    kwargs = {"model": model, "messages": messages, "temperature": temperature}
-    if is_new_completion_model(model):
-        kwargs["max_completion_tokens"] = max_tokens
-    else:
-        kwargs["max_tokens"] = max_tokens
-    return client.chat.completions.create(**kwargs)
-
 def summarize_text(text: str, title: Optional[str]) -> Dict[str, str]:
     if not text:
         return {"summary": "I don’t have the source text. Please paste key excerpts.", "stance": "Neutral"}
 
-    client = get_openai()
     max_toks = clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS)
     prompt = f"Title: {title}\n\n{SUMMARY_PROMPT}" if title else SUMMARY_PROMPT
+    user_text = f"{prompt}\n\n---\n{text}\n---"
 
     try:
-        if has_responses(client):
-            resp = client.responses.create(
-                model=OPENAI_MODEL,
-                input=[
-                    {"role": "system", "content": "You summarize financial news conservatively and concisely."},
-                    {"role": "user", "content": f"{prompt}\n\n---\n{text}\n---"}
-                ],
-                max_output_tokens=max_toks,
-                temperature=0.2,
-            )
-            out = resp.output_text.strip()
-        else:
-            resp = _chat_complete(
-                client,
-                OPENAI_MODEL,
-                [
-                    {"role": "system", "content": "You summarize financial news conservatively and concisely."},
-                    {"role": "user", "content": f"{prompt}\n\n---\n{text}\n---"}
-                ],
-                max_tokens=max_toks,
-                temperature=0.2,
-            )
-            out = (resp.choices[0].message.content or "").strip()
-
+        out = try_chat_or_fallback(
+            model=OPENAI_MODEL,
+            user_text=user_text,
+            max_tokens=max_toks,
+            temperature=0.2,
+        )
         stance_match = re.search(r"Stance\s*—\s*(Positive|Neutral|Negative)", out, re.IGNORECASE)
         stance = stance_match.group(1).capitalize() if stance_match else "Neutral"
         return {"summary": out, "stance": stance}
@@ -462,13 +483,17 @@ def run_summarize_and_send(window_minutes: int = 1440) -> Dict[str, Any]:
     conn.close()
     return {"ok": True, "sent_to": to_list, "items": len(items), "summarized": summarized, "mail": mail_res}
 
-# --- Auth ---
+# ----------------------------
+# Auth
+# ----------------------------
 def require_admin(request: Request):
     token = request.headers.get("x-admin-token")
     if not token or token != ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-# --- Routes ---
+# ----------------------------
+# Routes
+# ----------------------------
 @app.get("/", response_class=PlainTextResponse)
 def root():
     return "QuantBrief Daily — OK"
@@ -502,24 +527,12 @@ def admin_health():
 @app.get("/admin/test_openai", dependencies=[Depends(require_admin)])
 def test_openai():
     try:
-        client = get_openai()
-        if has_responses(client):
-            _ = client.responses.create(
-                model=OPENAI_MODEL,
-                input="Say OK",
-                max_output_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS),
-                temperature=0
-            )
-            sample = "OK"
-        else:
-            _ = _chat_complete(
-                client,
-                OPENAI_MODEL,
-                [{"role":"user","content":"Say OK"}],
-                max_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS),
-                temperature=0
-            )
-            sample = "OK"
+        sample = try_chat_or_fallback(
+            model=OPENAI_MODEL,
+            user_text="Say OK",
+            max_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS),
+            temperature=0.0,
+        )
         return PlainTextResponse(f"   ok model      sample\n   -- -----      ------\nTrue {OPENAI_MODEL} {sample}\n")
     except Exception as e:
         return PlainTextResponse(f"   ok model      err\n   -- -----      ---\nFalse {OPENAI_MODEL} {str(e)[:200]}\n")

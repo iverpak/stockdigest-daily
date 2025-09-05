@@ -4,7 +4,7 @@ httpx
 feedparser
 readability-lxml
 lxml_html_clean
-psycopg[binary]
+psycopg2-binary
 python-dotenv
 jinja2
 openai

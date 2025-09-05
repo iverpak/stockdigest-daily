@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple, Dict, Any
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote_plus
 
 import requests
 import feedparser
@@ -129,7 +129,7 @@ BAD_DOMAINS = {
     "lh5.googleusercontent.com",
     "gstatic.com",
 }
-
+EXCLUDE_DOMAINS = BAD_DOMAINS | {"news.google.com", "news.url.google.com"}
 def is_bad_domain(u: str) -> bool:
     try:
         host = (urlparse(u).hostname or "").lower()
@@ -174,7 +174,7 @@ def fetch_google_news_rss(queries: List[str]) -> List[Dict[str, Any]]:
     out = []
     headers = {"User-Agent": "QuantBriefBot/1.0"}
     for q in queries:
-        rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(q)}&hl=en-US&gl=US&ceid=US:en"
+        rss_url = f"https://news.google.com/rss/search?q={quote_plus(q)}&hl=en-US&gl=US&ceid=US:en"
         try:
             resp = requests.get(rss_url, timeout=15, headers=headers)
             resp.raise_for_status()
@@ -476,11 +476,11 @@ def cron_ingest(
                 # Store unique URLs only
                 for e in entries:
                     url = e["url"]
-                    if not url or is_bad_domain(url):
-                        continue
-                    host = domain_of(url)
-                    if not host:
-                        continue
+                if not url:
+                    continue
+                host = domain_of(url)
+                if not host or host in EXCLUDE_DOMAINS:
+                    continue
                     pub = e.get("published_at")
                     # Skip obviously ancient items if they carry no pub date
                     if pub and (pub < window_start or pub > window_end):
@@ -532,13 +532,19 @@ def cron_digest(x_admin_token: Optional[str] = Header(None), minutes: int = Quer
         for row in wl:
             symbol = row.symbol
             company = row.company
-            rs = conn.execute(text("""
-                select * from items
-                where symbol=:sym
-                  and (published_at is null or (published_at >= :ws and published_at <= :we))
-                order by coalesce(published_at, inserted_at) desc
-                limit 80
-            """), {"sym": symbol, "ws": window_start, "we": window_end}).mappings().all()
+rs = conn.execute(text("""
+    select * from items
+    where symbol = :sym
+      and domain <> ALL(:excluded)
+      and (published_at is null or (published_at >= :ws and published_at <= :we))
+    order by coalesce(published_at, inserted_at) desc
+    limit 80
+"""), {
+    "sym": symbol,
+    "ws": window_start,
+    "we": window_end,
+    "excluded": list(EXCLUDE_DOMAINS),
+}).mappings().all()
 
             # Try to fill raw_text and summary if missing (but cap work)
             for r in rs:

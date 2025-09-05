@@ -1,8 +1,9 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 
-# Database
-psycopg[binary]==3.2.1
+# Database (install both; app picks whichever is available)
+psycopg==3.2.1
+psycopg2-binary==2.9.9
 
 # HTTP / parsing
 requests==2.32.3

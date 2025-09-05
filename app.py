@@ -1,13 +1,12 @@
 import os
 import re
-import hmac
 import json
 import time
 import hashlib
 import logging
 import datetime as dt
-from urllib.parse import urlparse, parse_qs, urlsplit, unquote
 from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse, parse_qs, urlsplit, unquote
 
 import requests
 import feedparser
@@ -18,24 +17,19 @@ from jinja2 import Template
 import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi.responses import PlainTextResponse
 from openai import OpenAI
 
-# ----------------------------
-# Basic app / logging
-# ----------------------------
 app = FastAPI(title="QuantBrief Daily")
 log = logging.getLogger("uvicorn")
 log.setLevel(logging.INFO)
 
-# ----------------------------
-# Env & constants
-# ----------------------------
+# --- Env ---
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme")
-DATABASE_URL = os.environ["DATABASE_URL"]  # must be set
+DATABASE_URL = os.environ["DATABASE_URL"]
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "you@example.com")
 
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")  # you can set gpt-5-mini
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")  # keep gpt-5-mini if you want
 OPENAI_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "300"))
 
 MAILGUN_API_KEY = os.environ.get("MAILGUN_API_KEY", "")
@@ -46,19 +40,16 @@ DEFAULT_TZ = os.environ.get("DEFAULT_TZ", "America/Toronto")
 DIGEST_HOUR_LOCAL = int(os.environ.get("DIGEST_HOUR_LOCAL", "8"))
 DIGEST_MINUTE_LOCAL = int(os.environ.get("DIGEST_MINUTE_LOCAL", "30"))
 
-# Known "image cdn / static" domains to ignore
 NOISY_DOMAINS = {
     "lh3.googleusercontent.com",
     "gstatic.com",
     "fonts.gstatic.com",
     "fonts.googleapis.com",
     "maps.googleapis.com",
-    "news.google.com"  # we try to expand; if not, skip
+    "news.google.com",
 }
 
-# ----------------------------
-# DB helpers
-# ----------------------------
+# --- DB helpers ---
 def db() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, autocommit=True, row_factory=dict_row)
 
@@ -108,11 +99,9 @@ def ensure_schema(conn: psycopg.Connection):
           items INT NOT NULL
         );
 
-        -- helpful indexes
         CREATE INDEX IF NOT EXISTS idx_article_published ON article (published_at DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_article_url_unique ON article (url);
         """)
-    # seed defaults if empty
     with conn.cursor() as cur:
         cur.execute("INSERT INTO recipients (email) VALUES (%s) ON CONFLICT DO NOTHING", (OWNER_EMAIL,))
         cur.execute("""
@@ -127,9 +116,6 @@ def get_watchlist(conn: psycopg.Connection) -> List[Dict[str, Any]]:
         return list(cur.fetchall())
 
 def upsert_article(conn: psycopg.Connection, rec: Dict[str, Any]) -> Optional[int]:
-    """
-    rec keys: url, title, publisher, published_at (datetime or None), canonical_url?
-    """
     sha = hashlib.sha256(rec["url"].encode("utf-8")).hexdigest()
     with conn.cursor() as cur:
         try:
@@ -159,8 +145,8 @@ def list_unsummarized(conn: psycopg.Connection, window_minutes: int = 1440) -> L
             FROM article a
             LEFT JOIN article_nlp n ON n.article_id = a.id
             WHERE n.article_id IS NULL
-              AND a.published_at >= now() - INTERVAL '%s minutes'
-            ORDER BY a.published_at DESC NULLS LAST
+              AND (a.published_at IS NULL OR a.published_at >= now() - INTERVAL '%s minutes')
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
         """, (window_minutes,))
         return list(cur.fetchall())
 
@@ -185,14 +171,12 @@ def list_recent_summaries(conn: psycopg.Connection, window_minutes: int = 1440) 
             SELECT a.id, a.url, a.title, a.publisher, a.published_at, n.summary, n.stance
             FROM article a
             JOIN article_nlp n ON n.article_id = a.id
-            WHERE a.published_at >= now() - INTERVAL '%s minutes'
-            ORDER BY a.published_at DESC NULLS LAST
+            WHERE (a.published_at IS NULL OR a.published_at >= now() - INTERVAL '%s minutes')
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
         """, (window_minutes,))
         return list(cur.fetchall())
 
-# ----------------------------
-# OpenAI lazy client (NO proxies kwarg)
-# ----------------------------
+# --- OpenAI client (with compatibility) ---
 _openai_client: Optional[OpenAI] = None
 
 def get_openai() -> OpenAI:
@@ -201,15 +185,17 @@ def get_openai() -> OpenAI:
         _openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     return _openai_client
 
-def clamp_tokens(n: int) -> int:
-    # avoid "below minimum value" errors
-    n = max(n, 128)
-    # most models allow far more, but we keep this sane and cheap
-    return min(n, 2000)
+def has_responses(client: OpenAI) -> bool:
+    try:
+        # 1.x newer SDKs expose .responses; some builds do not
+        return hasattr(client, "responses") and hasattr(client.responses, "create")
+    except Exception:
+        return False
 
-# ----------------------------
-# Utilities
-# ----------------------------
+def clamp_tokens(n: int) -> int:
+    return max(128, min(n, 2000))
+
+# --- Utils ---
 def as_utc(dt_like: Optional[dt.datetime]) -> Optional[dt.datetime]:
     if not dt_like:
         return None
@@ -227,7 +213,6 @@ def now_local() -> dt.datetime:
     return dt.datetime.now(tz=tz.gettz(DEFAULT_TZ))
 
 def expand_google_news_link(link: str) -> Optional[str]:
-    # Google News sometimes has url= param embedded
     try:
         parsed = urlsplit(link)
         qs = parse_qs(parsed.query)
@@ -238,9 +223,6 @@ def expand_google_news_link(link: str) -> Optional[str]:
     return None
 
 def extract_readable(url: str) -> Dict[str, Optional[str]]:
-    """
-    Fetch and extract main text. Avoids saving images/garbage.
-    """
     try:
         downloaded = trafilatura.fetch_url(url, no_ssl=False)
         if not downloaded:
@@ -250,13 +232,8 @@ def extract_readable(url: str) -> Dict[str, Optional[str]]:
     except Exception:
         return {"raw_html": None, "clean_text": None}
 
-# ----------------------------
-# Ingestion (GDELT + optional Google News RSS)
-# ----------------------------
+# --- Ingestion (GDELT + Google News RSS) ---
 def ingest_gdelt_for_query(query: str, minutes: int = 1440) -> List[Dict[str, Any]]:
-    """
-    Use GDELT 2.1 DOC API: https://api.gdeltproject.org/api/v2/doc/doc
-    """
     url = "https://api.gdeltproject.org/api/v2/doc/doc"
     params = {
         "query": query,
@@ -277,7 +254,6 @@ def ingest_gdelt_for_query(query: str, minutes: int = 1440) -> List[Dict[str, An
             published = None
             try:
                 if ts:
-                    # GDELT times are like 2025-09-05 04:12:00
                     published = as_utc(dt.datetime.fromisoformat(ts.replace(" ", "T")))
             except Exception:
                 published = None
@@ -295,9 +271,6 @@ def ingest_gdelt_for_query(query: str, minutes: int = 1440) -> List[Dict[str, An
         return []
 
 def ingest_google_news_rss(query: str, minutes: int = 1440) -> List[Dict[str, Any]]:
-    """
-    Light RSS approach; we try to expand to the original site link and skip image/static domains.
-    """
     q = requests.utils.quote(query)
     rss = f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
     out = []
@@ -306,12 +279,10 @@ def ingest_google_news_rss(query: str, minutes: int = 1440) -> List[Dict[str, An
         cutoff = dt.datetime.utcnow().replace(tzinfo=tz.UTC) - dt.timedelta(minutes=minutes)
         for e in feed.entries:
             link = e.link
-            # expand aggregator to the source url if possible
             expanded = expand_google_news_link(link) or link
             d = domain_of(expanded)
             if not d or d in NOISY_DOMAINS:
                 continue
-            # compute published time
             published = None
             try:
                 if hasattr(e, "published_parsed") and e.published_parsed:
@@ -338,19 +309,14 @@ def ingest_all(minutes: int = 1440) -> Dict[str, Any]:
     watch = get_watchlist(conn)
     found, inserted = 0, 0
 
-    # Build queries per ticker/company
     queries = []
     for w in watch:
-        # Example: ("TLN" OR "Talen Energy") AND (news OR announcement OR deal)
         ticker = w["ticker"]
         comp = w["company"] or ticker
         queries.append(f'("{ticker}" OR "{comp}")')
 
     for q in queries:
-        gdelt_items = ingest_gdelt_for_query(q, minutes=minutes)
-        gnews_items = ingest_google_news_rss(q, minutes=minutes)
-        items = gdelt_items + gnews_items
-        for rec in items:
+        for rec in (ingest_gdelt_for_query(q, minutes) + ingest_google_news_rss(q, minutes)):
             found += 1
             if domain_of(rec["url"]) in NOISY_DOMAINS:
                 continue
@@ -361,9 +327,7 @@ def ingest_all(minutes: int = 1440) -> Dict[str, Any]:
     conn.close()
     return {"ok": True, "found_urls": found, "inserted": inserted}
 
-# ----------------------------
-# Summarize + Mail
-# ----------------------------
+# --- Summarize + Mail ---
 SUMMARY_PROMPT = """You are a strict buy-side junior PM analyst. Given an article excerpt, produce two fields:
 
 • What matters — 1–2 crisp sentences with the investor takeaway (no fluff).
@@ -378,26 +342,35 @@ def summarize_text(text: str, title: Optional[str]) -> Dict[str, str]:
 
     client = get_openai()
     max_tokens = clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS)
-
-    prompt = SUMMARY_PROMPT
-    if title:
-        prompt = f"Title: {title}\n\n" + prompt
+    prompt = f"Title: {title}\n\n{SUMMARY_PROMPT}" if title else SUMMARY_PROMPT
 
     try:
-        resp = client.responses.create(
-            model=OPENAI_MODEL,
-            input=[
-                {"role": "system", "content": "You summarize financial news conservatively and concisely."},
-                {"role": "user", "content": f"{prompt}\n\n---\n{text}\n---"}
-            ],
-            max_output_tokens=max_tokens,
-            temperature=0.2,
-        )
-        out = resp.output_text.strip()
-        # crude split for stance line
+        if has_responses(client):
+            resp = client.responses.create(
+                model=OPENAI_MODEL,
+                input=[
+                    {"role": "system", "content": "You summarize financial news conservatively and concisely."},
+                    {"role": "user", "content": f"{prompt}\n\n---\n{text}\n---"}
+                ],
+                max_output_tokens=max_tokens,
+                temperature=0.2,
+            )
+            out = resp.output_text.strip()
+        else:
+            # Fallback to Chat Completions for older 1.x SDKs
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "You summarize financial news conservatively and concisely."},
+                    {"role": "user", "content": f"{prompt}\n\n---\n{text}\n---"}
+                ],
+                max_tokens=max_tokens,
+                temperature=0.2,
+            )
+            out = (resp.choices[0].message.content or "").strip()
+
         stance_match = re.search(r"Stance\s*—\s*(Positive|Neutral|Negative)", out, re.IGNORECASE)
         stance = stance_match.group(1).capitalize() if stance_match else "Neutral"
-        # Keep only the two bullets
         return {"summary": out, "stance": stance}
     except Exception as e:
         return {"summary": f"(LLM error) {e}", "stance": "Neutral"}
@@ -405,14 +378,13 @@ def summarize_text(text: str, title: Optional[str]) -> Dict[str, str]:
 def build_email_html(items: List[Dict[str, Any]]) -> str:
     local_now = now_local()
     window = f"last 24h ending {DIGEST_HOUR_LOCAL:02d}:{DIGEST_MINUTE_LOCAL:02d} {DEFAULT_TZ}"
-    comp_line = "Companies — " + ", ".join(sorted({i.get("publisher") or domain_of(i.get("url","")) for i in items})) if items else "No companies"
     tmpl = Template("""
     <div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:780px">
       <h2>QuantBrief Daily — {{ date_str }}</h2>
       <p><b>Window:</b> {{ window }}</p>
       {% for it in items %}
         <div style="margin:16px 0;padding:12px;border:1px solid #eee;border-radius:8px">
-          <div style="font-size:14px;color:#666">{{ it['publisher'] or it['domain'] }} — {{ it['published_at'] or '' }}</div>
+          <div style="font-size:14px;color:#666">{{ it['publisher'] or it['domain'] }}{% if it['published_at'] %} — {{ it['published_at'] }}{% endif %}</div>
           <div style="font-size:16px;margin:6px 0">
             <a href="{{ it['url'] }}" target="_blank" style="text-decoration:none">{{ it['title'] or it['url'] }}</a>
           </div>
@@ -450,14 +422,11 @@ def run_summarize_and_send(window_minutes: int = 1440) -> Dict[str, Any]:
     conn = db()
     ensure_schema(conn)
 
-    # 1) Pull unsummarized articles and extract text
     uns = list_unsummarized(conn, window_minutes=window_minutes)
     summarized = 0
     for a in uns:
-        # skip noisy domains
         if domain_of(a["url"]) in NOISY_DOMAINS:
             continue
-        # fetch only if we don't have clean_text
         if not a.get("clean_text"):
             ext = extract_readable(a["url"])
             with conn.cursor() as cur:
@@ -470,83 +439,71 @@ def run_summarize_and_send(window_minutes: int = 1440) -> Dict[str, Any]:
         store_summary(conn, a["id"], s["summary"], s["stance"])
         summarized += 1
 
-    # 2) Build digest list
     items = list_recent_summaries(conn, window_minutes=window_minutes)
     for it in items:
         it["domain"] = domain_of(it["url"])
 
-    # 3) Send email
     to_list = list_recipients(conn)
     subject = f"QuantBrief Daily — {now_local().date().isoformat()}"
     html = build_email_html(items)
     mail_res = send_mail(subject, html, to_list)
 
-    # 4) Log delivery
     with conn.cursor() as cur:
         cur.execute("INSERT INTO delivery_log (sent_to, items) VALUES (%s, %s)", (",".join(to_list), len(items)))
 
     conn.close()
     return {"ok": True, "sent_to": to_list, "items": len(items), "summarized": summarized, "mail": mail_res}
 
-# ----------------------------
-# Auth
-# ----------------------------
+# --- Auth ---
 def require_admin(request: Request):
     token = request.headers.get("x-admin-token")
     if not token or token != ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-# ----------------------------
-# Routes
-# ----------------------------
+# --- Routes ---
 @app.get("/", response_class=PlainTextResponse)
 def root():
     return "QuantBrief Daily — OK"
 
 @app.get("/admin/health", dependencies=[Depends(require_admin)])
 def admin_health():
-    # Show which envs are present without leaking values
     present = {
         k: bool(os.environ.get(k))
         for k in ["DATABASE_URL","OPENAI_API_KEY","OPENAI_MODEL","OPENAI_MAX_OUTPUT_TOKENS",
                   "MAILGUN_API_KEY","MAILGUN_DOMAIN","MAILGUN_FROM","OWNER_EMAIL","ADMIN_TOKEN"]
     }
-    # counts
-    conn = db()
-    ensure_schema(conn)
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) c FROM article")
-        arts = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) c FROM article_nlp")
-        sumd = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) c FROM recipients")
-        recs = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) c FROM watchlist")
-        w = cur.fetchone()["c"]
-    conn.close()
-    return PlainTextResponse(
-        "env\n---\n" + json.dumps(present, indent=2) + "\n\ncounts\n------\n"
-        + f"articles={arts}\nsummarized={sumd}\nrecipients={recs}\nwatchlist={w}\n"
-    )
+    try:
+        conn = db()
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) c FROM article")
+            arts = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) c FROM article_nlp")
+            sumd = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) c FROM recipients")
+            recs = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) c FROM watchlist")
+            w = cur.fetchone()["c"]
+        conn.close()
+        counts = f"articles={arts}\nsummarized={sumd}\nrecipients={recs}\nwatchlist={w}\n"
+        return PlainTextResponse("env\n---\n" + json.dumps(present, indent=2) + "\n\ncounts\n------\n" + counts)
+    except Exception as e:
+        log.exception("/admin/health failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/admin/test_openai", dependencies=[Depends(require_admin)])
 def test_openai():
     try:
         client = get_openai()
-        resp = client.responses.create(
-            model=OPENAI_MODEL,
-            input="Say OK",
-            max_output_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS),
-            temperature=0
-        )
-        return PlainTextResponse(
-            f"   ok model      sample\n   -- -----      ------\nTrue {OPENAI_MODEL} OK\n"
-        )
+        if has_responses(client):
+            _ = client.responses.create(model=OPENAI_MODEL, input="Say OK", max_output_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS), temperature=0)
+            sample = "OK"
+        else:
+            _ = client.chat.completions.create(model=OPENAI_MODEL, messages=[{"role":"user","content":"Say OK"}], max_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS), temperature=0)
+            sample = "OK"
+        return PlainTextResponse(f"   ok model      sample\n   -- -----      ------\nTrue {OPENAI_MODEL} {sample}\n")
     except Exception as e:
-        return PlainTextResponse(
-            "   ok model      err\n   -- -----      ---\nFalse "
-            f"{OPENAI_MODEL} {str(e)[:200]}\n"
-        )
+        return PlainTextResponse(f"   ok model      err\n   -- -----      ---\nFalse {OPENAI_MODEL} {str(e)[:200]}\n")
 
 @app.post("/admin/init", dependencies=[Depends(require_admin)])
 def admin_init():

@@ -29,7 +29,7 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme")
 DATABASE_URL = os.environ["DATABASE_URL"]
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "you@example.com")
 
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")  # keep gpt-5-mini if you want
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "300"))
 
 MAILGUN_API_KEY = os.environ.get("MAILGUN_API_KEY", "")
@@ -139,15 +139,16 @@ def upsert_article(conn: psycopg.Connection, rec: Dict[str, Any]) -> Optional[in
             return None
 
 def list_unsummarized(conn: psycopg.Connection, window_minutes: int = 1440) -> List[Dict[str, Any]]:
+    # Use safe interval param
     with conn.cursor() as cur:
         cur.execute("""
             SELECT a.*
             FROM article a
             LEFT JOIN article_nlp n ON n.article_id = a.id
             WHERE n.article_id IS NULL
-              AND (a.published_at IS NULL OR a.published_at >= now() - INTERVAL '%s minutes')
+              AND (a.published_at IS NULL OR a.published_at >= now() - (%s || ' minutes')::interval)
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
-        """, (window_minutes,))
+        """, (str(window_minutes),))
         return list(cur.fetchall())
 
 def store_summary(conn: psycopg.Connection, article_id: int, summary: str, stance: str):
@@ -171,9 +172,9 @@ def list_recent_summaries(conn: psycopg.Connection, window_minutes: int = 1440) 
             SELECT a.id, a.url, a.title, a.publisher, a.published_at, n.summary, n.stance
             FROM article a
             JOIN article_nlp n ON n.article_id = a.id
-            WHERE (a.published_at IS NULL OR a.published_at >= now() - INTERVAL '%s minutes')
+            WHERE (a.published_at IS NULL OR a.published_at >= now() - (%s || ' minutes')::interval)
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
-        """, (window_minutes,))
+        """, (str(window_minutes),))
         return list(cur.fetchall())
 
 # --- OpenAI client (with compatibility) ---
@@ -187,10 +188,14 @@ def get_openai() -> OpenAI:
 
 def has_responses(client: OpenAI) -> bool:
     try:
-        # 1.x newer SDKs expose .responses; some builds do not
         return hasattr(client, "responses") and hasattr(client.responses, "create")
     except Exception:
         return False
+
+def is_new_completion_model(model_name: str) -> bool:
+    # models like gpt-5-*, o4-*, gpt-4.1-* require max_completion_tokens
+    mn = model_name.lower()
+    return mn.startswith("gpt-5") or mn.startswith("o4") or mn.startswith("gpt-4.1")
 
 def clamp_tokens(n: int) -> int:
     return max(128, min(n, 2000))
@@ -235,12 +240,7 @@ def extract_readable(url: str) -> Dict[str, Optional[str]]:
 # --- Ingestion (GDELT + Google News RSS) ---
 def ingest_gdelt_for_query(query: str, minutes: int = 1440) -> List[Dict[str, Any]]:
     url = "https://api.gdeltproject.org/api/v2/doc/doc"
-    params = {
-        "query": query,
-        "timespan": f"{minutes}m",
-        "format": "json",
-        "maxrecords": "100"
-    }
+    params = {"query": query, "timespan": f"{minutes}m", "format": "json", "maxrecords": "100"}
     try:
         r = requests.get(url, params=params, timeout=20)
         r.raise_for_status()
@@ -336,12 +336,20 @@ SUMMARY_PROMPT = """You are a strict buy-side junior PM analyst. Given an articl
 Return plain text with exactly these two bullets.
 """
 
+def _chat_complete(client: OpenAI, model: str, messages: List[Dict[str, str]], max_tokens: int, temperature: float):
+    kwargs = {"model": model, "messages": messages, "temperature": temperature}
+    if is_new_completion_model(model):
+        kwargs["max_completion_tokens"] = max_tokens
+    else:
+        kwargs["max_tokens"] = max_tokens
+    return client.chat.completions.create(**kwargs)
+
 def summarize_text(text: str, title: Optional[str]) -> Dict[str, str]:
     if not text:
         return {"summary": "I don’t have the source text. Please paste key excerpts.", "stance": "Neutral"}
 
     client = get_openai()
-    max_tokens = clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS)
+    max_toks = clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS)
     prompt = f"Title: {title}\n\n{SUMMARY_PROMPT}" if title else SUMMARY_PROMPT
 
     try:
@@ -352,19 +360,19 @@ def summarize_text(text: str, title: Optional[str]) -> Dict[str, str]:
                     {"role": "system", "content": "You summarize financial news conservatively and concisely."},
                     {"role": "user", "content": f"{prompt}\n\n---\n{text}\n---"}
                 ],
-                max_output_tokens=max_tokens,
+                max_output_tokens=max_toks,
                 temperature=0.2,
             )
             out = resp.output_text.strip()
         else:
-            # Fallback to Chat Completions for older 1.x SDKs
-            resp = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
+            resp = _chat_complete(
+                client,
+                OPENAI_MODEL,
+                [
                     {"role": "system", "content": "You summarize financial news conservatively and concisely."},
                     {"role": "user", "content": f"{prompt}\n\n---\n{text}\n---"}
                 ],
-                max_tokens=max_tokens,
+                max_tokens=max_toks,
                 temperature=0.2,
             )
             out = (resp.choices[0].message.content or "").strip()
@@ -496,10 +504,21 @@ def test_openai():
     try:
         client = get_openai()
         if has_responses(client):
-            _ = client.responses.create(model=OPENAI_MODEL, input="Say OK", max_output_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS), temperature=0)
+            _ = client.responses.create(
+                model=OPENAI_MODEL,
+                input="Say OK",
+                max_output_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS),
+                temperature=0
+            )
             sample = "OK"
         else:
-            _ = client.chat.completions.create(model=OPENAI_MODEL, messages=[{"role":"user","content":"Say OK"}], max_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS), temperature=0)
+            _ = _chat_complete(
+                client,
+                OPENAI_MODEL,
+                [{"role":"user","content":"Say OK"}],
+                max_tokens=clamp_tokens(OPENAI_MAX_OUTPUT_TOKENS),
+                temperature=0
+            )
             sample = "OK"
         return PlainTextResponse(f"   ok model      sample\n   -- -----      ------\nTrue {OPENAI_MODEL} {sample}\n")
     except Exception as e:

@@ -144,7 +144,6 @@ def upsert_article(conn: psycopg.Connection, rec: Dict[str, Any]) -> Optional[in
 
 def list_unsummarized(conn: psycopg.Connection, window_minutes: int = 1440) -> List[Dict[str, Any]]:
     with conn.cursor() as cur:
-        # safe interval parameterization
         cur.execute("""
             SELECT a.*
             FROM article a
@@ -195,31 +194,37 @@ def get_openai() -> OpenAI:
 def clamp_tokens(n: int) -> int:
     return max(128, min(n, 2000))
 
+def _call_chat(model: str, user_text: str, max_tokens: Optional[int], temperature: float) -> str:
+    client = get_openai()
+    kwargs = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You summarize financial news conservatively and concisely."},
+            {"role": "user", "content": user_text},
+        ],
+        "temperature": temperature,
+    }
+    if isinstance(max_tokens, int):
+        kwargs["max_tokens"] = max_tokens  # usual param for Chat Completions
+
+    resp = client.chat.completions.create(**kwargs)
+    return (resp.choices[0].message.content or "").strip()
+
 def try_chat_or_fallback(model: str, user_text: str, max_tokens: int, temperature: float) -> str:
     """
-    1) Try Chat Completions with max_tokens (works for gpt-5-mini).
-    2) If API says max_tokens unsupported, try Responses API with max_output_tokens.
+    1) Try Chat Completions with max_tokens (works for many models including past gpt-5-mini behavior).
+    2) If server says to use max_completion_tokens, try Responses.create with max_output_tokens.
+    3) If Responses API is unavailable, retry Chat Completions WITHOUT any max token param and force brevity in the prompt.
     """
-    client = get_openai()
-
-    # First try: Chat Completions (standard)
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You summarize financial news conservatively and concisely."},
-                {"role": "user", "content": user_text},
-            ],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        return (resp.choices[0].message.content or "").strip()
+        return _call_chat(model, user_text, max_tokens=max_tokens, temperature=temperature)
     except Exception as e:
         msg = str(e)
-        # Known model message: suggest max_completion_tokens — which Chat Completions does not accept.
-        # In that case, switch to Responses API with max_output_tokens (if available in the SDK).
-        if "max_tokens" in msg and "max_completion_tokens" in msg:
+        # If the platform insists on "max_completion_tokens", prefer Responses API if present.
+        if ("max_tokens" in msg and "max_completion_tokens" in msg) or "Use 'max_completion_tokens' instead" in msg:
+            client = get_openai()
             try:
+                # Use Responses API if available in this SDK version
                 if hasattr(client, "responses") and hasattr(client.responses, "create"):
                     resp2 = client.responses.create(
                         model=model,
@@ -227,19 +232,28 @@ def try_chat_or_fallback(model: str, user_text: str, max_tokens: int, temperatur
                             {"role": "system", "content": "You summarize financial news conservatively and concisely."},
                             {"role": "user", "content": user_text},
                         ],
-                        max_output_tokens=max_tokens,
+                        max_output_tokens=max_tokens,  # correct param name for Responses
                         temperature=temperature,
                     )
-                    # responses.create offers .output_text convenience
-                    return (resp2.output_text or "").strip()
+                    return (getattr(resp2, "output_text", None) or "").strip()
+                # If not available, fall back to chat without any token cap, but tighten prompt
                 else:
-                    # SDK too old for Responses; bubble original error to be visible in /admin/test_openai
-                    raise RuntimeError("OpenAI SDK lacks Responses API; upgrade openai package.")
-            except Exception as e2:
-                raise e2
-        else:
-            # Any other error: rethrow
-            raise e
+                    shortened_user = (
+                        "Return <= 120 tokens total. Use exactly two bullets.\n\n" + user_text
+                    )
+                    return _call_chat(model, shortened_user, max_tokens=None, temperature=temperature)
+            except Exception:
+                # Final fallback: chat without token cap
+                shortened_user = (
+                    "Return <= 120 tokens total. Use exactly two bullets.\n\n" + user_text
+                )
+                return _call_chat(model, shortened_user, max_tokens=None, temperature=temperature)
+        # Any other error: last-ditch prompt-shortening retry
+        try:
+            shortened_user = "Return <= 120 tokens total. Use exactly two bullets.\n\n" + user_text
+            return _call_chat(model, shortened_user, max_tokens=None, temperature=temperature)
+        except Exception as e2:
+            raise e2
 
 # ----------------------------
 # Utilities
@@ -380,7 +394,7 @@ SUMMARY_PROMPT = """You are a strict buy-side junior PM analyst. Given an articl
 • What matters — 1–2 crisp sentences with the investor takeaway (no fluff).
 • Stance — one of: Positive / Neutral / Negative, based only on the excerpt.
 
-Return plain text with exactly these two bullets.
+Return plain text with exactly these two bullets. Keep it under 120 tokens total.
 """
 
 def summarize_text(text: str, title: Optional[str]) -> Dict[str, str]:
@@ -454,19 +468,22 @@ def run_summarize_and_send(window_minutes: int = 1440) -> Dict[str, Any]:
     uns = list_unsummarized(conn, window_minutes=window_minutes)
     summarized = 0
     for a in uns:
-        if domain_of(a["url"]) in NOISY_DOMAINS:
-            continue
-        if not a.get("clean_text"):
-            ext = extract_readable(a["url"])
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE article SET raw_html=%s, clean_text=%s WHERE id=%s",
-                    (ext["raw_html"], ext["clean_text"], a["id"])
-                )
-            a["clean_text"] = ext["clean_text"]
-        s = summarize_text(a.get("clean_text") or "", a.get("title"))
-        store_summary(conn, a["id"], s["summary"], s["stance"])
-        summarized += 1
+        try:
+            if domain_of(a["url"]) in NOISY_DOMAINS:
+                continue
+            if not a.get("clean_text"):
+                ext = extract_readable(a["url"])
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE article SET raw_html=%s, clean_text=%s WHERE id=%s",
+                        (ext["raw_html"], ext["clean_text"], a["id"])
+                    )
+                a["clean_text"] = ext["clean_text"]
+            s = summarize_text(a.get("clean_text") or "", a.get("title"))
+            store_summary(conn, a["id"], s["summary"], s["stance"])
+            summarized += 1
+        except Exception as e:
+            log.warning("Summarize failed for id=%s: %s", a.get("id"), e)
 
     items = list_recent_summaries(conn, window_minutes=window_minutes)
     for it in items:
@@ -521,8 +538,8 @@ def admin_health():
         counts = f"articles={arts}\nsummarized={sumd}\nrecipients={recs}\nwatchlist={w}\n"
         return PlainTextResponse("env\n---\n" + json.dumps(present, indent=2) + "\n\ncounts\n------\n" + counts)
     except Exception as e:
-        log.exception("/admin/health failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return details instead of a hard 500 so you can see the cause in PowerShell
+        return PlainTextResponse("env\n---\n" + json.dumps(present, indent=2) + "\n\nerrors\n------\n" + str(e) + "\n")
 
 @app.get("/admin/test_openai", dependencies=[Depends(require_admin)])
 def test_openai():
@@ -545,8 +562,7 @@ def admin_init():
         conn.close()
         return PlainTextResponse("Initialized.\n")
     except Exception as e:
-        log.exception("admin/init failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(f"Init error: {e}\n")
 
 @app.post("/cron/ingest", dependencies=[Depends(require_admin)])
 def cron_ingest(minutes: Optional[int] = 1440):
@@ -557,8 +573,7 @@ def cron_ingest(minutes: Optional[int] = 1440):
             f"True {res['found_urls']:>10} {res['inserted']:>8}\n"
         )
     except Exception as e:
-        log.exception("cron/ingest failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(f"Ingest error: {e}\n")
 
 @app.post("/cron/digest", dependencies=[Depends(require_admin)])
 def cron_digest(minutes: Optional[int] = 1440):
@@ -570,5 +585,4 @@ def cron_digest(minutes: Optional[int] = 1440):
             f"True {','.join(res['sent_to']):<28} {res['items']:>5} {res['summarized']:>10}\n"
         )
     except Exception as e:
-        log.exception("cron/digest failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(f"Digest error: {e}\n")

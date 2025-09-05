@@ -1,7 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 
-# Database (install both; app picks whichever is available)
+# Database (v3 preferred, v2 fallback)
 psycopg==3.2.1
 psycopg2-binary==2.9.9
 
@@ -11,10 +11,10 @@ feedparser==6.0.11
 jinja2==3.1.4
 python-dateutil==2.9.0.post0
 
-# Content extraction (optional but recommended)
+# Content extraction
 trafilatura==1.9.0
 beautifulsoup4==4.12.3
-lxml==5.3.0
+lxml==5.1.0   # <= fix: satisfy trafilatura (<5.2.0)
 
 # OpenAI API v1
 openai==1.40.0

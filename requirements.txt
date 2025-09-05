@@ -16,5 +16,5 @@ beautifulsoup4==4.12.3
 jinja2==3.1.4
 python-dateutil==2.9.0.post0
 
-# OpenAI SDK — 1.x
+# OpenAI SDK — tested path
 openai==1.40.0

@@ -36,6 +36,19 @@ MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN", "")
 MAILGUN_FROM = os.getenv("MAILGUN_FROM", "")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 
+BLOCKED_SITES = {
+    d.strip().lower()
+    for d in os.getenv("BLOCKED_SITES", "").split(",")
+    if d.strip()
+}
+
+def _is_blocked_domain(domain: str) -> bool:
+    if not domain:
+        return False
+    d = domain.lower()
+    # match exact or subdomain (e.g., www.marketbeat.com)
+    return any(d == b or d.endswith("." + b) for b in BLOCKED_SITES)
+
 # Google News locale
 GN_HL = os.getenv("GOOGLE_NEWS_HL", "en-US")
 GN_GL = os.getenv("GOOGLE_NEWS_GL", "US")

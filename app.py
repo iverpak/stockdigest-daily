@@ -88,14 +88,43 @@ def get_conn():
 
 def exec_sql_batch(conn, sql: str) -> None:
     """
-    Execute semicolon-separated SQL statements (psycopg3 can't run multi-stmt in one execute).
-    Keep this simple: our SEED has no $$-functions or embedded semicolons in string literals.
+    Execute a batch of SQL statements safely:
+    - Strip line comments (`-- ...`) and block comments (`/* ... */`)
+    - Then split on semicolons and run each non-empty statement
     """
-    for stmt in sql.split(";"):
+    cleaned_lines = []
+    in_block = False
+
+    for raw in sql.splitlines():
+        line = raw.replace("\ufeff", "")  # guard against BOMs
+
+        if in_block:
+            if "*/" in line:
+                # close block comment; keep any code that follows on same line
+                line = line.split("*/", 1)[1]
+                in_block = False
+            else:
+                continue  # still inside block comment, skip line
+
+        # start of a block comment on this line?
+        if "/*" in line:
+            before, _ = line.split("/*", 1)
+            line = before
+            in_block = True
+
+        # strip single-line comments
+        if "--" in line:
+            line = line.split("--", 1)[0]
+
+        if line.strip():
+            cleaned_lines.append(line)
+
+    sql_clean = "\n".join(cleaned_lines)
+
+    for stmt in sql_clean.split(";"):
         s = stmt.strip()
-        if not s or s.startswith("--"):
-            continue
-        conn.execute(s)
+        if s:
+            conn.execute(s)
 
 
 # -----------------------------------------------------------------------------

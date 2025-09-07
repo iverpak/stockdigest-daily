@@ -2,607 +2,503 @@ import os
 import re
 import json
 import time
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Optional, Tuple
-
+import math
+import html
 import httpx
-import feedparser
-from fastapi import FastAPI, Request, HTTPException, Query
-from pydantic import BaseModel
-from jinja2 import Template
+import logging
+import traceback
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote_plus
+
 import psycopg
-from psycopg.rows import dict_row
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import PlainTextResponse, JSONResponse
+from pydantic import BaseModel
+from xml.etree import ElementTree as ET
 
-from openai import OpenAI
-
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Config / Env
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+APP_NAME = os.getenv("APP_NAME", "QuantBrief Daily")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TEMPERATURE = os.getenv("OPENAI_TEMPERATURE", "0.3")  # may be rejected by some models
+
+MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN", "")
+MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY", "")
+MAIL_FROM = os.getenv("MAIL_FROM", "QuantBrief Daily <daily@example.com>")
+MAIL_TO = os.getenv("MAIL_TO", "you@example.com")  # comma-separated
+
+# Render/Heroku style: platform sets $PORT
+PORT = int(os.getenv("PORT", "10000"))
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("quantbrief")
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is required")
+# -----------------------------------------------------------------------------
+# FastAPI
+# -----------------------------------------------------------------------------
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is required")
-
-# Auth for admin endpoints
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "dev-token")
-
-# Email (Mailgun example; adapt to your provider if needed)
-MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")            # e.g. "mg.quantbrief.ca"
-MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
-FROM_ADDR = os.getenv("FROM_ADDR", "QuantBrief Daily <daily@mg.quantbrief.ca>")
-RECIPIENTS = os.getenv("RECIPIENTS", "you@example.com")  # comma-separated
-
-# Summarization model
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-# Exclusions & allowlist
-EXCLUDED_DOMAINS = {
-    d.strip().lower()
-    for d in os.getenv("EXCLUDED_DOMAINS", "marketbeat.com,www.marketbeat.com,newser.com,www.newser.com").split(",")
-    if d.strip()
-}
-QUALITY_DOMAINS = {
-    d.strip().lower()
-    for d in os.getenv("QUALITY_DOMAINS", "").split(",")
-    if d.strip()
-}  # optional allowlist; if empty, it's ignored
-
-# Default company search
-DEFAULT_QUERY = os.getenv("NEWS_QUERY", "(Talen Energy) OR TLN")
-
-# Google News locale (affects feed language and region)
-GN_HL = os.getenv("GN_HL", "en-US")
-GN_GL = os.getenv("GN_GL", "US")
-GN_CEID = os.getenv("GN_CEID", "US:en")
-
-# ------------------------------------------------------------------------------
-# App
-# ------------------------------------------------------------------------------
-
-app = FastAPI()
+app = FastAPI(title=APP_NAME)
 
 
-# ------------------------------------------------------------------------------
-# DB Helpers
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DATABASE_URL, autocommit=True, row_factory=dict_row)
-
-
-DDL_SQL = """
-
-CREATE TABLE IF NOT EXISTS source_feed (
-    id SERIAL PRIMARY KEY,
-    kind TEXT NOT NULL,          -- 'google-news'
-    url TEXT NOT NULL,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
-    name TEXT NOT NULL,          -- human label (e.g. "Google News")
-    persist_days INTEGER NOT NULL DEFAULT 30,
-    UNIQUE(kind, url)
-);
-
-CREATE TABLE IF NOT EXISTS found_url (
-    id BIGSERIAL PRIMARY KEY,
-    url TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL,
-    publisher TEXT,
-    published_at TIMESTAMPTZ,
-    seen_first_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    seen_last_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS found_url_published_idx ON found_url (published_at DESC);
-
-CREATE TABLE IF NOT EXISTS summary (
-    id BIGSERIAL PRIMARY KEY,
-    found_url_id BIGINT NOT NULL REFERENCES found_url(id) ON DELETE CASCADE,
-    model TEXT NOT NULL,
-    summary_text TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(found_url_id)
-);
-
-CREATE TABLE IF NOT EXISTS send_log (
-    id BIGSERIAL PRIMARY KEY,
-    recipients TEXT NOT NULL,
-    num_items INTEGER NOT NULL,
-    num_summarized INTEGER NOT NULL,
-    window_minutes INTEGER NOT NULL,
-    window_end TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-"""
-
-MIGRATE_SQL = """
--- Bring old/source tables up to date if they already exist
-ALTER TABLE IF EXISTS public.source_feed
-  ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE,
-  ADD COLUMN IF NOT EXISTS name   TEXT    NOT NULL DEFAULT 'Google News',
-  ADD COLUMN IF NOT EXISTS persist_days INTEGER NOT NULL DEFAULT 30;
-
--- Ensure the ON CONFLICT (kind, url) has a matching UNIQUE constraint
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint c
-    JOIN pg_class t ON t.oid = c.conrelid
-    JOIN pg_namespace n ON n.oid = t.relnamespace
-    WHERE n.nspname = 'public'
-      AND t.relname  = 'source_feed'
-      AND c.contype  = 'u'
-      AND c.conname  = 'source_feed_kind_url_key'
-  ) THEN
-    ALTER TABLE public.source_feed
-      ADD CONSTRAINT source_feed_kind_url_key UNIQUE (kind, url);
-  END IF;
-END$$;
-"""
-
-def ensure_schema():
-    with db() as conn:
-        with conn.cursor() as cur:
-            # Create tables/indexes if missing
-            cur.execute(DDL_SQL)
-            # Backfill missing columns/constraints for existing installs
-            cur.execute(MIGRATE_SQL)
-
-
-def upsert_feed(kind: str, url: str, name: str, persist_days: int = 30):
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO source_feed (kind, url, active, name, persist_days)
-                VALUES (%s, %s, TRUE, %s, %s)
-                ON CONFLICT (kind, url) DO UPDATE
-                SET active = EXCLUDED.active,
-                    name = EXCLUDED.name,
-                    persist_days = EXCLUDED.persist_days
-                """,
-                (kind, url, name, persist_days),
-            )
-
-
-def insert_or_touch_url(u: Dict) -> Tuple[bool, Optional[int]]:
-    """
-    Insert a URL row if new; otherwise update seen_last_at.
-    Returns (inserted, id or None if fetch fails)
-    """
-    with db() as conn, conn.cursor() as cur:
-        try:
-            cur.execute(
-                """
-                INSERT INTO found_url (url, title, publisher, published_at)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (url) DO UPDATE
-                SET seen_last_at = NOW()
-                RETURNING id
-                """,
-                (u["url"], u["title"], u.get("publisher"), u.get("published_at")),
-            )
-            row = cur.fetchone()
-            return True, row["id"] if row else None
-        except Exception as e:
-            log.exception("insert_or_touch_url error for %s", u["url"])
-            return False, None
-
-
-def store_summary(found_url_id: int, model: str, text: str):
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO summary (found_url_id, model, summary_text)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (found_url_id) DO UPDATE SET
-                model = EXCLUDED.model,
-                summary_text = EXCLUDED.summary_text,
-                created_at = NOW()
-            """,
-            (found_url_id, model, text),
-        )
-
-
-def fetch_items_for_window(window_minutes: int, window_end: datetime) -> List[Dict]:
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT f.id, f.url, f.title, f.publisher, f.published_at, s.summary_text
-            FROM found_url f
-            LEFT JOIN summary s ON s.found_url_id = f.id
-            WHERE f.seen_last_at >= %s
-            ORDER BY COALESCE(f.published_at, f.seen_last_at) DESC
-            """,
-            (window_end - timedelta(minutes=window_minutes),),
-        )
-        return list(cur.fetchall())
-
-
-def log_send(recipients: str, num_items: int, num_summarized: int, window_minutes: int, window_end: datetime):
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO send_log (recipients, num_items, num_summarized, window_minutes, window_end)
-            VALUES (%s, %s, %s, %s, %s)
-            """,
-            (recipients, num_items, num_summarized, window_minutes, window_end),
-        )
-
-# ------------------------------------------------------------------------------
-# Utilities
-# ------------------------------------------------------------------------------
-
-def require_admin(req: Request):
-    token = req.headers.get("x-admin-token") or req.headers.get("authorization")
-    if not token or token.replace("Bearer ", "").strip() != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="unauthorized")
-
-
-def now_utc() -> datetime:
+def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def strip_utm(url: str) -> str:
-    if "?" not in url:
-        return url
-    base, q = url.split("?", 1)
-    # Keep only non-tracking params
-    keep = []
-    for kv in q.split("&"):
-        k = kv.split("=", 1)[0].lower()
-        if not k.startswith("utm_") and k not in {"gclid", "fbclid", "mc_cid", "mc_eid"}:
-            keep.append(kv)
-    return base if not keep else base + "?" + "&".join(keep)
+def auth_required(req: Request):
+    sent = req.headers.get("x-admin-token", "")
+    if not ADMIN_TOKEN or sent != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def domain_of(url: str) -> str:
-    m = re.match(r"^https?://([^/]+)", url)
-    return (m.group(1).lower() if m else "").lstrip("www.")
+def db() -> psycopg.Connection:
+    return psycopg.connect(DATABASE_URL, autocommit=True)
 
 
-def is_allowed(url: str) -> bool:
-    d = domain_of(url)
-    if d in EXCLUDED_DOMAINS or ("www." + d) in EXCLUDED_DOMAINS:
-        return False
-    if QUALITY_DOMAINS and d not in QUALITY_DOMAINS and ("www." + d) not in QUALITY_DOMAINS:
-        return False
-    return True
+def exec_sql_batch(conn: psycopg.Connection, sql: str):
+    # Split on semicolons that end a statement; ignore whitespace-only chunks.
+    for stmt in [s.strip() for s in sql.split(";")]:
+        if stmt:
+            conn.execute(stmt)
 
 
-def build_google_news_feed(query: str, days: int = 7, excluded: Optional[List[str]] = None) -> str:
-    """
-    Build a Google News RSS URL with exclusions embedded in the query
-    (so Google doesn't even return them).
-    """
-    excluded = excluded or []
-    minus_sites = " ".join(f"-site:{s}" for s in excluded)
-    q = f"{query} {minus_sites} when:{days}d".strip()
-    # Manual encode: feedparser/httpx can handle normal URL encoding
-    import urllib.parse as up
-    qs = up.urlencode({
-        "q": q,
-        "hl": GN_HL,
-        "gl": GN_GL,
-        "ceid": GN_CEID
-    })
-    return f"https://news.google.com/rss/search?{qs}"
+def to_int(s: Optional[str], default: int) -> int:
+    try:
+        return int(s) if s is not None else default
+    except Exception:
+        return default
 
 
-def parse_google_news(feed_url: str, minutes: int) -> List[Dict]:
-    """
-    Parse Google News RSS and return normalized articles:
-    - url from <source href> (canonical publisher URL)
-    - title from entry.title
-    - publisher from entry.source.title (or domain)
-    - published_at from entry.published_parsed if present
-    Applies time window (minutes) and domain filters.
-    """
-    log.info("parsed feed: %s", feed_url)
-    # We only fetch the RSS feed. We do not click every Google redirect link.
-    resp = httpx.get(feed_url, timeout=30)
-    resp.raise_for_status()
-    parsed = feedparser.parse(resp.text)
+def list_csv(s: str) -> List[str]:
+    return [x.strip() for x in s.split(",") if x.strip()]
 
-    window_start = now_utc() - timedelta(minutes=minutes)
-    out: List[Dict] = []
 
-    for e in parsed.entries:
-        # Canonical article URL is in <source href="...">
-        src_href = None
-        src_title = None
-        try:
-            # feedparser maps <source> to .source
-            if hasattr(e, "source"):
-                src_href = getattr(e.source, "href", None)
-                src_title = getattr(e.source, "title", None)
-        except Exception:
-            pass
+def minute_window(minutes: int) -> (datetime, datetime):
+    end = _now()
+    start = end - timedelta(minutes=minutes)
+    return (start, end)
 
-        link = src_href or getattr(e, "link", None)
-        if not link:
-            continue
 
-        link = strip_utm(link)
-        if not is_allowed(link):
-            continue
+# -----------------------------------------------------------------------------
+# DB schema (includes persist_days so your earlier error doesn't recur)
+# -----------------------------------------------------------------------------
 
-        # Publisher
-        publisher = src_title or domain_of(link) or "Unknown"
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS source_feed (
+  id            BIGSERIAL PRIMARY KEY,
+  kind          TEXT NOT NULL,            -- e.g., 'google-news'
+  url           TEXT NOT NULL UNIQUE,
+  name          TEXT,
+  active        BOOLEAN NOT NULL DEFAULT TRUE,
+  persist_days  INTEGER NOT NULL DEFAULT 30,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-        # Title
-        title = getattr(e, "title", "").strip() or domain_of(link)
+CREATE TABLE IF NOT EXISTS found_url (
+  id            BIGSERIAL PRIMARY KEY,
+  url           TEXT NOT NULL UNIQUE,
+  title         TEXT,
+  feed_id       BIGINT REFERENCES source_feed(id) ON DELETE SET NULL,
+  first_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw_html      TEXT,
+  source_kind   TEXT,      -- redundant but handy in queries
+  status        TEXT,      -- fetch/summarize status
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-        # Published time (if present)
-        published_at = None
-        if hasattr(e, "published_parsed") and e.published_parsed:
-            try:
-                published_at = datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
-            except Exception:
-                published_at = None
+CREATE INDEX IF NOT EXISTS ix_found_url_last_seen ON found_url(last_seen DESC);
 
-        # Time window filter: if we have published_at, use it; else pass (we'll keep)
-        if published_at and published_at < window_start:
-            continue
+CREATE TABLE IF NOT EXISTS summaries (
+  id            BIGSERIAL PRIMARY KEY,
+  url           TEXT NOT NULL REFERENCES found_url(url) ON DELETE CASCADE,
+  model         TEXT,
+  summary       TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-        out.append({
-            "url": link,
-            "title": title,
-            "publisher": publisher,
-            "published_at": published_at,
-        })
+CREATE INDEX IF NOT EXISTS ix_summaries_url ON summaries(url);
 
+CREATE TABLE IF NOT EXISTS sent_digest (
+  id             BIGSERIAL PRIMARY KEY,
+  window_start   TIMESTAMPTZ NOT NULL,
+  window_end     TIMESTAMPTZ NOT NULL,
+  recipients     TEXT NOT NULL,
+  items_count    INTEGER NOT NULL,
+  summarized     INTEGER NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+
+# -----------------------------------------------------------------------------
+# Google News feed builder and parser
+# -----------------------------------------------------------------------------
+
+def build_google_news_url(query: str, days: int, excl: List[str], allow: List[str]) -> str:
+    # Google News supports "when:7d", site: filters (+/-)
+    terms = [f"({query})"] if query else []
+    for a in allow:
+        terms.append(f"site:{a}")
+    for e in excl:
+        terms.append(f"-site:{e}")
+    terms.append(f"when:{days}d")
+    q = " ".join(terms)
+    return (
+        "https://news.google.com/rss/search"
+        f"?q={quote_plus(q)}&hl=en-US&gl=US&ceid=US%3Aen"
+    )
+
+
+def parse_rss_entries(xml_text: str) -> List[Dict[str, str]]:
+    # Minimal RSS parser for Google News
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return []
+    ns = {}
+    # Build entries
+    out: List[Dict[str, str]] = []
+    for item in root.findall(".//item", ns):
+        title_e = item.find("title")
+        link_e = item.find("link")
+        desc_e = item.find("description")
+        title = title_e.text if title_e is not None else ""
+        link = link_e.text if link_e is not None else ""
+        desc = desc_e.text if desc_e is not None else ""
+        out.append({"title": html.unescape(title or "").strip(),
+                    "link": (link or "").strip(),
+                    "desc": html.unescape(desc or "").strip()})
     return out
 
 
-# ------------------------------------------------------------------------------
-# Summarization
-# ------------------------------------------------------------------------------
+async def http_get(url: str, timeout: float = 30.0) -> httpx.Response:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+        return await client.get(url)
 
-_openai = OpenAI(api_key=OPENAI_API_KEY)
 
-SUMMARY_SYSTEM = (
-    "You are QuantBrief, a crisp financial news summarizer. "
-    "For each item, write ONE short bullet (~20–35 words), neutral tone, "
-    "focusing on what happened and why investors might care. No hype."
-)
+# -----------------------------------------------------------------------------
+# OpenAI summarize with temperature fallback
+# -----------------------------------------------------------------------------
 
-def summarize_one(title: str, publisher: str) -> str:
+def _chat_complete(messages: List[Dict[str, str]], max_tokens: int = 400) -> str:
+    """
+    Calls OpenAI Chat Completions, retrying without 'temperature' if the model rejects it.
+    """
+    if not OPENAI_API_KEY:
+        return ""
+
+    # parse optional temperature
+    try:
+        temp_val = float(OPENAI_TEMPERATURE) if OPENAI_TEMPERATURE.strip() != "" else None
+    except Exception:
+        temp_val = None
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    def _req(include_temp: bool) -> str:
+        payload: Dict[str, Any] = {
+            "model": OPENAI_MODEL,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        # Only attach temperature if non-default AND caller asked us to
+        if include_temp and temp_val is not None and temp_val != 1:
+            payload["temperature"] = temp_val
+
+        r = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30.0,
+        )
+        if r.status_code >= 400:
+            raise RuntimeError(f"{r.status_code}: {r.text}")
+        j = r.json()
+        return (j["choices"][0]["message"]["content"] or "").strip()
+
+    try:
+        return _req(include_temp=True)
+    except RuntimeError as e:
+        msg = str(e)
+        if "unsupported_value" in msg or "does not support" in msg:
+            log.warning("OpenAI: model rejects temperature; retrying without it.")
+            return _req(include_temp=False)
+        raise
+
+
+def summarize_text(text: str) -> str:
+    if not text:
+        return ""
     prompt = (
-        f"Title: {title}\n"
-        f"Source: {publisher}\n\n"
-        "Return one sentence (~20–35 words)."
+        "You are a terse financial/news summarizer. "
+        "Summarize the key facts in 2–3 bullets. "
+        "Avoid hype; include tickers only if explicitly present."
     )
     try:
-        resp = _openai.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": SUMMARY_SYSTEM},
-                {"role": "user", "content": prompt},
+        return _chat_complete(
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": text[:8000]},
             ],
-            temperature=0.3,
+            max_tokens=220,
         )
-        text = (resp.choices[0].message.content or "").strip()
-        # Guardrails
-        text = re.sub(r"\s+", " ", text)
-        # Strip leading bullets/dashes if any
-        text = re.sub(r"^[-•\u2022]\s*", "", text)
-        return text
     except Exception as e:
-        log.warning("OpenAI summarize error: %s", e)
-        # Fallback: very short heuristic summary
-        return f"{publisher}: {title}"
+        log.warning(f"OpenAI summarize error: {e}")
+        return ""
 
 
-# ------------------------------------------------------------------------------
-# Email
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Mailgun email
+# -----------------------------------------------------------------------------
 
-EMAIL_TEMPLATE = Template("""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>QuantBrief Daily</title>
-</head>
-<body style="font-family: Arial, Helvetica, sans-serif; color:#111; line-height:1.5;">
-  <h2 style="margin:0 0 8px 0;">QuantBrief Daily — {{ now_str }}</h2>
-  <div style="color:#444; margin:0 0 16px 0;">
-    Window: last {{ window_minutes }} minutes ending {{ window_end_iso }}
-  </div>
+def send_mail(subject: str, text_body: str, html_body: Optional[str] = None) -> bool:
+    if not (MAILGUN_DOMAIN and MAILGUN_API_KEY and MAIL_FROM and MAIL_TO):
+        log.warning("Mailgun not configured; skipping email.")
+        return False
 
-  {% if items %}
-  <ol style="padding-left: 18px;">
-    {% for it in items %}
-      <li style="margin-bottom:12px;">
-        <div style="font-weight:600;">
-          <a href="{{ it.url }}" target="_blank" rel="noopener noreferrer">{{ it.title }}</a>
-          <span style="color:#666;"> — {{ it.publisher }}</span>
-        </div>
-        <div style="margin-top:4px;">- {{ it.summary }}</div>
-      </li>
-    {% endfor %}
-  </ol>
-  {% else %}
-    <p>No items found for this window.</p>
-  {% endif %}
-
-  <hr style="margin:20px 0;">
-  <div style="font-size:12px; color:#666;">
-    Sources are links only. We don’t republish paywalled content.
-  </div>
-</body>
-</html>
-""".strip())
-
-
-def send_email_html(subject: str, html: str, recipients: List[str]) -> Tuple[bool, str]:
-    """
-    Sends via Mailgun API. You can swap this out for SES/Sendgrid/etc.
-    """
-    if not MAILGUN_DOMAIN or not MAILGUN_API_KEY:
-        log.warning("Mailgun not configured; skipping email send.")
-        return False, "mailgun not configured"
-
-    url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
+    to_list = list_csv(MAIL_TO)
     data = {
-        "from": FROM_ADDR,
-        "to": recipients,
+        "from": MAIL_FROM,
+        "to": to_list,
         "subject": subject,
-        "html": html,
+        "text": text_body,
     }
+    if html_body:
+        data["html"] = html_body
+
     try:
-        r = httpx.post(url, auth=("api", MAILGUN_API_KEY), data=data, timeout=30)
-        r.raise_for_status()
-        return True, "ok"
+        r = httpx.post(
+            f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages",
+            auth=("api", MAILGUN_API_KEY),
+            data=data,
+            timeout=30.0,
+        )
+        if r.status_code >= 400:
+            log.error(f"Mailgun send failed: {r.status_code} {r.text}")
+            return False
+        return True
     except Exception as e:
-        log.exception("send_email error")
-        return False, str(e)
+        log.error(f"Mailgun exception: {e}")
+        return False
 
 
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Admin payload and upsert feed
+# -----------------------------------------------------------------------------
+
+class AdminInitIn(BaseModel):
+    query: str = "(Talen Energy) OR TLN"
+    days: int = 7
+    exclude_sites: List[str] = ["newser.com", "marketbeat.com", "www.newser.com", "www.marketbeat.com"]
+    allow_sites: List[str] = []
+
+
+def upsert_feed(kind: str, url: str, name: str, persist_days: int = 30):
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO source_feed (kind, url, name, active, persist_days)
+            VALUES (%s, %s, %s, TRUE, %s)
+            ON CONFLICT (url) DO UPDATE
+               SET name = EXCLUDED.name,
+                   active = TRUE,
+                   persist_days = EXCLUDED.persist_days
+            """,
+            (kind, url, name, persist_days),
+        )
+
+
+# -----------------------------------------------------------------------------
 # Routes
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-@app.get("/health")
-def health():
-    return {"ok": True, "time": now_utc().isoformat()}
-
-
-class InitBody(BaseModel):
-    query: Optional[str] = None
-    days: Optional[int] = 7
-    # Optionally override exclusions / allowlist for this service
-    excluded_domains: Optional[List[str]] = None
-    quality_domains: Optional[List[str]] = None
+@app.get("/")
+def root():
+    return PlainTextResponse("QuantBrief Daily is up. POST /admin/init, /cron/ingest, /cron/digest")
 
 
 @app.post("/admin/init")
-def admin_init(body: InitBody, request: Request):
-    require_admin(request)
-    ensure_schema()
+def admin_init(payload: AdminInitIn, request: Request):
+    auth_required(request)
+    days = max(1, int(payload.days or 7))
+    excl = payload.exclude_sites or []
+    allow = payload.allow_sites or []
+    log.info(f"init: query={payload.query} days={days} excl={excl} allow={allow}")
 
-    q = (body.query or DEFAULT_QUERY).strip()
-    days = int(body.days or 7)
-
-    # Allow runtime override of lists
-    ex = body.excluded_domains if body.excluded_domains is not None else list(EXCLUDED_DOMAINS)
-    allow = body.quality_domains if body.quality_domains is not None else list(QUALITY_DOMAINS)
-
-    # Persist optional allowlist/exclusions as env-driven at runtime (not stored)
-    log.info("init: query=%s days=%s excl=%s allow=%s", q, days, ex, allow)
-
-    feed_url = build_google_news_feed(q, days=days, excluded=ex)
+    feed_url = build_google_news_url(payload.query, days, excl, allow)
+    with db() as conn:
+        exec_sql_batch(conn, SCHEMA_SQL)
     upsert_feed(kind="google-news", url=feed_url, name="Google News", persist_days=max(30, days + 7))
-
-    return {"initialized": True, "feed_url": feed_url}
+    log.info(f"parsed feed: {feed_url}")
+    return JSONResponse({"ok": True, "feed": feed_url})
 
 
 @app.post("/cron/ingest")
-def cron_ingest(request: Request, minutes: int = Query(1440, ge=5, le=60*24*30)):
-    require_admin(request)
-    ensure_schema()
-
+async def cron_ingest(request: Request, minutes: Optional[int] = 10080):
+    auth_required(request)
+    minutes = to_int(str(minutes), 10080)
+    # get feeds
     with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT id, kind, url, active, name FROM source_feed WHERE active = TRUE")
-        feeds = list(cur.fetchall())
+        cur.execute("SELECT id, kind, url, persist_days FROM source_feed WHERE active = TRUE")
+        feeds = cur.fetchall()
 
-    total_new = 0
-    total_seen = 0
-    for f in feeds:
-        if f["kind"] != "google-news":
-            continue
-        items = parse_google_news(f["url"], minutes)
-        # Dedup by URL within this batch as well
-        seen_batch = set()
-        for it in items:
-            u = it["url"]
-            if u in seen_batch:
-                continue
-            seen_batch.add(u)
+    inserted = 0
+    for fid, kind, url, persist_days in feeds:
+        try:
+            if kind == "google-news":
+                r = await http_get(url)
+                entries = parse_rss_entries(r.text)
+                log.info(f"feed entries: {len(entries)}")
+                with db() as conn, conn.cursor() as cur:
+                    for e in entries:
+                        link = e.get("link", "").strip()
+                        title = e.get("title", "").strip()
+                        if not link:
+                            continue
+                        cur.execute(
+                            """
+                            INSERT INTO found_url (url, title, feed_id, last_seen, source_kind, status)
+                            VALUES (%s, %s, %s, NOW(), %s, %s)
+                            ON CONFLICT (url) DO UPDATE
+                               SET last_seen = EXCLUDED.last_seen,
+                                   title = COALESCE(EXCLUDED.title, found_url.title)
+                            """,
+                            (link, title, fid, kind, "seen"),
+                        )
+                        inserted += 1
+                # cleanup old
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM found_url
+                        WHERE last_seen < NOW() - (%s || ' days')::INTERVAL
+                        """,
+                        (str(int(persist_days)),),
+                    )
+        except Exception as e:
+            log.warning(f"ingest error for feed {url}: {e}")
 
-            inserted, _id = insert_or_touch_url(it)
-            if inserted:
-                total_new += 1
-            else:
-                total_seen += 1
-
-    return {"ok": True, "inserted": total_new, "touched": total_seen}
-
-
-@app.post("/cron/summarize")
-def cron_summarize(request: Request, minutes: int = Query(1440, ge=5, le=60*24*30)):
-    require_admin(request)
-    ensure_schema()
-
-    window_end = now_utc()
-    window_items = fetch_items_for_window(minutes, window_end)
-
-    to_summarize = [w for w in window_items if not w["summary_text"]]
-    summarized = 0
-
-    for w in to_summarize:
-        s = summarize_one(w["title"], w.get("publisher") or domain_of(w["url"]))
-        store_summary(w["id"], OPENAI_MODEL, s)
-        summarized += 1
-
-    return {"ok": True, "summarized": summarized, "pending": len(to_summarize) - summarized}
+    return JSONResponse({"ok": True, "inserted_or_updated": inserted})
 
 
 @app.post("/cron/digest")
-def cron_digest(request: Request, minutes: int = Query(1440, ge=5, le=60*24*30)):
-    require_admin(request)
-    ensure_schema()
+def cron_digest(request: Request, minutes: Optional[int] = 10080):
+    auth_required(request)
+    minutes = to_int(str(minutes), 10080)
+    start, end = minute_window(minutes)
 
-    window_end = now_utc()
-    items = fetch_items_for_window(minutes, window_end)
+    # get items to summarize
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT f.url, f.title
+            FROM found_url f
+            LEFT JOIN summaries s ON s.url = f.url
+            WHERE f.last_seen BETWEEN %s AND %s
+              AND s.url IS NULL
+            ORDER BY f.last_seen DESC
+            LIMIT 200
+            """,
+            (start, end),
+        )
+        to_summarize = cur.fetchall()
 
-    # Ensure everything in-window has a summary
-    for w in items:
-        if not w["summary_text"]:
-            s = summarize_one(w["title"], w.get("publisher") or domain_of(w["url"]))
-            store_summary(w["id"], OPENAI_MODEL, s)
-            w["summary_text"] = s
+    # summarize
+    summarized = 0
+    blocks: List[str] = []
+    with db() as conn, conn.cursor() as cur:
+        for url, title in to_summarize:
+            text = f"{title}\n\n{url}"
+            summ = summarize_text(text)
+            if summ:
+                cur.execute(
+                    "INSERT INTO summaries (url, model, summary) VALUES (%s, %s, %s)",
+                    (url, OPENAI_MODEL, summ),
+                )
+                summarized += 1
 
-    # Format email
-    formatted = []
-    for w in items:
-        # Apply domain filter again just before sending (in case URL changed)
-        if not is_allowed(w["url"]):
-            continue
-        formatted.append({
-            "url": w["url"],
-            "title": w["title"],
-            "publisher": w.get("publisher") or domain_of(w["url"]),
-            "summary": w["summary_text"] or (w.get("publisher") or "") + ": " + w["title"],
-        })
+    # pull all items (even those summarized earlier)
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT f.url, f.title, COALESCE(s.summary, '') AS summary
+            FROM found_url f
+            LEFT JOIN summaries s ON s.url = f.url
+            WHERE f.last_seen BETWEEN %s AND %s
+            ORDER BY f.last_seen DESC
+            LIMIT 300
+            """,
+            (start, end),
+        )
+        rows = cur.fetchall()
 
-    now_str = window_end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
-    html = EMAIL_TEMPLATE.render(
-        now_str=now_str,
-        window_minutes=minutes,
-        window_end_iso=window_end.isoformat(),
-        items=formatted
+    items_count = len(rows)
+    if items_count == 0:
+        return JSONResponse({"ok": True, "sent": False, "reason": "no items in window"})
+
+    # Build email body
+    # If no summary for an item, show "(no summary)" to mirror your logs
+    lines_txt: List[str] = []
+    lines_html: List[str] = []
+    for url, title, summ in rows:
+        title = title or url
+        s = summ.strip() if summ else "(no summary)"
+        lines_txt.append(f"{title}\n  {url}\n{s}\n")
+        item_html = (
+            f"<p><b>{html.escape(title)}</b><br>"
+            f'<a href="{html.escape(url)}">{html.escape(url)}</a><br>'
+            f"{'<br>'.join(html.escape(x) for x in s.splitlines())}</p>"
+        )
+        lines_html.append(item_html)
+
+    subject = f"{APP_NAME} — {end:%Y-%m-%d %H:%M} Window: last {minutes} minutes ending {end.isoformat(timespec='seconds')}"
+    text_body = (
+        f"{APP_NAME} — {end:%Y-%m-%d %H:%M} "
+        f"Window: last {minutes} minutes ending {end.isoformat(timespec='seconds')}\n\n"
+        + "\n".join(lines_txt)
+        + "\nSources are links only. We don’t republish paywalled content."
     )
-    subject = f"QuantBrief Daily — {now_str}"
+    html_body = (
+        f"<h3>{html.escape(APP_NAME)} — {end:%Y-%m-%d %H:%M}</h3>"
+        f"<p><i>Window: last {minutes} minutes ending {html.escape(end.isoformat(timespec='seconds'))}</i></p>"
+        + "\n".join(lines_html)
+        + "<p><i>Sources are links only. We don’t republish paywalled content.</i></p>"
+    )
 
-    recips = [r.strip() for r in RECIPIENTS.split(",") if r.strip()]
-    ok, msg = send_email_html(subject, html, recips)
+    sent_ok = send_mail(subject, text_body, html_body)
 
-    log_send(",".join(recips), num_items=len(formatted), num_summarized=len(formatted), window_minutes=minutes, window_end=window_end)
+    # record send
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO sent_digest (window_start, window_end, recipients, items_count, summarized)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (start, end, MAIL_TO, items_count, summarized),
+        )
 
-    return {"ok": ok, "message": msg, "sent_to": recips, "items": len(formatted)}
+    log.info(f"sent_to={MAIL_TO} items={items_count} summarized={summarized} sent_ok={sent_ok}")
+    return JSONResponse({"ok": True, "sent": bool(sent_ok), "to": MAIL_TO, "items": items_count, "summarized": summarized})
 
 
-# Root (intentional 404 to match your logs)
-@app.get("/")
-def root():
-    raise HTTPException(status_code=404, detail="Not Found")
+# -----------------------------------------------------------------------------
+# Uvicorn entrypoint (Render runs: uvicorn app:app --host 0.0.0.0 --port $PORT)
+# -----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=False)

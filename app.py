@@ -79,6 +79,7 @@ def db() -> psycopg.Connection:
 
 
 DDL_SQL = """
+
 CREATE TABLE IF NOT EXISTS source_feed (
     id SERIAL PRIMARY KEY,
     kind TEXT NOT NULL,          -- 'google-news'
@@ -121,11 +122,39 @@ CREATE TABLE IF NOT EXISTS send_log (
 );
 """
 
+MIGRATE_SQL = """
+-- Bring old/source tables up to date if they already exist
+ALTER TABLE IF EXISTS public.source_feed
+  ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS name   TEXT    NOT NULL DEFAULT 'Google News',
+  ADD COLUMN IF NOT EXISTS persist_days INTEGER NOT NULL DEFAULT 30;
+
+-- Ensure the ON CONFLICT (kind, url) has a matching UNIQUE constraint
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = 'public'
+      AND t.relname  = 'source_feed'
+      AND c.contype  = 'u'
+      AND c.conname  = 'source_feed_kind_url_key'
+  ) THEN
+    ALTER TABLE public.source_feed
+      ADD CONSTRAINT source_feed_kind_url_key UNIQUE (kind, url);
+  END IF;
+END$$;
+"""
 
 def ensure_schema():
     with db() as conn:
         with conn.cursor() as cur:
+            # Create tables/indexes if missing
             cur.execute(DDL_SQL)
+            # Backfill missing columns/constraints for existing installs
+            cur.execute(MIGRATE_SQL)
 
 
 def upsert_feed(kind: str, url: str, name: str, persist_days: int = 30):

@@ -163,33 +163,64 @@ async def http_get(url: str, timeout: float = 30.0) -> httpx.Response:
 def _chat_complete(messages: List[Dict[str, str]], max_tokens: int = 400) -> str:
     if not OPENAI_API_KEY:
         return ""
+
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
 
-    # Parse temperature, but only set it if it's not the default (1) — and retry without it if model rejects
+    # Only send temperature if it's *not* the default (1) — and drop it if model rejects it.
     temp = None
     try:
-        tmp = float(OPENAI_TEMPERATURE) if OPENAI_TEMPERATURE != "" else None
-        if tmp is not None and tmp != 1:
-            temp = tmp
+        t = float(OPENAI_TEMPERATURE) if OPENAI_TEMPERATURE != "" else None
+        if t is not None and t != 1:
+            temp = t
     except Exception:
         pass
 
-    def req(include_temp: bool) -> str:
-        payload: Dict[str, Any] = {"model": OPENAI_MODEL, "messages": messages, "max_tokens": max_tokens}
+    def request_with(tokens_param: str | None, include_temp: bool) -> str:
+        payload: Dict[str, Any] = {
+            "model": OPENAI_MODEL,
+            "messages": messages,
+        }
+        if tokens_param:
+            payload[tokens_param] = max_tokens
         if include_temp and temp is not None:
             payload["temperature"] = temp
-        r = httpx.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30.0)
+
+        r = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30.0,
+        )
         if r.status_code >= 400:
             raise RuntimeError(f"{r.status_code}: {r.text}")
         j = r.json()
         return (j["choices"][0]["message"]["content"] or "").strip()
 
+    # 1) Try: max_tokens (+ maybe temperature)
     try:
-        return req(include_temp=True)
-    except RuntimeError as e:
-        if "unsupported_value" in str(e) or "does not support" in str(e):
-            log.warning("OpenAI: model rejects temperature; retrying without it.")
-            return req(include_temp=False)
+        return request_with(tokens_param="max_tokens", include_temp=True)
+    except RuntimeError as e1:
+        es1 = str(e1)
+
+        # If temperature is unsupported, try again without it (still with max_tokens)
+        if "unsupported_value" in es1 and "temperature" in es1:
+            try:
+                return request_with(tokens_param="max_tokens", include_temp=False)
+            except RuntimeError as e1b:
+                es1 = str(e1b)  # fall through to next block with updated error
+
+        # If max_tokens is unsupported, switch to max_completion_tokens
+        if "unsupported_parameter" in es1 and "max_tokens" in es1:
+            try:
+                return request_with(tokens_param="max_completion_tokens", include_temp=True)
+            except RuntimeError as e2:
+                es2 = str(e2)
+                # And if temperature still offends here, drop it too
+                if "unsupported_value" in es2 and "temperature" in es2:
+                    return request_with(tokens_param="max_completion_tokens", include_temp=False)
+                raise
+
+        # Otherwise propagate original error
         raise
 
 def summarize_text(text: str) -> str:

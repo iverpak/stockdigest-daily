@@ -94,7 +94,7 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
     )
 
     with get_conn() as conn, conn.cursor() as cur:
-        # Does source_feed.retain_days exist?
+        # Check if source_feed.retain_days exists
         cur.execute("""
             SELECT EXISTS (
               SELECT 1
@@ -107,7 +107,6 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
         (has_retain_days,) = cur.fetchone()
 
         if has_retain_days:
-            # Per-feed retention: 0 => use default
             cur.execute("""
                 DELETE FROM found_url f
                 USING source_feed s
@@ -116,7 +115,6 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
                       - (COALESCE(NULLIF(s.retain_days, 0), %s) || ' days')::interval
             """, (effective_default,))
         else:
-            # Single default retention
             cur.execute("""
                 DELETE FROM found_url
                 WHERE found_at < NOW() - (%s || ' days')::interval

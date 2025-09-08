@@ -84,6 +84,7 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
     If source_feed.retain_days exists, use it per-feed (0 means 'use default').
     Otherwise, fall back to a single default (7 days unless overridden).
     """
+    import logging
     effective_default = (
         retention_days
         if retention_days is not None
@@ -93,7 +94,7 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
     )
 
     with get_conn() as conn, conn.cursor() as cur:
-        # Check if source_feed.retain_days exists
+        # Does source_feed.retain_days exist?
         cur.execute("""
             SELECT EXISTS (
               SELECT 1
@@ -106,25 +107,28 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
         (has_retain_days,) = cur.fetchone()
 
         if has_retain_days:
+            # Per-feed retention: 0 => use default
             cur.execute("""
                 DELETE FROM found_url f
                 USING source_feed s
                 WHERE f.feed_id = s.id
                   AND f.found_at < NOW()
-                      - make_interval(days => COALESCE(NULLIF(s.retain_days, 0), %s))
+                      - (COALESCE(NULLIF(s.retain_days, 0), %s) || ' days')::interval
             """, (effective_default,))
         else:
+            # Single default retention
             cur.execute("""
                 DELETE FROM found_url
-                WHERE found_at < NOW() - make_interval(days => %s)
+                WHERE found_at < NOW() - (%s || ' days')::interval
             """, (effective_default,))
 
+        deleted = cur.rowcount
         conn.commit()
-        logging.info(
-            "pruned %s rows from found_url (default=%s days, has_retain_days=%s)",
-            cur.rowcount, effective_default, has_retain_days
+        logging.warning(
+            "prune_old_found_urls: deleted=%s, default_days=%s, has_retain_days=%s",
+            deleted, effective_default, has_retain_days
         )
-
+        
 def upsert_source_feed(url: str, name: Optional[str] = None) -> int:
     """Ensure a feed exists; return its id."""
     with get_conn() as conn, conn.cursor() as cur:

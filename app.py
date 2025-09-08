@@ -32,6 +32,7 @@ if not LOG.handlers:
 # Config / Environment
 # ------------------------------------------------------------------------------
 APP = FastAPI()
+app = APP  # <- add this line so uvicorn app:app can find it
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:

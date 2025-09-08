@@ -77,19 +77,17 @@ class IngestResult(BaseModel):
 
 # ---------- Utilities ----------
 
-def prune_old_found_urls(retention_days: int = 30) -> int:
-    """Delete found_url rows older than N days."""
+def prune_old_found_urls(default_retain_days: int = 7) -> None:
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            DELETE FROM found_url
-            WHERE found_at < NOW() - ($1 || ' days')::INTERVAL
-            """,
-            (retention_days,),
-        )
-        deleted = cur.rowcount or 0
+        cur.execute("""
+            DELETE FROM found_url f
+            USING source_feed s
+            WHERE f.feed_id = s.id
+              AND f.found_at < NOW()
+                  - make_interval(days => COALESCE(NULLIF(s.retain_days, 0), %s))
+        """, (default_retain_days,))
         conn.commit()
-        return deleted
+        logging.info("pruned %s rows from found_url", cur.rowcount)
 
 def upsert_source_feed(url: str, name: Optional[str] = None) -> int:
     """Ensure a feed exists; return its id."""

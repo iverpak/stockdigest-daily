@@ -135,9 +135,8 @@ def get_conn() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 def exec_sql_batch(conn, sql: str):
-    # Run the whole script at once so DO $$ ... $$ isn’t broken
     with conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql)   # one execute for the whole script
     conn.commit()
 
 # ------------------------------------------------------------------------------

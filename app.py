@@ -77,14 +77,17 @@ class IngestResult(BaseModel):
 
 # ---------- Utilities ----------
 
-def prune_old_found_urls(*, retention_days: int | None = None, default_retain_days: int | None = None) -> None:
+def prune_old_found_urls(*, retention_days: int | None = None, default_retain_days: int | None = None) -> int:
     """
     Delete old rows from found_url.
 
-    If source_feed.retain_days exists, use it per-feed (0 means 'use default').
+    If source_feed.retain_days exists, use it per-feed (0 => use default).
     Otherwise, fall back to a single default (7 days unless overridden).
+    Returns: number of rows deleted (int).
     """
     import logging
+    LOG = logging.getLogger("quantbrief")
+
     effective_default = (
         retention_days
         if retention_days is not None
@@ -94,22 +97,22 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
     )
 
     with get_conn() as conn, conn.cursor() as cur:
-        # Check if source_feed.retain_days exists
+        # Check for the column
         cur.execute("""
             SELECT EXISTS (
               SELECT 1
               FROM information_schema.columns
-              WHERE table_schema = 'public'
-                AND table_name   = 'source_feed'
-                AND column_name  = 'retain_days'
+              WHERE table_schema='public'
+                AND table_name='source_feed'
+                AND column_name='retain_days'
             )
         """)
         (has_retain_days,) = cur.fetchone()
 
         if has_retain_days:
             cur.execute("""
-                DELETE FROM found_url f
-                USING source_feed s
+                DELETE FROM found_url AS f
+                USING source_feed AS s
                 WHERE f.feed_id = s.id
                   AND f.found_at < NOW()
                       - (COALESCE(NULLIF(s.retain_days, 0), %s) || ' days')::interval
@@ -120,12 +123,14 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
                 WHERE found_at < NOW() - (%s || ' days')::interval
             """, (effective_default,))
 
-        deleted = cur.rowcount
+        deleted = cur.rowcount or 0
         conn.commit()
-        logging.warning(
-            "prune_old_found_urls: deleted=%s, default_days=%s, has_retain_days=%s",
-            deleted, effective_default, has_retain_days
-        )
+
+    LOG.warning(
+        "prune_old_found_urls: deleted=%d, default_days=%s, has_retain_days=%s",
+        deleted, effective_default, has_retain_days
+    )
+    return deleted
         
 def upsert_source_feed(url: str, name: Optional[str] = None) -> int:
     """Ensure a feed exists; return its id."""
@@ -247,7 +252,7 @@ def cron_ingest(retention_days: int = int(os.getenv("RETENTION_DAYS", "30"))):
     # Prune old items
     try:
         deleted = prune_old_found_urls(retention_days=retention_days)
-        LOG.info("pruned %d old found_url rows (older than %d days)", deleted, retention_days)
+        LOG.info("pruned %d old found_url rows (older than %s days)", deleted, retention_days)
     except Exception as e:
         LOG.warning("prune_old_found_urls failed: %s", e)
         errors += 1

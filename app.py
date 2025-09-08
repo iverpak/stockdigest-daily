@@ -79,12 +79,11 @@ class IngestResult(BaseModel):
 
 def prune_old_found_urls(*, retention_days: int | None = None, default_retain_days: int | None = None) -> None:
     """
-    Deletes rows from found_url older than either:
-      - source_feed.retain_days (if set and > 0), else
-      - the provided retention_days/default_retain_days, else 7 days.
-    Accepts both kwarg names for compatibility with older callers.
+    Delete old rows from found_url.
+
+    If source_feed.retain_days exists, use it per-feed (0 means 'use default').
+    Otherwise, fall back to a single default (7 days unless overridden).
     """
-    # choose an effective default if the feed doesn't override it
     effective_default = (
         retention_days
         if retention_days is not None
@@ -94,15 +93,37 @@ def prune_old_found_urls(*, retention_days: int | None = None, default_retain_da
     )
 
     with get_conn() as conn, conn.cursor() as cur:
+        # Check if source_feed.retain_days exists
         cur.execute("""
-            DELETE FROM found_url f
-            USING source_feed s
-            WHERE f.feed_id = s.id
-              AND f.found_at < NOW()
-                  - make_interval(days => COALESCE(NULLIF(s.retain_days, 0), %s))
-        """, (effective_default,))
+            SELECT EXISTS (
+              SELECT 1
+              FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND table_name   = 'source_feed'
+                AND column_name  = 'retain_days'
+            )
+        """)
+        (has_retain_days,) = cur.fetchone()
+
+        if has_retain_days:
+            cur.execute("""
+                DELETE FROM found_url f
+                USING source_feed s
+                WHERE f.feed_id = s.id
+                  AND f.found_at < NOW()
+                      - make_interval(days => COALESCE(NULLIF(s.retain_days, 0), %s))
+            """, (effective_default,))
+        else:
+            cur.execute("""
+                DELETE FROM found_url
+                WHERE found_at < NOW() - make_interval(days => %s)
+            """, (effective_default,))
+
         conn.commit()
-        logging.info("pruned %s rows from found_url (default=%s days)", cur.rowcount, effective_default)
+        logging.info(
+            "pruned %s rows from found_url (default=%s days, has_retain_days=%s)",
+            cur.rowcount, effective_default, has_retain_days
+        )
 
 def upsert_source_feed(url: str, name: Optional[str] = None) -> int:
     """Ensure a feed exists; return its id."""

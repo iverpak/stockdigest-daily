@@ -77,7 +77,22 @@ class IngestResult(BaseModel):
 
 # ---------- Utilities ----------
 
-def prune_old_found_urls(default_retain_days: int = 7) -> None:
+def prune_old_found_urls(*, retention_days: int | None = None, default_retain_days: int | None = None) -> None:
+    """
+    Deletes rows from found_url older than either:
+      - source_feed.retain_days (if set and > 0), else
+      - the provided retention_days/default_retain_days, else 7 days.
+    Accepts both kwarg names for compatibility with older callers.
+    """
+    # choose an effective default if the feed doesn't override it
+    effective_default = (
+        retention_days
+        if retention_days is not None
+        else default_retain_days
+        if default_retain_days is not None
+        else 7
+    )
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("""
             DELETE FROM found_url f
@@ -85,9 +100,9 @@ def prune_old_found_urls(default_retain_days: int = 7) -> None:
             WHERE f.feed_id = s.id
               AND f.found_at < NOW()
                   - make_interval(days => COALESCE(NULLIF(s.retain_days, 0), %s))
-        """, (default_retain_days,))
+        """, (effective_default,))
         conn.commit()
-        logging.info("pruned %s rows from found_url", cur.rowcount)
+        logging.info("pruned %s rows from found_url (default=%s days)", cur.rowcount, effective_default)
 
 def upsert_source_feed(url: str, name: Optional[str] = None) -> int:
     """Ensure a feed exists; return its id."""

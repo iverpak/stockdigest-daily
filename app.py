@@ -41,19 +41,8 @@ CREATE TABLE IF NOT EXISTS source_feed (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Create a unique *index* first (idempotent).
+-- Enforce uniqueness with a unique index only (idempotent & safe)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_source_feed_url ON source_feed (url);
-
--- Attach a UNIQUE constraint to that index, tolerate if it already exists.
-DO $$
-BEGIN
-    ALTER TABLE source_feed
-      ADD CONSTRAINT uq_source_feed_url UNIQUE USING INDEX uq_source_feed_url;
-EXCEPTION
-    WHEN duplicate_object THEN
-        -- Constraint already exists; ignore.
-        NULL;
-END $$;
 
 -- Found URLs table
 CREATE TABLE IF NOT EXISTS found_url (
@@ -66,7 +55,7 @@ CREATE TABLE IF NOT EXISTS found_url (
     found_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- If earlier versions existed without found_at, add it.
+-- Backfill column if old table existed without it
 ALTER TABLE found_url
     ADD COLUMN IF NOT EXISTS found_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 

@@ -134,11 +134,11 @@ CREATE TABLE IF NOT EXISTS digest_log (
 def get_conn() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
-def exec_sql_batch(conn: psycopg.Connection, sql: str) -> None:
-    with conn:
-        with conn.cursor() as cur:
-            for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
-                conn.execute(stmt + ";")
+def exec_sql_batch(conn, sql: str):
+    # Run the whole script at once so DO $$ ... $$ isn’t broken
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
 
 # ------------------------------------------------------------------------------
 # Utility

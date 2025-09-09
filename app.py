@@ -11,7 +11,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 import requests
 import feedparser
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
 import psycopg
 from psycopg.rows import dict_row
@@ -39,6 +39,7 @@ BANNED_HOSTS |= extra_banned
 
 app = FastAPI(title=APP_NAME)
 
+# -------------------- helpers --------------------
 def as_utc(d: Optional[dt.datetime]) -> Optional[dt.datetime]:
     if d is None:
         return None
@@ -113,6 +114,7 @@ def get_conn():
         raise RuntimeError("DATABASE_URL is not set")
     return psycopg.connect(DATABASE_URL, autocommit=True, row_factory=dict_row)
 
+# -------------------- migrations --------------------
 SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
     (
         "0001_base",
@@ -126,7 +128,8 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
             id SERIAL PRIMARY KEY,
             url TEXT UNIQUE NOT NULL,
             active BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            name TEXT NOT NULL DEFAULT 'feed'
         );
 
         CREATE TABLE IF NOT EXISTS found_url (
@@ -139,7 +142,7 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
             summary TEXT,
             published_at TIMESTAMPTZ,
             score DOUBLE PRECISION DEFAULT 0,
-            feed_id INTEGER REFERENCES feed(id) ON DELETE SET NULL,
+            feed_id INTEGER,
             fingerprint TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
@@ -150,60 +153,8 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS ix_found_url_url_canonical ON found_url(url_canonical);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_url ON found_url(url);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
-        """,
-    ),
-    (
-        "0001a_compat_existing",
-        """
-        -- feed
-        CREATE TABLE IF NOT EXISTS feed (id SERIAL PRIMARY KEY, url TEXT UNIQUE NOT NULL);
-        ALTER TABLE feed ADD COLUMN IF NOT EXISTS active BOOLEAN;
-        UPDATE feed SET active = TRUE WHERE active IS NULL;
-        ALTER TABLE feed ALTER COLUMN active SET DEFAULT TRUE;
-        ALTER TABLE feed ALTER COLUMN active SET NOT NULL;
-        ALTER TABLE feed ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
-        UPDATE feed SET created_at = now() WHERE created_at IS NULL;
-        ALTER TABLE feed ALTER COLUMN created_at SET DEFAULT now();
-        ALTER TABLE feed ALTER COLUMN created_at SET NOT NULL;
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_feed_url ON feed(url);
 
-        -- found_url
-        CREATE TABLE IF NOT EXISTS found_url (id BIGSERIAL PRIMARY KEY, url TEXT NOT NULL);
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS url_canonical TEXT;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS host TEXT;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS title TEXT;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS title_slug TEXT;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS summary TEXT;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS feed_id INTEGER;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS fingerprint TEXT;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
-        UPDATE found_url SET created_at = now() WHERE created_at IS NULL;
-        ALTER TABLE found_url ALTER COLUMN created_at SET DEFAULT now();
-        ALTER TABLE found_url ALTER COLUMN created_at SET NOT NULL;
-
-        CREATE INDEX IF NOT EXISTS ix_found_url_published_at ON found_url(published_at DESC NULLS LAST);
-        CREATE INDEX IF NOT EXISTS ix_found_url_host ON found_url(host);
-        CREATE INDEX IF NOT EXISTS ix_found_url_title_slug ON found_url(title_slug);
-        CREATE INDEX IF NOT EXISTS ix_found_url_url_canonical ON found_url(url_canonical);
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_url ON found_url(url);
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
-        """,
-    ),
-    (
-        "0001b_compat_feed_name",
-        """
-        ALTER TABLE feed ADD COLUMN IF NOT EXISTS name TEXT;
-        ALTER TABLE feed ALTER COLUMN name SET DEFAULT 'feed';
-        UPDATE feed SET name = 'feed' WHERE name IS NULL;
-        """,
-    ),
-    # NEW: fix legacy FK to source_feed, mirror data, and repoint FK to feed
-    (
-        "0001c_fk_source_feed_compat",
-        """
-        -- If a legacy 'source_feed' exists, ensure it's present (no-op if already there)
+        -- Ensure legacy source_feed exists (no-op if already there), used for compatibility copy
         CREATE TABLE IF NOT EXISTS source_feed (
             id SERIAL PRIMARY KEY,
             name TEXT,
@@ -211,28 +162,6 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
             active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMPTZ DEFAULT now()
         );
-
-        -- Copy missing IDs from source_feed -> feed (preserve IDs so existing found_url.feed_id remains valid)
-        INSERT INTO feed(id, url, active, created_at, name)
-        SELECT sf.id, sf.url, COALESCE(sf.active, TRUE), COALESCE(sf.created_at, now()), COALESCE(sf.name, 'feed')
-        FROM source_feed sf
-        LEFT JOIN feed f ON f.id = sf.id
-        WHERE f.id IS NULL
-        ON CONFLICT (id) DO NOTHING;
-
-        -- Create inactive placeholders for any dangling found_url.feed_id with no feed row
-        INSERT INTO feed(id, url, active, created_at, name)
-        SELECT DISTINCT fu.feed_id, 'legacy://feed/' || fu.feed_id, FALSE, now(), 'legacy'
-        FROM found_url fu
-        LEFT JOIN feed f ON f.id = fu.feed_id
-        WHERE fu.feed_id IS NOT NULL AND f.id IS NULL
-        ON CONFLICT (id) DO NOTHING;
-
-        -- Re-point FK: drop any legacy FK (e.g., to source_feed) and add FK to feed(id)
-        ALTER TABLE found_url DROP CONSTRAINT IF EXISTS found_url_feed_id_fkey;
-        ALTER TABLE found_url
-          ADD CONSTRAINT found_url_feed_id_fkey
-          FOREIGN KEY (feed_id) REFERENCES feed(id) ON DELETE SET NULL;
         """,
     ),
     (
@@ -245,28 +174,97 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
            TRUE, 'Google News: Talen Energy / TLN (7d)')
         ON CONFLICT (url) DO UPDATE
           SET active = EXCLUDED.active,
-              name = COALESCE(feed.name, EXCLUDED.name);
+              name   = COALESCE(feed.name, EXCLUDED.name);
         """,
     ),
 ]
 
+def _apply_sql(cur, sql: str) -> None:
+    for stmt in [s.strip() for s in sql.strip().split(";") if s.strip()]:
+        cur.execute(stmt + ";")
+
+def _mirror_legacy_source_feed(cur) -> None:
+    # Copy missing IDs from source_feed -> feed (preserve IDs)
+    cur.execute(
+        """
+        INSERT INTO feed(id, url, active, created_at, name)
+        SELECT sf.id,
+               sf.url,
+               COALESCE(sf.active, TRUE),
+               COALESCE(sf.created_at, now()),
+               COALESCE(sf.name, 'feed')
+        FROM source_feed sf
+        LEFT JOIN feed f ON f.id = sf.id
+        WHERE f.id IS NULL
+        ON CONFLICT (id) DO NOTHING;
+        """
+    )
+
+def _placeholder_missing_feed_ids(cur) -> None:
+    # Create inactive placeholders for any dangling found_url.feed_id with no feed row
+    cur.execute(
+        """
+        INSERT INTO feed(id, url, active, created_at, name)
+        SELECT DISTINCT fu.feed_id,
+               'legacy://feed/' || fu.feed_id,
+               FALSE,
+               now(),
+               'legacy'
+        FROM found_url fu
+        LEFT JOIN feed f ON f.id = fu.feed_id
+        WHERE fu.feed_id IS NOT NULL AND f.id IS NULL
+        ON CONFLICT (id) DO NOTHING;
+        """
+    )
+
+def _fix_found_url_feed_fk(cur) -> None:
+    # Drop ANY FK on found_url(feed_id) regardless of name/target table
+    cur.execute(
+        """
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        JOIN unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ord) ON TRUE
+        JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attnum = cols.attnum
+        WHERE rel.relname = 'found_url' AND c.contype = 'f' AND a.attname = 'feed_id';
+        """
+    )
+    rows = cur.fetchall()
+    for r in rows:
+        conname = r["conname"]
+        cur.execute(f'ALTER TABLE found_url DROP CONSTRAINT IF EXISTS "{conname}";')
+
+    # After drops, add the single correct FK
+    cur.execute(
+        """
+        ALTER TABLE found_url
+        ADD CONSTRAINT found_url_feed_id_fkey
+        FOREIGN KEY (feed_id) REFERENCES feed(id) ON DELETE SET NULL;
+        """
+    )
+
 def run_migrations(conn) -> None:
     with conn.cursor() as cur:
-        cur.execute("CREATE TABLE IF NOT EXISTS schema_version(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());")
+        _apply_sql(cur, "CREATE TABLE IF NOT EXISTS schema_version(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());")
         cur.execute("SELECT version FROM schema_version;")
         applied = {r["version"] for r in cur.fetchall()}
+
         for version, sql in SCHEMA_MIGRATIONS:
-            if version in applied:
-                continue
-            for stmt in [s.strip() for s in sql.strip().split(";") if s.strip()]:
-                cur.execute(stmt + ";")
-            cur.execute("INSERT INTO schema_version(version) VALUES (%s);", (version,))
-            log.info("Applied migration %s", version)
+            if version not in applied:
+                _apply_sql(cur, sql)
+                cur.execute("INSERT INTO schema_version(version) VALUES (%s);", (version,))
+                log.info("Applied migration %s", version)
+
+        # Compatibility pass every run:
+        _mirror_legacy_source_feed(cur)
+        _placeholder_missing_feed_ids(cur)
+        _fix_found_url_feed_fk(cur)
 
 def ensure_schema_and_seed(conn) -> None:
-    log.info("Ensuring schema via migrations…")
+    log.info("Schema ensuring & compatibility pass…")
     run_migrations(conn)
 
+# -------------------- ingest & digest --------------------
 def parse_feed(url: str):
     return (feedparser.parse(url, request_headers={"User-Agent": USER_AGENT}).entries) or []
 
@@ -310,7 +308,7 @@ def do_ingest(minutes: int) -> dict:
     pruned = 0
 
     with get_conn() as conn:
-        run_migrations(conn)
+        ensure_schema_and_seed(conn)
 
         with conn.cursor() as cur:
             cur.execute("SELECT id, url FROM feed WHERE active IS TRUE;")
@@ -423,6 +421,7 @@ def send_email(subject: str, html_body: str, text_body: str) -> bool:
     log.info("Email sent to %s", TO_EMAILS)
     return True
 
+# -------------------- routes --------------------
 @app.get("/", response_class=PlainTextResponse)
 def root():
     return f"{APP_NAME} up"
@@ -438,9 +437,9 @@ def healthz():
         return PlainTextResponse(f"not ok: {e}", status_code=500)
 
 @app.post("/admin/init", response_class=PlainTextResponse)
-def admin_init(request: Request):
+def admin_init():
     with get_conn() as conn:
-        run_migrations(conn)
+        ensure_schema_and_seed(conn)
     log.info("Schema ensured; seed feeds upserted.")
     return "Schema ensured; seed feeds upserted."
 
@@ -453,7 +452,7 @@ def cron_ingest(minutes: int = 7 * 24 * 60):
 @app.get("/admin/preview-digest", response_class=HTMLResponse)
 def admin_preview_digest(minutes: int = 7 * 24 * 60):
     with get_conn() as conn:
-        run_migrations(conn)
+        ensure_schema_and_seed(conn)
         rows = select_digest_rows(conn, minutes=minutes)
     subj = f"{APP_NAME} digest — last {minutes} minutes — {len(rows)} items"
     html, _ = format_email_html(subj, rows)
@@ -462,7 +461,7 @@ def admin_preview_digest(minutes: int = 7 * 24 * 60):
 @app.post("/cron/digest", response_class=PlainTextResponse)
 def cron_digest(minutes: int = 7 * 24 * 60):
     with get_conn() as conn:
-        run_migrations(conn)
+        ensure_schema_and_seed(conn)
         rows = select_digest_rows(conn, minutes=minutes)
     subj = f"{APP_NAME} digest — last {minutes} minutes — {len(rows)} items"
     html, text = format_email_html(subj, rows)

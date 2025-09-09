@@ -136,7 +136,8 @@ def exec_sql_batch(conn, sql: str):
 
 def ensure_schema_and_seed(conn):
     exec_sql_batch(conn, SCHEMA_SQL)
-
+    exec_sql_batch(conn, MIGRATIONS_SQL)  # <-- add this
+    
     # Seed: four TLN Google News feeds (two strict, two broader)
     seeds = [
         # name, url, language, retain_days

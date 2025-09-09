@@ -73,7 +73,7 @@ app = FastAPI(title=APP_NAME)
 # -----------------------------------------------------------------------------
 # DB schema & seeding
 # -----------------------------------------------------------------------------
-SCHEMA_SQL = """
+SCHEMA_TABLES = """
 CREATE TABLE IF NOT EXISTS feed (
     id           SERIAL PRIMARY KEY,
     name         TEXT NOT NULL,
@@ -92,10 +92,24 @@ CREATE TABLE IF NOT EXISTS found_url (
     summary        TEXT,
     published_at   TIMESTAMPTZ,
     score          DOUBLE PRECISION DEFAULT 0.0,
-    feed_id        INTEGER REFERENCES feed(id) ON DELETE SET NULL,
-    fingerprint    TEXT, -- NEW: strong dedupe key
+    feed_id        INTEGER,
+    fingerprint    TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+"""
+
+SCHEMA_INDEXES = """
+CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_url ON found_url(url);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_url_canonical
+  ON found_url(url_canonical) WHERE url_canonical IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint
+  ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ix_found_url_host_slug_time
+  ON found_url (host, title_slug, published_at DESC);
+CREATE INDEX IF NOT EXISTS ix_found_url_published_at
+  ON found_url (published_at DESC);
+"""
 
 -- Uniqueness
 CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_url ON found_url(url);
@@ -131,13 +145,26 @@ def exec_sql_batch(conn, sql: str):
     conn.commit()
 
 def ensure_schema_and_seed(conn):
-    exec_sql_batch(conn, SCHEMA_SQL)
-    # Make sure columns exist if migrating an old DB (idempotent)
+    # 1) Create tables (no indexes that depend on new columns)
     with conn.cursor() as cur:
-        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS fingerprint TEXT;")
-        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS title_slug TEXT;")
+        cur.execute(SCHEMA_TABLES)
     conn.commit()
 
+    # 2) Migrations: add columns if missing (idempotent)
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS url_canonical TEXT;")
+        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS title_slug TEXT;")
+        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION DEFAULT 0.0;")
+        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS feed_id INTEGER;")
+        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS fingerprint TEXT;")
+    conn.commit()
+
+    # 3) Now create indexes (column definitely exists)
+    with conn.cursor() as cur:
+        cur.execute(SCHEMA_INDEXES)
+    conn.commit()
+
+    # 4) Seed feeds
     with conn.cursor() as cur:
         for name, url in SEED_FEEDS:
             cur.execute(

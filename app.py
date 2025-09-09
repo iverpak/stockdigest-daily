@@ -113,6 +113,89 @@ END $$;
 
 """
 
+MIGRATIONS_SQL = r"""
+DO $$
+BEGIN
+  -- ---------- found_url ----------
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='host'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN host TEXT;
+    -- backfill host from url
+    UPDATE found_url
+       SET host = lower(regexp_replace(substring(url from '://([^/]+)'), '^www\.', ''))
+     WHERE host IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_found_url_host ON found_url (host);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='article_type'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN article_type TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='score'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN score DOUBLE PRECISION;
+    CREATE INDEX IF NOT EXISTS idx_found_url_score ON found_url (score DESC);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='quality_notes'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN quality_notes TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='language'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN language TEXT NOT NULL DEFAULT 'en';
+    UPDATE found_url SET language = 'en' WHERE language IS NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='published_at'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN published_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url (published_at DESC);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='found_at'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN found_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    CREATE INDEX IF NOT EXISTS idx_found_url_found_at ON found_url (found_at DESC);
+  END IF;
+
+  -- ---------- source_feed ----------
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='source_feed' AND column_name='updated_at'
+  ) THEN
+    ALTER TABLE source_feed ADD COLUMN updated_at TIMESTAMPTZ;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='source_feed' AND column_name='language'
+  ) THEN
+    ALTER TABLE source_feed ADD COLUMN language TEXT;
+    UPDATE source_feed SET language = 'en' WHERE language IS NULL;
+    ALTER TABLE source_feed ALTER COLUMN language SET DEFAULT 'en';
+    ALTER TABLE source_feed ALTER COLUMN language SET NOT NULL;
+  END IF;
+
+END $$;
+"""
+
 # -------------------------
 # App + helpers
 # -------------------------
@@ -136,7 +219,8 @@ def exec_sql_batch(conn, sql: str):
 
 def ensure_schema_and_seed(conn):
     exec_sql_batch(conn, SCHEMA_SQL)
-    exec_sql_batch(conn, MIGRATIONS_SQL)  # <-- add this
+    exec_sql_batch(conn, MIGRATIONS_SQL)  # <- add this line
+    seed_default_feeds(conn)              # whatever you already do to seed
     
     # Seed: four TLN Google News feeds (two strict, two broader)
     seeds = [
@@ -514,18 +598,22 @@ def fetch_digest_rows(conn, minutes: int, min_score: float) -> List[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT f.title, f.url, f.host, f.article_type, f.score, f.quality_notes,
-                   COALESCE(sf.name, 'feed') AS feed_name,
-                   f.published_at
+            SELECT
+                f.title,
+                f.url,
+                f.host,
+                f.article_type,
+                COALESCE(f.score, 0) AS score,
+                f.published_at,
+                s.name AS feed_name
             FROM found_url f
-            LEFT JOIN source_feed sf ON sf.id = f.feed_id
-            WHERE f.published_at >= NOW() - make_interval(minutes => %s)
+            JOIN source_feed s ON s.id = f.feed_id
+            WHERE f.published_at >= NOW() - make_interval(mins => %s::int)
               AND COALESCE(f.score, 0) >= %s
-              AND f.article_type = ANY(%s)
-            ORDER BY f.score DESC, f.published_at DESC
-            LIMIT 300
+            ORDER BY f.published_at DESC
+            LIMIT 500
             """,
-            (minutes, min_score, list(GOOD_TYPES)),
+            (minutes, min_score),
         )
         return list(cur.fetchall())
 

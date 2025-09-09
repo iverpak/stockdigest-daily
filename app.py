@@ -161,25 +161,23 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
         """,
     ),
-    # New: make legacy DBs converge (adds missing columns/indexes if tables pre-existed)
+    # Make legacy DBs converge (adds/normalizes columns & indexes if tables pre-existed)
     (
         "0001a_compat_existing",
         """
-        -- feed table & essentials
+        -- feed essentials
         CREATE TABLE IF NOT EXISTS feed (id SERIAL PRIMARY KEY, url TEXT UNIQUE NOT NULL);
         ALTER TABLE feed ADD COLUMN IF NOT EXISTS active BOOLEAN;
         UPDATE feed SET active = TRUE WHERE active IS NULL;
         ALTER TABLE feed ALTER COLUMN active SET DEFAULT TRUE;
         ALTER TABLE feed ALTER COLUMN active SET NOT NULL;
-
         ALTER TABLE feed ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
         UPDATE feed SET created_at = now() WHERE created_at IS NULL;
         ALTER TABLE feed ALTER COLUMN created_at SET DEFAULT now();
         ALTER TABLE feed ALTER COLUMN created_at SET NOT NULL;
-
         CREATE UNIQUE INDEX IF NOT EXISTS ux_feed_url ON feed(url);
 
-        -- found_url table & essentials
+        -- found_url essentials
         CREATE TABLE IF NOT EXISTS found_url (id BIGSERIAL PRIMARY KEY, url TEXT NOT NULL);
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS url_canonical TEXT;
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS host TEXT;
@@ -203,13 +201,27 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
         """,
     ),
+    # NEW: ensure/normalize feed.name BEFORE seeding (covers legacy NOT NULL-without-default cases)
+    (
+        "0001b_compat_feed_name",
+        """
+        ALTER TABLE feed ADD COLUMN IF NOT EXISTS name TEXT;
+        -- Provide a default so INSERTs that don't specify 'name' won't fail on legacy NOT NULL schemas
+        ALTER TABLE feed ALTER COLUMN name SET DEFAULT 'feed';
+        UPDATE feed SET name = 'feed' WHERE name IS NULL;
+        """,
+    ),
     (
         "0002_seed_feeds",
         """
-        INSERT INTO feed(url, active) VALUES
-          ('https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+-site:newser.com+-site:marketbeat.com+when:3d&hl=en-US&gl=US&ceid=US:en', TRUE),
-          ('https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+when:7d&hl=en-US&gl=US&ceid=US:en', TRUE)
-        ON CONFLICT (url) DO UPDATE SET active=EXCLUDED.active;
+        INSERT INTO feed(url, active, name) VALUES
+          ('https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+-site:newser.com+-site:marketbeat.com+when:3d&hl=en-US&gl=US&ceid=US:en',
+           TRUE, 'Google News: Talen Energy / TLN (3d, excluding MarketBeat & Newser)'),
+          ('https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+when:7d&hl=en-US&gl=US&ceid=US:en',
+           TRUE, 'Google News: Talen Energy / TLN (7d)')
+        ON CONFLICT (url) DO UPDATE
+          SET active = EXCLUDED.active,
+              name = COALESCE(feed.name, EXCLUDED.name);
         """,
     ),
 ]

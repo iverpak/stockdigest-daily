@@ -456,35 +456,36 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
                     continue
 
             # Insert
-            with conn.cursor() as cur:
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO found_url
-                          (url, url_canonical, title, title_slug, host, feed_id, language, article_type, score, published_at, found_at)
-                        VALUES
-                          (%s,  %s,            %s,    %s,         %s,   %s,      %s,       %s,           %s,    %s,           NOW())
-                        ON CONFLICT (url) DO NOTHING
-                        """,
-                        (
-                            final_url,
-                            final_url_canon,
-                            title,
-                            slug or None,
-                            display_host,
-                            sf["id"],
-                            language,
-                            "article",
-                            s,
-                            published,
-                        ),
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM found_url
+                WHERE
+                    (url = %s OR url = %s OR url_canonical = %s)
+                    OR (
+                        %s::text <> ''       -- make the param a typed TEXT
+                        AND host = %s
+                        AND title_slug = %s
+                        AND published_at >= NOW() - (%s::int * INTERVAL '1 day')
                     )
-                    if cur.rowcount:
-                        inserted += 1
-                except Exception as ex:
-                    LOG.warning("insert failed for %s: %s", final_url, ex)
-
-            scanned += 1
+                LIMIT 1
+                """,
+                (
+                    final_url,               # exact final URL
+                    final_url_canon,         # exact canonical in url column (if ever stored that way)
+                    final_url_canon,         # canonical in url_canonical
+                    (slug or ""),            # typed via ::text above
+                    display_host,
+                    (slug or ""),
+                    DEDUPE_WINDOW_DAYS,      # typed via ::int above
+                ),
+            )
+            row = cur.fetchone()
+            if row:
+                LOG.info("skip duplicate: %s (host=%s slug=%s)", final_url, display_host, slug)
+                scanned += 1
+                continue
 
     # Prune old rows by per-feed retain_days (0 means use default)
     with conn.cursor() as cur:

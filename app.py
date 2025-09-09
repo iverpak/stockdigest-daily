@@ -184,19 +184,57 @@ def _apply_sql(cur, sql: str) -> None:
         cur.execute(stmt + ";")
 
 def _mirror_legacy_source_feed(cur) -> None:
-    # Copy missing IDs from source_feed -> feed (preserve IDs)
+    """
+    Make feed reflect source_feed without violating feed(url) uniqueness, and
+    preserve/repair references from found_url.feed_id.
+    Strategy:
+      - If a feed row with the same URL already exists (possibly different id):
+          * Update its metadata from source_feed.
+          * Remap found_url.feed_id from source_feed.id -> that feed.id.
+      - If neither the id nor the url exist in feed:
+          * Insert a new feed row using source_feed's id.
+    """
+
+    # 1) Refresh existing feed rows (matched by URL) with metadata from source_feed.
     cur.execute(
         """
-        INSERT INTO feed(id, url, active, created_at, name)
+        UPDATE feed f
+        SET active     = COALESCE(sf.active, TRUE),
+            name       = COALESCE(sf.name, f.name),
+            created_at = COALESCE(sf.created_at, f.created_at)
+        FROM source_feed sf
+        WHERE f.url = sf.url;
+        """
+    )
+
+    # 2) Remap found_url.feed_id from legacy source_feed.id to existing feed.id when URL matches but ids differ.
+    cur.execute(
+        """
+        UPDATE found_url fu
+        SET feed_id = f_existing.id
+        FROM source_feed sf
+        JOIN feed f_existing ON f_existing.url = sf.url
+        WHERE fu.feed_id = sf.id
+          AND f_existing.id <> sf.id;
+        """
+    )
+
+    # 3) Insert any source_feed rows that don't exist in feed by id or by url.
+    #    (This avoids violating the unique constraint on feed(url).)
+    cur.execute(
+        """
+        INSERT INTO feed (id, url, active, created_at, name)
         SELECT sf.id,
                sf.url,
                COALESCE(sf.active, TRUE),
                COALESCE(sf.created_at, now()),
                COALESCE(sf.name, 'feed')
         FROM source_feed sf
-        LEFT JOIN feed f ON f.id = sf.id
-        WHERE f.id IS NULL
-        ON CONFLICT (id) DO NOTHING;
+        LEFT JOIN feed f_id  ON f_id.id = sf.id
+        LEFT JOIN feed f_url ON f_url.url = sf.url
+        WHERE f_id.id IS NULL
+          AND f_url.id IS NULL
+        ON CONFLICT DO NOTHING;
         """
     )
 

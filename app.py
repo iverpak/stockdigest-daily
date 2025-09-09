@@ -506,6 +506,31 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
     )
     return inserted, scanned, pruned
 
+# --- duplicate check (replace your current SELECT 1 block) ---
+# explicit cutoff as a timestamptz param (avoids interval typing)
+time_cutoff = datetime.now(timezone.utc) - timedelta(days=DEDUPE_WINDOW_DAYS)
+
+sql = [
+    "SELECT 1",
+    "FROM found_url",
+    "WHERE (url = %s OR url = %s OR url_canonical = %s)"
+]
+params = [final_url, final_url_canon, final_url_canon]
+
+# only add the slug/host window when we actually have a slug
+if slug:
+    sql.append("OR (host = %s AND title_slug = %s AND published_at >= %s)")
+    params.extend([display_host, slug, time_cutoff])
+
+sql.append("LIMIT 1")
+with conn.cursor() as cur:
+    cur.execute("\n".join(sql), params)
+    if cur.fetchone():
+        LOG.info("skip duplicate: %s (host=%s slug=%s)", final_url, display_host, slug)
+        scanned += 1
+        continue
+# --- end duplicate check ---
+
 # -----------------------------------------------------------------------------
 # Digest fetch
 # -----------------------------------------------------------------------------

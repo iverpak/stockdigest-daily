@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Optional, Dict, Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
 
 import feedparser
 import requests
@@ -33,17 +33,20 @@ if not DATABASE_URL:
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 
-DEFAULT_MINUTES = int(os.getenv("DEFAULT_MINUTES", "10080"))  # 7 days
+DEFAULT_MINUTES = int(os.getenv("DEFAULT_MINUTES", "10080"))  # 7 days (use 1440 in prod)
 DEFAULT_MIN_SCORE = float(os.getenv("DEFAULT_MIN_SCORE", "0.55"))
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "30"))
 MAX_FETCH_PER_RUN = int(os.getenv("MAX_FETCH_PER_RUN", "200"))
+SLUG_DEDUP_DAYS = int(os.getenv("SLUG_DEDUP_DAYS", "21"))
 
 HTTP_USER_AGENT = os.getenv(
     "HTTP_USER_AGENT",
     "Mozilla/5.0 (compatible; QuantbriefBot/1.0; +https://quantbrief)"
 )
 
+# -----------------------------------------------------------------------------
 # Final-landing redirect blocklist
+# -----------------------------------------------------------------------------
 def _normalized_host(u: str) -> str:
     try:
         host = urlparse(u).netloc.lower()
@@ -60,7 +63,9 @@ BLOCK_REDIRECT_HOSTS = {
     if h.strip()
 }
 
+# -----------------------------------------------------------------------------
 # Outbound email settings
+# -----------------------------------------------------------------------------
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
@@ -98,6 +103,7 @@ CREATE TABLE IF NOT EXISTS found_url (
   id            BIGSERIAL PRIMARY KEY,
   url           TEXT NOT NULL UNIQUE,
   title         TEXT,
+  title_slug    TEXT,
   host          TEXT,
   feed_id       BIGINT REFERENCES source_feed(id) ON DELETE CASCADE,
   language      TEXT,
@@ -110,6 +116,8 @@ CREATE TABLE IF NOT EXISTS found_url (
 CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url (published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_found_url_score ON found_url (score DESC);
 CREATE INDEX IF NOT EXISTS idx_found_url_feed ON found_url (feed_id);
+CREATE INDEX IF NOT EXISTS idx_found_url_host ON found_url (host);
+CREATE INDEX IF NOT EXISTS idx_found_url_title_slug ON found_url (title_slug);
 """
 
 # Migrations to ensure any old DBs get missing columns; safe to run anytime.
@@ -137,13 +145,15 @@ ALTER TABLE found_url ADD COLUMN IF NOT EXISTS host TEXT;
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS language TEXT;
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS article_type TEXT;
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
+ALTER TABLE found_url ADD COLUMN IF NOT EXISTS title_slug TEXT;
 
 -- Indexes (idempotent)
 CREATE INDEX IF NOT EXISTS idx_found_url_host ON found_url (host);
+CREATE INDEX IF NOT EXISTS idx_found_url_title_slug ON found_url (title_slug);
 """
 
 SEED_FEEDS: List[Dict[str, Any]] = [
-    # Keep your TLN / Talen Energy seeds
+    # TLN / Talen Energy seeds
     {
         "url": "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN&hl=en-US&gl=US&ceid=US:en",
         "name": "Google News: Talen Energy OR TLN (all)",
@@ -195,22 +205,49 @@ def ensure_schema_and_seed(conn: psycopg.Connection) -> None:
     LOG.info("Schema ensured; seed feeds upserted.")
 
 # -----------------------------------------------------------------------------
-# Redirect resolution / blocklist
+# Canonicalization / redirects / blocklist
 # -----------------------------------------------------------------------------
+def _strip_tracking_params(u: str) -> str:
+    try:
+        p = urlparse(u)
+        q = parse_qs(p.query, keep_blank_values=False)
+        cleaned = {
+            k: v for k, v in q.items()
+            if not (k.lower().startswith("utm_") or k.lower() in {"gclid","fbclid","mc_cid","mc_eid","yclid","igsh","s","ved"})
+        }
+        new_q = urlencode(cleaned, doseq=True)
+        return urlunparse((p.scheme, p.netloc, p.path, p.params, new_q, p.fragment))
+    except Exception:
+        return u
+
+def _google_news_target(u: str) -> Optional[str]:
+    try:
+        if _normalized_host(u) != "news.google.com":
+            return None
+        p = urlparse(u)
+        q = parse_qs(p.query)
+        for key in ("url","u"):
+            if key in q and q[key]:
+                return q[key][0]
+    except Exception:
+        pass
+    return None
+
 def _resolve_final_url(start_url: str, timeout: int = 8) -> str:
     headers = {"User-Agent": HTTP_USER_AGENT}
+    target = _google_news_target(start_url) or start_url
+    final = target
     try:
         with requests.Session() as s:
-            r = s.head(start_url, allow_redirects=True, timeout=timeout, headers=headers)
-            final = r.url or start_url
-            # If HEAD didn't redirect, do a minimal GET to catch JS-less redirects
-            if _normalized_host(final) == _normalized_host(start_url):
-                r = s.get(start_url, allow_redirects=True, timeout=timeout, headers=headers, stream=True)
+            r = s.head(target, allow_redirects=True, timeout=timeout, headers=headers)
+            final = r.url or target
+            if _normalized_host(final) == _normalized_host(target):
+                r = s.get(target, allow_redirects=True, timeout=timeout, headers=headers, stream=True)
                 final = r.url or final
                 r.close()
-            return final
     except Exception:
-        return start_url
+        pass
+    return _strip_tracking_params(final)
 
 def _is_blocked_redirect(start_url: str) -> Tuple[bool, str, str]:
     final_url = _resolve_final_url(start_url)
@@ -233,24 +270,33 @@ def list_active_feeds(conn: psycopg.Connection) -> List[Dict[str, Any]]:
         return list(cur.fetchall())
 
 # -----------------------------------------------------------------------------
+# Title slug for cross-outlet de-dup
+# -----------------------------------------------------------------------------
+_title_clean_re = re.compile(r"[^a-z0-9]+")
+def _title_slug(title: str) -> str:
+    t = (title or "").strip().lower()
+    t = re.sub(r"\$[a-z0-9]+", "", t)
+    t = _title_clean_re.sub("-", t)
+    t = re.sub(r"-{2,}", "-", t).strip("-")
+    return t
+
+# -----------------------------------------------------------------------------
 # Simple content-agnostic scoring (placeholder; will refine later)
 # -----------------------------------------------------------------------------
 def simple_score(title: str, host: str) -> float:
-    # Baseline heuristic while we work on content-scoring:
     score = 0.5
     tlen = len(title or "")
     if tlen >= 40:
         score += 0.06
     elif tlen >= 25:
         score += 0.03
-    # Slight bump for known outlets (non-exhaustive, tweak as you like)
     good_bits = ("reuters", "bloomberg", "ft.com", "wsj.com", "seekingalpha", "heatmap.news", "bisnow", "utilitydive", "power-eng.com", "power-mag")
     if any(x in host for x in good_bits):
         score += 0.08
     return min(score, 0.99)
 
 # -----------------------------------------------------------------------------
-# Ingest & prune
+# Ingest & prune (with strong de-dup and blocklist on final host)
 # -----------------------------------------------------------------------------
 def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -> Tuple[int, int, int]:
     feeds = list_active_feeds(conn)
@@ -261,6 +307,10 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
     inserted = 0
     scanned = 0
     blocked_redirects = 0
+
+    # Run-level de-dup
+    seen_urls: set = set()
+    seen_slugs: set = set()
 
     for sf in feeds:
         url = sf["url"]
@@ -290,12 +340,14 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
 
             # Final redirect host check
             blocked, final_url, final_host = _is_blocked_redirect(raw_url)
-            if blocked:
-                LOG.info("skip blocked redirect: %s -> %s (%s)", raw_url, final_url, final_host)
+            if blocked or final_host == "" or final_host == "news.google.com":
+                LOG.info("skip blocked/invalid redirect: %s -> %s (%s)", raw_url, final_url, final_host)
                 blocked_redirects += 1
                 continue
 
             title = (e.get("title") or "").strip()
+            slug = _title_slug(title)
+
             # Published time from feed; if missing, fallback to now
             published = None
             for k in ("published_parsed", "updated_parsed"):
@@ -307,7 +359,12 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
                 published = datetime.now(timezone.utc)
 
             if published < cutoff_dt:
-                # Outside window
+                continue
+
+            # Run-level de-dup
+            if final_url in seen_urls:
+                continue
+            if slug and slug in seen_slugs:
                 continue
 
             # Score (placeholder)
@@ -315,18 +372,38 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
             if s < min_score:
                 continue
 
-            # Insert
+            # DB-level de-dup by URL and recent title_slug
             with conn.cursor() as cur:
+                # URL already exists?
+                cur.execute("SELECT 1 FROM found_url WHERE url = %s", (final_url,))
+                if cur.fetchone():
+                    continue
+
+                # Recent slug exists?
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM found_url
+                    WHERE title_slug = %s
+                      AND published_at >= NOW() - INTERVAL %s
+                    LIMIT 1
+                    """,
+                    (slug or None, f"'{SLUG_DEDUP_DAYS} days'"),
+                )
+                if cur.fetchone():
+                    continue
+
                 try:
                     cur.execute(
                         """
-                        INSERT INTO found_url (url, title, host, feed_id, language, article_type, score, published_at, found_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                        INSERT INTO found_url (url, title, title_slug, host, feed_id, language, article_type, score, published_at, found_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                         ON CONFLICT (url) DO NOTHING
                         """,
                         (
                             final_url,
                             title,
+                            slug or None,
                             final_host,
                             sf["id"],
                             language,
@@ -337,6 +414,9 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
                     )
                     if cur.rowcount:
                         inserted += 1
+                        seen_urls.add(final_url)
+                        if slug:
+                            seen_slugs.add(slug)
                 except Exception as ex:
                     LOG.warning("insert failed for %s: %s", final_url, ex)
 
@@ -362,19 +442,25 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
     return inserted, scanned, pruned
 
 # -----------------------------------------------------------------------------
-# Digest fetch
+# Digest fetch (de-duplicated across outlets by title_slug/url)
 # -----------------------------------------------------------------------------
 def fetch_digest_rows(conn: psycopg.Connection, since_dt: datetime, min_score: float) -> List[Dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT f.title, f.url, f.host, f.article_type, f.score,
-                   f.published_at, s.name AS feed_name
-            FROM found_url f
-            JOIN source_feed s ON s.id = f.feed_id
-            WHERE f.published_at >= %s
-              AND COALESCE(f.score, 0) >= %s
-            ORDER BY f.published_at DESC, f.score DESC
+            WITH dedup AS (
+              SELECT DISTINCT ON (COALESCE(title_slug, url))
+                     f.id, f.title, f.url, f.host, f.article_type, COALESCE(f.score,0) AS score,
+                     f.published_at, s.name AS feed_name
+              FROM found_url f
+              JOIN source_feed s ON s.id = f.feed_id
+              WHERE f.published_at >= %s
+                AND COALESCE(f.score, 0) >= %s
+              ORDER BY COALESCE(title_slug, url), COALESCE(f.score,0) DESC, f.published_at DESC, f.id DESC
+            )
+            SELECT id, title, url, host, article_type, score, published_at, feed_name
+            FROM dedup
+            ORDER BY score DESC, published_at DESC, id DESC
             """,
             (since_dt, min_score),
         )
@@ -414,13 +500,8 @@ def _parse_sender_addr() -> Tuple[str, str]:
     header_from = SMTP_FROM or EMAIL_FROM
     if not header_from:
         raise RuntimeError("SMTP not configured. Need SMTP_HOST and EMAIL_FROM/SMTP_FROM.")
-    # Extract bare email for envelope
     m = re.search(r"<\s*([^>]+)\s*>", header_from)
-    if m:
-        envelope_from = m.group(1).strip()
-    else:
-        # header has no display name, it's a plain email
-        envelope_from = header_from.strip()
+    envelope_from = m.group(1).strip() if m else header_from.strip()
     return header_from, envelope_from
 
 def _parse_recipients(to_env: str) -> List[str]:
@@ -431,7 +512,6 @@ def _parse_recipients(to_env: str) -> List[str]:
         p = part.strip()
         if not p:
             continue
-        # if "Name <email>" keep only email for envelope list
         m = re.search(r"<\s*([^>]+)\s*>", p)
         recips.append(m.group(1).strip() if m else p)
     return recips

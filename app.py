@@ -38,7 +38,7 @@ DEFAULT_FEEDS = [
 # Hosts to exclude from the digest
 BANNED_HOSTS = {
     # noisy / mirrors / social
-    "marketbeat.com", "newser.com", "linkedin.com", "facebook.com", "youtube.com", "youtu.be",
+    "marketbeat.com", "newser.com", "facebook.com", "youtube.com", "youtu.be",
     "msn.com", "tipranks.com", "simplywall.st",
     # spammy mirrors seen in your logs
     "js.signavitae.com", "epayslip.grz.gov.zm", "mehadschools.ir", "krjc.org", "howcome.com.tw",
@@ -46,7 +46,7 @@ BANNED_HOSTS = {
     "tw13zhi.com", "zyrofisherb2b.co.uk", "randgo", "clientele.co.za", "thjb.com.tw",
     "samsconsult.com", "westganews.net", "bluerewards.clientele.co.za",
     # finance rewrites (keep if you don't want Yahoo quote pages)
-    "finance.yahoo.com", "uk.finance.yahoo.com", "ca.finance.yahoo.com", "yahoo.com",
+    #"finance.yahoo.com", "uk.finance.yahoo.com", "ca.finance.yahoo.com", "yahoo.com",
     # allow Google News (we dedupe and display publisher if we can)
     # "news.google.com"  <-- intentionally NOT banned
 }

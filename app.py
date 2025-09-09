@@ -1,716 +1,626 @@
-# app.py
 import os
 import re
-import ssl
-import smtplib
+import json
 import time
 import math
-import json
-import hashlib
+import smtplib
 import logging
-import datetime as dt
-from typing import Optional, List, Tuple, Dict
-from urllib.parse import urlparse, parse_qs, urlunparse, urlencode, urljoin, unquote
-from email.message import EmailMessage
-from email.utils import parseaddr, formataddr
+import traceback
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 import feedparser
 import psycopg
-from psycopg.rows import dict_row
-import requests
-from bs4 import BeautifulSoup
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import PlainTextResponse, JSONResponse
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr, parseaddr
 
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse, PlainTextResponse
+# ---------------------------
+# Config & Logging
+# ---------------------------
 
-# ------------------------------------------------------------------------------
-# Config & logging
-# ------------------------------------------------------------------------------
 LOG = logging.getLogger("quantbrief")
-logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(levelname)s:quantbrief:%(message)s",
+)
 
-APP_NAME = os.environ.get("APP_NAME", "quantbrief")
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme")
+DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+APP_NAME = os.getenv("APP_NAME", "quantbrief")
 
-DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN") or ""
-if not DATABASE_URL:
-    # Render provides PG* env vars
-    pg_host = os.environ.get("PGHOST")
-    pg_user = os.environ.get("PGUSER")
-    pg_pass = os.environ.get("PGPASSWORD")
-    pg_db   = os.environ.get("PGDATABASE")
-    pg_port = os.environ.get("PGPORT", "5432")
-    if pg_host and pg_user and pg_pass and pg_db:
-        DATABASE_URL = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+DEFAULT_MINUTES = int(os.getenv("DEFAULT_MINUTES", "10080"))  # 7 days
+DEFAULT_MIN_SCORE = float(os.getenv("DEFAULT_MIN_SCORE", "0.55"))
+DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "30"))
+MAX_FETCH_PER_RUN = int(os.getenv("MAX_FETCH_PER_RUN", "200"))
 
-SMTP_HOST = os.environ.get("SMTP_HOST")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USERNAME")
-SMTP_PASS = os.environ.get("SMTP_PASSWORD")
-SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "1") not in ("0", "false", "False")
-EMAIL_FROM = os.environ.get("EMAIL_FROM") or os.environ.get("SMTP_FROM")  # alias
-DIGEST_TO = os.environ.get("DIGEST_TO") or os.environ.get("ADMIN_EMAIL")
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False")
+EMAIL_FROM = os.getenv("EMAIL_FROM")  # Display header (e.g., 'QuantBrief Daily <daily@mg.example>')
+SMTP_FROM = os.getenv("SMTP_FROM")    # Envelope MAIL FROM (e.g., 'daily@mg.example')
+DIGEST_TO = os.getenv("DIGEST_TO", os.getenv("ADMIN_EMAIL", ""))
 
-DEFAULT_MINUTES = int(os.environ.get("DEFAULT_MINUTES", "10080"))  # 7 days
-DEFAULT_RETAIN_DAYS = int(os.environ.get("DEFAULT_RETAIN_DAYS", "30"))
-DEFAULT_MIN_SCORE = float(os.environ.get("DEFAULT_MIN_SCORE", "0.55"))
-MAX_FETCH_PER_RUN = int(os.environ.get("MAX_FETCH_PER_RUN", "200"))  # guardrails
+app = FastAPI(title="Quantbrief")
 
-USER_AGENT = os.environ.get("USER_AGENT", f"{APP_NAME}/1.0 (+https://example.com)")
+# ---------------------------
+# DB Helpers
+# ---------------------------
 
-# ------------------------------------------------------------------------------
-# DB schema (idempotent)
-# ------------------------------------------------------------------------------
-SCHEMA_SQL = r"""
--- Core tables
-CREATE TABLE IF NOT EXISTS source_feed (
-  id           BIGSERIAL PRIMARY KEY,
-  url          TEXT NOT NULL UNIQUE,
-  name         TEXT,
-  language     TEXT NOT NULL DEFAULT 'en',
-  retain_days  INTEGER NOT NULL DEFAULT 30,
-  active       BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+def get_db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
+    return psycopg.connect(DATABASE_URL, autocommit=True)
 
-CREATE OR REPLACE FUNCTION set_source_feed_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at := NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_source_feed_updated_at'
-  ) THEN
-    CREATE TRIGGER trg_source_feed_updated_at
-    BEFORE UPDATE ON source_feed
-    FOR EACH ROW
-    EXECUTE FUNCTION set_source_feed_updated_at();
-  END IF;
-END
-$$;
-
-CREATE TABLE IF NOT EXISTS found_url (
-  id            BIGSERIAL PRIMARY KEY,
-  url           TEXT NOT NULL,
-  title         TEXT,
-  feed_id       BIGINT NOT NULL REFERENCES source_feed(id) ON DELETE CASCADE,
-  language      TEXT NOT NULL DEFAULT 'en',
-  published_at  TIMESTAMPTZ NOT NULL,
-  found_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (url)
-);
-
-CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
-CREATE INDEX IF NOT EXISTS idx_found_url_feed_id ON found_url(feed_id);
-
--- Scoring / quality metrics
-CREATE TABLE IF NOT EXISTS article_metrics (
-  found_url_id   BIGINT PRIMARY KEY REFERENCES found_url(id) ON DELETE CASCADE,
-  fetched_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  word_count     INTEGER,
-  byline         BOOLEAN,
-  content_date   TIMESTAMPTZ,
-  entity_count   INTEGER,
-  is_press_rel   BOOLEAN,
-  is_job_or_quote BOOLEAN,
-  score          REAL
-);
-
--- Domain policy
-CREATE TABLE IF NOT EXISTS domain_policy (
-  domain  TEXT PRIMARY KEY,
-  action  TEXT NOT NULL CHECK (action IN ('allow','demote','block')),
-  score   REAL NOT NULL DEFAULT 0.0,
-  notes   TEXT
-);
-
--- Feedback (optional learning loop)
-CREATE TABLE IF NOT EXISTS article_feedback (
-  found_url_id BIGINT REFERENCES found_url(id) ON DELETE CASCADE,
-  vote         SMALLINT NOT NULL, -- +1/-1
-  reason       TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY(found_url_id, created_at)
-);
-"""
-
-SEED_FEEDS = [
-    # Your four Google News variants (keep, tweak as desired)
-    ("https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN&hl=en-US&gl=US&ceid=US:en", "Google News: Talen Energy OR TLN (all)", "en", DEFAULT_RETAIN_DAYS),
-    ("https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+-site:newser.com+-site:marketbeat.com+when:3d&hl=en-US&gl=US&ceid=US:en", "Google News: Talen Energy OR TLN (3d, filtered)", "en", DEFAULT_RETAIN_DAYS),
-    ("https://news.google.com/rss/search?q=%28Talen+Energy%29+OR+TLN+-site%3Anewser.com+-site%3Awww.marketbeat.com+-site%3Amarketbeat.com+-site%3Awww.newser.com+when%3A7d&hl=en-US&gl=US&ceid=US%3Aen", "Google News: ((Talen Energy) OR TLN) (7d, filtered B)", "en", DEFAULT_RETAIN_DAYS),
-    ("https://news.google.com/rss/search?q=%28%28Talen+Energy%29+OR+TLN%29+-site%3Anewser.com+-site%3Awww.newser.com+-site%3Amarketbeat.com+-site%3Awww.marketbeat.com+when%3A7d&hl=en-US&gl=US&ceid=US%3Aen", "Google News: ((Talen Energy) OR TLN) (7d, filtered A)", "en", DEFAULT_RETAIN_DAYS),
-]
-
-SEED_DOMAIN_POLICY = [
-    # allow/boost (score in 0..1)
-    ("reuters.com", "allow", 1.0, "Top tier wire"),
-    ("ft.com", "allow", 0.9, "Financial Times"),
-    ("wsj.com", "allow", 0.9, "Wall Street Journal"),
-    ("bloomberg.com", "allow", 0.9, "Bloomberg"),
-    ("utilitydive.com", "allow", 0.9, "Utility Dive"),
-    ("power-eng.com", "allow", 0.8, "Power Engineering"),
-    ("powermag.com", "allow", 0.8, "POWER Magazine"),
-    ("datacenterdynamics.com", "allow", 0.8, "DCD"),
-    ("heatmap.news", "allow", 0.8, "Heatmap"),
-    ("spglobal.com", "allow", 0.8, "S&P Global"),
-    ("pjm.com", "allow", 0.8, "PJM"),
-    ("ferc.gov", "allow", 0.8, "Regulatory"),
-    ("talenenergy.com", "allow", 0.7, "Company IR / PR"),
-    ("seekingalpha.com", "allow", 0.6, "Analysis (mixed)"),
-    ("eedaily.net", "allow", 0.7, "Politico Pro / E&E (if accessible)"),
-
-    # demote
-    ("yahoo.com", "demote", 0.35, "Mirrors/aggregation mixed"),
-    ("finance.yahoo.com", "demote", 0.35, "Quotes/finance mirrors"),
-    ("nasdaq.com", "demote", 0.35, "Mirrors/SEO"),
-    ("simplywall.st", "demote", 0.3, "Automated analysis"),
-    ("zacks.com", "demote", 0.3, "Screens/SEO"),
-    ("tipranks.com", "demote", 0.25, "Screens/SEO"),
-
-    # block
-    ("marketbeat.com", "block", -1.0, "SEO & fund flows spam"),
-    ("financialcontent.com", "block", -1.0, "Syndicated quote pages"),
-    ("msn.com", "block", -1.0, "Mirrors"),
-    ("facebook.com", "block", -1.0, "Social"),
-    ("linkedin.com", "block", -1.0, "Jobs/social"),
-    ("tiktok.com", "block", -1.0, "Social video"),
-    ("indeed.com", "block", -1.0, "Jobs"),
-    ("smartrecruiters.com", "block", -1.0, "Jobs"),
-    ("youtube.com", "block", -1.0, "Video"),
-]
-
-# ------------------------------------------------------------------------------
-# FastAPI
-# ------------------------------------------------------------------------------
-app = FastAPI()
-
-# ------------------------------------------------------------------------------
-# DB helpers
-# ------------------------------------------------------------------------------
-def db() -> psycopg.Connection:
-    return psycopg.connect(DATABASE_URL, autocommit=False, row_factory=dict_row)
-
-def exec_sql_batch(conn: psycopg.Connection, sql: str):
+def exec_sql(conn, sql: str):
     with conn.cursor() as cur:
         cur.execute(sql)
-    conn.commit()
 
-# ------------------------------------------------------------------------------
-# Utilities: URL normalization, domain extraction, Google News target extraction
-# ------------------------------------------------------------------------------
-RE_UTM = re.compile(r"(utm_[^=&]+|cmp|gclid|fbclid|mc_cid|mc_eid|icid)=", re.I)
+# ---------------------------
+# Schema (idempotent)
+# ---------------------------
 
-def strip_tracking(url: str) -> str:
+SCHEMA_SQL = r"""
+DO $$
+BEGIN
+  -- source_feed
+  CREATE TABLE IF NOT EXISTS source_feed (
+    id           BIGSERIAL PRIMARY KEY,
+    url          TEXT NOT NULL,
+    name         TEXT,
+    language     TEXT NOT NULL DEFAULT 'en',
+    retain_days  INTEGER,
+    is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- unique by URL (index is sufficient; no separate constraint required)
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_source_feed_url ON source_feed (url);
+
+  -- found_url
+  CREATE TABLE IF NOT EXISTS found_url (
+    id            BIGSERIAL PRIMARY KEY,
+    url           TEXT NOT NULL,
+    title         TEXT,
+    feed_id       BIGINT REFERENCES source_feed(id) ON DELETE CASCADE,
+    language      TEXT NOT NULL DEFAULT 'en',
+    published_at  TIMESTAMPTZ,
+    found_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    score         DOUBLE PRECISION,
+    meta          JSONB
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_found_url_url ON found_url (url);
+  CREATE INDEX IF NOT EXISTS idx_found_url_found_at ON found_url (found_at);
+  CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url (published_at);
+  CREATE INDEX IF NOT EXISTS idx_found_url_feed_id ON found_url (feed_id);
+
+  -- updated_at trigger (safe replace)
+  CREATE OR REPLACE FUNCTION set_source_feed_updated_at()
+  RETURNS trigger AS $f$
+  BEGIN
+    NEW.updated_at := NOW();
+    RETURN NEW;
+  END
+  $f$ LANGUAGE plpgsql;
+
+  DROP TRIGGER IF EXISTS trg_source_feed_updated ON source_feed;
+  CREATE TRIGGER trg_source_feed_updated
+  BEFORE UPDATE ON source_feed
+  FOR EACH ROW EXECUTE FUNCTION set_source_feed_updated_at();
+END
+$$;
+"""
+
+# ---------------------------
+# Feed seeding / upsert
+# ---------------------------
+
+SEED_FEEDS: List[Tuple[str, str, str, Optional[int]]] = [
+    # name, url, language, retain_days
+    ("Google News: Talen Energy OR TLN (3d, filtered)",
+     "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+-site:newser.com+-site:marketbeat.com+when:3d&hl=en-US&gl=US&ceid=US:en",
+     "en", 7),
+    ("Google News: Talen Energy OR TLN (all)",
+     "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN&hl=en-US&gl=US&ceid=US:en",
+     "en", 7),
+    ("Google News: ((Talen Energy) OR TLN) (7d, filtered A)",
+     "https://news.google.com/rss/search?q=%28Talen+Energy%29+OR+TLN+-site%3Anewser.com+-site%3Awww.marketbeat.com+-site%3Amarketbeat.com+-site%3Awww.newser.com+when%3A7d&hl=en-US&gl=US&ceid=US%3Aen",
+     "en", 10),
+    ("Google News: ((Talen Energy) OR TLN) (7d, filtered B)",
+     "https://news.google.com/rss/search?q=%28%28Talen+Energy%29+OR+TLN%29+-site%3Anewser.com+-site%3Awww.newser.com+-site%3Amarketbeat.com+-site%3Awww.marketbeat.com+when%3A7d&hl=en-US&gl=US&ceid=US%3Aen",
+     "en", 10),
+]
+
+def ensure_schema_and_seed():
+    with get_db() as conn:
+        exec_sql(conn, SCHEMA_SQL)
+        with conn.cursor() as cur:
+            for name, url, language, retain_days in SEED_FEEDS:
+                cur.execute(
+                    """
+                    INSERT INTO source_feed (url, name, language, retain_days, is_active)
+                    VALUES (%s, %s, %s, %s, TRUE)
+                    ON CONFLICT (url) DO UPDATE
+                    SET name = EXCLUDED.name,
+                        language = COALESCE(EXCLUDED.language, source_feed.language),
+                        retain_days = COALESCE(EXCLUDED.retain_days, source_feed.retain_days),
+                        is_active = TRUE
+                    RETURNING id
+                    """,
+                    (url, name, language, retain_days),
+                )
+        LOG.info("Schema ensured; seed feeds upserted.")
+
+def list_active_feeds() -> List[Dict[str, Any]]:
+    with get_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, url, COALESCE(NULLIF(language,''), 'en') AS language,
+                   COALESCE(retain_days, %s) AS retain_days,
+                   COALESCE(NULLIF(name,''), url) AS name
+            FROM source_feed
+            WHERE is_active = TRUE
+            ORDER BY id
+            """,
+            (DEFAULT_RETAIN_DAYS,),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "id": r[0],
+            "url": r[1],
+            "language": r[2],
+            "retain_days": r[3],
+            "name": r[4],
+        }
+        for r in rows
+    ]
+
+# ---------------------------
+# URL tools
+# ---------------------------
+
+UTM_PREFIXES = {"utm_", "igshid", "ocid", "cmpid", "_hs", "spm", "yclid", "gclid", "fbclid"}
+
+def canonicalize_url(url: str) -> str:
     try:
         p = urlparse(url)
-        qs = parse_qs(p.query, keep_blank_values=True)
-        qs = {k: v for k, v in qs.items() if not RE_UTM.search(k)}
-        q = urlencode(qs, doseq=True)
-        return urlunparse((p.scheme, p.netloc, p.path, p.params, q, ""))
+        q = [(k, v) for (k, v) in parse_qsl(p.query, keep_blank_values=True)
+             if not any(k.lower().startswith(pref) for pref in UTM_PREFIXES)]
+        qstr = urlencode(q, doseq=True)
+        # remove fragments
+        new = p._replace(query=qstr, fragment="")
+        # strip default ports
+        netloc = new.netloc
+        if netloc.endswith(":80"):
+            netloc = netloc[:-3]
+        elif netloc.endswith(":443"):
+            netloc = netloc[:-4]
+        new = new._replace(netloc=netloc)
+        return urlunparse(new)
     except Exception:
         return url
 
-def extract_domain(url: str) -> str:
+def domain_of(url: str) -> str:
     try:
         host = urlparse(url).netloc.lower()
-        if host.startswith("www."):
-            host = host[4:]
         return host
     except Exception:
         return ""
 
-def google_news_target(url: str) -> Optional[str]:
-    """
-    If the URL is a Google News redirect/article link, try to extract the real target.
-    """
-    try:
-        p = urlparse(url)
-        if "news.google." in p.netloc:
-            qs = parse_qs(p.query)
-            if "url" in qs and qs["url"]:
-                return unquote(qs["url"][0])
-        return None
-    except Exception:
-        return None
+# ---------------------------
+# Quality Scoring
+# ---------------------------
 
-def canonicalize_url(url: str) -> str:
-    url = strip_tracking(url)
-    tgt = google_news_target(url)
-    if tgt:
-        url = strip_tracking(tgt)
-    # drop trailing slash if path != "/"
-    p = urlparse(url)
-    path = p.path
-    if len(path) > 1 and path.endswith("/"):
-        path = path[:-1]
-    return urlunparse((p.scheme, p.netloc.lower(), path, p.params, p.query, ""))
+# Hard block (skip entirely)
+BLOCK_DOMAINS = {
+    "marketbeat.com", "www.marketbeat.com",
+    "newser.com", "www.newser.com",
+    "msn.com", "www.msn.com",
+    "sg.finance.yahoo.com", "uk.finance.yahoo.com", "ca.finance.yahoo.com",
+    "finance.yahoo.com", "au.finance.yahoo.com",
+    "futubull", "moomoo", "futunn",  # handled via substring check too
+    "blueocean-eg.com", "reefoasisdiveclub.com", "azzurra-redsea.com",
+    "alumnimallrandgo.up.ac.za", "epayslip.grz.gov.zm",
+    "js.signavitae.com", "tw13zhi.com", "zyrofisherb2b.co.uk",
+    "valueinvestorinsight.com",  # lots of spam clones
+    "dolphinworldegypt.com",
+}
 
-# ------------------------------------------------------------------------------
-# Layer A: domain/URL heuristics
-# ------------------------------------------------------------------------------
-DROP_PATH_PATTERNS = [
-    r"/jobs?", r"/careers?", r"/hiring", r"/apply", r"/job(s|board)",
-    r"linkedin\.com", r"facebook\.com", r"tiktok\.com", r"youtube\.com",
-    r"/watch", r"/video", r"/videos",
-    r"/option(s)?-?chain", r"/quote", r"/interactive-?chart", r"/holders?",
-    r"/financials?", r"/income-?statement", r"/historical",
-    r"pressrelease", r"press-release", r"newswire", r"globenewswire", r"prnews",
+# Domain weights (boost credible sources)
+SOURCE_WEIGHTS = {
+    "reuters.com": 0.95,
+    "wsj.com": 0.95,
+    "ft.com": 0.95,
+    "bloomberg.com": 0.95,
+    "politico.com": 0.85,
+    "eenews.net": 0.85,
+    "heatmap.news": 0.85,
+    "powermag.com": 0.85,
+    "power-eng.com": 0.80,
+    "datacenterdynamics.com": 0.85,
+    "power-technology.com": 0.80,
+    "utilitydive.com": 0.85,
+    "seekingalpha.com": 0.80,     # articles ok; data pages filtered via title rules
+    "law360.com": 0.80,
+    "whitecase.com": 0.75,
+    "vinson-elkins.com": 0.75,
+    "investopedia.com": 0.75,
+    "theglobeandmail.com": 0.80,
+    "industrialinfo.com": 0.75,
+    "esgdive.com": 0.75,
+    "dcd.global": 0.85,           # Data Center Dynamics alt
+    "talenenergy.com": 0.60,      # press release (neutral/ok)
+    "wraltechwire.com": 0.70,
+    "citizensvoice.com": 0.70,
+    "wpxi.com": 0.65,
+}
+
+# Strong title/url filters (drop)
+DROP_PATTERNS = [
+    r"\b(job|jobs|hiring|careers?|apply|internship)\b",
+    r"\b(options?\s+chain|option\s+chain)\b",
+    r"\b(stock\s+forum|discussion)\b",
+    r"\b(interactive\s+stock\s+chart)\b",
+    r"\b(dividend\s+history|p\/e|peg\s+ratios?|analyst\s+estimates?)\b",
+    r"\b(etf|holdings)\b",
+    r"facebook\.com|linkedin\.com|indeed\.com|ziprecruiter\.com|smartrecruiters\.com|tiktok\.com|youtube\.com",
+    r"\b(msn|yahoo\s+finance)\b",
 ]
 
-TITLE_SPAM_PHRASES = [
-    "buy zone", "ai powered", "momentum", "swing alert", "entry and exit",
-    "weekly watchlist", "day trade", "price target &", "fast entry", "high accuracy",
-    "profit recap", "trade signal", "trade tips", "buyback activity",
-    "portfolio report", "big picture", "bear alert", "volume trigger",
+# Soft keyword boosts for genuine insight / institutional commentary
+BOOST_KEYWORDS = [
+    r"\b(hedge fund|letter to investors|quarterly commentary|industry outlook)\b",
+    r"\b(PJM|FERC|SMR|nuclear|data centers?|PPA|RMR|capacity market)\b",
+    r"\b(Amazon|AWS|Susquehanna)\b",
+    r"\b(analysis|opinion|deep dive)\b",
 ]
 
-def path_blacklisted(url: str) -> bool:
-    u = url.lower()
-    return any(re.search(p, u) for p in DROP_PATH_PATTERNS)
+def regex_any(patterns: List[str], s: str) -> bool:
+    s_l = s.lower()
+    return any(re.search(p, s_l) for p in patterns)
 
-def title_spammy(title: str) -> bool:
-    t = (title or "").lower()
-    # very short or weird
-    if len(t) < 12:
-        return True
-    return any(ph in t for ph in TITLE_SPAM_PHRASES)
+def score_article(url: str, title: str, feed_name: str) -> float:
+    d = domain_of(url)
+    host = d
+    bare = host.replace("www.", "")
 
-# ------------------------------------------------------------------------------
-# Domain policy helpers
-# ------------------------------------------------------------------------------
-def ensure_domain_policy(conn: psycopg.Connection):
-    with conn.cursor() as cur:
-        for d, action, score, notes in SEED_DOMAIN_POLICY:
-            cur.execute("""
-                INSERT INTO domain_policy(domain, action, score, notes)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (domain) DO UPDATE
-                SET action=EXCLUDED.action, score=EXCLUDED.score, notes=EXCLUDED.notes
-            """, (d, action, score, notes))
-    conn.commit()
+    # Block by obvious junk domains (hard or substring)
+    if any(tok in host for tok in ("futubull", "moomoo", "futunn")):
+        return 0.0
+    if bare in BLOCK_DOMAINS:
+        return 0.0
 
-def get_domain_policy(conn: psycopg.Connection, domain: str) -> Tuple[str, float]:
-    with conn.cursor() as cur:
-        cur.execute("SELECT action, score FROM domain_policy WHERE domain=%s", (domain,))
-        row = cur.fetchone()
-        if row:
-            return row["action"], float(row["score"])
-    return ("demote", 0.4)  # default neutral-ish
+    t = (title or "").strip()
+    if len(t) < 5:
+        return 0.0
 
-# ------------------------------------------------------------------------------
-# Content fetching & scoring (Layer C)
-# ------------------------------------------------------------------------------
-HEADERS = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
+    # Drop if title/url matches strong junk patterns
+    hay = f"{t} {url}".lower()
+    if regex_any(DROP_PATTERNS, hay):
+        return 0.0
 
-def fetch_html(url: str, timeout: float = 5.0) -> Optional[str]:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
-        if r.status_code >= 200 and r.status_code < 300 and "text/html" in r.headers.get("content-type",""):
-            return r.text
-        return None
-    except Exception:
-        return None
+    # Base score from source reputation
+    base = SOURCE_WEIGHTS.get(bare, 0.5)
 
-def extract_published_date(soup: BeautifulSoup) -> Optional[dt.datetime]:
-    # schema.org or article meta
-    meta_props = [
-        ("meta", {"property": "article:published_time"}),
-        ("meta", {"name": "article:published_time"}),
-        ("meta", {"itemprop": "datePublished"}),
-        ("time", {"itemprop": "datePublished"}),
-        ("time", {"datetime": True}),
-    ]
-    for tag, sel in meta_props:
-        el = soup.find(tag, sel)
-        if el:
-            val = el.get("content") or el.get("datetime") or el.text
-            try:
-                return dt.datetime.fromisoformat(val.replace("Z","+00:00"))
-            except Exception:
-                pass
-    return None
+    # Penalize obvious scraper / aggregator paths
+    if any(seg in hay for seg in ("quote&", "/quote/", "stock-quote", "/prices/", "/interactive/")):
+        base -= 0.2
 
-def extract_main_text(soup: BeautifulSoup) -> Tuple[str, int]:
-    # Simple readability heuristic: paragraphs inside article/main/div with > 80 chars
-    candidates = []
-    for container in soup.find_all(["article", "main", "div", "section"]):
-        text = " ".join(p.get_text(" ", strip=True) for p in container.find_all(["p","h2","h3","li"]))
-        text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > 400:
-            candidates.append(text)
-    if not candidates:
-        # fallback: all paragraphs
-        text = " ".join(p.get_text(" ", strip=True) for p in soup.find_all("p"))
-        text = re.sub(r"\s+", " ", text).strip()
-        wc = len(text.split())
-        return text, wc
-    best = max(candidates, key=lambda t: len(t))
-    return best, len(best.split())
+    # Penalize many hyphens/commas/dates that suggest ticker pages
+    hyphen_pen = min(t.count("-"), 4) * 0.03
+    base -= hyphen_pen
 
-def detect_byline(soup: BeautifulSoup, text: str) -> bool:
-    by_meta = soup.find("meta", {"name": "author"}) or soup.find("meta", {"property": "author"})
-    if by_meta and (by_meta.get("content") or "").strip():
-        return True
-    # visible "By John Smith"
-    return bool(re.search(r"\bBy\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\b", text))
+    # Boost if looks like analysis/industry insight
+    if regex_any(BOOST_KEYWORDS, hay):
+        base += 0.15
 
-def count_entities(text: str) -> int:
-    # naive: count distinct capitalized multi-words not at sentence start
-    words = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b", text)
-    return len(set(words))
+    # Slight boost if from feed title indicating 'filtered'
+    if "filtered" in (feed_name or "").lower():
+        base += 0.05
 
-def is_press_release(text: str) -> bool:
-    t = text.lower()
-    flags = ["for immediate release", "forward-looking statements", "non-gaap", "investor relations"]
-    return any(f in t for f in flags)
+    # Bound to [0, 1]
+    return max(0.0, min(1.0, base))
 
-def is_job_or_quote_page(text: str) -> bool:
-    t = text.lower()
-    if "apply now" in t or "responsibilities" in t or "qualifications" in t:
-        return True
-    if "options chain" in t or "interactive chart" in t or "bid" in t and "ask" in t:
-        return True
-    return False
+# ---------------------------
+# Email
+# ---------------------------
 
-def compute_score(domain_score: float, wc: int, byline: bool, ent: int, article_markup: bool,
-                  pr_flag: bool, jq_flag: bool) -> float:
-    score = 0.50*domain_score \
-          + 0.25*min(1.0, wc/1200.0) \
-          + 0.10*(1.0 if byline else 0.0) \
-          + 0.10*min(1.0, ent/12.0) \
-          + 0.05*(1.0 if article_markup else 0.0) \
-          - 0.30*(1.0 if pr_flag else 0.0) \
-          - 0.40*(1.0 if jq_flag else 0.0)
-    # clamp 0..1
-    return max(0.0, min(1.0, score))
+def _from_header_and_envelope() -> Tuple[str, str]:
+    # Envelope MAIL FROM must be a plain address; header can be Name <addr>
+    header_from = EMAIL_FROM
+    if not header_from:
+        # fallback to username if set
+        if SMTP_USERNAME:
+            header_from = formataddr((APP_NAME, SMTP_USERNAME))
+        elif SMTP_FROM:
+            header_from = formataddr((APP_NAME, SMTP_FROM))
+        else:
+            header_from = f"{APP_NAME} <noreply@localhost>"
 
-def analyze_and_store(conn: psycopg.Connection, row: dict, domain_score: float):
-    url = row["url"]
-    html = fetch_html(url, timeout=5.0)
-    if not html:
-        # Store minimal metrics to avoid re-fetching every run
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO article_metrics(found_url_id, word_count, byline, entity_count,
-                                            is_press_rel, is_job_or_quote, score)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (found_url_id) DO NOTHING
-            """, (row["id"], None, False, None, False, False, 0.0))
-        conn.commit()
-        return
+    env_from = SMTP_FROM
+    if not env_from:
+        addr = parseaddr(header_from)[1]
+        env_from = addr or SMTP_USERNAME or "noreply@localhost"
 
-    soup = BeautifulSoup(html, "html.parser")
-    text, wc = extract_main_text(soup)
-    byline = detect_byline(soup, text)
-    ents = count_entities(text)
-    pr = is_press_release(text)
-    jq = is_job_or_quote_page(text)
-    # Article markup present?
-    article_markup = bool(soup.find(["article"]) or soup.find("meta", {"property": "og:type", "content": "article"}))
+    return header_from, env_from
 
-    # try content date if missing
-    content_dt = extract_published_date(soup)
+def send_email(subject: str, html: str, to_addrs: List[str]) -> None:
+    if not (SMTP_HOST and SMTP_PORT and SMTP_USERNAME and SMTP_PASSWORD):
+        raise RuntimeError("SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD.")
 
-    score = compute_score(domain_score, wc or 0, byline, ents, article_markup, pr, jq)
+    to_addrs = [a.strip() for a in to_addrs if a and a.strip()]
+    if not to_addrs:
+        raise RuntimeError("No recipient to send to.")
 
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO article_metrics(found_url_id, word_count, byline, content_date,
-                                        entity_count, is_press_rel, is_job_or_quote, score)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (found_url_id) DO UPDATE
-            SET fetched_at=NOW(),
-                word_count=EXCLUDED.word_count,
-                byline=EXCLUDED.byline,
-                content_date=COALESCE(EXCLUDED.content_date, article_metrics.content_date),
-                entity_count=EXCLUDED.entity_count,
-                is_press_rel=EXCLUDED.is_press_rel,
-                is_job_or_quote=EXCLUDED.is_job_or_quote,
-                score=EXCLUDED.score
-        """, (row["id"], wc, byline, content_dt, ents, pr, jq, score))
-    conn.commit()
+    header_from, envelope_from = _from_header_and_envelope()
 
-# ------------------------------------------------------------------------------
-# Ingest helpers
-# ------------------------------------------------------------------------------
-def parse_entry_time(entry) -> Optional[dt.datetime]:
-    # feedparser returns time structs; prefer published then updated
-    for key in ("published_parsed", "updated_parsed"):
-        t = entry.get(key)
-        if t:
-            return dt.datetime.fromtimestamp(time.mktime(t), tz=dt.timezone.utc)
-    # sometimes only 'published' string exists; try iso parse
-    val = entry.get("published") or entry.get("updated")
-    if val:
-        for fmt in ("%a, %d %b %Y %H:%M:%S %Z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"):
-            try:
-                return dt.datetime.strptime(val, fmt).astimezone(dt.timezone.utc)
-            except Exception:
-                pass
-    return None
-
-def upsert_feed(conn: psycopg.Connection, url: str, name: str, language: str, retain_days: int) -> int:
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO source_feed (url, name, language, retain_days, active)
-            VALUES (%s,%s,%s,%s, TRUE)
-            ON CONFLICT (url) DO UPDATE
-            SET name=EXCLUDED.name, language=EXCLUDED.language, retain_days=EXCLUDED.retain_days, active=TRUE
-            RETURNING id
-        """, (url, name, language, retain_days))
-        return int(cur.fetchone()["id"])
-
-def list_active_feeds(conn: psycopg.Connection) -> List[dict]:
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, url,
-                   COALESCE(NULLIF(language,''),'en') AS language,
-                   COALESCE(NULLIF(name,''), url) AS name,
-                   retain_days
-            FROM source_feed
-            WHERE active = TRUE
-            ORDER BY id
-        """)
-        return list(cur.fetchall())
-
-def insert_found_url(conn: psycopg.Connection, url: str, title: str, feed_id: int,
-                     language: str, published_at: dt.datetime) -> Optional[int]:
-    with conn.cursor() as cur:
-        try:
-            cur.execute("""
-                INSERT INTO found_url (url, title, feed_id, language, published_at, found_at)
-                VALUES (%s,%s,%s,%s,%s,NOW())
-                ON CONFLICT (url) DO NOTHING
-                RETURNING id
-            """, (url, title, feed_id, language, published_at))
-            row = cur.fetchone()
-            conn.commit()
-            return int(row["id"]) if row else None
-        except Exception as e:
-            conn.rollback()
-            LOG.warning("insert_found_url failed: %s", e)
-            return None
-
-def prune_old_found_urls(conn: psycopg.Connection) -> int:
-    with conn.cursor() as cur:
-        cur.execute(f"""
-            WITH del AS (
-                DELETE FROM found_url f
-                USING source_feed s
-                WHERE f.feed_id = s.id
-                  AND f.published_at < NOW() - (s.retain_days || ' days')::interval
-                RETURNING 1
-            )
-            SELECT count(*) AS c FROM del
-        """)
-        c = int(cur.fetchone()["c"])
-    conn.commit()
-    LOG.warning("prune_old_found_urls: deleted=%d", c)
-    return c
-
-# ------------------------------------------------------------------------------
-# Email helper
-# ------------------------------------------------------------------------------
-def send_email(subject: str, html: str, to_addrs: list[str]) -> None:
-    display_from = os.getenv("EMAIL_FROM") or os.getenv("SMTP_FROM") or "no-reply@mg.quantbrief.ca"
-    name, addr = parseaddr(display_from)               # parses “Name <email>” or plain email
-    envelope_from = os.getenv("SMTP_FROM") or addr     # MUST be bare email for SMTP
-
-    msg = EmailMessage()
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = formataddr((name or addr.split("@")[0], addr))  # pretty header
+    msg["From"] = header_from
     msg["To"] = ", ".join(to_addrs)
-    msg.set_content("HTML email requires an HTML-capable client.")
-    msg.add_alternative(html, subtype="html")
+    msg.attach(MIMEText(html, "html", "utf-8"))
 
-    host = os.getenv("SMTP_HOST", "smtp.mailgun.org")
-    port = int(os.getenv("SMTP_PORT", "587"))
-    starttls = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False")
-
-    with smtplib.SMTP(host, port, timeout=30) as s:
-        if starttls:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+        if SMTP_STARTTLS:
             s.starttls()
-        user = os.getenv("SMTP_USERNAME")
-        pwd = os.getenv("SMTP_PASSWORD")
-        if user and pwd:
-            s.login(user, pwd)
+        s.login(SMTP_USERNAME, SMTP_PASSWORD)
         s.sendmail(envelope_from, to_addrs, msg.as_string())
-# ------------------------------------------------------------------------------
-# Digest rendering
-# ------------------------------------------------------------------------------
-def render_digest_html(items: List[dict], minutes: int) -> str:
-    rows = []
-    for it in items:
-        ts = it["published_at"].strftime("%Y-%m-%d %H:%M")
-        score = it.get("score")
-        score_part = f" <span style='color:#888'>(score {score:.2f})</span>" if score is not None else ""
-        title = (it.get("title") or "").replace("&", "&amp;").replace("<", "&lt;")
-        url = it["url"]
-        feed = it.get("feed_name") or "feed"
-        rows.append(f"<li><a href='{url}'>{title}</a>{score_part} &mdash; "
-                    f"<em>{feed}</em> <small>{ts}</small></li>")
-    html = f"""
-    <html><body>
-    <h2>Quantbrief digest — last {minutes} minutes</h2>
-    <ol>
-      {''.join(rows)}
-    </ol>
-    </body></html>
-    """
-    return html
 
-# ------------------------------------------------------------------------------
-# Admin endpoints
-# ------------------------------------------------------------------------------
-def require_admin(req: Request):
-    tok = req.headers.get("x-admin-token") or req.headers.get("authorization", "").replace("Bearer ","").strip()
-    if not tok or tok != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="forbidden")
+# ---------------------------
+# Pruning
+# ---------------------------
 
-@app.get("/")
-def home():
-    return PlainTextResponse("OK")
+def prune_old_found_urls(default_days: int = DEFAULT_RETAIN_DAYS) -> int:
+    with get_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH del AS (
+              DELETE FROM found_url f
+              USING source_feed s
+              WHERE f.feed_id = s.id
+                AND f.found_at < NOW() - make_interval(days => COALESCE(NULLIF(s.retain_days, 0), %s))
+              RETURNING 1
+            )
+            SELECT count(*) FROM del
+            """,
+            (default_days,),
+        )
+        row = cur.fetchone()
+        deleted = int(row[0]) if row and row[0] is not None else 0
+    LOG.warning("prune_old_found_urls: deleted=%d", deleted)
+    return deleted
 
-@app.post("/admin/init")
-def admin_init(req: Request):
-    require_admin(req)
-    with db() as conn:
-        exec_sql_batch(conn, SCHEMA_SQL)
-        # seed feeds
-        for url, name, lang, days in SEED_FEEDS:
-            upsert_feed(conn, url, name, lang, days)
-        ensure_domain_policy(conn)
-    LOG.info("Schema ensured; seed feeds upserted.")
-    return JSONResponse({"ok": True})
+# ---------------------------
+# Ingest
+# ---------------------------
 
-@app.post("/admin/test-email")
-def admin_test_email(req: Request):
-    require_admin(req)
-    ok = send_email("Quantbrief test email", "<b>It works</b>")
-    return JSONResponse({"ok": ok})
-
-# ------------------------------------------------------------------------------
-# Core: ingest + scoring + digest
-# ------------------------------------------------------------------------------
-@app.post("/cron/ingest")
-def cron_ingest(req: Request, minutes: int = DEFAULT_MINUTES):
-    require_admin(req)
-    start = time.time()
-    inserted = 0
-    fetched = 0
-
-    with db() as conn:
-        feeds = list_active_feeds(conn)
-        for f in feeds:
-            url = f["url"]
+def parse_time(entry: Dict[str, Any]) -> Optional[datetime]:
+    for key in ("published_parsed", "updated_parsed", "created_parsed"):
+        if entry.get(key):
             try:
-                d = feedparser.parse(url)
-                LOG.info("parsed feed: %s", url)
-                LOG.info("feed entries: %d", len(d.entries))
-            except Exception as e:
-                LOG.warning("feed parse failed %s: %s", url, e)
+                # feedparser returns time.struct_time
+                t = entry[key]
+                return datetime(*t[:6], tzinfo=timezone.utc)
+            except Exception:
+                continue
+    # Try 'published' string if present (feedparser sometimes parses it)
+    return None
+
+def upsert_found_url(row: Dict[str, Any]) -> None:
+    with get_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO found_url (url, title, feed_id, language, published_at, found_at, score, meta)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s)
+            ON CONFLICT (url) DO UPDATE
+            SET title = COALESCE(EXCLUDED.title, found_url.title),
+                feed_id = COALESCE(EXCLUDED.feed_id, found_url.feed_id),
+                language = COALESCE(EXCLUDED.language, found_url.language),
+                published_at = COALESCE(EXCLUDED.published_at, found_url.published_at),
+                score = GREATEST(COALESCE(found_url.score, 0), COALESCE(EXCLUDED.score, 0)),
+                meta = COALESCE(found_url.meta, '{}'::jsonb) || COALESCE(EXCLUDED.meta, '{}'::jsonb)
+            """,
+            (
+                row["url"],
+                row.get("title"),
+                row.get("feed_id"),
+                row.get("language") or "en",
+                row.get("published_at"),
+                row.get("score") or 0.0,
+                json.dumps(row.get("meta") or {}),
+            ),
+        )
+
+def fetch_and_ingest(minutes: int = DEFAULT_MINUTES, min_score: float = DEFAULT_MIN_SCORE) -> Tuple[int, int]:
+    feeds = list_active_feeds()
+    cutoff = datetime.now(timezone.utc) - (minutes * 60) * datetime.resolution
+    # ^ resolution trick not ideal; use make_interval in SQL filter when selecting for digest.
+    # Here we do additional local filter against 7-day window on published_at when available.
+
+    inserted = 0
+    scanned = 0
+
+    for f in feeds:
+        url = f["url"]
+        name = f["name"]
+        lang = f.get("language") or "en"
+        feed_id = f["id"]
+
+        try:
+            parsed = feedparser.parse(url)
+            entries = parsed.entries[:MAX_FETCH_PER_RUN]
+            LOG.info("parsed feed: %s", url)
+            LOG.info("feed entries: %d", len(entries))
+        except Exception as e:
+            LOG.warning("failed to parse feed %s: %s", url, e)
+            continue
+
+        for e in entries:
+            scanned += 1
+            link = e.get("link") or e.get("id")
+            title = (e.get("title") or "").strip()
+            if not link:
                 continue
 
-            # intra-feed dedupe by normalized title
-            seen_titles = set()
+            link = canonicalize_url(link)
+            d = domain_of(link)
 
-            for e in d.entries:
-                pub = parse_entry_time(e)
-                if not pub:
-                    # try to skip entries without a reliable date (we enforce 7d window)
-                    continue
-                # enforce last N minutes at ingest time (tight window)
-                if pub < dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes):
-                    continue
+            # Hard domain blocks
+            bare = d.replace("www.", "")
+            if bare in BLOCK_DOMAINS or any(tok in d for tok in ("futubull", "moomoo", "futunn")):
+                continue
 
-                raw_link = e.get("link") or e.get("id") or ""
-                if not raw_link:
-                    continue
-
-                link = canonicalize_url(raw_link)
-                if path_blacklisted(link):
-                    continue
-                domain = extract_domain(link)
-                action, dscore = get_domain_policy(conn, domain)
-                if action == "block":
+            published_at = parse_time(e)
+            # Drop outside window when we have a timestamp
+            if published_at:
+                # Keep only items whose published_at is within minutes window
+                cutoff_dt = datetime.now(timezone.utc) - (minutes * 60) * datetime.resolution
+                if (published_at < cutoff_dt):
                     continue
 
-                title = e.get("title") or ""
-                norm_title = re.sub(r"\W+", " ", title.lower()).strip()
-                if norm_title in seen_titles:
-                    continue
-                seen_titles.add(norm_title)
+            score = score_article(link, title, name)
+            if score < min_score:
+                continue
 
-                if title_spammy(title):
-                    # heavy demotion: keep only if domain is strongly allowed
-                    if dscore < 0.75:
-                        continue
+            row = {
+                "url": link,
+                "title": title,
+                "feed_id": feed_id,
+                "language": lang,
+                "published_at": published_at,
+                "score": score,
+                "meta": {
+                    "source": name,
+                    "domain": d,
+                },
+            }
 
-                # Insert
-                fid = insert_found_url(conn, link, title, f["id"], f["language"], pub)
-                if fid:
-                    inserted += 1
+            try:
+                upsert_found_url(row)
+                inserted += 1
+            except Exception as ex:
+                # ignore dup races etc.
+                LOG.warning("ingest upsert error (%s): %s", link, ex)
 
-        # prune
-        deleted = prune_old_found_urls(conn)
+    return inserted, scanned
 
-        # fetch & score a subset of newest rows missing metrics
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT f.id, f.url, f.title, f.published_at
-                FROM found_url f
-                LEFT JOIN article_metrics am ON am.found_url_id = f.id
-                WHERE am.found_url_id IS NULL
-                ORDER BY f.published_at DESC
-                LIMIT %s
-            """, (MAX_FETCH_PER_RUN,))
-            todo = cur.fetchall()
+# ---------------------------
+# Digest
+# ---------------------------
 
-        for row in todo:
-            domain = extract_domain(row["url"])
-            _, dscore = get_domain_policy(conn, domain)
-            analyze_and_store(conn, row, dscore)
-            fetched += 1
-
-    LOG.info("ingest done: inserted=%d, fetched_scored=%d, pruned=%d, took=%.2fs",
-             inserted, fetched, deleted, time.time() - start)
-    return JSONResponse({"ok": True, "inserted": inserted, "fetched_scored": fetched, "pruned": deleted})
-
-@app.post("/cron/digest")
-def cron_digest(req: Request,
-                minutes: int = DEFAULT_MINUTES,
-                min_score: float = DEFAULT_MIN_SCORE,
-                limit: int = 200,
-                email: int = 1):
-    require_admin(req)
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes)
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT f.url, f.title, f.published_at,
-                   COALESCE(s.name, s.url) AS feed_name,
-                   am.score
+def fetch_digest_rows(minutes: int, min_score: float) -> List[Tuple[str, str, Optional[datetime], str, float]]:
+    with get_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT f.url, COALESCE(NULLIF(f.title,''), f.url) AS title,
+                   f.published_at, COALESCE(NULLIF(s.name,''), s.url) AS feed_name,
+                   COALESCE(f.score, 0)
             FROM found_url f
             JOIN source_feed s ON s.id = f.feed_id
-            LEFT JOIN article_metrics am ON am.found_url_id = f.id
-            LEFT JOIN domain_policy dp ON dp.domain = split_part(split_part(f.url, '://', 2), '/', 1)
-            WHERE f.published_at >= %s
-              AND (COALESCE(am.score, dp.score, 0.0)) >= %s
-            ORDER BY COALESCE(am.score, dp.score, 0.0) DESC, f.published_at DESC
-            LIMIT %s
-        """, (cutoff, min_score, limit))
-        rows = list(cur.fetchall())
+            WHERE f.found_at >= NOW() - make_interval(mins => %s)
+              AND (f.published_at IS NULL OR f.published_at >= NOW() - make_interval(mins => %s))
+              AND COALESCE(f.score, 0) >= %s
+            ORDER BY f.score DESC, COALESCE(f.published_at, f.found_at) DESC
+            LIMIT 400
+            """,
+            (minutes, minutes, min_score),
+        )
+        return cur.fetchall()
 
+def render_digest_html(rows: List[Tuple[str, str, Optional[datetime], str, float]], minutes: int) -> str:
+    items = []
+    for url, title, published_at, feed_name, score in rows:
+        ts = published_at.isoformat() if published_at else ""
+        items.append(f"<li><a href='{url}'>{title}</a> "
+                     f"<small>({feed_name}{' • ' + ts if ts else ''} • score {score:.2f})</small></li>")
+    return f"""
+    <h2>Quantbrief digest — last {minutes} minutes</h2>
+    <ol>
+      {''.join(items)}
+    </ol>
+    """
+
+# ---------------------------
+# Auth
+# ---------------------------
+
+def check_admin(request: Request):
+    tok = request.headers.get("x-admin-token") or request.headers.get("authorization", "").replace("Bearer ", "")
+    if not ADMIN_TOKEN or tok != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+# ---------------------------
+# Routes
+# ---------------------------
+
+@app.get("/", response_class=PlainTextResponse)
+def root():
+    return "OK"
+
+@app.post("/admin/init")
+def admin_init(request: Request):
+    check_admin(request)
+    ensure_schema_and_seed()
+    return {"ok": True}
+
+@app.post("/cron/ingest")
+def cron_ingest(request: Request, minutes: Optional[int] = None, min_score: Optional[float] = None):
+    check_admin(request)
+    minutes = minutes or DEFAULT_MINUTES
+    min_score = min_score if min_score is not None else DEFAULT_MIN_SCORE
+
+    t0 = time.time()
+    inserted, scanned = fetch_and_ingest(minutes=minutes, min_score=min_score)
+    deleted = prune_old_found_urls(DEFAULT_RETAIN_DAYS)
+    took = time.time() - t0
+    LOG.info("ingest done: inserted=%d, fetched_scored=%d, pruned=%d, took=%.2fs",
+             inserted, scanned, deleted, took)
+    return {"ok": True, "inserted": inserted, "scanned": scanned, "pruned": deleted, "took_sec": took}
+
+@app.post("/cron/digest")
+def cron_digest(request: Request, minutes: Optional[int] = None, min_score: Optional[float] = None):
+    check_admin(request)
+    minutes = minutes or DEFAULT_MINUTES
+    min_score = min_score if min_score is not None else DEFAULT_MIN_SCORE
+
+    rows = fetch_digest_rows(minutes, min_score)
     html = render_digest_html(rows, minutes)
-    if email and rows:
-        subj = f"Quantbrief digest — last {minutes} minutes ({len(rows)} items)"
-        send_email(subj, html)
-    return PlainTextResponse(html, media_type="text/html")
+    subject = f"Quantbrief digest — last {minutes} minutes ({len(rows)} items)"
+
+    to_env = DIGEST_TO
+    if not to_env:
+        LOG.error("DIGEST_TO/ADMIN_EMAIL not set; cannot send digest")
+        return {"ok": False, "error": "DIGEST_TO not set", "count": len(rows)}
+
+    recipients = [a.strip() for a in to_env.split(",") if a.strip()]
+    try:
+        send_email(subject, html, recipients)
+        LOG.info("Email sent to %s (subject='%s')", recipients, subject)
+        return {"ok": True, "sent_to": recipients, "count": len(rows)}
+    except Exception as e:
+        LOG.error("send_email failed: %s", e)
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+@app.post("/admin/test-email")
+def admin_test_email(request: Request):
+    check_admin(request)
+    to_env = DIGEST_TO or os.getenv("ADMIN_EMAIL")
+    if not to_env:
+        raise HTTPException(status_code=400, detail="Set DIGEST_TO or ADMIN_EMAIL env var so I know where to send the test email.")
+    to_addrs = [a.strip() for a in to_env.split(",") if a.strip()]
+    html = "<b>It works</b> — Quantbrief can send email via your SMTP settings."
+    try:
+        send_email("Quantbrief test email", html, to_addrs)
+        LOG.info("Email sent to %s (subject='Quantbrief test email')", to_addrs)
+        return {"ok": True, "to": to_addrs}
+    except Exception as e:
+        LOG.error("send_email failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"send_email failed: {e}")

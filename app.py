@@ -1,10 +1,7 @@
 import os
 import re
-import time
 import html
 import ssl
-import math
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Optional, Dict, Any
@@ -45,7 +42,7 @@ HTTP_USER_AGENT = os.getenv(
 )
 
 # -----------------------------------------------------------------------------
-# Final-landing redirect blocklist
+# Blocklist (applied to final landing host)
 # -----------------------------------------------------------------------------
 def _normalized_host(u: str) -> str:
     try:
@@ -64,15 +61,15 @@ BLOCK_REDIRECT_HOSTS = {
 }
 
 # -----------------------------------------------------------------------------
-# Outbound email settings
+# Email settings
 # -----------------------------------------------------------------------------
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False", "")
-SMTP_FROM = os.getenv("SMTP_FROM", "").strip()  # e.g. QuantBrief Daily <daily@mg.example.com>
-EMAIL_FROM = os.getenv("EMAIL_FROM", "").strip()  # legacy/fallback
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip()  # e.g. "QuantBrief Daily <daily@mg.example.com>"
+EMAIL_FROM = os.getenv("EMAIL_FROM", "").strip()
 DIGEST_TO = os.getenv("DIGEST_TO", "").strip()  # comma-separated
 
 # -----------------------------------------------------------------------------
@@ -86,7 +83,7 @@ def exec_sql_batch(conn: psycopg.Connection, sql: str) -> None:
         cur.execute(sql)
 
 # -----------------------------------------------------------------------------
-# Schema (idempotent) + migrations
+# Schema (idempotent) + migrations (safe on old DBs)
 # -----------------------------------------------------------------------------
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS source_feed (
@@ -99,6 +96,7 @@ CREATE TABLE IF NOT EXISTS source_feed (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Base table with all current columns (ok if exists with fewer columns)
 CREATE TABLE IF NOT EXISTS found_url (
   id            BIGSERIAL PRIMARY KEY,
   url           TEXT NOT NULL UNIQUE,
@@ -113,47 +111,43 @@ CREATE TABLE IF NOT EXISTS found_url (
   found_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Indexes on columns that have always existed in some form
 CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url (published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_found_url_score ON found_url (score DESC);
 CREATE INDEX IF NOT EXISTS idx_found_url_feed ON found_url (feed_id);
-CREATE INDEX IF NOT EXISTS idx_found_url_host ON found_url (host);
-CREATE INDEX IF NOT EXISTS idx_found_url_title_slug ON found_url (title_slug);
+-- NOTE: indexes on possibly-missing columns (host, title_slug) are created in MIGRATIONS_SQL
 """
 
-# Migrations to ensure any old DBs get missing columns; safe to run anytime.
 MIGRATIONS_SQL = """
--- Ensure language exists on source_feed (text not null default 'en')
+-- Ensure columns on source_feed
 ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS language TEXT;
 UPDATE source_feed SET language='en' WHERE language IS NULL;
 ALTER TABLE source_feed ALTER COLUMN language SET DEFAULT 'en';
 ALTER TABLE source_feed ALTER COLUMN language SET NOT NULL;
 
--- Ensure retain_days exists
 ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS retain_days INT;
 UPDATE source_feed SET retain_days = 30 WHERE retain_days IS NULL;
 ALTER TABLE source_feed ALTER COLUMN retain_days SET DEFAULT 30;
 ALTER TABLE source_feed ALTER COLUMN retain_days SET NOT NULL;
 
--- Ensure active exists
 ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS active BOOLEAN;
 UPDATE source_feed SET active = TRUE WHERE active IS NULL;
 ALTER TABLE source_feed ALTER COLUMN active SET DEFAULT TRUE;
 ALTER TABLE source_feed ALTER COLUMN active SET NOT NULL;
 
--- found_url additions
+-- Ensure columns on found_url
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS host TEXT;
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS language TEXT;
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS article_type TEXT;
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS title_slug TEXT;
 
--- Indexes (idempotent)
+-- Indexes that depend on newly added columns
 CREATE INDEX IF NOT EXISTS idx_found_url_host ON found_url (host);
 CREATE INDEX IF NOT EXISTS idx_found_url_title_slug ON found_url (title_slug);
 """
 
 SEED_FEEDS: List[Dict[str, Any]] = [
-    # TLN / Talen Energy seeds
     {
         "url": "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN&hl=en-US&gl=US&ceid=US:en",
         "name": "Google News: Talen Energy OR TLN (all)",
@@ -185,9 +179,11 @@ SEED_FEEDS: List[Dict[str, Any]] = [
 ]
 
 def ensure_schema_and_seed(conn: psycopg.Connection) -> None:
+    # Base schema first (safe no-op if the old table exists with fewer columns)
     exec_sql_batch(conn, SCHEMA_SQL)
+    # Then apply migrations that add columns & indexes conditionally
     exec_sql_batch(conn, MIGRATIONS_SQL)
-    # Upsert seeds
+    # Upsert seed feeds
     with conn.cursor() as cur:
         for f in SEED_FEEDS:
             cur.execute(
@@ -270,7 +266,7 @@ def list_active_feeds(conn: psycopg.Connection) -> List[Dict[str, Any]]:
         return list(cur.fetchall())
 
 # -----------------------------------------------------------------------------
-# Title slug for cross-outlet de-dup
+# Title slug (for cross-outlet de-dup)
 # -----------------------------------------------------------------------------
 _title_clean_re = re.compile(r"[^a-z0-9]+")
 def _title_slug(title: str) -> str:
@@ -281,7 +277,7 @@ def _title_slug(title: str) -> str:
     return t
 
 # -----------------------------------------------------------------------------
-# Simple content-agnostic scoring (placeholder; will refine later)
+# Simple content-agnostic scoring (placeholder)
 # -----------------------------------------------------------------------------
 def simple_score(title: str, host: str) -> float:
     score = 0.5
@@ -314,7 +310,6 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
 
     for sf in feeds:
         url = sf["url"]
-        name = sf["name"]
         language = sf.get("language") or "en"
 
         try:
@@ -331,14 +326,13 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
             if not raw_url:
                 continue
 
-            # Initial host quick check
-            init_host = _normalized_host(raw_url)
-            if init_host in BLOCK_REDIRECT_HOSTS:
+            # Quick initial host block
+            if _normalized_host(raw_url) in BLOCK_REDIRECT_HOSTS:
                 LOG.info("skip blocked host (initial): %s", raw_url)
                 blocked_redirects += 1
                 continue
 
-            # Final redirect host check
+            # Resolve final URL and block by final host
             blocked, final_url, final_host = _is_blocked_redirect(raw_url)
             if blocked or final_host == "" or final_host == "news.google.com":
                 LOG.info("skip blocked/invalid redirect: %s -> %s (%s)", raw_url, final_url, final_host)
@@ -385,10 +379,10 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
                     SELECT 1
                     FROM found_url
                     WHERE title_slug = %s
-                      AND published_at >= NOW() - INTERVAL %s
+                      AND published_at >= NOW() - (%s * INTERVAL '1 day')
                     LIMIT 1
                     """,
-                    (slug or None, f"'{SLUG_DEDUP_DAYS} days'"),
+                    (slug or None, SLUG_DEDUP_DAYS),
                 )
                 if cur.fetchone():
                     continue
@@ -396,8 +390,10 @@ def fetch_and_ingest(conn: psycopg.Connection, minutes: int, min_score: float) -
                 try:
                     cur.execute(
                         """
-                        INSERT INTO found_url (url, title, title_slug, host, feed_id, language, article_type, score, published_at, found_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                        INSERT INTO found_url
+                          (url, title, title_slug, host, feed_id, language, article_type, score, published_at, found_at)
+                        VALUES
+                          (%s,   %s,    %s,         %s,   %s,      %s,       %s,           %s,    %s,           NOW())
                         ON CONFLICT (url) DO NOTHING
                         """,
                         (
@@ -492,11 +488,6 @@ def render_digest_html(rows: List[Dict[str, Any]], minutes: int) -> str:
 # Email
 # -----------------------------------------------------------------------------
 def _parse_sender_addr() -> Tuple[str, str]:
-    """
-    Returns (header_from, envelope_from)
-    header_from: can be 'Name <addr@domain>'
-    envelope_from: must be just 'addr@domain'
-    """
     header_from = SMTP_FROM or EMAIL_FROM
     if not header_from:
         raise RuntimeError("SMTP not configured. Need SMTP_HOST and EMAIL_FROM/SMTP_FROM.")
@@ -582,7 +573,7 @@ def cron_ingest(req: Request, minutes: Optional[int] = None, min_score: Optional
     minutes = int(minutes or DEFAULT_MINUTES)
     min_score = float(min_score or DEFAULT_MIN_SCORE)
     with db() as conn:
-        ensure_schema_and_seed(conn)  # safe if already exists
+        ensure_schema_and_seed(conn)
         inserted, scanned, pruned = fetch_and_ingest(conn, minutes=minutes, min_score=min_score)
     return f"ok (inserted={inserted}, scanned={scanned}, pruned={pruned})"
 
@@ -594,7 +585,7 @@ def cron_digest(req: Request, minutes: Optional[int] = None, min_score: Optional
     since_dt = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
     with db() as conn:
-        ensure_schema_and_seed(conn)  # safe if already exists
+        ensure_schema_and_seed(conn)
         rows = fetch_digest_rows(conn, since_dt=since_dt, min_score=min_score)
 
     html_body = render_digest_html(rows, minutes)

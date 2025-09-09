@@ -11,6 +11,8 @@ import logging
 import datetime as dt
 from typing import Optional, List, Tuple, Dict
 from urllib.parse import urlparse, parse_qs, urlunparse, urlencode, urljoin, unquote
+from email.message import EmailMessage
+from email.utils import parseaddr, formataddr
 
 import feedparser
 import psycopg
@@ -517,35 +519,30 @@ def prune_old_found_urls(conn: psycopg.Connection) -> int:
 # ------------------------------------------------------------------------------
 # Email helper
 # ------------------------------------------------------------------------------
-def send_email(subject: str, html: str, to_addr: Optional[str] = None) -> bool:
-    to_addr = to_addr or DIGEST_TO
-    if not (SMTP_HOST and EMAIL_FROM and to_addr):
-        LOG.error("SMTP not configured. Need SMTP_HOST and EMAIL_FROM/SMTP_FROM.")
-        return False
+def send_email(subject: str, html: str, to_addrs: list[str]) -> None:
+    display_from = os.getenv("EMAIL_FROM") or os.getenv("SMTP_FROM") or "no-reply@mg.quantbrief.ca"
+    name, addr = parseaddr(display_from)               # parses “Name <email>” or plain email
+    envelope_from = os.getenv("SMTP_FROM") or addr     # MUST be bare email for SMTP
 
-    msg = f"From: {EMAIL_FROM}\r\nTo: {to_addr}\r\nSubject: {subject}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}"
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((name or addr.split("@")[0], addr))  # pretty header
+    msg["To"] = ", ".join(to_addrs)
+    msg.set_content("HTML email requires an HTML-capable client.")
+    msg.add_alternative(html, subtype="html")
 
-    try:
-        if SMTP_STARTTLS:
-            context = ssl.create_default_context()
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.ehlo()
-                if SMTP_USER and SMTP_PASS:
-                    server.login(SMTP_USER, SMTP_PASS)
-                server.sendmail(EMAIL_FROM, [to_addr], msg.encode("utf-8"))
-        else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                if SMTP_USER and SMTP_PASS:
-                    server.login(SMTP_USER, SMTP_PASS)
-                server.sendmail(EMAIL_FROM, [to_addr], msg.encode("utf-8"))
-        LOG.info("Email sent to %s (subject='%s')", to_addr, subject)
-        return True
-    except Exception as e:
-        LOG.error("send_email failed: %s", e)
-        return False
+    host = os.getenv("SMTP_HOST", "smtp.mailgun.org")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    starttls = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False")
 
+    with smtplib.SMTP(host, port, timeout=30) as s:
+        if starttls:
+            s.starttls()
+        user = os.getenv("SMTP_USERNAME")
+        pwd = os.getenv("SMTP_PASSWORD")
+        if user and pwd:
+            s.login(user, pwd)
+        s.sendmail(envelope_from, to_addrs, msg.as_string())
 # ------------------------------------------------------------------------------
 # Digest rendering
 # ------------------------------------------------------------------------------

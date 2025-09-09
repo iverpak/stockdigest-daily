@@ -66,9 +66,9 @@ def exec_sql(conn, sql: str):
 # ---------------------------
 
 SCHEMA_SQL = r"""
+-- Create tables if missing (fresh installs)
 DO $$
 BEGIN
-  -- source_feed
   CREATE TABLE IF NOT EXISTS source_feed (
     id           BIGSERIAL PRIMARY KEY,
     url          TEXT NOT NULL,
@@ -80,10 +80,6 @@ BEGIN
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
-  -- unique by URL (index is sufficient; no separate constraint required)
-  CREATE UNIQUE INDEX IF NOT EXISTS uq_source_feed_url ON source_feed (url);
-
-  -- found_url
   CREATE TABLE IF NOT EXISTS found_url (
     id            BIGSERIAL PRIMARY KEY,
     url           TEXT NOT NULL,
@@ -95,27 +91,87 @@ BEGIN
     score         DOUBLE PRECISION,
     meta          JSONB
   );
-
-  CREATE UNIQUE INDEX IF NOT EXISTS uq_found_url_url ON found_url (url);
-  CREATE INDEX IF NOT EXISTS idx_found_url_found_at ON found_url (found_at);
-  CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url (published_at);
-  CREATE INDEX IF NOT EXISTS idx_found_url_feed_id ON found_url (feed_id);
-
-  -- updated_at trigger (safe replace)
-  CREATE OR REPLACE FUNCTION set_source_feed_updated_at()
-  RETURNS trigger AS $f$
-  BEGIN
-    NEW.updated_at := NOW();
-    RETURN NEW;
-  END
-  $f$ LANGUAGE plpgsql;
-
-  DROP TRIGGER IF EXISTS trg_source_feed_updated ON source_feed;
-  CREATE TRIGGER trg_source_feed_updated
-  BEFORE UPDATE ON source_feed
-  FOR EACH ROW EXECUTE FUNCTION set_source_feed_updated_at();
 END
 $$;
+
+-- Bring existing installs up-to-date (idempotent migrations)
+DO $$
+BEGIN
+  -- source_feed columns
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='source_feed' AND column_name='language'
+  ) THEN
+    ALTER TABLE source_feed ADD COLUMN language TEXT NOT NULL DEFAULT 'en';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='source_feed' AND column_name='retain_days'
+  ) THEN
+    ALTER TABLE source_feed ADD COLUMN retain_days INTEGER;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='source_feed' AND column_name='updated_at'
+  ) THEN
+    ALTER TABLE source_feed ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  END IF;
+
+  -- found_url columns
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='language'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN language TEXT NOT NULL DEFAULT 'en';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='published_at'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN published_at TIMESTAMPTZ;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='found_at'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN found_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='score'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN score DOUBLE PRECISION;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='found_url' AND column_name='meta'
+  ) THEN
+    ALTER TABLE found_url ADD COLUMN meta JSONB;
+  END IF;
+END
+$$;
+
+-- Indexes & uniques (safe to re-run)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_source_feed_url ON source_feed (url);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_found_url_url   ON found_url (url);
+CREATE INDEX IF NOT EXISTS idx_found_url_found_at    ON found_url (found_at);
+CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url (published_at);
+CREATE INDEX IF NOT EXISTS idx_found_url_feed_id     ON found_url (feed_id);
+
+-- updated_at trigger
+CREATE OR REPLACE FUNCTION set_source_feed_updated_at()
+RETURNS trigger AS $f$ BEGIN NEW.updated_at := NOW(); RETURN NEW; END $f$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_source_feed_updated ON source_feed;
+CREATE TRIGGER trg_source_feed_updated
+BEFORE UPDATE ON source_feed
+FOR EACH ROW EXECUTE FUNCTION set_source_feed_updated_at();
 """
 
 # ---------------------------
@@ -441,9 +497,7 @@ def upsert_found_url(row: Dict[str, Any]) -> None:
 
 def fetch_and_ingest(minutes: int = DEFAULT_MINUTES, min_score: float = DEFAULT_MIN_SCORE) -> Tuple[int, int]:
     feeds = list_active_feeds()
-    cutoff = datetime.now(timezone.utc) - (minutes * 60) * datetime.resolution
-    # ^ resolution trick not ideal; use make_interval in SQL filter when selecting for digest.
-    # Here we do additional local filter against 7-day window on published_at when available.
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
     inserted = 0
     scanned = 0
@@ -480,11 +534,8 @@ def fetch_and_ingest(minutes: int = DEFAULT_MINUTES, min_score: float = DEFAULT_
 
             published_at = parse_time(e)
             # Drop outside window when we have a timestamp
-            if published_at:
-                # Keep only items whose published_at is within minutes window
-                cutoff_dt = datetime.now(timezone.utc) - (minutes * 60) * datetime.resolution
-                if (published_at < cutoff_dt):
-                    continue
+            if published_at and published_at < cutoff_dt:
+                continue
 
             score = score_article(link, title, name)
             if score < min_score:

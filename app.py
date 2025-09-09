@@ -4,10 +4,9 @@ import re
 import ssl
 import smtplib
 import logging
-import textwrap
+import hashlib
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
-
 from datetime import datetime, timezone, timedelta
 
 import feedparser
@@ -24,7 +23,6 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
-# Render/Neon typically require TLS; psycopg v3 will negotiate, but allow override
 PG_SSLMODE = os.getenv("PGSSLMODE", "prefer")
 
 # Email settings
@@ -33,15 +31,30 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", f"{APP_NAME}@no-reply.local")
-# Comma-separated list of recipients
 TO_EMAILS = [e.strip() for e in os.getenv("TO_EMAILS", "quantbrief.research@gmail.com").split(",") if e.strip()]
 
-# Ingestion/dedupe tuning
+# Ingestion / scoring / dedupe
 DEDUPE_WINDOW_DAYS = int(os.getenv("DEDUPE_WINDOW_DAYS", "14"))
-DEFAULT_MINUTES = 60 * 24 * 7  # one week
+DEFAULT_MINUTES = 60 * 24 * 7
 DEFAULT_MIN_SCORE = float(os.getenv("DEFAULT_MIN_SCORE", "0.0"))
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "8.0"))
 MAX_FEED_ITEMS = int(os.getenv("MAX_FEED_ITEMS", "200"))
+
+# Banned hosts (hard filter). Extend/override with env.
+DEFAULT_BANNED = [
+    "news.google.com",   # aggregator wrapper
+    "marketbeat.com",    # explicitly banned in your query
+    "newser.com",        # explicitly banned in your query
+    "linkedin.com",
+    "facebook.com",
+    "youtube.com",
+    "msn.com",
+]
+BANNED_HOSTS = {
+    h.strip().lower()
+    for h in (os.getenv("BANNED_HOSTS", ",".join(DEFAULT_BANNED))).split(",")
+    if h.strip()
+}
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -75,22 +88,22 @@ CREATE TABLE IF NOT EXISTS found_url (
     url_canonical  TEXT,
     host           TEXT,
     title          TEXT,
-    title_slug     TEXT, -- IMPORTANT: was missing before
+    title_slug     TEXT,
     summary        TEXT,
     published_at   TIMESTAMPTZ,
     score          DOUBLE PRECISION DEFAULT 0.0,
     feed_id        INTEGER REFERENCES feed(id) ON DELETE SET NULL,
+    fingerprint    TEXT, -- NEW: strong dedupe key
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Safety/uniqueness helpers
+-- Uniqueness
 CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_url ON found_url(url);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_url_canonical ON found_url(url_canonical) WHERE url_canonical IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
 
--- Dedupe accelerator: same site + slug in a recent window
+-- Performance helpers
 CREATE INDEX IF NOT EXISTS ix_found_url_host_slug_time ON found_url (host, title_slug, published_at DESC);
-
--- Time queries
 CREATE INDEX IF NOT EXISTS ix_found_url_published_at ON found_url(published_at DESC);
 """
 
@@ -99,15 +112,12 @@ SEED_FEEDS: List[Tuple[str, str]] = [
         "Google News — Talen Energy (3d window, filtered)",
         "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+-site:newser.com+-site:marketbeat.com+when:3d&hl=en-US&gl=US&ceid=US:en",
     ),
-    # You can add more seeds here if you like:
-    # ("Example feed", "https://example.com/rss")
 ]
 
 # -----------------------------------------------------------------------------
-# Utilities
+# Helpers
 # -----------------------------------------------------------------------------
 def get_conn():
-    # Note: psycopg v3 accepts sslmode in the URL; we allow override via env
     if "sslmode=" not in DATABASE_URL and PG_SSLMODE:
         sep = "&" if "?" in DATABASE_URL else "?"
         dsn = f"{DATABASE_URL}{sep}sslmode={PG_SSLMODE}"
@@ -122,7 +132,12 @@ def exec_sql_batch(conn, sql: str):
 
 def ensure_schema_and_seed(conn):
     exec_sql_batch(conn, SCHEMA_SQL)
-    # Seed feeds
+    # Make sure columns exist if migrating an old DB (idempotent)
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS fingerprint TEXT;")
+        cur.execute("ALTER TABLE found_url ADD COLUMN IF NOT EXISTS title_slug TEXT;")
+    conn.commit()
+
     with conn.cursor() as cur:
         for name, url in SEED_FEEDS:
             cur.execute(
@@ -142,41 +157,39 @@ def slugify(text: Optional[str]) -> str:
         return ""
     text = text.lower().strip()
     text = _slug_re.sub("-", text).strip("-")
-    # optional: collapse long slugs
     return text[:200]
 
 def simplify_host(netloc: str) -> str:
-    host = netloc.lower()
+    host = (netloc or "").lower()
     if host.startswith("www."):
         host = host[4:]
     return host
 
 def canonicalize_url(url: str) -> str:
-    """
-    - Normalize scheme/host casing
-    - Remove fragments
-    - Keep meaningful query if it looks like an article link; strip common tracking
-    """
     try:
         p = urlparse(url)
     except Exception:
         return url
 
-    host = p.netloc.lower()
     scheme = (p.scheme or "https").lower()
-    # Strip fragment
-    fragment = ""
-    query = p.query
+    host = (p.netloc or "").lower()
+    path = p.path or ""
+    params = p.params or ""
+    query = p.query or ""
+    fragment = ""  # always drop
 
-    # Remove tracking params
+    # Strip common tracking params everywhere
     if query:
         q = parse_qs(query, keep_blank_values=True)
-        for bad in ("utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "ncid", "clid", "gclid", "fbclid"):
-            if bad in q:
-                q.pop(bad, None)
+        for bad in ("utm_source","utm_medium","utm_campaign","utm_term","utm_content","utm_id",
+                    "gclid","fbclid","ncid","clid","igshid","spm","xtor"):
+            q.pop(bad, None)
+        # Special: Google News junk query keys -> drop all, we never keep GN wrappers
+        if host.endswith("news.google.com"):
+            q = {}
         query = urlencode(q, doseq=True)
 
-    return urlunparse((scheme, host, p.path, p.params, query, fragment))
+    return urlunparse((scheme, host, path, params, query, fragment))
 
 def is_google_news_link(url: str) -> bool:
     try:
@@ -187,9 +200,9 @@ def is_google_news_link(url: str) -> bool:
 
 def resolve_google_news(url: str) -> Optional[str]:
     """
-    Google News RSS often wraps the real destination. Try to unwrap via:
-    1) the 'url' query param if present
-    2) following redirects (best effort)
+    Try to unwrap a Google News RSS link.
+    1) If there's a 'url=' param, use it.
+    2) Otherwise we DO NOT keep the wrapper; if we can't unwrap, return None.
     """
     try:
         p = urlparse(url)
@@ -198,18 +211,10 @@ def resolve_google_news(url: str) -> Optional[str]:
             return qs["url"][0]
     except Exception:
         pass
-
-    try:
-        # Fallback: follow redirects
-        with requests.get(url, timeout=HTTP_TIMEOUT, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as r:
-            if r.history and r.url and not is_google_news_link(r.url):
-                return r.url
-    except Exception:
-        pass
+    # No reliable param? Hard fail -> skip this item.
     return None
 
 def extract_summary(entry) -> str:
-    # Try 'summary', fallback to title
     for key in ("summary", "summary_detail", "description"):
         v = entry.get(key)
         if isinstance(v, dict):
@@ -219,26 +224,38 @@ def extract_summary(entry) -> str:
     return entry.get("title", "")
 
 def parse_time(entry) -> Optional[datetime]:
-    # Prefer published_parsed, then updated_parsed
     if entry.get("published_parsed"):
-        dt = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-        return dt
+        return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
     if entry.get("updated_parsed"):
-        dt = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
-        return dt
+        return datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
     return None
 
 def compute_score(title: str, summary: str, host: str) -> float:
-    # Very light heuristic; customize as needed
     score = 0.0
     txt = f"{title} {summary}".lower()
-    for kw in ("earnings", "guidance", "merger", "acquisition", "award", "contract", "upgrade", "downgrade", "bankruptcy"):
+    for kw in ("earnings","guidance","merger","acquisition","award","contract","upgrade","downgrade","bankruptcy","buyback","repurchase"):
         if kw in txt:
             score += 0.7
-    # de-emphasize press-release aggregators if you want
-    if host.endswith(("globenewswire.com", "prnewswire.com", "businesswire.com")):
+    if host.endswith(("globenewswire.com","prnewswire.com","businesswire.com")):
         score -= 0.2
     return max(score, 0.0)
+
+def is_banned_host(host: str) -> bool:
+    host = (host or "").lower()
+    base = host
+    return base in BANNED_HOSTS or any(base.endswith("." + b) for b in BANNED_HOSTS)
+
+def compute_fingerprint(url_canon: Optional[str], host: str, slug: str, published_at: datetime) -> str:
+    """
+    Prefer canonical URL. Fallback: host+slug+day — avoids dupes
+    across runs, feeds, and GN wrapper variants.
+    """
+    if url_canon:
+        key = url_canon
+    else:
+        day = (published_at or datetime.now(timezone.utc)).date().isoformat()
+        key = f"{host}|{slug}|{day}"
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 # -----------------------------------------------------------------------------
 # Ingestion
@@ -252,11 +269,8 @@ def fetch_and_ingest(conn, minutes: int, min_score: float) -> Tuple[int, int, in
         cur.execute("SELECT id, name, url FROM feed WHERE enabled = TRUE ORDER BY id;")
         feeds = cur.fetchall()
 
-    time_cutoff = datetime.now(timezone.utc) - timedelta(days=DEDUPE_WINDOW_DAYS)
-
     for feed_row in feeds:
         feed_id = feed_row["id"]
-        feed_name = feed_row["name"]
         feed_url = feed_row["url"]
 
         LOG.info("parsed feed: %s", feed_url)
@@ -266,85 +280,65 @@ def fetch_and_ingest(conn, minutes: int, min_score: float) -> Tuple[int, int, in
 
         for e in entries:
             scanned += 1
-            raw_title = e.get("title", "").strip()
-            summary = extract_summary(e)
             link = e.get("link") or e.get("id") or ""
-
             if not link:
                 continue
 
-            # Unwrap Google News if needed
-            final_url = link
+            # 1) STRICTLY unwrap/ban Google News
             if is_google_news_link(link):
                 resolved = resolve_google_news(link)
                 if not resolved:
-                    LOG.info("skip blocked/invalid redirect: %s (%s)", link, urlparse(link).netloc)
+                    LOG.info("skip (GN unresolvable): %s", link)
                     continue
-                final_url = resolved
+                link = resolved
 
-            # Canonicalize and extract host
-            final_url = final_url.strip()
-            final_url_canon = canonicalize_url(final_url)
-            host = simplify_host(urlparse(final_url_canon).netloc or urlparse(final_url).netloc)
-            display_host = host
+            # Canonicalize / host / filters
+            link = link.strip()
+            link_canon = canonicalize_url(link)
+            host = simplify_host(urlparse(link_canon).netloc or urlparse(link).netloc)
 
-            title = raw_title or host
-            slug = slugify(title)
+            if is_banned_host(host):
+                LOG.info("skip (banned host=%s): %s", host, link_canon or link)
+                continue
+
+            title = (e.get("title") or host).strip()
+            summary = extract_summary(e)
             published_at = parse_time(e) or datetime.now(timezone.utc)
-
+            slug = slugify(title)
             score = compute_score(title, summary, host)
 
-            # -------------------------------------------------------------
-            # DUPLICATE CHECK (fixed to avoid IndeterminateDatatype on $4)
-            # -------------------------------------------------------------
-            # Only add the (host, title_slug, published_at>=time_cutoff) clause
-            # when we actually have a slug. Bind a concrete timestamptz param.
-            sql = [
-                "SELECT 1",
-                "FROM found_url",
-                "WHERE (url = %s OR url = %s OR url_canonical = %s)"
-            ]
-            params = [final_url, final_url_canon, final_url_canon]
+            # Optional scoring gate
+            if score < min_score:
+                pruned += 1
+                continue
 
-            if slug:
-                sql.append("OR (host = %s AND title_slug = %s AND published_at >= %s)")
-                params.extend([display_host, slug, time_cutoff])
+            fingerprint = compute_fingerprint(link_canon or link, host, slug, published_at)
 
-            sql.append("LIMIT 1")
-
-            with conn.cursor() as cur:
-                cur.execute("\n".join(sql), params)
-                if cur.fetchone():
-                    LOG.info("skip duplicate: %s (host=%s slug=%s)", final_url, display_host, slug)
-                    continue
-
-            # Insert
+            # INSERT with hard dedupe on fingerprint (and url/url_canonical as backup)
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO found_url
-                        (url, url_canonical, host, title, title_slug, summary, published_at, score, feed_id)
+                        (url, url_canonical, host, title, title_slug, summary, published_at, score, feed_id, fingerprint)
                     VALUES
-                        (%s,  %s,            %s,   %s,    %s,         %s,      %s,           %s,    %s)
-                    ON CONFLICT (url) DO NOTHING
+                        (%s,  %s,            %s,   %s,    %s,         %s,      %s,           %s,    %s,      %s)
+                    ON CONFLICT (fingerprint) DO NOTHING
                     """,
                     (
-                        final_url,
-                        final_url_canon,
-                        display_host,
+                        link,
+                        link_canon,
+                        host,
                         title,
                         slug,
                         summary,
                         published_at,
                         score,
                         feed_id,
+                        fingerprint,
                     ),
                 )
                 if cur.rowcount > 0:
                     inserted += 1
-
-            # Optional pruning of very low score items (soft delete = skip insert above)
-            # If you prefer an actual delete, implement here.
 
     conn.commit()
     return inserted, scanned, pruned
@@ -379,14 +373,25 @@ def send_email(to_addrs: List[str], subject: str, text_body: str):
     LOG.info("Email sent to %s (subject='%s')", to_addrs, subject)
 
 def render_digest_rows(rows) -> str:
+    """
+    Hyperlink the title; no raw URLs. Dedup by a running set of fingerprints.
+    """
+    seen = set()
     lines = []
     for r in rows:
+        fp = r.get("fingerprint")
+        if fp in seen:
+            continue
+        seen.add(fp)
+
         when = r["published_at"].astimezone(timezone.utc).strftime("%Y-%m-%d %H:%MZ") if r.get("published_at") else ""
         title = (r.get("title") or "").strip()
         host = r.get("host") or ""
-        url = r.get("url") or r.get("url_canonical") or ""
-        score = r.get("score") or 0.0
-        lines.append(f"- [{when}] ({host}) [score {score:.2f}] {title}\n  {url}")
+        url = r.get("url_canonical") or r.get("url") or ""
+        score = float(r.get("score") or 0.0)
+
+        # Markdown: Title hyperlinked, no naked link
+        lines.append(f"- [{when}] ({host}) [score {score:.2f}] [{title}]({url})")
     return "\n".join(lines)
 
 # -----------------------------------------------------------------------------
@@ -415,7 +420,7 @@ def cron_ingest(
     min_score: float = Query(DEFAULT_MIN_SCORE),
 ):
     with get_conn() as conn:
-        ensure_schema_and_seed(conn)  # safe if already exists
+        ensure_schema_and_seed(conn)
         inserted, scanned, pruned = fetch_and_ingest(conn, minutes=minutes, min_score=min_score)
     return {"ok": True, "inserted": inserted, "scanned": scanned, "pruned": pruned}
 
@@ -423,14 +428,14 @@ def cron_ingest(
 def cron_digest(
     minutes: int = Query(DEFAULT_MINUTES, ge=1, le=60 * 24 * 60),
     min_score: float = Query(DEFAULT_MIN_SCORE),
-    limit: int = Query(1000, ge=1, le=2000),
+    limit: int = Query(1000, ge=1, le=5000),
 ):
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     with get_conn() as conn, conn.cursor() as cur:
-        ensure_schema_and_seed(conn)  # safe if already exists
+        ensure_schema_and_seed(conn)
         cur.execute(
             """
-            SELECT url, url_canonical, host, title, published_at, score
+            SELECT url, url_canonical, host, title, published_at, score, fingerprint
             FROM found_url
             WHERE published_at >= %s
               AND score >= %s
@@ -443,12 +448,11 @@ def cron_digest(
 
     subject = f"Quantbrief digest — last {minutes} minutes ({len(rows)} items)"
     body = render_digest_rows(rows) or "(No items)"
-
     send_email(TO_EMAILS, subject, body)
     return {"ok": True, "count": len(rows)}
 
 # -----------------------------------------------------------------------------
-# Error handlers
+# Error handler
 # -----------------------------------------------------------------------------
 @app.exception_handler(Exception)
 async def unhandled_exceptions(request: Request, exc: Exception):
@@ -456,7 +460,7 @@ async def unhandled_exceptions(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 # -----------------------------------------------------------------------------
-# Local dev
+# Dev entry
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn

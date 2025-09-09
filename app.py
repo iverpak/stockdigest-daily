@@ -18,9 +18,6 @@ from psycopg.rows import dict_row
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# -------------------------
-# Config & logging
-# -------------------------
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
 DATABASE_URL = os.getenv("DATABASE_URL")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "")
@@ -42,9 +39,6 @@ BANNED_HOSTS |= extra_banned
 
 app = FastAPI(title=APP_NAME)
 
-# -------------------------
-# Helpers
-# -------------------------
 def as_utc(d: Optional[dt.datetime]) -> Optional[dt.datetime]:
     if d is None:
         return None
@@ -114,9 +108,6 @@ def compute_fingerprint(url_canonical: Optional[str], url: str, title: Optional[
         return None
     return sha1_hex(key)
 
-# -------------------------
-# DB
-# -------------------------
 def get_conn():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set")
@@ -161,11 +152,10 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
         """,
     ),
-    # Make legacy DBs converge (adds/normalizes columns & indexes if tables pre-existed)
     (
         "0001a_compat_existing",
         """
-        -- feed essentials
+        -- feed
         CREATE TABLE IF NOT EXISTS feed (id SERIAL PRIMARY KEY, url TEXT UNIQUE NOT NULL);
         ALTER TABLE feed ADD COLUMN IF NOT EXISTS active BOOLEAN;
         UPDATE feed SET active = TRUE WHERE active IS NULL;
@@ -177,7 +167,7 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
         ALTER TABLE feed ALTER COLUMN created_at SET NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS ux_feed_url ON feed(url);
 
-        -- found_url essentials
+        -- found_url
         CREATE TABLE IF NOT EXISTS found_url (id BIGSERIAL PRIMARY KEY, url TEXT NOT NULL);
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS url_canonical TEXT;
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS host TEXT;
@@ -186,7 +176,7 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS summary TEXT;
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
-        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS feed_id INTEGER REFERENCES feed(id) ON DELETE SET NULL;
+        ALTER TABLE found_url ADD COLUMN IF NOT EXISTS feed_id INTEGER;
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS fingerprint TEXT;
         ALTER TABLE found_url ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
         UPDATE found_url SET created_at = now() WHERE created_at IS NULL;
@@ -201,14 +191,48 @@ SCHEMA_MIGRATIONS: List[tuple[str, str]] = [
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url(fingerprint) WHERE fingerprint IS NOT NULL;
         """,
     ),
-    # NEW: ensure/normalize feed.name BEFORE seeding (covers legacy NOT NULL-without-default cases)
     (
         "0001b_compat_feed_name",
         """
         ALTER TABLE feed ADD COLUMN IF NOT EXISTS name TEXT;
-        -- Provide a default so INSERTs that don't specify 'name' won't fail on legacy NOT NULL schemas
         ALTER TABLE feed ALTER COLUMN name SET DEFAULT 'feed';
         UPDATE feed SET name = 'feed' WHERE name IS NULL;
+        """,
+    ),
+    # NEW: fix legacy FK to source_feed, mirror data, and repoint FK to feed
+    (
+        "0001c_fk_source_feed_compat",
+        """
+        -- If a legacy 'source_feed' exists, ensure it's present (no-op if already there)
+        CREATE TABLE IF NOT EXISTS source_feed (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            url TEXT UNIQUE NOT NULL,
+            active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now()
+        );
+
+        -- Copy missing IDs from source_feed -> feed (preserve IDs so existing found_url.feed_id remains valid)
+        INSERT INTO feed(id, url, active, created_at, name)
+        SELECT sf.id, sf.url, COALESCE(sf.active, TRUE), COALESCE(sf.created_at, now()), COALESCE(sf.name, 'feed')
+        FROM source_feed sf
+        LEFT JOIN feed f ON f.id = sf.id
+        WHERE f.id IS NULL
+        ON CONFLICT (id) DO NOTHING;
+
+        -- Create inactive placeholders for any dangling found_url.feed_id with no feed row
+        INSERT INTO feed(id, url, active, created_at, name)
+        SELECT DISTINCT fu.feed_id, 'legacy://feed/' || fu.feed_id, FALSE, now(), 'legacy'
+        FROM found_url fu
+        LEFT JOIN feed f ON f.id = fu.feed_id
+        WHERE fu.feed_id IS NOT NULL AND f.id IS NULL
+        ON CONFLICT (id) DO NOTHING;
+
+        -- Re-point FK: drop any legacy FK (e.g., to source_feed) and add FK to feed(id)
+        ALTER TABLE found_url DROP CONSTRAINT IF EXISTS found_url_feed_id_fkey;
+        ALTER TABLE found_url
+          ADD CONSTRAINT found_url_feed_id_fkey
+          FOREIGN KEY (feed_id) REFERENCES feed(id) ON DELETE SET NULL;
         """,
     ),
     (
@@ -239,14 +263,10 @@ def run_migrations(conn) -> None:
             cur.execute("INSERT INTO schema_version(version) VALUES (%s);", (version,))
             log.info("Applied migration %s", version)
 
-# Back-compat wrapper name
 def ensure_schema_and_seed(conn) -> None:
     log.info("Ensuring schema via migrations…")
     run_migrations(conn)
 
-# -------------------------
-# Ingest
-# -------------------------
 def parse_feed(url: str):
     return (feedparser.parse(url, request_headers={"User-Agent": USER_AGENT}).entries) or []
 
@@ -339,9 +359,6 @@ def do_ingest(minutes: int) -> dict:
 
     return {"inserted": inserted, "scanned": scanned, "pruned": pruned}
 
-# -------------------------
-# Digest & email
-# -------------------------
 def select_digest_rows(conn, minutes: int) -> List[dict]:
     with conn.cursor() as cur:
         cur.execute(
@@ -406,9 +423,6 @@ def send_email(subject: str, html_body: str, text_body: str) -> bool:
     log.info("Email sent to %s", TO_EMAILS)
     return True
 
-# -------------------------
-# Routes
-# -------------------------
 @app.get("/", response_class=PlainTextResponse)
 def root():
     return f"{APP_NAME} up"

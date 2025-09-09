@@ -11,14 +11,12 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, urlsplit, u
 import feedparser
 import psycopg
 from psycopg.rows import dict_row
-
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, HTMLResponse
 
-# ---------------------------------------------------------------------------
-# Config & Logging
-# ---------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------
+# Config & logging
+# -----------------------------------------------------------------------------
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -39,22 +37,23 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 MAIL_FROM = os.getenv("MAIL_FROM")
 MAIL_TO = [e.strip() for e in os.getenv("MAIL_TO", "").split(",") if e.strip()]
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # FastAPI
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+app = FastAPI(title="Quantbrief Daily", version="1.1.0")
 
-app = FastAPI(title="Quantbrief Daily", version="1.0.1")
 
 def get_conn() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, autocommit=False, row_factory=dict_row)
 
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
-# ---------------------------------------------------------------------------
-# Schema (idempotent) + Compatibility
-# ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Schema, migrations, and compatibility (all idempotent)
+# -----------------------------------------------------------------------------
 FEED_SEED: List[Tuple[str, str, bool]] = [
     (
         "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+-site:newser.com+-site:marketbeat.com+when:3d&hl=en-US&gl=US&ceid=US:en",
@@ -68,7 +67,8 @@ FEED_SEED: List[Tuple[str, str, bool]] = [
     ),
 ]
 
-def _ensure_base_schema(cur) -> None:
+
+def _ensure_table_shells(cur) -> None:
     # Canonical feeds table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS feed (
@@ -79,7 +79,8 @@ def _ensure_base_schema(cur) -> None:
             created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
         );
     """)
-    # Legacy source_feed (kept for compatibility/mapping)
+
+    # Legacy table retained for compat/mapping; don't enforce strict NOT NULL here
     cur.execute("""
         CREATE TABLE IF NOT EXISTS source_feed (
             id          BIGINT PRIMARY KEY,
@@ -89,7 +90,8 @@ def _ensure_base_schema(cur) -> None:
             created_at  TIMESTAMPTZ DEFAULT now()
         );
     """)
-    # Articles/links
+
+    # Articles / links
     cur.execute("""
         CREATE TABLE IF NOT EXISTS found_url (
             id            BIGSERIAL PRIMARY KEY,
@@ -107,15 +109,72 @@ def _ensure_base_schema(cur) -> None:
         );
     """)
 
-    # Helpful, idempotent indexes
+
+def _ensure_columns(cur) -> None:
+    # Add columns that might be missing in older DBs
+    cur.execute("ALTER TABLE feed       ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;")
+    cur.execute("ALTER TABLE feed       ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();")
+    cur.execute("ALTER TABLE feed       ADD COLUMN IF NOT EXISTS name TEXT;")
+    cur.execute("UPDATE feed SET name = COALESCE(name, 'feed');")
+
+    cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS slug TEXT;")
+    cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;")
+    cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS fingerprint TEXT;")
+    cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();")
+
+    # indexes commonly used
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url(published_at);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_feed_id ON found_url(feed_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_url ON found_url(url);")
+
+
+def _drop_any_fk_on_found_url_feed(cur) -> None:
+    """
+    Drop ANY FK that targets found_url(feed_id) — regardless of what it references.
+    This clears old 'found_url.feed_id -> source_feed.id' constraints.
+    """
     cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint
-        ON found_url(fingerprint)
-        WHERE fingerprint IS NOT NULL;
+    DO $$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT tc.constraint_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_name = tc.constraint_name
+         AND kcu.table_name = tc.table_name
+        WHERE tc.table_name = 'found_url'
+          AND tc.constraint_type = 'FOREIGN KEY'
+          AND kcu.column_name = 'feed_id'
+      LOOP
+        EXECUTE format('ALTER TABLE found_url DROP CONSTRAINT %I', r.constraint_name);
+      END LOOP;
+    END $$;
     """)
+
+
+def _ensure_unique_fingerprint_constraint(cur) -> None:
+    """
+    Ensure a NAMED UNIQUE CONSTRAINT (not just a partial index) so we can use:
+      ON CONFLICT ON CONSTRAINT ux_found_url_fingerprint DO NOTHING
+    Multi-NULLs are allowed by Postgres UNIQUE, so no need for partial index.
+    """
+    cur.execute("""
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name='found_url'
+          AND constraint_type='UNIQUE'
+          AND constraint_name='ux_found_url_fingerprint'
+      ) THEN
+        EXECUTE 'ALTER TABLE found_url
+                 ADD CONSTRAINT ux_found_url_fingerprint
+                 UNIQUE (fingerprint)';
+      END IF;
+    END $$;
+    """)
+
 
 def _seed_feeds_by_url(cur) -> None:
     cur.executemany(
@@ -123,109 +182,117 @@ def _seed_feeds_by_url(cur) -> None:
         INSERT INTO feed (url, name, active, created_at)
         VALUES (%s, %s, %s, now())
         ON CONFLICT (url) DO UPDATE
-        SET name = EXCLUDED.name,
-            active = EXCLUDED.active
+          SET name = EXCLUDED.name,
+              active = EXCLUDED.active
         """,
         FEED_SEED,
     )
 
+
 def _sync_feed_from_source_feed(cur) -> None:
     """
-    Ensure feed rows exist for all URLs present in source_feed (by URL).
-    This keeps 'feed' canonical; IDs may differ from legacy 'source_feed.id'.
+    Make sure every URL present in legacy source_feed has a canonical row in feed.
     """
     cur.execute("""
         INSERT INTO feed (url, name, active, created_at)
-        SELECT sf.url, COALESCE(sf.name, 'feed'), COALESCE(sf.active, TRUE),
+        SELECT sf.url,
+               COALESCE(NULLIF(sf.name, ''), 'feed'),
+               COALESCE(sf.active, TRUE),
                COALESCE(sf.created_at, now())
         FROM source_feed sf
+        WHERE sf.url IS NOT NULL
         ON CONFLICT (url) DO UPDATE
-        SET name = EXCLUDED.name,
-            active = EXCLUDED.active,
-            created_at = COALESCE(feed.created_at, EXCLUDED.created_at);
+          SET name = EXCLUDED.name,
+              active = EXCLUDED.active,
+              created_at = COALESCE(feed.created_at, EXCLUDED.created_at);
     """)
+
 
 def _remap_found_url_feed_ids_from_source_feed(cur) -> None:
     """
-    Map found_url.feed_id (legacy source_feed.id) -> feed.id via common URL.
-    Then null any feed_id that still doesn't resolve to a feed row.
+    Map found_url.feed_id from legacy source_feed.id to canonical feed.id by matching URL.
+    Then null out any remaining orphans that still don't match a feed row.
     """
-    # 1) Remap using URL join
+    # 1) Remap using URL join (legacy id -> canonical id)
     cur.execute("""
         UPDATE found_url fu
-        SET feed_id = f.id
-        FROM source_feed sf
-        JOIN feed f ON f.url = sf.url
-        WHERE fu.feed_id = sf.id
-          AND fu.feed_id IS NOT NULL
-          AND fu.feed_id <> f.id;
-    """)
-    # 2) Null any orphaned feed_id (no matching feed row)
-    cur.execute("""
-        UPDATE found_url fu
-        SET feed_id = NULL
-        WHERE fu.feed_id IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM feed f WHERE f.id = fu.feed_id);
+           SET feed_id = f.id
+          FROM source_feed sf
+          JOIN feed f ON f.url = sf.url
+         WHERE fu.feed_id = sf.id
+           AND fu.feed_id IS NOT NULL
+           AND fu.feed_id <> f.id;
     """)
 
-def _ensure_fk_found_url_to_feed(cur) -> None:
-    """
-    Ensure FK exists from found_url(feed_id) -> feed(id), deferrable.
-    Drop if exists (by name) then add if missing. Safe to re-run.
-    """
-    # Drop existing FK if present
+    # 2) For any remaining non-null feed_id that doesn't match a feed row, null it
     cur.execute("""
-        DO $$
-        BEGIN
-          IF EXISTS (
-            SELECT 1
-            FROM information_schema.table_constraints
-            WHERE table_name='found_url'
-              AND constraint_type='FOREIGN KEY'
-              AND constraint_name='found_url_feed_id_fkey'
-          ) THEN
-            EXECUTE 'ALTER TABLE found_url DROP CONSTRAINT found_url_feed_id_fkey';
-          END IF;
-        END$$;
+        UPDATE found_url fu
+           SET feed_id = NULL
+         WHERE fu.feed_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM feed f WHERE f.id = fu.feed_id);
     """)
-    # Add FK if missing
+
+
+def _add_fk_found_url_to_feed(cur) -> None:
+    """
+    Add a deferrable FK from found_url(feed_id) -> feed(id), if missing.
+    """
     cur.execute("""
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1
-            FROM information_schema.table_constraints
-            WHERE table_name='found_url'
-              AND constraint_type='FOREIGN KEY'
-              AND constraint_name='found_url_feed_id_fkey'
-          ) THEN
-            EXECUTE '
-              ALTER TABLE found_url
-              ADD CONSTRAINT found_url_feed_id_fkey
-              FOREIGN KEY (feed_id) REFERENCES feed(id)
-              ON DELETE SET NULL
-              DEFERRABLE INITIALLY DEFERRED
-            ';
-          END IF;
-        END$$;
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+          FROM information_schema.table_constraints
+         WHERE table_name='found_url'
+           AND constraint_type='FOREIGN KEY'
+           AND constraint_name='found_url_feed_id_fkey'
+      ) THEN
+        EXECUTE '
+          ALTER TABLE found_url
+          ADD CONSTRAINT found_url_feed_id_fkey
+          FOREIGN KEY (feed_id) REFERENCES feed(id)
+          ON DELETE SET NULL
+          DEFERRABLE INITIALLY DEFERRED
+        ';
+      END IF;
+    END $$;
     """)
+
 
 def ensure_schema_and_seed(conn) -> None:
     logger.info("Schema ensuring & compatibility pass…")
     with conn.cursor() as cur:
-        _ensure_base_schema(cur)
+        _ensure_table_shells(cur)
+        _ensure_columns(cur)
+
+        # Critical: drop any legacy FK before we touch feed_id values
+        _drop_any_fk_on_found_url_feed(cur)
+
+        # Ensure we have a named unique constraint for fingerprint upsert
+        _ensure_unique_fingerprint_constraint(cur)
+
+        # Seed canonical feeds & mirror legacy URLs into 'feed'
         _seed_feeds_by_url(cur)
-        _sync_feed_from_source_feed(cur)              # make sure canonical feeds exist for all legacy URLs
-        _remap_found_url_feed_ids_from_source_feed(cur)  # remap legacy ids -> canonical ids, null orphans
-        _ensure_fk_found_url_to_feed(cur)             # add FK after remap/cleanup
+        _sync_feed_from_source_feed(cur)
+
+        # Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
+        _remap_found_url_feed_ids_from_source_feed(cur)
+
+        # Re-add the FK targeting feed(id)
+        _add_fk_found_url_to_feed(cur)
+
     conn.commit()
     logger.info("Schema ensured; seed feeds upserted.")
 
-# ---------------------------------------------------------------------------
-# Utils for ingestion
-# ---------------------------------------------------------------------------
 
-UTM_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "gclid", "igshid"}
+# -----------------------------------------------------------------------------
+# Ingestion utilities
+# -----------------------------------------------------------------------------
+UTM_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "gclid", "igshid"
+}
+
 
 def _strip_tracking_params(url: str) -> str:
     try:
@@ -235,6 +302,7 @@ def _strip_tracking_params(url: str) -> str:
         return urlunsplit((parts.scheme, parts.netloc.lower(), parts.path, new_q, parts.fragment))
     except Exception:
         return url
+
 
 def canonicalize_url(url: str) -> str:
     u = (url or "").strip()
@@ -250,6 +318,7 @@ def canonicalize_url(url: str) -> str:
     except Exception:
         return _strip_tracking_params(u)
 
+
 def slugify(text: Optional[str]) -> Optional[str]:
     if not text:
         return None
@@ -257,13 +326,14 @@ def slugify(text: Optional[str]) -> Optional[str]:
     s = re.sub(r"[\s_-]+", "-", s)
     return s[:200]
 
+
 def entry_published(entry) -> Optional[datetime]:
-    dt = None
     if getattr(entry, "published_parsed", None):
-        dt = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-    elif getattr(entry, "updated_parsed", None):
-        dt = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
-    return dt
+        return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+    if getattr(entry, "updated_parsed", None):
+        return datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
+    return None
+
 
 def fingerprint_for(url_canonical: str) -> Optional[str]:
     if not url_canonical:
@@ -271,16 +341,16 @@ def fingerprint_for(url_canonical: str) -> Optional[str]:
     import hashlib
     return hashlib.sha256(url_canonical.encode("utf-8")).hexdigest()
 
-# ---------------------------------------------------------------------------
-# Insert helpers
-# ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Insert helpers
+# -----------------------------------------------------------------------------
 def insert_found_url(conn, row: Dict[str, Any]) -> bool:
     sql = """
         INSERT INTO found_url
-        (url, url_canonical, host, title, slug, summary, published_at, score, feed_id, fingerprint)
+          (url, url_canonical, host, title, slug, summary, published_at, score, feed_id, fingerprint)
         VALUES
-        (%(url)s, %(url_canonical)s, %(host)s, %(title)s, %(slug)s, %(summary)s, %(published_at)s, %(score)s, %(feed_id)s, %(fingerprint)s)
+          (%(url)s, %(url_canonical)s, %(host)s, %(title)s, %(slug)s, %(summary)s, %(published_at)s, %(score)s, %(feed_id)s, %(fingerprint)s)
         ON CONFLICT ON CONSTRAINT ux_found_url_fingerprint DO NOTHING
         RETURNING id;
     """
@@ -289,10 +359,10 @@ def insert_found_url(conn, row: Dict[str, Any]) -> bool:
         got = cur.fetchone()
     return bool(got)
 
-# ---------------------------------------------------------------------------
-# Ingestion
-# ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Ingestion
+# -----------------------------------------------------------------------------
 def do_ingest(minutes: int = 7 * 24 * 60) -> Dict[str, Any]:
     since = now_utc() - timedelta(minutes=minutes)
     added = 0
@@ -339,6 +409,7 @@ def do_ingest(minutes: int = 7 * 24 * 60) -> Dict[str, Any]:
                     "feed_id": feed_id,
                     "fingerprint": fingerprint_for(can),
                 }
+
                 try:
                     if insert_found_url(conn, row):
                         added += 1
@@ -349,22 +420,32 @@ def do_ingest(minutes: int = 7 * 24 * 60) -> Dict[str, Any]:
 
     return {"inserted": added, "scanned": scanned, "pruned": pruned}
 
-# ---------------------------------------------------------------------------
-# Email
-# ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Email
+# -----------------------------------------------------------------------------
 def format_email_html(subject: str, rows: List[Dict[str, Any]]) -> Tuple[str, str]:
     html_items = []
     text_items = []
     for r in rows:
-        (_id, url, url_canonical, host, title, _slug, _summary, published_at, score, _feed_id, _fp) = (
-            r["id"], r["url"], r["url_canonical"], r["host"], r["title"], r["slug"], r["summary"],
-            r["published_at"], r["score"], r["feed_id"], r["fingerprint"]
-        )
+        _id = r["id"]
+        url = r["url"]
+        url_canonical = r["url_canonical"]
+        host = r["host"]
+        title = r["title"]
+        _slug = r["slug"]
+        _summary = r["summary"]
+        published_at = r["published_at"]
+        score = r["score"]
+        _feed_id = r["feed_id"]
+        _fp = r["fingerprint"]
+
         disp = title or url_canonical or url
         pub_txt = published_at.isoformat() if isinstance(published_at, datetime) else ""
-        html_items.append(f'<li><a href="{url}">{disp}</a>'
-                          f' <small>({host or ""})</small> <small>{pub_txt}</small></li>')
+        html_items.append(
+            f'<li><a href="{url}">{disp}</a> '
+            f'<small>({host or ""})</small> <small>{pub_txt}</small></li>'
+        )
         text_items.append(f"- {disp} [{host or ''}] {url} {pub_txt}")
 
     html = f"""<html><body>
@@ -376,6 +457,7 @@ def format_email_html(subject: str, rows: List[Dict[str, Any]]) -> Tuple[str, st
 
     text = subject + "\n\n" + "\n".join(text_items) + "\n"
     return html, text
+
 
 def send_email(subject: str, html_body: str, text_body: str) -> None:
     if not (SMTP_HOST and SMTP_PORT and MAIL_FROM and MAIL_TO):
@@ -405,10 +487,10 @@ def send_email(subject: str, html_body: str, text_body: str) -> None:
     except Exception as ex:
         logger.warning(f"{APP_NAME}: test email failed: {ex}")
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Routes
+# -----------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def home():
     return "<h3>Quantbrief Daily is live ✔</h3>"

@@ -85,7 +85,7 @@ SCHEMA_SQL = r"""
 -- Feed sources table
 CREATE TABLE IF NOT EXISTS source_feed (
   id           BIGSERIAL PRIMARY KEY,
-  url          TEXT NOT NULL UNIQUE,
+  url          TEXT NOT NULL,
   name         TEXT,
   ticker       TEXT,
   active       BOOLEAN NOT NULL DEFAULT TRUE,
@@ -95,54 +95,7 @@ CREATE TABLE IF NOT EXISTS source_feed (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Found articles table with quality scoring
-CREATE TABLE IF NOT EXISTS found_url (
-  id              BIGSERIAL PRIMARY KEY,
-  url             TEXT NOT NULL,
-  resolved_url    TEXT,
-  url_hash        TEXT NOT NULL,
-  title           TEXT,
-  description     TEXT,
-  feed_id         BIGINT REFERENCES source_feed(id) ON DELETE CASCADE,
-  ticker          TEXT,
-  language        TEXT NOT NULL DEFAULT 'en',
-  quality_score   FLOAT DEFAULT 0,
-  is_duplicate    BOOLEAN DEFAULT FALSE,
-  domain          TEXT,
-  published_at    TIMESTAMPTZ,
-  found_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  sent_in_digest  BOOLEAN DEFAULT FALSE
-);
-
--- Unique constraint on URL hash to prevent duplicates
-CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
-CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
-CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
-CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
-
--- Digest history
-CREATE TABLE IF NOT EXISTS digest_history (
-  id           BIGSERIAL PRIMARY KEY,
-  sent_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  recipient    TEXT,
-  article_count INTEGER,
-  tickers      TEXT[]
-);
-
--- Update trigger for source_feed
-CREATE OR REPLACE FUNCTION update_modified_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS update_source_feed_modtime ON source_feed;
-CREATE TRIGGER update_source_feed_modtime
-BEFORE UPDATE ON source_feed
-FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-"""
+-- Add unique constraint if missing
 
 # ------------------------------------------------------------------------------
 # Stock configurations

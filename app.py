@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 # Config & logging
 # -----------------------------------------------------------------------------
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
-BUILD_TAG = "quantbrief build 2025-09-10T00:15Z"  # <- shows in logs so you know this file is live
+BUILD_TAG = "quantbrief build 2025-09-10T00:24Z"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(
@@ -42,7 +42,7 @@ MAIL_TO = [e.strip() for e in os.getenv("MAIL_TO", "").split(",") if e.strip()]
 # -----------------------------------------------------------------------------
 # FastAPI
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Quantbrief Daily", version="1.1.2")
+app = FastAPI(title="Quantbrief Daily", version="1.1.3")
 
 
 def get_conn() -> psycopg.Connection:
@@ -155,14 +155,27 @@ def _drop_any_fk_on_found_url_feed(cur) -> None:
     """)
 
 
+def _dedupe_fingerprints(cur) -> None:
+    """
+    Remove duplicate rows sharing the same non-null fingerprint, keeping the lowest id.
+    This makes creating the unique index safe even if earlier runs inserted dupes.
+    """
+    cur.execute("""
+        WITH ranked AS (
+          SELECT id, fingerprint,
+                 ROW_NUMBER() OVER (PARTITION BY fingerprint ORDER BY id) AS rn
+          FROM found_url
+          WHERE fingerprint IS NOT NULL
+        )
+        DELETE FROM found_url
+        WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+    """)
+
+
 def _ensure_unique_fingerprint_index(cur) -> None:
     """
     Ensure a UNIQUE INDEX on found_url(fingerprint) so we can safely use:
       ON CONFLICT (fingerprint) DO NOTHING
-
-    NOTE: This is an INDEX, not a CONSTRAINT, to avoid the DuplicateTable issue.
-    If a previous run already created an index named 'ux_found_url_fingerprint',
-    this statement is a no-op.
     """
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint
@@ -260,17 +273,20 @@ def ensure_schema_and_seed(conn) -> None:
         # 1) Drop any legacy FK first (prevents FK errors while remapping)
         _drop_any_fk_on_found_url_feed(cur)
 
-        # 2) Ensure idempotent unique INDEX (not constraint) for fingerprint
+        # 2) Pre-dedupe before creating the unique index (succeeds even if no dupes)
+        _dedupe_fingerprints(cur)
+
+        # 3) Ensure idempotent unique INDEX (not a named constraint)
         _ensure_unique_fingerprint_index(cur)
 
-        # 3) Seed canonical feeds & mirror legacy URLs into 'feed'
+        # 4) Seed canonical feeds & mirror legacy URLs into 'feed'
         _seed_feeds_by_url(cur)
         _sync_feed_from_source_feed(cur)
 
-        # 4) Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
+        # 5) Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
         _remap_found_url_feed_ids_from_source_feed(cur)
 
-        # 5) Re-add FK targeting feed(id)
+        # 6) Re-add FK targeting feed(id)
         _add_fk_found_url_to_feed(cur)
 
     conn.commit()
@@ -327,15 +343,15 @@ def entry_published(entry) -> Optional[datetime]:
     return None
 
 
-def fingerprint_for(url_canonical: str) -> Optional[str]:
-    if not url_canonical:
+def fingerprint_for(val: Optional[str]) -> Optional[str]:
+    if not val:
         return None
     import hashlib
-    return hashlib.sha256(url_canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(val.encode("utf-8")).hexdigest()
 
 
 # -----------------------------------------------------------------------------
-# Insert helpers
+# Insert helpers (each insert runs in a SAVEPOINT to avoid aborting the batch)
 # -----------------------------------------------------------------------------
 def insert_found_url(conn, row: Dict[str, Any]) -> bool:
     sql = """
@@ -346,10 +362,16 @@ def insert_found_url(conn, row: Dict[str, Any]) -> bool:
         ON CONFLICT (fingerprint) DO NOTHING
         RETURNING id;
     """
-    with conn.cursor() as cur:
-        cur.execute(sql, row)
-        got = cur.fetchone()
-    return bool(got)
+    # SAVEPOINT via nested transaction: if this fails, the outer tx survives.
+    try:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(sql, row)
+                got = cur.fetchone()
+        return bool(got)
+    except Exception as ex:
+        logger.exception(f"Insert failed (fingerprint={row.get('fingerprint')}): {ex}")
+        return False
 
 
 # -----------------------------------------------------------------------------
@@ -389,6 +411,7 @@ def do_ingest(minutes: int = 7 * 24 * 60) -> Dict[str, Any]:
 
                 can = canonicalize_url(link)
                 host = urlparse(can).netloc.lower() if can else None
+                fp_source = can or link or (title or "").strip()
                 row = {
                     "url": link or can,
                     "url_canonical": can,
@@ -399,15 +422,13 @@ def do_ingest(minutes: int = 7 * 24 * 60) -> Dict[str, Any]:
                     "published_at": pub_dt,
                     "score": 0.0,
                     "feed_id": feed_id,
-                    "fingerprint": fingerprint_for(can),
+                    "fingerprint": fingerprint_for(fp_source),
                 }
 
-                try:
-                    if insert_found_url(conn, row):
-                        added += 1
-                except Exception as ex:
-                    logger.exception(f"Failed insert for {link}: {ex}")
+                if insert_found_url(conn, row):
+                    added += 1
 
+        # Final commit for the batch (SAVEPOINT failures do not poison this)
         conn.commit()
 
     return {"inserted": added, "scanned": scanned, "pruned": pruned}
@@ -420,17 +441,11 @@ def format_email_html(subject: str, rows: List[Dict[str, Any]]) -> Tuple[str, st
     html_items = []
     text_items = []
     for r in rows:
-        _id = r["id"]
         url = r["url"]
         url_canonical = r["url_canonical"]
         host = r["host"]
         title = r["title"]
-        _slug = r["slug"]
-        _summary = r["summary"]
         published_at = r["published_at"]
-        score = r["score"]
-        _feed_id = r["feed_id"]
-        _fp = r["fingerprint"]
 
         disp = title or url_canonical or url
         pub_txt = published_at.isoformat() if isinstance(published_at, datetime) else ""

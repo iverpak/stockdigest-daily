@@ -385,8 +385,7 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
                     if desc.lower().startswith(title.lower()):
                         desc = desc[len(title):].strip()
                     
-                    # Remove trailing source names
-                    import re
+                    # Remove trailing source names but keep them visible
                     desc = re.sub(r'\s+(TipRanks|MSN|MarketScreener|Seeking Alpha|The Daily Item)\.?$', '', desc)
                     
                     # If what's left is too short, skip it

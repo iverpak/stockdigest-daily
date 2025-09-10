@@ -382,7 +382,6 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
                 # For Google News articles, clean up the messy descriptions
                 if "news.google.com" in (article.get("url", "") or ""):
                     # Remove everything after the first domain name (like " TipRanks", " MSN", etc.)
-                    desc = re.sub(r'\s+[A-Z][a-zA-Z]*\.?
             
             # Clean up domain name for consistency
             domain = article["domain"] or "unknown"

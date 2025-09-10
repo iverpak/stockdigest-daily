@@ -16,7 +16,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, HTMLResponse
 
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
-BUILD_TAG = "quantbrief build 2025-09-10T00:45Z"
+BUILD_TAG = "quantbrief build 2025-09-10T00:58Z"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(
@@ -37,7 +37,7 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 MAIL_FROM = os.getenv("MAIL_FROM")
 MAIL_TO = [e.strip() for e in os.getenv("MAIL_TO", "").split(",") if e.strip()]
 
-app = FastAPI(title="Quantbrief Daily", version="1.1.5")
+app = FastAPI(title="Quantbrief Daily", version="1.1.6")
 
 def get_conn() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, autocommit=False, row_factory=dict_row)
@@ -135,7 +135,7 @@ def _drop_any_fk_on_found_url_feed(cur) -> None:
 def _drop_fks_referencing_found_url_url(cur) -> None:
     """
     Drop ANY foreign key in any table that references found_url(url).
-    This clears dependencies so we can drop the UNIQUE(url).
+    This clears dependencies so we can drop UNIQUE(url).
     """
     cur.execute("""
     DO $$
@@ -162,13 +162,31 @@ def _drop_fks_referencing_found_url_url(cur) -> None:
     """)
 
 def _drop_unique_url_constraint_and_indexes(cur) -> None:
-    # Must drop dependent FKs first:
+    # 1) Drop any dependent FKs to found_url(url)
     _drop_fks_referencing_found_url_url(cur)
 
-    # Drop the legacy unique constraint if present
-    cur.execute("ALTER TABLE found_url DROP CONSTRAINT IF EXISTS found_url_url_key;")
+    # 2) Drop ANY UNIQUE constraint that targets found_url(url) (not just one name), CASCADE to remove its backing index.
+    cur.execute("""
+    DO $$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT tc.constraint_name
+          FROM information_schema.table_constraints tc
+          JOIN information_schema.constraint_column_usage ccu
+            ON tc.constraint_name = ccu.constraint_name
+           AND tc.table_schema   = ccu.table_schema
+         WHERE tc.table_schema='public'
+           AND tc.table_name='found_url'
+           AND tc.constraint_type='UNIQUE'
+           AND ccu.column_name='url'
+      LOOP
+        EXECUTE format('ALTER TABLE public.found_url DROP CONSTRAINT IF EXISTS %I CASCADE', r.constraint_name);
+      END LOOP;
+    END $$;
+    """)
 
-    # Drop any UNIQUE index that only covers (url)
+    # 3) If any standalone UNIQUE index on (url) still exists, drop it.
     cur.execute("""
     DO $$
     DECLARE r RECORD;
@@ -186,7 +204,7 @@ def _drop_unique_url_constraint_and_indexes(cur) -> None:
     END $$;
     """)
 
-    # Ensure a plain (non-unique) index remains
+    # 4) Ensure a plain (non-unique) index for performance.
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_url ON found_url(url);")
 
 def _migrate_summaries_fk_to_found_url_id(cur) -> None:
@@ -194,7 +212,6 @@ def _migrate_summaries_fk_to_found_url_id(cur) -> None:
     If a 'summaries' table exists and previously referenced found_url(url),
     migrate it to reference found_url(id) instead.
     """
-    # Does summaries exist?
     cur.execute("""
       SELECT COUNT(*) AS n
       FROM information_schema.tables
@@ -203,9 +220,7 @@ def _migrate_summaries_fk_to_found_url_id(cur) -> None:
     if (cur.fetchone() or {}).get("n", 0) == 0:
         return
 
-    # Add found_url_id if missing
     cur.execute("ALTER TABLE summaries ADD COLUMN IF NOT EXISTS found_url_id BIGINT;")
-    # Backfill from url -> found_url.id
     cur.execute("""
         UPDATE summaries s
            SET found_url_id = fu.id
@@ -214,7 +229,6 @@ def _migrate_summaries_fk_to_found_url_id(cur) -> None:
            AND s.url IS NOT NULL
            AND fu.url = s.url;
     """)
-    # Helpful index and FK (deferrable)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_summaries_found_url_id ON summaries(found_url_id);")
     cur.execute("""
     DO $$
@@ -326,16 +340,16 @@ def ensure_schema_and_seed(conn) -> None:
         _ensure_table_shells(cur)
         _ensure_columns(cur)
 
-        # FK on found_url.feed_id can block legacy remaps
+        # Temporarily drop FK on found_url.feed_id during remaps
         _drop_any_fk_on_found_url_feed(cur)
 
-        # Drop any FK elsewhere that references found_url(url), then remove unique(url)
+        # Remove ANY legacy UNIQUE(url) + its dependencies
         _drop_unique_url_constraint_and_indexes(cur)
 
         # Migrate summaries (if present) to found_url_id -> found_url(id)
         _migrate_summaries_fk_to_found_url_id(cur)
 
-        # Fingerprint dedupe & unique index (idempotent unique INDEX, not a table constraint)
+        # Fingerprint dedupe & unique index
         _dedupe_fingerprints(cur)
         _ensure_unique_fingerprint_index(cur)
 
@@ -420,8 +434,7 @@ def insert_found_url(conn, row: Dict[str, Any]) -> bool:
                 got = cur.fetchone()
         return bool(got)
     except pg_errors.UniqueViolation as ex:
-        # If some environment still has a lingering unique(url), just treat as "already there".
-        logger.debug(f"Insert skipped due to unique(url) violation (legacy env): {ex}")
+        logger.debug(f"Insert skipped due to legacy unique(url) violation: {ex}")
         return False
     except Exception as ex:
         logger.exception(f"Insert failed (fingerprint={row.get('fingerprint')}): {ex}")

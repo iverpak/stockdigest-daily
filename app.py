@@ -66,9 +66,7 @@ DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))  # Keep 3 mont
 # Quality filtering keywords
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com",
-    "newser.com", "www.newser.com",
-    "zacks.com", "seekingalpha.com/market-currents",
-    "benzinga.com/pressreleases", "accesswire.com"
+    "newser.com", "www.newser.com"
 }
 
 QUALITY_DOMAINS = {
@@ -77,25 +75,6 @@ QUALITY_DOMAINS = {
     "yahoo.com/finance", "finance.yahoo.com",
     "businesswire.com", "prnewswire.com", "globenewswire.com"
 }
-
-# ------------------------------------------------------------------------------
-# Database Schema
-# ------------------------------------------------------------------------------
-SCHEMA_SQL = r"""
--- Feed sources table
-CREATE TABLE IF NOT EXISTS source_feed (
-  id           BIGSERIAL PRIMARY KEY,
-  url          TEXT NOT NULL,
-  name         TEXT,
-  ticker       TEXT,
-  active       BOOLEAN NOT NULL DEFAULT TRUE,
-  retain_days  INTEGER DEFAULT 90,
-  language     TEXT NOT NULL DEFAULT 'en',
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Add unique constraint if missing
 
 # ------------------------------------------------------------------------------
 # Stock configurations
@@ -136,9 +115,142 @@ def db():
 
 def ensure_schema():
     """Initialize database schema"""
+    schema_sql = """
+    -- Create tables if they don't exist
+    CREATE TABLE IF NOT EXISTS source_feed (
+      id           BIGSERIAL PRIMARY KEY,
+      url          TEXT NOT NULL,
+      name         TEXT,
+      active       BOOLEAN NOT NULL DEFAULT TRUE,
+      retain_days  INTEGER DEFAULT 90,
+      language     TEXT NOT NULL DEFAULT 'en',
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS found_url (
+      id           BIGSERIAL PRIMARY KEY,
+      url          TEXT NOT NULL,
+      title        TEXT,
+      feed_id      BIGINT,
+      language     TEXT NOT NULL DEFAULT 'en',
+      published_at TIMESTAMPTZ,
+      found_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS digest_history (
+      id            BIGSERIAL PRIMARY KEY,
+      sent_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      recipient     TEXT,
+      article_count INTEGER,
+      tickers       TEXT[]
+    );
+
+    -- Add columns with proper error handling
+    DO $$
+    BEGIN
+        -- Add ticker to source_feed
+        BEGIN
+            ALTER TABLE source_feed ADD COLUMN ticker TEXT;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        -- Add columns to found_url
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN resolved_url TEXT;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN url_hash TEXT;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN description TEXT;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN ticker TEXT;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN quality_score FLOAT DEFAULT 0;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN is_duplicate BOOLEAN DEFAULT FALSE;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN domain TEXT;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        BEGIN
+            ALTER TABLE found_url ADD COLUMN sent_in_digest BOOLEAN DEFAULT FALSE;
+        EXCEPTION
+            WHEN duplicate_column THEN NULL;
+        END;
+        
+        -- Add unique constraint on source_feed.url
+        BEGIN
+            ALTER TABLE source_feed ADD CONSTRAINT uq_source_feed_url UNIQUE (url);
+        EXCEPTION
+            WHEN duplicate_table THEN NULL;
+            WHEN duplicate_object THEN NULL;
+        END;
+        
+        -- Add foreign key if missing
+        BEGIN
+            ALTER TABLE found_url ADD CONSTRAINT found_url_feed_id_fkey 
+            FOREIGN KEY (feed_id) REFERENCES source_feed(id) ON DELETE CASCADE;
+        EXCEPTION
+            WHEN duplicate_table THEN NULL;
+            WHEN duplicate_object THEN NULL;
+        END;
+    END $$;
+
+    -- Create indexes (will skip if they already exist)
+    CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
+    CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_found_url_feed_foundat ON found_url(feed_id, found_at DESC);
+
+    -- Update trigger
+    CREATE OR REPLACE FUNCTION update_modified_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS update_source_feed_modtime ON source_feed;
+    CREATE TRIGGER update_source_feed_modtime
+    BEFORE UPDATE ON source_feed
+    FOR EACH ROW EXECUTE FUNCTION update_modified_column();
+
+    -- Populate url_hash for existing records (where it's NULL)
+    UPDATE found_url SET url_hash = MD5(LOWER(url)) WHERE url_hash IS NULL;
+    """
+    
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute(SCHEMA_SQL)
+            cur.execute(schema_sql)
 
 def upsert_feed(url: str, name: str, ticker: str, retain_days: int = 90) -> int:
     """Insert or update a feed source"""

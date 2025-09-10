@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, urlsplit, u
 import feedparser
 import psycopg
 from psycopg.rows import dict_row
+from psycopg import errors as pg_errors
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, HTMLResponse
 
@@ -18,7 +19,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 # Config & logging
 # -----------------------------------------------------------------------------
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
-BUILD_TAG = "quantbrief build 2025-09-10T00:24Z"
+BUILD_TAG = "quantbrief build 2025-09-10T00:36Z"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(
@@ -42,7 +43,7 @@ MAIL_TO = [e.strip() for e in os.getenv("MAIL_TO", "").split(",") if e.strip()]
 # -----------------------------------------------------------------------------
 # FastAPI
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Quantbrief Daily", version="1.1.3")
+app = FastAPI(title="Quantbrief Daily", version="1.1.4")
 
 
 def get_conn() -> psycopg.Connection:
@@ -153,6 +154,37 @@ def _drop_any_fk_on_found_url_feed(cur) -> None:
       END LOOP;
     END $$;
     """)
+
+
+def _drop_unique_url_constraint_and_indexes(cur) -> None:
+    """
+    Remove any UNIQUE constraint or UNIQUE index on found_url(url),
+    replacing it with a plain (non-unique) index. This avoids collisions
+    from older schemas where url was enforced unique.
+    """
+    # Drop a common constraint name if present
+    cur.execute("ALTER TABLE found_url DROP CONSTRAINT IF EXISTS found_url_url_key;")
+
+    # Drop any other unique index that only covers (url)
+    cur.execute("""
+    DO $$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT indexname, indexdef
+          FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND tablename  = 'found_url'
+      LOOP
+        IF r.indexdef ILIKE '%%UNIQUE%%(url%%' THEN
+          EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
+        END IF;
+      END LOOP;
+    END $$;
+    """)
+
+    # Ensure a normal (non-unique) index remains
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_url ON found_url(url);")
 
 
 def _dedupe_fingerprints(cur) -> None:
@@ -273,20 +305,23 @@ def ensure_schema_and_seed(conn) -> None:
         # 1) Drop any legacy FK first (prevents FK errors while remapping)
         _drop_any_fk_on_found_url_feed(cur)
 
-        # 2) Pre-dedupe before creating the unique index (succeeds even if no dupes)
+        # 2) Remove legacy URL uniqueness, keep plain index
+        _drop_unique_url_constraint_and_indexes(cur)
+
+        # 3) Pre-dedupe before creating the unique index (succeeds even if no dupes)
         _dedupe_fingerprints(cur)
 
-        # 3) Ensure idempotent unique INDEX (not a named constraint)
+        # 4) Ensure idempotent unique INDEX (not a named constraint)
         _ensure_unique_fingerprint_index(cur)
 
-        # 4) Seed canonical feeds & mirror legacy URLs into 'feed'
+        # 5) Seed canonical feeds & mirror legacy URLs into 'feed'
         _seed_feeds_by_url(cur)
         _sync_feed_from_source_feed(cur)
 
-        # 5) Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
+        # 6) Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
         _remap_found_url_feed_ids_from_source_feed(cur)
 
-        # 6) Re-add FK targeting feed(id)
+        # 7) Re-add FK targeting feed(id)
         _add_fk_found_url_to_feed(cur)
 
     conn.commit()
@@ -313,7 +348,7 @@ def _strip_tracking_params(url: str) -> str:
 
 
 def canonicalize_url(url: str) -> str:
-    u = (url or "").strip()
+    u = (url or "").trim() if hasattr(str, "trim") else (url or "").strip()
     if not u:
         return u
     try:
@@ -351,7 +386,7 @@ def fingerprint_for(val: Optional[str]) -> Optional[str]:
 
 
 # -----------------------------------------------------------------------------
-# Insert helpers (each insert runs in a SAVEPOINT to avoid aborting the batch)
+# Insert helpers (each insert runs in its own transaction to avoid aborting the batch)
 # -----------------------------------------------------------------------------
 def insert_found_url(conn, row: Dict[str, Any]) -> bool:
     sql = """
@@ -362,13 +397,17 @@ def insert_found_url(conn, row: Dict[str, Any]) -> bool:
         ON CONFLICT (fingerprint) DO NOTHING
         RETURNING id;
     """
-    # SAVEPOINT via nested transaction: if this fails, the outer tx survives.
     try:
+        # This opens & commits a small transaction per row (or savepoint if already inside one)
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute(sql, row)
                 got = cur.fetchone()
         return bool(got)
+    except pg_errors.UniqueViolation as ex:
+        # If some environment still has a lingering unique(url), just treat as "already have it".
+        logger.debug(f"Insert skipped due to unique violation on legacy constraint: {ex}")
+        return False
     except Exception as ex:
         logger.exception(f"Insert failed (fingerprint={row.get('fingerprint')}): {ex}")
         return False
@@ -428,7 +467,7 @@ def do_ingest(minutes: int = 7 * 24 * 60) -> Dict[str, Any]:
                 if insert_found_url(conn, row):
                     added += 1
 
-        # Final commit for the batch (SAVEPOINT failures do not poison this)
+        # Final commit for the batch (row-level transactions already committed)
         conn.commit()
 
     return {"inserted": added, "scanned": scanned, "pruned": pruned}

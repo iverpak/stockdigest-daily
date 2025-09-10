@@ -320,11 +320,18 @@ def calculate_quality_score(
         score += 5
     
     # Social media posts tend to be shorter, so don't penalize too much
-    if "reddit.com" in domain or "twitter.com" in domain or "stocktwits.com" in domain:
+    if "reddit.com" in domain_clean or "twitter.com" in domain_clean or "stocktwits.com" in domain_clean:
         if len(title or "") < 10:
             score -= 10  # Very short posts are often low quality
     
-    return max(0, min(100, score))
+    final_score = max(0, min(100, score))
+    
+    # Final spam check - if score would be > 0 but domain is definitely spam, force to 0
+    if final_score > 0 and any(spam in domain_clean for spam in ["khodrobank", "marketbeat", "newser"]):
+        LOG.warning(f"FINAL SPAM BLOCK: {domain_clean} - {title[:50]} (was score: {final_score})")
+        return 0.0
+    
+    return final_score
 
 def get_url_hash(url: str) -> str:
     """Generate hash for URL deduplication"""
@@ -760,6 +767,56 @@ def get_stats(request: Request):
         stats["by_ticker"] = list(cur.fetchall())
     
     return stats
+
+@APP.post("/admin/clean-feeds")
+def clean_duplicate_feeds(request: Request):
+    """Clean up duplicate feeds in database"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Deactivate all feeds first
+        cur.execute("UPDATE source_feed SET active = FALSE")
+        
+        # Get count before cleanup
+        cur.execute("SELECT COUNT(*) as total FROM source_feed")
+        before_count = cur.fetchone()["total"]
+        
+        # Delete duplicate feeds (keep only the latest by id for each URL)
+        cur.execute("""
+            DELETE FROM source_feed s1 
+            WHERE EXISTS (
+                SELECT 1 FROM source_feed s2 
+                WHERE s2.url = s1.url 
+                AND s2.id > s1.id
+            )
+        """)
+        deleted_count = cur.rowcount
+        
+        # Get count after cleanup
+        cur.execute("SELECT COUNT(*) as total FROM source_feed")
+        after_count = cur.fetchone()["total"]
+    
+    return {
+        "status": "cleaned",
+        "feeds_before": before_count,
+        "feeds_after": after_count,
+        "deleted_duplicates": deleted_count
+    }
+
+@APP.get("/admin/list-feeds")
+def list_feeds(request: Request):
+    """List all feeds in database"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, name, url, active, ticker
+            FROM source_feed
+            ORDER BY active DESC, ticker, id
+        """)
+        feeds = list(cur.fetchall())
+    
+    return {"feeds": feeds}
 
 @APP.post("/admin/reset-digest-flags")
 def reset_digest_flags(request: Request):

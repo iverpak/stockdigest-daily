@@ -553,7 +553,7 @@ def force_digest(request: Request):
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
-        # Get recent articles regardless of sent_in_digest status
+        # Get ALL recent articles regardless of sent_in_digest status (no limit)
         cur.execute("""
             SELECT 
                 f.url, f.resolved_url, f.title, f.description,
@@ -563,7 +563,6 @@ def force_digest(request: Request):
             WHERE f.found_at >= NOW() - INTERVAL '7 days'
                 AND f.quality_score >= 20
             ORDER BY f.ticker, f.quality_score DESC, f.published_at DESC
-            LIMIT 50
         """)
         
         articles_by_ticker = {}
@@ -579,7 +578,7 @@ def force_digest(request: Request):
         return {"status": "no_articles", "message": "No articles found in database"}
     
     html = build_digest_html(articles_by_ticker, 7)
-    subject = f"TEST Stock Digest: {', '.join(articles_by_ticker.keys())} - {total_articles} articles"
+    subject = f"FULL Stock Digest: {', '.join(articles_by_ticker.keys())} - {total_articles} articles"
     success = send_email(subject, html)
     
     return {

@@ -383,7 +383,7 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
                 if "news.google.com" in article.get("url", ""):
                     # Don't remove the duplicate title - keep the full description
                     # Just clean up the source names at the end
-                    desc = re.sub(r'\s+(TipRanks|MSN|MarketScreener|Seeking Alpha|The Daily Item)\.?
+                    desc = re.sub(r'\s+(TipRanks|MSN|MarketScreener|Seeking Alpha|The Daily Item)\.?$', '', desc)
             
             # Clean up domain name for consistency
             domain = article["domain"] or "unknown"

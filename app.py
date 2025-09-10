@@ -40,7 +40,7 @@ MAIL_TO = [e.strip() for e in os.getenv("MAIL_TO", "").split(",") if e.strip()]
 # -----------------------------------------------------------------------------
 # FastAPI
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Quantbrief Daily", version="1.1.0")
+app = FastAPI(title="Quantbrief Daily", version="1.1.1")
 
 
 def get_conn() -> psycopg.Connection:
@@ -80,7 +80,7 @@ def _ensure_table_shells(cur) -> None:
         );
     """)
 
-    # Legacy table retained for compat/mapping; don't enforce strict NOT NULL here
+    # Legacy table retained for compat/mapping; keep nullable for flexibility
     cur.execute("""
         CREATE TABLE IF NOT EXISTS source_feed (
             id          BIGINT PRIMARY KEY,
@@ -122,7 +122,7 @@ def _ensure_columns(cur) -> None:
     cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS fingerprint TEXT;")
     cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();")
 
-    # indexes commonly used
+    # Helpful indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url(published_at);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_feed_id ON found_url(feed_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_url ON found_url(url);")
@@ -131,7 +131,7 @@ def _ensure_columns(cur) -> None:
 def _drop_any_fk_on_found_url_feed(cur) -> None:
     """
     Drop ANY FK that targets found_url(feed_id) — regardless of what it references.
-    This clears old 'found_url.feed_id -> source_feed.id' constraints.
+    Clears old 'found_url.feed_id -> source_feed.id' constraints.
     """
     cur.execute("""
     DO $$
@@ -153,24 +153,26 @@ def _drop_any_fk_on_found_url_feed(cur) -> None:
     """)
 
 
-def _ensure_unique_fingerprint_constraint(cur) -> None:
+def _ensure_unique_fingerprint_index(cur) -> None:
     """
-    Ensure a NAMED UNIQUE CONSTRAINT (not just a partial index) so we can use:
-      ON CONFLICT ON CONSTRAINT ux_found_url_fingerprint DO NOTHING
-    Multi-NULLs are allowed by Postgres UNIQUE, so no need for partial index.
+    Ensure a UNIQUE INDEX on found_url(fingerprint) so we can use
+      ON CONFLICT (fingerprint) DO NOTHING
+
+    If a constraint created an index with this name earlier, this is a no-op.
+    If some *other* unique index already exists on (fingerprint), skip creating another.
     """
     cur.execute("""
     DO $$
     BEGIN
       IF NOT EXISTS (
-        SELECT 1 FROM information_schema.table_constraints
-        WHERE table_name='found_url'
-          AND constraint_type='UNIQUE'
-          AND constraint_name='ux_found_url_fingerprint'
-      ) THEN
-        EXECUTE 'ALTER TABLE found_url
-                 ADD CONSTRAINT ux_found_url_fingerprint
-                 UNIQUE (fingerprint)';
+        SELECT 1
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'found_url'
+          AND indexdef ILIKE 'CREATE UNIQUE INDEX % ON %found_url% (fingerprint%'
+      )
+      THEN
+        EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url (fingerprint)';
       END IF;
     END $$;
     """)
@@ -268,8 +270,8 @@ def ensure_schema_and_seed(conn) -> None:
         # Critical: drop any legacy FK before we touch feed_id values
         _drop_any_fk_on_found_url_feed(cur)
 
-        # Ensure we have a named unique constraint for fingerprint upsert
-        _ensure_unique_fingerprint_constraint(cur)
+        # Ensure a unique index (idempotent, avoids DuplicateTable)
+        _ensure_unique_fingerprint_index(cur)
 
         # Seed canonical feeds & mirror legacy URLs into 'feed'
         _seed_feeds_by_url(cur)
@@ -351,7 +353,7 @@ def insert_found_url(conn, row: Dict[str, Any]) -> bool:
           (url, url_canonical, host, title, slug, summary, published_at, score, feed_id, fingerprint)
         VALUES
           (%(url)s, %(url_canonical)s, %(host)s, %(title)s, %(slug)s, %(summary)s, %(published_at)s, %(score)s, %(feed_id)s, %(fingerprint)s)
-        ON CONFLICT ON CONSTRAINT ux_found_url_fingerprint DO NOTHING
+        ON CONFLICT (fingerprint) DO NOTHING
         RETURNING id;
     """
     with conn.cursor() as cur:

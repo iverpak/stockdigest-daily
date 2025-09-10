@@ -26,7 +26,7 @@ from bs4 import BeautifulSoup
 # Logging
 # ------------------------------------------------------------------------------
 LOG = logging.getLogger("quantbrief")
-LOG.setLevel(logging.INFO)
+LOG.setLevel(logging.DEBUG)
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 if not LOG.handlers:
@@ -63,14 +63,11 @@ DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
-# Enhanced quality filtering keywords
+# Spam domains
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com",
     "newser.com", "www.newser.com",
-    "khodrobank.com", "www.khodrobank.com",
-    "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©",  # Arabic version of khodrobank
-    # Add problematic social accounts if needed
-    "spam-reddit-user.reddit.com"
+    "khodrobank.com", "www.khodrobank.com"
 }
 
 QUALITY_DOMAINS = {
@@ -78,18 +75,14 @@ QUALITY_DOMAINS = {
     "barrons.com", "cnbc.com", "marketwatch.com",
     "yahoo.com/finance", "finance.yahoo.com",
     "businesswire.com", "prnewswire.com", "globenewswire.com",
-    # Social media domains
-    "reddit.com", "www.reddit.com",
-    "twitter.com", "x.com", "nitter.net",
-    "stocktwits.com"
+    "reddit.com", "www.reddit.com"
 }
 
 # ------------------------------------------------------------------------------
-# Extended Stock configurations with social media feeds
+# Clean Stock Feed Configuration - NO TWITTER FEEDS
 # ------------------------------------------------------------------------------
 STOCK_FEEDS = {
     "TLN": [
-        # Traditional News Sources
         {
             "url": "https://news.google.com/rss/search?q=Talen+Energy+OR+TLN+when:7d&hl=en-US&gl=US&ceid=US:en",
             "name": "Google News: Talen Energy (7 days)"
@@ -106,43 +99,13 @@ STOCK_FEEDS = {
             "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001903816&type=&dateb=&count=40&output=atom",
             "name": "SEC EDGAR: Talen Energy Filings"
         },
-        
-        # Reddit RSS Feeds (expanded search terms)
         {
-            "url": "https://www.reddit.com/r/investing/search.rss?q=Talen+Energy+OR+TLN+OR+nuclear+energy+OR+data+center+power&restrict_sr=1&sort=new&t=week",
-            "name": "Reddit r/investing: Talen Energy (expanded)"
+            "url": "https://www.reddit.com/r/investing/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "name": "Reddit r/investing: Talen Energy"
         },
         {
-            "url": "https://www.reddit.com/r/stocks/search.rss?q=Talen+Energy+OR+TLN+OR+%24TLN&restrict_sr=1&sort=new&t=week",
+            "url": "https://www.reddit.com/r/stocks/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
             "name": "Reddit r/stocks: Talen Energy"
-        },
-        {
-            "url": "https://www.reddit.com/r/SecurityAnalysis/search.rss?q=Talen+Energy+OR+TLN+OR+utility+stock&restrict_sr=1&sort=new&t=week",
-            "name": "Reddit r/SecurityAnalysis: Talen Energy"
-        },
-        {
-            "url": "https://www.reddit.com/r/ValueInvesting/search.rss?q=Talen+Energy+OR+TLN+OR+energy+stock&restrict_sr=1&sort=new&t=week",
-            "name": "Reddit r/ValueInvesting: Talen Energy"
-        },
-        {
-            "url": "https://www.reddit.com/r/energy/search.rss?q=Talen+Energy+OR+TLN+OR+nuclear+power&restrict_sr=1&sort=new&t=week",
-            "name": "Reddit r/energy: Talen Energy"
-        },
-        
-        # Twitter/X RSS (using nitter.net as RSS proxy)
-        {
-            "url": "https://nitter.net/TalenEnergy/rss",
-            "name": "Twitter: @TalenEnergy Official"
-        },
-        {
-            "url": "https://nitter.net/search/rss?q=Talen+Energy+OR+%24TLN&f=tweets",
-            "name": "Twitter Search: Talen Energy mentions"
-        },
-        
-        # StockTwits RSS (if available)
-        {
-            "url": "https://stocktwits.com/symbol/TLN.rss",
-            "name": "StockTwits: TLN"
         }
     ]
 }
@@ -165,11 +128,8 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """Initialize database schema - works with clean schema"""
-    # This function now does minimal work since we have a clean schema
     with db() as conn:
         with conn.cursor() as cur:
-            # Just ensure the essential indexes exist
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
@@ -179,7 +139,6 @@ def ensure_schema():
             """)
 
 def upsert_feed(url: str, name: str, ticker: str, retain_days: int = 90) -> int:
-    """Insert or update a feed source"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             INSERT INTO source_feed (url, name, ticker, retain_days, active)
@@ -194,7 +153,6 @@ def upsert_feed(url: str, name: str, ticker: str, retain_days: int = 90) -> int:
         return cur.fetchone()["id"]
 
 def list_active_feeds() -> List[Dict]:
-    """Get all active feeds"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT id, url, name, ticker, retain_days
@@ -205,27 +163,14 @@ def list_active_feeds() -> List[Dict]:
         return list(cur.fetchall())
 
 # ------------------------------------------------------------------------------
-# Enhanced URL Resolution and Quality Scoring
+# Simple URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
 def resolve_google_news_url(url: str) -> Tuple[str, str]:
-    """Enhanced URL resolution for all platforms including social media"""
     try:
-        # Handle Twitter/X redirects
-        if "t.co/" in url:
-            response = requests.get(url, timeout=10, allow_redirects=True)
-            return response.url, urlparse(response.url).netloc
-        
-        # Handle Reddit share URLs
-        if "redd.it/" in url:
-            response = requests.get(url, timeout=10, allow_redirects=True)
-            return response.url, urlparse(response.url).netloc
-        
-        # Extract actual URL from Google News redirect
         if "news.google.com" in url and "/articles/" in url:
             response = requests.get(url, timeout=10, allow_redirects=True)
             return response.url, urlparse(response.url).netloc
         
-        # For direct Google redirect URLs
         if "google.com/url" in url:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
@@ -236,108 +181,53 @@ def resolve_google_news_url(url: str) -> Tuple[str, str]:
                 actual_url = params['q'][0]
                 return actual_url, urlparse(actual_url).netloc
         
-        # Already a direct URL
         return url, urlparse(url).netloc
     except Exception as e:
         LOG.warning(f"Failed to resolve URL {url}: {e}")
         return url, urlparse(url).netloc
 
-def calculate_quality_score(
-    title: str, 
-    domain: str, 
-    ticker: str,
-    description: str = ""
-) -> float:
-    """Enhanced quality scoring for social media content"""
-    score = 50.0  # Base score
-    
-    # Check for spam in title, domain, or description
-    spam_indicators = [
-        "marketbeat", "newser", "khodrobank", "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©",
-        "crypto scam", "get rich quick", "pump and dump"
-    ]
-    
-    content_to_check = f"{title} {domain} {description}".lower()
-    if any(spam in content_to_check for spam in spam_indicators):
-        return 0.0  # Auto-reject spam content
-    
-    # Domain quality scoring
-    if domain in SPAM_DOMAINS:
-        return 0.0  # Auto-reject spam domains
-    
-    # Traditional financial media gets highest scores
-    if domain in ["reuters.com", "bloomberg.com", "wsj.com", "ft.com"]:
-        score += 35
-    elif domain in ["cnbc.com", "marketwatch.com", "barrons.com"]:
-        score += 30
-    elif "yahoo.com" in domain and "finance" in domain:
-        score += 25
-    
-    # Social media scoring - more conservative
-    elif "reddit.com" in domain:
-        score += 15
-        # Boost for quality subreddits
-        if any(sub in domain for sub in ["/r/investing", "/r/SecurityAnalysis", "/r/ValueInvesting"]):
+def calculate_quality_score(title: str, domain: str, ticker: str, description: str = "") -> float:
+    """Simple quality scoring - no domain_clean variable"""
+    try:
+        LOG.debug(f"Scoring: title='{title}', domain='{domain}'")
+        
+        score = 50.0
+        
+        # Safe string conversion
+        title_text = str(title) if title else ""
+        domain_text = str(domain) if domain else ""
+        description_text = str(description) if description else ""
+        
+        # Clean domain (inline, no separate variable)
+        clean_domain = domain_text.lower().replace("www.", "")
+        
+        # Block spam domains immediately
+        if any(spam in clean_domain for spam in ["khodrobank.com", "marketbeat.com", "newser.com"]):
+            LOG.warning(f"SPAM BLOCKED: {clean_domain}")
+            return 0.0
+        
+        # Quality scoring
+        if "reuters.com" in clean_domain or "bloomberg.com" in clean_domain:
+            score += 30
+        elif "yahoo.com" in clean_domain and "finance" in clean_domain:
+            score += 20
+        elif "reddit.com" in clean_domain:
             score += 10
-        # Penalty for meme subreddits
-        if any(sub in domain for sub in ["/r/wallstreetbets", "/r/memes"]):
-            score -= 20
-    
-    elif domain in ["twitter.com", "x.com", "nitter.net"]:
-        score += 10
-        # Boost for official company accounts
-        if "official" in (title or "").lower() or any(word in (title or "").lower() for word in ["announces", "reports", "filed"]):
-            score += 15
-    
-    elif "stocktwits.com" in domain:
-        score += 12
-        # Boost for detailed analysis posts
-        if len(description or "") > 100:
-            score += 8
-    
-    # Title relevance
-    if ticker in (title or "").upper():
-        score += 10
-    if "Talen" in (title or ""):
-        score += 10
-    
-    # Social media specific signals
-    if any(signal in (title or "").lower() for signal in ["breaking", "alert", "update", "earnings", "sec filing"]):
-        score += 15
-    
-    # Negative signals
-    spam_keywords = [
-        "sponsored", "advertisement", "promoted", "partner content",
-        "to the moon", "diamond hands", "ape", "hodl", "yolo"
-    ]
-    if any(kw in (title or "").lower() for kw in spam_keywords):
-        score -= 25
-    
-    # Length and substance (adjusted for social media)
-    if len(title or "") > 20:
-        score += 5
-    if len(description or "") > 50:
-        score += 5
-    
-    # Social media posts tend to be shorter, so don't penalize too much
-    if "reddit.com" in domain_clean or "twitter.com" in domain_clean or "stocktwits.com" in domain_clean:
-        if len(title or "") < 10:
-            score -= 10  # Very short posts are often low quality
-    
-    final_score = max(0, min(100, score))
-    
-    # Final spam check - if score would be > 0 but domain is definitely spam, force to 0
-    if final_score > 0 and any(spam in domain_clean for spam in ["khodrobank", "marketbeat", "newser"]):
-        LOG.warning(f"FINAL SPAM BLOCK: {domain_clean} - {title[:50]} (was score: {final_score})")
-        return 0.0
-    
-    return final_score
+        
+        # Title relevance
+        if ticker and ticker.upper() in title_text.upper():
+            score += 10
+        if "Talen" in title_text:
+            score += 10
+        
+        return max(0, min(100, score))
+        
+    except Exception as e:
+        LOG.error(f"Error in quality scoring: {e}")
+        return 50.0
 
 def get_url_hash(url: str) -> str:
-    """Generate hash for URL deduplication"""
-    # Normalize URL for better dedup
     url_lower = url.lower()
-    # Remove common tracking parameters
     url_clean = re.sub(r'[?&](utm_|ref=|source=).*', '', url_lower)
     return hashlib.md5(url_clean.encode()).hexdigest()
 
@@ -345,20 +235,17 @@ def get_url_hash(url: str) -> str:
 # Feed Processing
 # ------------------------------------------------------------------------------
 def parse_datetime(candidate) -> Optional[datetime]:
-    """Parse various datetime formats"""
     if not candidate:
         return None
     if isinstance(candidate, datetime):
         return candidate if candidate.tzinfo else candidate.replace(tzinfo=timezone.utc)
     
-    # Handle struct_time from feedparser
     if hasattr(candidate, "tm_year"):
         try:
             return datetime.fromtimestamp(time.mktime(candidate), tz=timezone.utc)
         except:
             pass
     
-    # Try ISO format
     try:
         return datetime.fromisoformat(str(candidate))
     except:
@@ -369,13 +256,13 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0}
     
     try:
+        LOG.info(f"Processing {feed['name']}: Starting...")
         parsed = feedparser.parse(feed["url"])
         LOG.info(f"Processing {feed['name']}: {len(parsed.entries)} entries")
         
         for entry in parsed.entries:
             stats["processed"] += 1
             
-            # Get URL and resolve if needed
             original_url = getattr(entry, "link", None)
             if not original_url:
                 continue
@@ -383,37 +270,28 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
             resolved_url, domain = resolve_google_news_url(original_url)
             url_hash = get_url_hash(resolved_url)
             
-            # Extract metadata with proper defaults
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # Calculate quality score
-            quality_score = calculate_quality_score(
-                title, domain, feed["ticker"], description
-            )
+            quality_score = calculate_quality_score(title, domain, feed["ticker"], description)
             
             if quality_score < 20:
                 stats["low_quality"] += 1
-                LOG.debug(f"Skipping low quality: {title} (score: {quality_score})")
                 continue
             
-            # Get publication date
             published_at = None
             if hasattr(entry, "published_parsed"):
                 published_at = parse_datetime(entry.published_parsed)
             elif hasattr(entry, "updated_parsed"):
                 published_at = parse_datetime(entry.updated_parsed)
             
-            # Insert to database - each insert gets its own transaction
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Check if already exists first
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
                         continue
                     
-                    # Insert new record
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -427,11 +305,9 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        LOG.debug(f"Inserted: {title[:50]}...")
                         
             except Exception as e:
-                LOG.error(f"Database insert error for '{title[:50]}': {e}")
-                # Continue processing other articles instead of failing completely
+                LOG.error(f"Database insert error: {e}")
                 continue
                 
     except Exception as e:
@@ -440,10 +316,9 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
     return stats
 
 # ------------------------------------------------------------------------------
-# Email Digest
+# Email Functions
 # ------------------------------------------------------------------------------
 def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: int) -> str:
-    """Build HTML email digest - compact format"""
     html = [
         "<html><body style='font-family: Arial, sans-serif; font-size: 12px;'>",
         f"<h2>Quantbrief Stock Digest - Last {period_days} Days</h2>",
@@ -457,47 +332,17 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
             html.append("<p style='color: #999;'>No quality articles found for this period.</p>")
             continue
         
-        for article in articles[:100]:  # Limit to top 100 per stock
+        for article in articles[:100]:
             pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
-            
-            # Clean up title - remove source suffixes and normalize
             title = article["title"] or "No Title"
-            
-            # Remove common suffixes that indicate source
-            suffixes_to_remove = [
-                " - MarketBeat", " - Newser", " - TipRanks", " - MSN", 
-                " - The Daily Item", " - MarketScreener", " - Seeking Alpha",
-                " - simplywall.st", " - Investopedia", " - Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©",
-                " - Reddit", " - Twitter", " - StockTwits"
-            ]
-            
-            for suffix in suffixes_to_remove:
-                if title.endswith(suffix):
-                    title = title[:-len(suffix)].strip()
-            
-            # Remove $TLN ticker references that clutter titles
-            title = re.sub(r'\s*\$TLN\s*-?\s*', ' ', title)
-            title = re.sub(r'\s+', ' ', title).strip()
-            
-            # Clean up domain name for consistency
-            domain = article["domain"] or "unknown"
-            domain = domain.replace("www.", "")
+            domain = (article["domain"] or "unknown").replace("www.", "")
             
             html.append(f"""<div style='margin: 2px 0;'><a href='{article["resolved_url"] or article["url"]}' style='color: #1a73e8; text-decoration: none; font-weight: bold;'>{title}</a> | {domain} | {pub_date} | Score: {article["quality_score"]:.0f}</div>""")
     
-    html.append("""
-        <hr style='margin-top: 20px; border: 1px solid #e0e0e0;'>
-        <p style='color: #999; font-size: 10px;'>
-            This digest includes articles with quality scores above 20. Higher scores indicate more reputable sources and relevant content.
-            Social media sources (Reddit, Twitter, StockTwits) are included with adjusted quality scoring.
-        </p>
-        </body></html>
-    """)
-    
+    html.append("</body></html>")
     return "".join(html)
 
 def fetch_digest_articles(hours: int = 24) -> Dict[str, List[Dict]]:
-    """Fetch articles for digest grouped by ticker"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
     with db() as conn, conn.cursor() as cur:
@@ -520,7 +365,6 @@ def fetch_digest_articles(hours: int = 24) -> Dict[str, List[Dict]]:
                 articles_by_ticker[ticker] = []
             articles_by_ticker[ticker].append(dict(row))
         
-        # Mark articles as sent
         cur.execute("""
             UPDATE found_url
             SET sent_in_digest = TRUE
@@ -530,7 +374,6 @@ def fetch_digest_articles(hours: int = 24) -> Dict[str, List[Dict]]:
     return articles_by_ticker
 
 def send_email(subject: str, html_body: str, to: str = None):
-    """Send email via SMTP"""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
@@ -542,7 +385,6 @@ def send_email(subject: str, html_body: str, to: str = None):
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient
         
-        # Add plain text version
         text_body = "Please view this email in HTML format."
         msg.attach(MIMEText(text_body, "plain"))
         msg.attach(MIMEText(html_body, "html"))
@@ -561,10 +403,9 @@ def send_email(subject: str, html_body: str, to: str = None):
         return False
 
 # ------------------------------------------------------------------------------
-# Auth Middleware
+# Auth
 # ------------------------------------------------------------------------------
 def require_admin(request: Request):
-    """Verify admin token"""
     token = request.headers.get("x-admin-token") or \
             request.headers.get("authorization", "").replace("Bearer ", "")
     
@@ -578,9 +419,37 @@ def require_admin(request: Request):
 def root():
     return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
 
+@APP.post("/admin/hard-reset")
+def hard_reset_feeds(request: Request):
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM source_feed")
+        deleted_count = cur.rowcount
+        cur.execute("ALTER SEQUENCE source_feed_id_seq RESTART WITH 1")
+    
+    return {
+        "status": "hard_reset_complete",
+        "deleted_feeds": deleted_count,
+        "message": "All feeds deleted. Run /admin/init to add fresh feeds."
+    }
+
+@APP.get("/admin/list-feeds")
+def list_feeds(request: Request):
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, name, url, active, ticker
+            FROM source_feed
+            ORDER BY active DESC, ticker, id
+        """)
+        feeds = list(cur.fetchall())
+    
+    return {"feeds": feeds}
+
 @APP.post("/admin/init")
 def admin_init(request: Request):
-    """Initialize database and seed feeds"""
     require_admin(request)
     ensure_schema()
     
@@ -598,11 +467,7 @@ def admin_init(request: Request):
     return {"status": "initialized", "feeds": results}
 
 @APP.post("/cron/ingest")
-def cron_ingest(
-    request: Request,
-    minutes: int = Query(default=1440, description="Time window in minutes")
-):
-    """Ingest articles from all feeds"""
+def cron_ingest(request: Request, minutes: int = Query(default=1440)):
     require_admin(request)
     ensure_schema()
     
@@ -617,7 +482,6 @@ def cron_ingest(
         
         LOG.info(f"Feed {feed['name']}: {stats}")
     
-    # Clean old articles
     cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
     with db() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM found_url WHERE found_at < %s", (cutoff,))
@@ -627,11 +491,7 @@ def cron_ingest(
     return total_stats
 
 @APP.post("/cron/digest")
-def cron_digest(
-    request: Request,
-    minutes: int = Query(default=1440, description="Time window in minutes")
-):
-    """Generate and send email digest"""
+def cron_digest(request: Request, minutes: int = Query(default=1440)):
     require_admin(request)
     ensure_schema()
     
@@ -653,7 +513,6 @@ def cron_digest(
     subject = f"Stock Digest: {', '.join(articles.keys())} - {total_articles} articles"
     success = send_email(subject, html)
     
-    # Log digest history
     if success:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
@@ -670,11 +529,9 @@ def cron_digest(
 
 @APP.post("/admin/force-digest")
 def force_digest(request: Request):
-    """Force digest with existing articles (for testing)"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
-        # Get ALL recent articles regardless of sent_in_digest status (no limit)
         cur.execute("""
             SELECT 
                 f.url, f.resolved_url, f.title, f.description,
@@ -711,7 +568,6 @@ def force_digest(request: Request):
 
 @APP.post("/admin/test-email")
 def test_email(request: Request):
-    """Send test email"""
     require_admin(request)
     
     test_html = """
@@ -727,12 +583,10 @@ def test_email(request: Request):
 
 @APP.get("/admin/stats")
 def get_stats(request: Request):
-    """Get system statistics"""
     require_admin(request)
     ensure_schema()
     
     with db() as conn, conn.cursor() as cur:
-        # Article stats
         cur.execute("""
             SELECT 
                 COUNT(*) as total_articles,
@@ -745,7 +599,6 @@ def get_stats(request: Request):
         """)
         stats = dict(cur.fetchone())
         
-        # Top domains
         cur.execute("""
             SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
             FROM found_url
@@ -756,7 +609,6 @@ def get_stats(request: Request):
         """)
         stats["top_domains"] = list(cur.fetchall())
         
-        # Articles by ticker
         cur.execute("""
             SELECT ticker, COUNT(*) as count, AVG(quality_score) as avg_score
             FROM found_url
@@ -768,43 +620,8 @@ def get_stats(request: Request):
     
     return stats
 
-@APP.post("/admin/hard-reset")
-def hard_reset_feeds(request: Request):
-    """Delete ALL feeds and start completely fresh"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        # Delete all feeds completely
-        cur.execute("DELETE FROM source_feed")
-        deleted_count = cur.rowcount
-        
-        # Reset the ID sequence
-        cur.execute("ALTER SEQUENCE source_feed_id_seq RESTART WITH 1")
-    
-    return {
-        "status": "hard_reset_complete",
-        "deleted_feeds": deleted_count,
-        "message": "All feeds deleted. Run /admin/init to add fresh feeds."
-    }
-
-@APP.get("/admin/list-feeds")
-def list_feeds(request: Request):
-    """List all feeds in database"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, name, url, active, ticker
-            FROM source_feed
-            ORDER BY active DESC, ticker, id
-        """)
-        feeds = list(cur.fetchall())
-    
-    return {"feeds": feeds}
-
 @APP.post("/admin/reset-digest-flags")
 def reset_digest_flags(request: Request):
-    """Reset sent_in_digest flags for testing"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:

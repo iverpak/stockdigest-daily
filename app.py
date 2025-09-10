@@ -66,7 +66,9 @@ DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 # Quality filtering keywords
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com",
-    "newser.com", "www.newser.com"
+    "newser.com", "www.newser.com",
+    "khodrobank.com", "www.khodrobank.com",
+    "خودرو بانک"  # Arabic version of khodrobank
 }
 
 QUALITY_DOMAINS = {
@@ -189,6 +191,15 @@ def calculate_quality_score(
 ) -> float:
     """Calculate article quality score (0-100)"""
     score = 50.0  # Base score
+    
+    # Check for spam in title, domain, or description
+    spam_indicators = [
+        "marketbeat", "newser", "khodrobank", "خودرو بانک"
+    ]
+    
+    content_to_check = f"{title} {domain} {description}".lower()
+    if any(spam in content_to_check for spam in spam_indicators):
+        return 0.0  # Auto-reject spam content
     
     # Domain quality
     if domain in SPAM_DOMAINS:
@@ -371,298 +382,6 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
                 # Remove common prefixes from news aggregators
                 desc = re.sub(r'^[^:]+:\s*--\s*', '', desc)  # Remove "Source: -- " prefixes
                 desc = re.sub(r'^[^\.]+\.com\s*--\s*', '', desc)  # Remove "domain.com -- " prefixes
-                desc = re.sub(r'^[^\.]+\s+[^\.]+\s*
-
-def fetch_digest_articles(hours: int = 24) -> Dict[str, List[Dict]]:
-    """Fetch articles for digest grouped by ticker"""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT 
-                f.url, f.resolved_url, f.title, f.description,
-                f.ticker, f.domain, f.quality_score, f.published_at,
-                f.found_at
-            FROM found_url f
-            WHERE f.found_at >= %s
-                AND f.quality_score >= 20
-                AND NOT f.sent_in_digest
-            ORDER BY f.ticker, f.quality_score DESC, f.published_at DESC
-        """, (cutoff,))
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = []
-            articles_by_ticker[ticker].append(dict(row))
-        
-        # Mark articles as sent
-        cur.execute("""
-            UPDATE found_url
-            SET sent_in_digest = TRUE
-            WHERE found_at >= %s AND quality_score >= 20
-        """, (cutoff,))
-        
-    return articles_by_ticker
-
-def send_email(subject: str, html_body: str, to: str = None):
-    """Send email via SMTP"""
-    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
-        LOG.error("SMTP not fully configured")
-        return False
-    
-    try:
-        recipient = to or DIGEST_TO
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = recipient
-        
-        # Add plain text version
-        text_body = "Please view this email in HTML format."
-        msg.attach(MIMEText(text_body, "plain"))
-        msg.attach(MIMEText(html_body, "html"))
-        
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            if SMTP_STARTTLS:
-                server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
-        
-        LOG.info(f"Email sent to {recipient}")
-        return True
-        
-    except Exception as e:
-        LOG.error(f"Email send failed: {e}")
-        return False
-
-# ------------------------------------------------------------------------------
-# Auth Middleware
-# ------------------------------------------------------------------------------
-def require_admin(request: Request):
-    """Verify admin token"""
-    token = request.headers.get("x-admin-token") or \
-            request.headers.get("authorization", "").replace("Bearer ", "")
-    
-    if token != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-# ------------------------------------------------------------------------------
-# API Routes
-# ------------------------------------------------------------------------------
-@APP.get("/")
-def root():
-    return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
-
-@APP.post("/admin/init")
-def admin_init(request: Request):
-    """Initialize database and seed feeds"""
-    require_admin(request)
-    ensure_schema()
-    
-    results = []
-    for ticker, feeds in STOCK_FEEDS.items():
-        for feed_config in feeds:
-            feed_id = upsert_feed(
-                url=feed_config["url"],
-                name=feed_config["name"],
-                ticker=ticker,
-                retain_days=DEFAULT_RETAIN_DAYS
-            )
-            results.append({"ticker": ticker, "feed": feed_config["name"], "id": feed_id})
-    
-    return {"status": "initialized", "feeds": results}
-
-@APP.post("/cron/ingest")
-def cron_ingest(
-    request: Request,
-    minutes: int = Query(default=1440, description="Time window in minutes")
-):
-    """Ingest articles from all feeds"""
-    require_admin(request)
-    ensure_schema()
-    
-    feeds = list_active_feeds()
-    total_stats = {"feeds_processed": 0, "total_inserted": 0, "total_duplicates": 0}
-    
-    for feed in feeds:
-        stats = ingest_feed(feed)
-        total_stats["feeds_processed"] += 1
-        total_stats["total_inserted"] += stats["inserted"]
-        total_stats["total_duplicates"] += stats["duplicates"]
-        
-        LOG.info(f"Feed {feed['name']}: {stats}")
-    
-    # Clean old articles
-    cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM found_url WHERE found_at < %s", (cutoff,))
-        deleted = cur.rowcount
-    
-    total_stats["old_articles_deleted"] = deleted
-    return total_stats
-
-@APP.post("/cron/digest")
-def cron_digest(
-    request: Request,
-    minutes: int = Query(default=1440, description="Time window in minutes")
-):
-    """Generate and send email digest"""
-    require_admin(request)
-    ensure_schema()
-    
-    hours = minutes / 60
-    days = int(hours / 24) if hours >= 24 else 0
-    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
-    
-    articles = fetch_digest_articles(hours=hours)
-    total_articles = sum(len(arts) for arts in articles.values())
-    
-    if total_articles == 0:
-        return {
-            "status": "no_articles",
-            "message": f"No new quality articles found in the last {period_label}"
-        }
-    
-    html = build_digest_html(articles, days if days > 0 else 1)
-    
-    subject = f"Stock Digest: {', '.join(articles.keys())} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    # Log digest history
-    if success:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO digest_history (recipient, article_count, tickers)
-                VALUES (%s, %s, %s)
-            """, (DIGEST_TO, total_articles, list(articles.keys())))
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles.keys()),
-        "recipient": DIGEST_TO
-    }
-
-@APP.post("/admin/force-digest")
-def force_digest(request: Request):
-    """Force digest with existing articles (for testing)"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        # Get ALL recent articles regardless of sent_in_digest status (no limit)
-        cur.execute("""
-            SELECT 
-                f.url, f.resolved_url, f.title, f.description,
-                f.ticker, f.domain, f.quality_score, f.published_at,
-                f.found_at
-            FROM found_url f
-            WHERE f.found_at >= NOW() - INTERVAL '7 days'
-                AND f.quality_score >= 20
-            ORDER BY f.ticker, f.quality_score DESC, f.published_at DESC
-        """)
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = []
-            articles_by_ticker[ticker].append(dict(row))
-    
-    total_articles = sum(len(arts) for arts in articles_by_ticker.values())
-    
-    if total_articles == 0:
-        return {"status": "no_articles", "message": "No articles found in database"}
-    
-    html = build_digest_html(articles_by_ticker, 7)
-    subject = f"FULL Stock Digest: {', '.join(articles_by_ticker.keys())} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "recipient": DIGEST_TO
-    }
-
-@APP.post("/admin/test-email")
-def test_email(request: Request):
-    """Send test email"""
-    require_admin(request)
-    
-    test_html = """
-    <html><body>
-        <h2>Quantbrief Test Email</h2>
-        <p>Your email configuration is working correctly!</p>
-        <p>Time: {}</p>
-    </body></html>
-    """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    
-    success = send_email("Quantbrief Test Email", test_html)
-    return {"status": "sent" if success else "failed", "recipient": DIGEST_TO}
-
-@APP.get("/admin/stats")
-def get_stats(request: Request):
-    """Get system statistics"""
-    require_admin(request)
-    ensure_schema()
-    
-    with db() as conn, conn.cursor() as cur:
-        # Article stats
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_articles,
-                COUNT(DISTINCT ticker) as tickers,
-                COUNT(DISTINCT domain) as domains,
-                AVG(quality_score) as avg_quality,
-                MAX(published_at) as latest_article
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-        """)
-        stats = dict(cur.fetchone())
-        
-        # Top domains
-        cur.execute("""
-            SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-            GROUP BY domain
-            ORDER BY count DESC
-            LIMIT 10
-        """)
-        stats["top_domains"] = list(cur.fetchall())
-        
-        # Articles by ticker
-        cur.execute("""
-            SELECT ticker, COUNT(*) as count, AVG(quality_score) as avg_score
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-            GROUP BY ticker
-            ORDER BY ticker
-        """)
-        stats["by_ticker"] = list(cur.fetchall())
-    
-    return stats
-
-@APP.post("/admin/reset-digest-flags")
-def reset_digest_flags(request: Request):
-    """Reset sent_in_digest flags for testing"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
-        count = cur.rowcount
-    
-    return {"status": "reset", "articles_reset": count}
-
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "10000"))
-    uvicorn.run(APP, host="0.0.0.0", port=port), desc, 1)  # Clean standalone source names
                 
                 # Find first sentence (look for . followed by space or end of string)
                 sentences = re.split(r'\.(?:\s|$)', desc)

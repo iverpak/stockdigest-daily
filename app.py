@@ -468,7 +468,7 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
         
         html.append("<ul style='list-style-type: none; padding: 0;'>")
         
-        for article in articles[:20]:  # Limit to top 20 per stock
+        for article in articles[:100]:  # Limit to top 100 per stock
             quality_indicator = "🟢" if article["quality_score"] > 70 else "🟡" if article["quality_score"] > 40 else "🔴"
             pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
             

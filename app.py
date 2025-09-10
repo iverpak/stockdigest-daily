@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 # Config & logging
 # -----------------------------------------------------------------------------
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
+BUILD_TAG = "quantbrief build 2025-09-10T00:15Z"  # <- shows in logs so you know this file is live
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(
@@ -25,6 +26,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(APP_NAME)
+logger.info(BUILD_TAG)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if not DATABASE_URL:
@@ -40,7 +42,7 @@ MAIL_TO = [e.strip() for e in os.getenv("MAIL_TO", "").split(",") if e.strip()]
 # -----------------------------------------------------------------------------
 # FastAPI
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Quantbrief Daily", version="1.1.1")
+app = FastAPI(title="Quantbrief Daily", version="1.1.2")
 
 
 def get_conn() -> psycopg.Connection:
@@ -80,7 +82,7 @@ def _ensure_table_shells(cur) -> None:
         );
     """)
 
-    # Legacy table retained for compat/mapping; keep nullable for flexibility
+    # Legacy table for compatibility
     cur.execute("""
         CREATE TABLE IF NOT EXISTS source_feed (
             id          BIGINT PRIMARY KEY,
@@ -155,26 +157,16 @@ def _drop_any_fk_on_found_url_feed(cur) -> None:
 
 def _ensure_unique_fingerprint_index(cur) -> None:
     """
-    Ensure a UNIQUE INDEX on found_url(fingerprint) so we can use
+    Ensure a UNIQUE INDEX on found_url(fingerprint) so we can safely use:
       ON CONFLICT (fingerprint) DO NOTHING
 
-    If a constraint created an index with this name earlier, this is a no-op.
-    If some *other* unique index already exists on (fingerprint), skip creating another.
+    NOTE: This is an INDEX, not a CONSTRAINT, to avoid the DuplicateTable issue.
+    If a previous run already created an index named 'ux_found_url_fingerprint',
+    this statement is a no-op.
     """
     cur.execute("""
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_indexes
-        WHERE schemaname = 'public'
-          AND tablename = 'found_url'
-          AND indexdef ILIKE 'CREATE UNIQUE INDEX % ON %found_url% (fingerprint%'
-      )
-      THEN
-        EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint ON found_url (fingerprint)';
-      END IF;
-    END $$;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint
+        ON found_url (fingerprint);
     """)
 
 
@@ -192,9 +184,7 @@ def _seed_feeds_by_url(cur) -> None:
 
 
 def _sync_feed_from_source_feed(cur) -> None:
-    """
-    Make sure every URL present in legacy source_feed has a canonical row in feed.
-    """
+    # Mirror legacy urls into canonical feed
     cur.execute("""
         INSERT INTO feed (url, name, active, created_at)
         SELECT sf.url,
@@ -267,20 +257,20 @@ def ensure_schema_and_seed(conn) -> None:
         _ensure_table_shells(cur)
         _ensure_columns(cur)
 
-        # Critical: drop any legacy FK before we touch feed_id values
+        # 1) Drop any legacy FK first (prevents FK errors while remapping)
         _drop_any_fk_on_found_url_feed(cur)
 
-        # Ensure a unique index (idempotent, avoids DuplicateTable)
+        # 2) Ensure idempotent unique INDEX (not constraint) for fingerprint
         _ensure_unique_fingerprint_index(cur)
 
-        # Seed canonical feeds & mirror legacy URLs into 'feed'
+        # 3) Seed canonical feeds & mirror legacy URLs into 'feed'
         _seed_feeds_by_url(cur)
         _sync_feed_from_source_feed(cur)
 
-        # Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
+        # 4) Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
         _remap_found_url_feed_ids_from_source_feed(cur)
 
-        # Re-add the FK targeting feed(id)
+        # 5) Re-add FK targeting feed(id)
         _add_fk_found_url_to_feed(cur)
 
     conn.commit()
@@ -495,18 +485,18 @@ def send_email(subject: str, html_body: str, text_body: str) -> None:
 # -----------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return "<h3>Quantbrief Daily is live ✔</h3>"
+    return f"<h3>Quantbrief Daily is live ✔</h3><small>{BUILD_TAG}</small>"
 
 @app.post("/admin/init")
 def admin_init():
     with get_conn() as conn:
         ensure_schema_and_seed(conn)
-    return JSONResponse({"ok": True, "message": "Schema ensured; seed feeds upserted."})
+    return JSONResponse({"ok": True, "message": "Schema ensured; seed feeds upserted.", "build": BUILD_TAG})
 
 @app.post("/cron/ingest")
 def cron_ingest(minutes: int = Query(7 * 24 * 60, ge=1, le=60 * 24 * 30)):
     res = do_ingest(minutes=minutes)
-    return JSONResponse({"ok": True, **res})
+    return JSONResponse({"ok": True, **res, "build": BUILD_TAG})
 
 @app.post("/cron/digest")
 def cron_digest(minutes: int = Query(7 * 24 * 60, ge=1, le=60 * 24 * 30), limit: int = Query(25, ge=1, le=100)):
@@ -529,7 +519,7 @@ def cron_digest(minutes: int = Query(7 * 24 * 60, ge=1, le=60 * 24 * 30), limit:
     subject = f"Quantbrief digest ({len(rows)} links)"
     html_body, text_body = format_email_html(subject, rows)
     send_email(subject, html_body, text_body)
-    return JSONResponse({"ok": True, "count": len(rows)})
+    return JSONResponse({"ok": True, "count": len(rows), "build": BUILD_TAG})
 
 @app.post("/admin/test-email")
 def admin_test_email():
@@ -537,4 +527,4 @@ def admin_test_email():
     html_body = "<b>Test</b> email body"
     text_body = "Test email body"
     send_email(subject, html_body, text_body)
-    return JSONResponse({"ok": True, "message": "Test email attempted (check logs if not configured)."})
+    return JSONResponse({"ok": True, "message": "Test email attempted (check logs if not configured).", "build": BUILD_TAG})

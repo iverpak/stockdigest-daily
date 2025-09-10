@@ -723,3 +723,59 @@ def get_stats(request: Request):
     """Get system statistics"""
     require_admin(request)
     ensure_schema()
+    
+    with db() as conn, conn.cursor() as cur:
+        # Article stats
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_articles,
+                COUNT(DISTINCT ticker) as tickers,
+                COUNT(DISTINCT domain) as domains,
+                AVG(quality_score) as avg_quality,
+                MAX(published_at) as latest_article
+            FROM found_url
+            WHERE found_at > NOW() - INTERVAL '7 days'
+        """)
+        stats = dict(cur.fetchone())
+        
+        # Top domains
+        cur.execute("""
+            SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
+            FROM found_url
+            WHERE found_at > NOW() - INTERVAL '7 days'
+            GROUP BY domain
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        stats["top_domains"] = list(cur.fetchall())
+        
+        # Articles by ticker
+        cur.execute("""
+            SELECT ticker, COUNT(*) as count, AVG(quality_score) as avg_score
+            FROM found_url
+            WHERE found_at > NOW() - INTERVAL '7 days'
+            GROUP BY ticker
+            ORDER BY ticker
+        """)
+        stats["by_ticker"] = list(cur.fetchall())
+    
+    return stats
+
+@APP.post("/admin/reset-digest-flags")
+def reset_digest_flags(request: Request):
+    """Reset sent_in_digest flags for testing"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
+        count = cur.rowcount
+    
+    return {"status": "reset", "articles_reset": count}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "10000"))
+    uvicorn.run(APP, host="0.0.0.0", port=port)

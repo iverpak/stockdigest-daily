@@ -107,25 +107,25 @@ STOCK_FEEDS = {
             "name": "SEC EDGAR: Talen Energy Filings"
         },
         
-        # Reddit RSS Feeds
+        # Reddit RSS Feeds (expanded search terms)
         {
-            "url": "https://www.reddit.com/r/investing/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
-            "name": "Reddit r/investing: Talen Energy"
+            "url": "https://www.reddit.com/r/investing/search.rss?q=Talen+Energy+OR+TLN+OR+nuclear+energy+OR+data+center+power&restrict_sr=1&sort=new&t=week",
+            "name": "Reddit r/investing: Talen Energy (expanded)"
         },
         {
-            "url": "https://www.reddit.com/r/stocks/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "url": "https://www.reddit.com/r/stocks/search.rss?q=Talen+Energy+OR+TLN+OR+%24TLN&restrict_sr=1&sort=new&t=week",
             "name": "Reddit r/stocks: Talen Energy"
         },
         {
-            "url": "https://www.reddit.com/r/SecurityAnalysis/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "url": "https://www.reddit.com/r/SecurityAnalysis/search.rss?q=Talen+Energy+OR+TLN+OR+utility+stock&restrict_sr=1&sort=new&t=week",
             "name": "Reddit r/SecurityAnalysis: Talen Energy"
         },
         {
-            "url": "https://www.reddit.com/r/ValueInvesting/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "url": "https://www.reddit.com/r/ValueInvesting/search.rss?q=Talen+Energy+OR+TLN+OR+energy+stock&restrict_sr=1&sort=new&t=week",
             "name": "Reddit r/ValueInvesting: Talen Energy"
         },
         {
-            "url": "https://www.reddit.com/r/energy/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "url": "https://www.reddit.com/r/energy/search.rss?q=Talen+Energy+OR+TLN+OR+nuclear+power&restrict_sr=1&sort=new&t=week",
             "name": "Reddit r/energy: Talen Energy"
         },
         

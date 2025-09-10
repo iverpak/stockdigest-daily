@@ -15,11 +15,8 @@ from psycopg import errors as pg_errors
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, HTMLResponse
 
-# -----------------------------------------------------------------------------
-# Config & logging
-# -----------------------------------------------------------------------------
 APP_NAME = os.getenv("APP_NAME", "quantbrief")
-BUILD_TAG = "quantbrief build 2025-09-10T00:36Z"
+BUILD_TAG = "quantbrief build 2025-09-10T00:45Z"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(
@@ -40,22 +37,16 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 MAIL_FROM = os.getenv("MAIL_FROM")
 MAIL_TO = [e.strip() for e in os.getenv("MAIL_TO", "").split(",") if e.strip()]
 
-# -----------------------------------------------------------------------------
-# FastAPI
-# -----------------------------------------------------------------------------
-app = FastAPI(title="Quantbrief Daily", version="1.1.4")
-
+app = FastAPI(title="Quantbrief Daily", version="1.1.5")
 
 def get_conn() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, autocommit=False, row_factory=dict_row)
 
-
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
-
 # -----------------------------------------------------------------------------
-# Schema, migrations, and compatibility (all idempotent)
+# Schema & migrations (idempotent)
 # -----------------------------------------------------------------------------
 FEED_SEED: List[Tuple[str, str, bool]] = [
     (
@@ -70,9 +61,7 @@ FEED_SEED: List[Tuple[str, str, bool]] = [
     ),
 ]
 
-
 def _ensure_table_shells(cur) -> None:
-    # Canonical feeds table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS feed (
             id          BIGSERIAL PRIMARY KEY,
@@ -82,8 +71,6 @@ def _ensure_table_shells(cur) -> None:
             created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
         );
     """)
-
-    # Legacy table for compatibility
     cur.execute("""
         CREATE TABLE IF NOT EXISTS source_feed (
             id          BIGINT PRIMARY KEY,
@@ -93,8 +80,6 @@ def _ensure_table_shells(cur) -> None:
             created_at  TIMESTAMPTZ DEFAULT now()
         );
     """)
-
-    # Articles / links
     cur.execute("""
         CREATE TABLE IF NOT EXISTS found_url (
             id            BIGSERIAL PRIMARY KEY,
@@ -112,12 +97,10 @@ def _ensure_table_shells(cur) -> None:
         );
     """)
 
-
 def _ensure_columns(cur) -> None:
-    # Add columns that might be missing in older DBs
-    cur.execute("ALTER TABLE feed       ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;")
-    cur.execute("ALTER TABLE feed       ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();")
-    cur.execute("ALTER TABLE feed       ADD COLUMN IF NOT EXISTS name TEXT;")
+    cur.execute("ALTER TABLE feed ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;")
+    cur.execute("ALTER TABLE feed ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();")
+    cur.execute("ALTER TABLE feed ADD COLUMN IF NOT EXISTS name TEXT;")
     cur.execute("UPDATE feed SET name = COALESCE(name, 'feed');")
 
     cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS slug TEXT;")
@@ -125,17 +108,11 @@ def _ensure_columns(cur) -> None:
     cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS fingerprint TEXT;")
     cur.execute("ALTER TABLE found_url  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();")
 
-    # Helpful indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_published_at ON found_url(published_at);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_feed_id ON found_url(feed_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_url ON found_url(url);")
 
-
 def _drop_any_fk_on_found_url_feed(cur) -> None:
-    """
-    Drop ANY FK that targets found_url(feed_id) — regardless of what it references.
-    Clears old 'found_url.feed_id -> source_feed.id' constraints.
-    """
     cur.execute("""
     DO $$
     DECLARE r RECORD;
@@ -155,17 +132,43 @@ def _drop_any_fk_on_found_url_feed(cur) -> None:
     END $$;
     """)
 
+def _drop_fks_referencing_found_url_url(cur) -> None:
+    """
+    Drop ANY foreign key in any table that references found_url(url).
+    This clears dependencies so we can drop the UNIQUE(url).
+    """
+    cur.execute("""
+    DO $$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT n.nspname AS schemaname,
+               c.relname AS tablename,
+               con.conname AS constraint_name
+        FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE con.contype = 'f'
+          AND con.confrelid = 'public.found_url'::regclass
+          AND con.confkey = ARRAY[
+            (SELECT attnum FROM pg_attribute
+              WHERE attrelid = 'public.found_url'::regclass
+                AND attname = 'url')
+          ]
+      LOOP
+        EXECUTE format('ALTER TABLE %I.%I DROP CONSTRAINT IF EXISTS %I', r.schemaname, r.tablename, r.constraint_name);
+      END LOOP;
+    END $$;
+    """)
 
 def _drop_unique_url_constraint_and_indexes(cur) -> None:
-    """
-    Remove any UNIQUE constraint or UNIQUE index on found_url(url),
-    replacing it with a plain (non-unique) index. This avoids collisions
-    from older schemas where url was enforced unique.
-    """
-    # Drop a common constraint name if present
+    # Must drop dependent FKs first:
+    _drop_fks_referencing_found_url_url(cur)
+
+    # Drop the legacy unique constraint if present
     cur.execute("ALTER TABLE found_url DROP CONSTRAINT IF EXISTS found_url_url_key;")
 
-    # Drop any other unique index that only covers (url)
+    # Drop any UNIQUE index that only covers (url)
     cur.execute("""
     DO $$
     DECLARE r RECORD;
@@ -183,15 +186,57 @@ def _drop_unique_url_constraint_and_indexes(cur) -> None:
     END $$;
     """)
 
-    # Ensure a normal (non-unique) index remains
+    # Ensure a plain (non-unique) index remains
     cur.execute("CREATE INDEX IF NOT EXISTS idx_found_url_url ON found_url(url);")
 
+def _migrate_summaries_fk_to_found_url_id(cur) -> None:
+    """
+    If a 'summaries' table exists and previously referenced found_url(url),
+    migrate it to reference found_url(id) instead.
+    """
+    # Does summaries exist?
+    cur.execute("""
+      SELECT COUNT(*) AS n
+      FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='summaries';
+    """)
+    if (cur.fetchone() or {}).get("n", 0) == 0:
+        return
+
+    # Add found_url_id if missing
+    cur.execute("ALTER TABLE summaries ADD COLUMN IF NOT EXISTS found_url_id BIGINT;")
+    # Backfill from url -> found_url.id
+    cur.execute("""
+        UPDATE summaries s
+           SET found_url_id = fu.id
+          FROM found_url fu
+         WHERE s.found_url_id IS NULL
+           AND s.url IS NOT NULL
+           AND fu.url = s.url;
+    """)
+    # Helpful index and FK (deferrable)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_summaries_found_url_id ON summaries(found_url_id);")
+    cur.execute("""
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name='summaries'
+          AND constraint_type='FOREIGN KEY'
+          AND constraint_name='summaries_found_url_id_fkey'
+      ) THEN
+        EXECUTE '
+          ALTER TABLE summaries
+          ADD CONSTRAINT summaries_found_url_id_fkey
+          FOREIGN KEY (found_url_id) REFERENCES found_url(id)
+          ON DELETE SET NULL
+          DEFERRABLE INITIALLY DEFERRED
+        ';
+      END IF;
+    END $$;
+    """)
 
 def _dedupe_fingerprints(cur) -> None:
-    """
-    Remove duplicate rows sharing the same non-null fingerprint, keeping the lowest id.
-    This makes creating the unique index safe even if earlier runs inserted dupes.
-    """
     cur.execute("""
         WITH ranked AS (
           SELECT id, fingerprint,
@@ -203,17 +248,11 @@ def _dedupe_fingerprints(cur) -> None:
         WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
     """)
 
-
 def _ensure_unique_fingerprint_index(cur) -> None:
-    """
-    Ensure a UNIQUE INDEX on found_url(fingerprint) so we can safely use:
-      ON CONFLICT (fingerprint) DO NOTHING
-    """
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_found_url_fingerprint
         ON found_url (fingerprint);
     """)
-
 
 def _seed_feeds_by_url(cur) -> None:
     cur.executemany(
@@ -227,9 +266,7 @@ def _seed_feeds_by_url(cur) -> None:
         FEED_SEED,
     )
 
-
 def _sync_feed_from_source_feed(cur) -> None:
-    # Mirror legacy urls into canonical feed
     cur.execute("""
         INSERT INTO feed (url, name, active, created_at)
         SELECT sf.url,
@@ -244,13 +281,7 @@ def _sync_feed_from_source_feed(cur) -> None:
               created_at = COALESCE(feed.created_at, EXCLUDED.created_at);
     """)
 
-
 def _remap_found_url_feed_ids_from_source_feed(cur) -> None:
-    """
-    Map found_url.feed_id from legacy source_feed.id to canonical feed.id by matching URL.
-    Then null out any remaining orphans that still don't match a feed row.
-    """
-    # 1) Remap using URL join (legacy id -> canonical id)
     cur.execute("""
         UPDATE found_url fu
            SET feed_id = f.id
@@ -260,8 +291,6 @@ def _remap_found_url_feed_ids_from_source_feed(cur) -> None:
            AND fu.feed_id IS NOT NULL
            AND fu.feed_id <> f.id;
     """)
-
-    # 2) For any remaining non-null feed_id that doesn't match a feed row, null it
     cur.execute("""
         UPDATE found_url fu
            SET feed_id = NULL
@@ -269,11 +298,7 @@ def _remap_found_url_feed_ids_from_source_feed(cur) -> None:
            AND NOT EXISTS (SELECT 1 FROM feed f WHERE f.id = fu.feed_id);
     """)
 
-
 def _add_fk_found_url_to_feed(cur) -> None:
-    """
-    Add a deferrable FK from found_url(feed_id) -> feed(id), if missing.
-    """
     cur.execute("""
     DO $$
     BEGIN
@@ -295,47 +320,43 @@ def _add_fk_found_url_to_feed(cur) -> None:
     END $$;
     """)
 
-
 def ensure_schema_and_seed(conn) -> None:
     logger.info("Schema ensuring & compatibility pass…")
     with conn.cursor() as cur:
         _ensure_table_shells(cur)
         _ensure_columns(cur)
 
-        # 1) Drop any legacy FK first (prevents FK errors while remapping)
+        # FK on found_url.feed_id can block legacy remaps
         _drop_any_fk_on_found_url_feed(cur)
 
-        # 2) Remove legacy URL uniqueness, keep plain index
+        # Drop any FK elsewhere that references found_url(url), then remove unique(url)
         _drop_unique_url_constraint_and_indexes(cur)
 
-        # 3) Pre-dedupe before creating the unique index (succeeds even if no dupes)
-        _dedupe_fingerprints(cur)
+        # Migrate summaries (if present) to found_url_id -> found_url(id)
+        _migrate_summaries_fk_to_found_url_id(cur)
 
-        # 4) Ensure idempotent unique INDEX (not a named constraint)
+        # Fingerprint dedupe & unique index (idempotent unique INDEX, not a table constraint)
+        _dedupe_fingerprints(cur)
         _ensure_unique_fingerprint_index(cur)
 
-        # 5) Seed canonical feeds & mirror legacy URLs into 'feed'
+        # Seed/Sync feeds and remap legacy feed ids
         _seed_feeds_by_url(cur)
         _sync_feed_from_source_feed(cur)
-
-        # 6) Remap legacy found_url.feed_id -> canonical feed.id and clean orphans
         _remap_found_url_feed_ids_from_source_feed(cur)
 
-        # 7) Re-add FK targeting feed(id)
+        # Re-add FK from found_url(feed_id) -> feed(id)
         _add_fk_found_url_to_feed(cur)
 
     conn.commit()
     logger.info("Schema ensured; seed feeds upserted.")
 
-
 # -----------------------------------------------------------------------------
-# Ingestion utilities
+# Utilities
 # -----------------------------------------------------------------------------
 UTM_PARAMS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "gclid", "igshid"
 }
-
 
 def _strip_tracking_params(url: str) -> str:
     try:
@@ -346,9 +367,8 @@ def _strip_tracking_params(url: str) -> str:
     except Exception:
         return url
 
-
 def canonicalize_url(url: str) -> str:
-    u = (url or "").trim() if hasattr(str, "trim") else (url or "").strip()
+    u = (url or "").strip()
     if not u:
         return u
     try:
@@ -361,14 +381,12 @@ def canonicalize_url(url: str) -> str:
     except Exception:
         return _strip_tracking_params(u)
 
-
 def slugify(text: Optional[str]) -> Optional[str]:
     if not text:
         return None
     s = re.sub(r"[^\w\s-]", "", text).strip().lower()
     s = re.sub(r"[\s_-]+", "-", s)
     return s[:200]
-
 
 def entry_published(entry) -> Optional[datetime]:
     if getattr(entry, "published_parsed", None):
@@ -377,16 +395,14 @@ def entry_published(entry) -> Optional[datetime]:
         return datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
     return None
 
-
 def fingerprint_for(val: Optional[str]) -> Optional[str]:
     if not val:
         return None
     import hashlib
     return hashlib.sha256(val.encode("utf-8")).hexdigest()
 
-
 # -----------------------------------------------------------------------------
-# Insert helpers (each insert runs in its own transaction to avoid aborting the batch)
+# Insert helper (row-scoped transaction)
 # -----------------------------------------------------------------------------
 def insert_found_url(conn, row: Dict[str, Any]) -> bool:
     sql = """
@@ -398,20 +414,18 @@ def insert_found_url(conn, row: Dict[str, Any]) -> bool:
         RETURNING id;
     """
     try:
-        # This opens & commits a small transaction per row (or savepoint if already inside one)
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute(sql, row)
                 got = cur.fetchone()
         return bool(got)
     except pg_errors.UniqueViolation as ex:
-        # If some environment still has a lingering unique(url), just treat as "already have it".
-        logger.debug(f"Insert skipped due to unique violation on legacy constraint: {ex}")
+        # If some environment still has a lingering unique(url), just treat as "already there".
+        logger.debug(f"Insert skipped due to unique(url) violation (legacy env): {ex}")
         return False
     except Exception as ex:
         logger.exception(f"Insert failed (fingerprint={row.get('fingerprint')}): {ex}")
         return False
-
 
 # -----------------------------------------------------------------------------
 # Ingestion
@@ -467,11 +481,9 @@ def do_ingest(minutes: int = 7 * 24 * 60) -> Dict[str, Any]:
                 if insert_found_url(conn, row):
                     added += 1
 
-        # Final commit for the batch (row-level transactions already committed)
         conn.commit()
 
     return {"inserted": added, "scanned": scanned, "pruned": pruned}
-
 
 # -----------------------------------------------------------------------------
 # Email
@@ -485,7 +497,6 @@ def format_email_html(subject: str, rows: List[Dict[str, Any]]) -> Tuple[str, st
         host = r["host"]
         title = r["title"]
         published_at = r["published_at"]
-
         disp = title or url_canonical or url
         pub_txt = published_at.isoformat() if isinstance(published_at, datetime) else ""
         html_items.append(
@@ -504,12 +515,10 @@ def format_email_html(subject: str, rows: List[Dict[str, Any]]) -> Tuple[str, st
     text = subject + "\n\n" + "\n".join(text_items) + "\n"
     return html, text
 
-
 def send_email(subject: str, html_body: str, text_body: str) -> None:
     if not (SMTP_HOST and SMTP_PORT and MAIL_FROM and MAIL_TO):
         logger.warning("SMTP not fully configured; skipping email send.")
         return
-
     msg = f"From: {MAIL_FROM}\r\n"
     msg += f"To: {', '.join(MAIL_TO)}\r\n"
     msg += f"Subject: {subject}\r\n"
@@ -521,7 +530,6 @@ def send_email(subject: str, html_body: str, text_body: str) -> None:
     msg += "--BOUNDARY\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
     msg += html_body + "\r\n"
     msg += "--BOUNDARY--\r\n"
-
     try:
         context = ssl.create_default_context()
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
@@ -532,7 +540,6 @@ def send_email(subject: str, html_body: str, text_body: str) -> None:
         logger.info(f"Email sent to {MAIL_TO} (subject='{subject}')")
     except Exception as ex:
         logger.warning(f"{APP_NAME}: test email failed: {ex}")
-
 
 # -----------------------------------------------------------------------------
 # Routes

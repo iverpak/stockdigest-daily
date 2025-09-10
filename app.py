@@ -94,6 +94,10 @@ STOCK_FEEDS = {
         {
             "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=TLN&region=US&lang=en-US",
             "name": "Yahoo Finance: TLN News"
+        },
+        {
+            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001903816&type=&dateb=&count=40&output=atom",
+            "name": "SEC EDGAR: Talen Energy Filings"
         }
     ]
 }

@@ -768,39 +768,23 @@ def get_stats(request: Request):
     
     return stats
 
-@APP.post("/admin/clean-feeds")
-def clean_duplicate_feeds(request: Request):
-    """Clean up duplicate feeds in database"""
+@APP.post("/admin/hard-reset")
+def hard_reset_feeds(request: Request):
+    """Delete ALL feeds and start completely fresh"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
-        # Deactivate all feeds first
-        cur.execute("UPDATE source_feed SET active = FALSE")
-        
-        # Get count before cleanup
-        cur.execute("SELECT COUNT(*) as total FROM source_feed")
-        before_count = cur.fetchone()["total"]
-        
-        # Delete duplicate feeds (keep only the latest by id for each URL)
-        cur.execute("""
-            DELETE FROM source_feed s1 
-            WHERE EXISTS (
-                SELECT 1 FROM source_feed s2 
-                WHERE s2.url = s1.url 
-                AND s2.id > s1.id
-            )
-        """)
+        # Delete all feeds completely
+        cur.execute("DELETE FROM source_feed")
         deleted_count = cur.rowcount
         
-        # Get count after cleanup
-        cur.execute("SELECT COUNT(*) as total FROM source_feed")
-        after_count = cur.fetchone()["total"]
+        # Reset the ID sequence
+        cur.execute("ALTER SEQUENCE source_feed_id_seq RESTART WITH 1")
     
     return {
-        "status": "cleaned",
-        "feeds_before": before_count,
-        "feeds_after": after_count,
-        "deleted_duplicates": deleted_count
+        "status": "hard_reset_complete",
+        "deleted_feeds": deleted_count,
+        "message": "All feeds deleted. Run /admin/init to add fresh feeds."
     }
 
 @APP.get("/admin/list-feeds")

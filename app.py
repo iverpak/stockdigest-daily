@@ -63,26 +63,33 @@ DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
-# Quality filtering keywords
+# Enhanced quality filtering keywords
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com",
     "newser.com", "www.newser.com",
     "khodrobank.com", "www.khodrobank.com",
-    "خودرو بانک"  # Arabic version of khodrobank
+    "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©",  # Arabic version of khodrobank
+    # Add problematic social accounts if needed
+    "spam-reddit-user.reddit.com"
 }
 
 QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
     "yahoo.com/finance", "finance.yahoo.com",
-    "businesswire.com", "prnewswire.com", "globenewswire.com"
+    "businesswire.com", "prnewswire.com", "globenewswire.com",
+    # Social media domains
+    "reddit.com", "www.reddit.com",
+    "twitter.com", "x.com", "nitter.net",
+    "stocktwits.com"
 }
 
 # ------------------------------------------------------------------------------
-# Stock configurations
+# Extended Stock configurations with social media feeds
 # ------------------------------------------------------------------------------
 STOCK_FEEDS = {
     "TLN": [
+        # Traditional News Sources
         {
             "url": "https://news.google.com/rss/search?q=Talen+Energy+OR+TLN+when:7d&hl=en-US&gl=US&ceid=US:en",
             "name": "Google News: Talen Energy (7 days)"
@@ -98,6 +105,44 @@ STOCK_FEEDS = {
         {
             "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001903816&type=&dateb=&count=40&output=atom",
             "name": "SEC EDGAR: Talen Energy Filings"
+        },
+        
+        # Reddit RSS Feeds
+        {
+            "url": "https://www.reddit.com/r/investing/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "name": "Reddit r/investing: Talen Energy"
+        },
+        {
+            "url": "https://www.reddit.com/r/stocks/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "name": "Reddit r/stocks: Talen Energy"
+        },
+        {
+            "url": "https://www.reddit.com/r/SecurityAnalysis/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "name": "Reddit r/SecurityAnalysis: Talen Energy"
+        },
+        {
+            "url": "https://www.reddit.com/r/ValueInvesting/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "name": "Reddit r/ValueInvesting: Talen Energy"
+        },
+        {
+            "url": "https://www.reddit.com/r/energy/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
+            "name": "Reddit r/energy: Talen Energy"
+        },
+        
+        # Twitter/X RSS (using nitter.net as RSS proxy)
+        {
+            "url": "https://nitter.net/TalenEnergy/rss",
+            "name": "Twitter: @TalenEnergy Official"
+        },
+        {
+            "url": "https://nitter.net/search/rss?q=Talen+Energy+OR+%24TLN&f=tweets",
+            "name": "Twitter Search: Talen Energy mentions"
+        },
+        
+        # StockTwits RSS (if available)
+        {
+            "url": "https://stocktwits.com/symbol/TLN.rss",
+            "name": "StockTwits: TLN"
         }
     ]
 }
@@ -160,11 +205,21 @@ def list_active_feeds() -> List[Dict]:
         return list(cur.fetchall())
 
 # ------------------------------------------------------------------------------
-# URL Resolution and Quality Scoring
+# Enhanced URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
 def resolve_google_news_url(url: str) -> Tuple[str, str]:
-    """Resolve Google News redirect URL to actual article URL"""
+    """Enhanced URL resolution for all platforms including social media"""
     try:
+        # Handle Twitter/X redirects
+        if "t.co/" in url:
+            response = requests.get(url, timeout=10, allow_redirects=True)
+            return response.url, urlparse(response.url).netloc
+        
+        # Handle Reddit share URLs
+        if "redd.it/" in url:
+            response = requests.get(url, timeout=10, allow_redirects=True)
+            return response.url, urlparse(response.url).netloc
+        
         # Extract actual URL from Google News redirect
         if "news.google.com" in url and "/articles/" in url:
             response = requests.get(url, timeout=10, allow_redirects=True)
@@ -193,26 +248,52 @@ def calculate_quality_score(
     ticker: str,
     description: str = ""
 ) -> float:
-    """Calculate article quality score (0-100)"""
+    """Enhanced quality scoring for social media content"""
     score = 50.0  # Base score
     
     # Check for spam in title, domain, or description
     spam_indicators = [
-        "marketbeat", "newser", "khodrobank", "خودرو بانک"
+        "marketbeat", "newser", "khodrobank", "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©",
+        "crypto scam", "get rich quick", "pump and dump"
     ]
     
     content_to_check = f"{title} {domain} {description}".lower()
     if any(spam in content_to_check for spam in spam_indicators):
         return 0.0  # Auto-reject spam content
     
-    # Domain quality
+    # Domain quality scoring
     if domain in SPAM_DOMAINS:
         return 0.0  # Auto-reject spam domains
     
-    if domain in QUALITY_DOMAINS:
+    # Traditional financial media gets highest scores
+    if domain in ["reuters.com", "bloomberg.com", "wsj.com", "ft.com"]:
+        score += 35
+    elif domain in ["cnbc.com", "marketwatch.com", "barrons.com"]:
         score += 30
-    elif any(q in domain for q in ["reuters", "bloomberg", "wsj", "ft", "cnbc"]):
+    elif "yahoo.com" in domain and "finance" in domain:
         score += 25
+    
+    # Social media scoring - more conservative
+    elif "reddit.com" in domain:
+        score += 15
+        # Boost for quality subreddits
+        if any(sub in domain for sub in ["/r/investing", "/r/SecurityAnalysis", "/r/ValueInvesting"]):
+            score += 10
+        # Penalty for meme subreddits
+        if any(sub in domain for sub in ["/r/wallstreetbets", "/r/memes"]):
+            score -= 20
+    
+    elif domain in ["twitter.com", "x.com", "nitter.net"]:
+        score += 10
+        # Boost for official company accounts
+        if "official" in (title or "").lower() or any(word in (title or "").lower() for word in ["announces", "reports", "filed"]):
+            score += 15
+    
+    elif "stocktwits.com" in domain:
+        score += 12
+        # Boost for detailed analysis posts
+        if len(description or "") > 100:
+            score += 8
     
     # Title relevance
     if ticker in (title or "").upper():
@@ -220,16 +301,28 @@ def calculate_quality_score(
     if "Talen" in (title or ""):
         score += 10
     
-    # Negative signals
-    spam_keywords = ["sponsored", "advertisement", "promoted", "partner content"]
-    if any(kw in (title or "").lower() for kw in spam_keywords):
-        score -= 30
+    # Social media specific signals
+    if any(signal in (title or "").lower() for signal in ["breaking", "alert", "update", "earnings", "sec filing"]):
+        score += 15
     
-    # Length and substance
+    # Negative signals
+    spam_keywords = [
+        "sponsored", "advertisement", "promoted", "partner content",
+        "to the moon", "diamond hands", "ape", "hodl", "yolo"
+    ]
+    if any(kw in (title or "").lower() for kw in spam_keywords):
+        score -= 25
+    
+    # Length and substance (adjusted for social media)
     if len(title or "") > 20:
         score += 5
     if len(description or "") > 50:
         score += 5
+    
+    # Social media posts tend to be shorter, so don't penalize too much
+    if "reddit.com" in domain or "twitter.com" in domain or "stocktwits.com" in domain:
+        if len(title or "") < 10:
+            score -= 10  # Very short posts are often low quality
     
     return max(0, min(100, score))
 
@@ -367,7 +460,8 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
             suffixes_to_remove = [
                 " - MarketBeat", " - Newser", " - TipRanks", " - MSN", 
                 " - The Daily Item", " - MarketScreener", " - Seeking Alpha",
-                " - simplywall.st", " - Investopedia", " - خودرو بانک"
+                " - simplywall.st", " - Investopedia", " - Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©",
+                " - Reddit", " - Twitter", " - StockTwits"
             ]
             
             for suffix in suffixes_to_remove:
@@ -378,7 +472,6 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
             title = re.sub(r'\s*\$TLN\s*-?\s*', ' ', title)
             title = re.sub(r'\s+', ' ', title).strip()
             
-            # Get first sentence from description and clean it up
             # Clean up domain name for consistency
             domain = article["domain"] or "unknown"
             domain = domain.replace("www.", "")
@@ -389,6 +482,7 @@ def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: in
         <hr style='margin-top: 20px; border: 1px solid #e0e0e0;'>
         <p style='color: #999; font-size: 10px;'>
             This digest includes articles with quality scores above 20. Higher scores indicate more reputable sources and relevant content.
+            Social media sources (Reddit, Twitter, StockTwits) are included with adjusted quality scoring.
         </p>
         </body></html>
     """)
@@ -629,59 +723,3 @@ def get_stats(request: Request):
     """Get system statistics"""
     require_admin(request)
     ensure_schema()
-    
-    with db() as conn, conn.cursor() as cur:
-        # Article stats
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_articles,
-                COUNT(DISTINCT ticker) as tickers,
-                COUNT(DISTINCT domain) as domains,
-                AVG(quality_score) as avg_quality,
-                MAX(published_at) as latest_article
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-        """)
-        stats = dict(cur.fetchone())
-        
-        # Top domains
-        cur.execute("""
-            SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-            GROUP BY domain
-            ORDER BY count DESC
-            LIMIT 10
-        """)
-        stats["top_domains"] = list(cur.fetchall())
-        
-        # Articles by ticker
-        cur.execute("""
-            SELECT ticker, COUNT(*) as count, AVG(quality_score) as avg_score
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-            GROUP BY ticker
-            ORDER BY ticker
-        """)
-        stats["by_ticker"] = list(cur.fetchall())
-    
-    return stats
-
-@APP.post("/admin/reset-digest-flags")
-def reset_digest_flags(request: Request):
-    """Reset sent_in_digest flags for testing"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
-        count = cur.rowcount
-    
-    return {"status": "reset", "articles_reset": count}
-
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "10000"))
-    uvicorn.run(APP, host="0.0.0.0", port=port)

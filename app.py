@@ -690,7 +690,7 @@ def reset_digest_flags(request: Request):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "10000"))
-    uvicorn.run(APP, host="0.0.0.0", port=port), '', desc)
+    uvicorn.run(APP, host="0.0.0.0", port=port)
                     
                     # Extract first meaningful sentence
                     sentences = re.split(r'\.(?:\s|$)', desc)

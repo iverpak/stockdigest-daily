@@ -417,17 +417,41 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
             # Insert to database
             try:
                 with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO found_url (
-                            url, resolved_url, url_hash, title, description,
-                            feed_id, ticker, domain, quality_score, published_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (url_hash) DO NOTHING
-                        RETURNING id
-                    """, (
-                        original_url, resolved_url, url_hash, title, description,
-                        feed["id"], feed["ticker"], domain, quality_score, published_at
-                    ))
+                    # First try with ON CONFLICT
+                    try:
+                        cur.execute("""
+                            INSERT INTO found_url (
+                                url, resolved_url, url_hash, title, description,
+                                feed_id, ticker, domain, quality_score, published_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (url_hash) DO NOTHING
+                            RETURNING id
+                        """, (
+                            original_url, resolved_url, url_hash, title, description,
+                            feed["id"], feed["ticker"], domain, quality_score, published_at
+                        ))
+                    except Exception as e:
+                        # If constraint doesn't exist, try without ON CONFLICT
+                        if "no unique or exclusion constraint" in str(e):
+                            # Check if already exists
+                            cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
+                            if cur.fetchone():
+                                stats["duplicates"] += 1
+                                continue
+                            
+                            # Insert without ON CONFLICT
+                            cur.execute("""
+                                INSERT INTO found_url (
+                                    url, resolved_url, url_hash, title, description,
+                                    feed_id, ticker, domain, quality_score, published_at
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                RETURNING id
+                            """, (
+                                original_url, resolved_url, url_hash, title, description,
+                                feed["id"], feed["ticker"], domain, quality_score, published_at
+                            ))
+                        else:
+                            raise
                     
                     if cur.fetchone():
                         stats["inserted"] += 1

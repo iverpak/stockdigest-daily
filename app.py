@@ -2,21 +2,25 @@ import os
 import sys
 import time
 import logging
+import hashlib
+import re
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from contextlib import contextmanager
+from urllib.parse import urlparse, parse_qs, unquote
 
 import psycopg
 from psycopg.rows import dict_row
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 import feedparser
+import requests
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-
+from bs4 import BeautifulSoup
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -24,23 +28,23 @@ from email.mime.text import MIMEText
 LOG = logging.getLogger("quantbrief")
 LOG.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter("%(levelname)s:quantbrief:%(message)s"))
+handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 if not LOG.handlers:
     LOG.addHandler(handler)
 
 # ------------------------------------------------------------------------------
 # Config / Environment
 # ------------------------------------------------------------------------------
-APP = FastAPI()
-app = APP  # <- add this line so uvicorn app:app can find it
+APP = FastAPI(title="Quantbrief Stock News Aggregator")
+app = APP  # for uvicorn
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    LOG.warning("DATABASE_URL is not set; the app will not be able to use Postgres.")
+    LOG.warning("DATABASE_URL not set - database features disabled")
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
-# Prefer Mailgun envs if present; otherwise fall back to generic SMTP_*
+# Email configuration
 def _first(*vals) -> Optional[str]:
     for v in vals:
         if v:
@@ -53,153 +57,118 @@ SMTP_USERNAME = _first(os.getenv("MAILGUN_SMTP_LOGIN"), os.getenv("SMTP_USERNAME
 SMTP_PASSWORD = _first(os.getenv("MAILGUN_SMTP_PASSWORD"), os.getenv("SMTP_PASSWORD"))
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False", "")
 
-EMAIL_FROM = _first(os.getenv("MAILGUN_FROM"), os.getenv("EMAIL_FROM"), os.getenv("SMTP_FROM"), SMTP_USERNAME)
+EMAIL_FROM = _first(os.getenv("MAILGUN_FROM"), os.getenv("EMAIL_FROM"), SMTP_USERNAME)
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
-DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "30"))
+DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))  # Keep 3 months for summaries
+
+# Quality filtering keywords
+SPAM_DOMAINS = {
+    "marketbeat.com", "www.marketbeat.com",
+    "newser.com", "www.newser.com",
+    "zacks.com", "seekingalpha.com/market-currents",
+    "benzinga.com/pressreleases", "accesswire.com"
+}
+
+QUALITY_DOMAINS = {
+    "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
+    "barrons.com", "cnbc.com", "marketwatch.com",
+    "yahoo.com/finance", "finance.yahoo.com",
+    "businesswire.com", "prnewswire.com", "globenewswire.com"
+}
 
 # ------------------------------------------------------------------------------
-# Permanent schema / migrations (idempotent)
+# Database Schema
 # ------------------------------------------------------------------------------
 SCHEMA_SQL = r"""
--- 1) Create tables if missing
+-- Feed sources table
 CREATE TABLE IF NOT EXISTS source_feed (
   id           BIGSERIAL PRIMARY KEY,
-  url          TEXT NOT NULL,
+  url          TEXT NOT NULL UNIQUE,
   name         TEXT,
+  ticker       TEXT,
   active       BOOLEAN NOT NULL DEFAULT TRUE,
-  retain_days  INTEGER,
+  retain_days  INTEGER DEFAULT 90,
   language     TEXT NOT NULL DEFAULT 'en',
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Found articles table with quality scoring
 CREATE TABLE IF NOT EXISTS found_url (
-  id           BIGSERIAL PRIMARY KEY,
-  url          TEXT NOT NULL,
-  title        TEXT,
-  feed_id      BIGINT REFERENCES source_feed(id) ON DELETE CASCADE,
-  language     TEXT NOT NULL DEFAULT 'en',
-  published_at TIMESTAMPTZ,
-  found_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              BIGSERIAL PRIMARY KEY,
+  url             TEXT NOT NULL,
+  resolved_url    TEXT,
+  url_hash        TEXT NOT NULL,
+  title           TEXT,
+  description     TEXT,
+  feed_id         BIGINT REFERENCES source_feed(id) ON DELETE CASCADE,
+  ticker          TEXT,
+  language        TEXT NOT NULL DEFAULT 'en',
+  quality_score   FLOAT DEFAULT 0,
+  is_duplicate    BOOLEAN DEFAULT FALSE,
+  domain          TEXT,
+  published_at    TIMESTAMPTZ,
+  found_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_in_digest  BOOLEAN DEFAULT FALSE
 );
 
--- 2) Ensure columns that older deploys may lack (safe add)
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                 WHERE table_name='source_feed' AND column_name='created_at') THEN
-    ALTER TABLE source_feed ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                 WHERE table_name='source_feed' AND column_name='updated_at') THEN
-    ALTER TABLE source_feed ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                 WHERE table_name='source_feed' AND column_name='active') THEN
-    ALTER TABLE source_feed ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                 WHERE table_name='source_feed' AND column_name='retain_days') THEN
-    ALTER TABLE source_feed ADD COLUMN retain_days INTEGER;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                 WHERE table_name='source_feed' AND column_name='language') THEN
-    ALTER TABLE source_feed ADD COLUMN language TEXT;
-    UPDATE source_feed SET language='en' WHERE language IS NULL;
-    ALTER TABLE source_feed ALTER COLUMN language SET DEFAULT 'en';
-    ALTER TABLE source_feed ALTER COLUMN language SET NOT NULL;
-  END IF;
+-- Unique constraint on URL hash to prevent duplicates
+CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
+CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
+CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
 
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                 WHERE table_name='found_url' AND column_name='found_at') THEN
-    ALTER TABLE found_url ADD COLUMN found_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                 WHERE table_name='found_url' AND column_name='language') THEN
-    ALTER TABLE found_url ADD COLUMN language TEXT NOT NULL DEFAULT 'en';
-  END IF;
-END $$;
+-- Digest history
+CREATE TABLE IF NOT EXISTS digest_history (
+  id           BIGSERIAL PRIMARY KEY,
+  sent_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  recipient    TEXT,
+  article_count INTEGER,
+  tickers      TEXT[]
+);
 
--- 3) Unique constraints / indexes (guarded)
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_source_feed_url') THEN
-    ALTER TABLE source_feed ADD CONSTRAINT uq_source_feed_url UNIQUE (url);
-  END IF;
-END $$;
-
--- Optionally dedupe found_url by URL across feeds. If you prefer per-feed duplicates,
--- comment out this block.
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_found_url_url') THEN
-    ALTER TABLE found_url ADD CONSTRAINT uq_found_url_url UNIQUE (url);
-  END IF;
-END $$;
-
--- Helpful index for pruning / digest queries
-CREATE INDEX IF NOT EXISTS idx_found_url_feed_foundat ON found_url(feed_id, found_at DESC);
-CREATE INDEX IF NOT EXISTS idx_found_url_pub ON found_url(published_at DESC);
-
--- 4) updated_at trigger on source_feed (idempotent)
-CREATE OR REPLACE FUNCTION set_source_feed_updated_at()
+-- Update trigger for source_feed
+CREATE OR REPLACE FUNCTION update_modified_column()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.updated_at := NOW();
-  RETURN NEW;
+    NEW.updated_at = NOW();
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'tr_source_feed_updated_at'
-  ) THEN
-    CREATE TRIGGER tr_source_feed_updated_at
-    BEFORE UPDATE ON source_feed
-    FOR EACH ROW EXECUTE FUNCTION set_source_feed_updated_at();
-  END IF;
-END $$;
+DROP TRIGGER IF EXISTS update_source_feed_modtime ON source_feed;
+CREATE TRIGGER update_source_feed_modtime
+BEFORE UPDATE ON source_feed
+FOR EACH ROW EXECUTE FUNCTION update_modified_column();
 """
 
 # ------------------------------------------------------------------------------
-# Seed feeds (idempotent via upsert)
+# Stock configurations
 # ------------------------------------------------------------------------------
-SEED_FEEDS = [
-    {
-        "url": "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN+-site:newser.com+-site:marketbeat.com+when:3d&hl=en-US&gl=US&ceid=US:en",
-        "name": "Google News: Talen Energy OR TLN (3d, filtered)",
-        "language": "en",
-        "retain_days": 30,
-    },
-    {
-        "url": "https://news.google.com/rss/search?q=(Talen+Energy)+OR+TLN&hl=en-US&gl=US&ceid=US:en",
-        "name": "Google News: Talen Energy OR TLN (all)",
-        "language": "en",
-        "retain_days": 30,
-    },
-    {
-        "url": "https://news.google.com/rss/search?q=%28Talen+Energy%29+OR+TLN+-site%3Anewser.com+-site%3Awww.marketbeat.com+-site%3Amarketbeat.com+-site%3Awww.newser.com+when%3A7d&hl=en-US&gl=US&ceid=US%3Aen",
-        "name": "Google News: Talen Energy OR TLN (7d, filtered A)",
-        "language": "en",
-        "retain_days": 30,
-    },
-    {
-        "url": "https://news.google.com/rss/search?q=%28%28Talen+Energy%29+OR+TLN%29+-site%3Anewser.com+-site%3Awww.newser.com+-site%3Amarketbeat.com+-site%3Awww.marketbeat.com+when%3A7d&hl=en-US&gl=US&ceid=US%3Aen",
-        "name": "Google News: ((Talen Energy) OR TLN) (7d, filtered B)",
-        "language": "en",
-        "retain_days": 30,
-    },
-]
+STOCK_FEEDS = {
+    "TLN": [
+        {
+            "url": "https://news.google.com/rss/search?q=Talen+Energy+OR+TLN+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": "Google News: Talen Energy (7 days)"
+        },
+        {
+            "url": "https://finance.yahoo.com/rss/headline?s=TLN",
+            "name": "Yahoo Finance: TLN Headlines"
+        },
+        {
+            "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=TLN&region=US&lang=en-US",
+            "name": "Yahoo Finance: TLN News"
+        }
+    ]
+}
 
 # ------------------------------------------------------------------------------
-# DB helpers
+# Database helpers
 # ------------------------------------------------------------------------------
 @contextmanager
-def db() -> psycopg.Connection:
+def db():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL not configured")
     conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
@@ -212,325 +181,488 @@ def db() -> psycopg.Connection:
     finally:
         conn.close()
 
-
-def exec_sql_batch(conn: psycopg.Connection, sql: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute(sql)
-
-
-def ensure_schema() -> None:
+def ensure_schema():
+    """Initialize database schema"""
     with db() as conn:
-        exec_sql_batch(conn, SCHEMA_SQL)
+        with conn.cursor() as cur:
+            cur.execute(SCHEMA_SQL)
 
-
-def upsert_feed(
-    url: str,
-    name: Optional[str] = None,
-    language: Optional[str] = None,
-    retain_days: Optional[int] = None,
-    active: Optional[bool] = True,
-) -> int:
-    ensure_schema()
+def upsert_feed(url: str, name: str, ticker: str, retain_days: int = 90) -> int:
+    """Insert or update a feed source"""
     with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO source_feed (url, name, language, retain_days, active)
-            VALUES (%s, COALESCE(%s,''), COALESCE(NULLIF(%s,''),'en'), %s, COALESCE(%s, TRUE))
+        cur.execute("""
+            INSERT INTO source_feed (url, name, ticker, retain_days, active)
+            VALUES (%s, %s, %s, %s, TRUE)
             ON CONFLICT (url) DO UPDATE
-              SET name = EXCLUDED.name,
-                  language = EXCLUDED.language,
-                  retain_days = EXCLUDED.retain_days,
-                  active = EXCLUDED.active
+            SET name = EXCLUDED.name,
+                ticker = EXCLUDED.ticker,
+                retain_days = EXCLUDED.retain_days,
+                active = TRUE
             RETURNING id;
-            """,
-            (url, name, language, retain_days, active),
-        )
-        row = cur.fetchone()
-        return int(row["id"])
+        """, (url, name, ticker, retain_days))
+        return cur.fetchone()["id"]
 
-
-def list_active_feeds() -> List[Dict[str, Any]]:
-    ensure_schema()
+def list_active_feeds() -> List[Dict]:
+    """Get all active feeds"""
     with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, url,
-                   COALESCE(NULLIF(name,''), url) AS name,
-                   COALESCE(NULLIF(language,''), 'en') AS language,
-                   retain_days,
-                   active
+        cur.execute("""
+            SELECT id, url, name, ticker, retain_days
             FROM source_feed
-            WHERE active IS TRUE
-            ORDER BY id ASC
-            """
-        )
+            WHERE active = TRUE
+            ORDER BY ticker, id
+        """)
         return list(cur.fetchall())
 
+# ------------------------------------------------------------------------------
+# URL Resolution and Quality Scoring
+# ------------------------------------------------------------------------------
+def resolve_google_news_url(url: str) -> Tuple[str, str]:
+    """Resolve Google News redirect URL to actual article URL"""
+    try:
+        # Extract actual URL from Google News redirect
+        if "news.google.com" in url and "/articles/" in url:
+            response = requests.get(url, timeout=10, allow_redirects=True)
+            return response.url, urlparse(response.url).netloc
+        
+        # For direct Google redirect URLs
+        if "google.com/url" in url:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            if 'url' in params:
+                actual_url = params['url'][0]
+                return actual_url, urlparse(actual_url).netloc
+            elif 'q' in params:
+                actual_url = params['q'][0]
+                return actual_url, urlparse(actual_url).netloc
+        
+        # Already a direct URL
+        return url, urlparse(url).netloc
+    except Exception as e:
+        LOG.warning(f"Failed to resolve URL {url}: {e}")
+        return url, urlparse(url).netloc
 
-def insert_found_url(
-    url: str,
-    title: Optional[str],
-    feed_id: int,
-    language: Optional[str],
-    published_at: Optional[datetime],
-    found_at: Optional[datetime] = None,
-) -> None:
-    ensure_schema()
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO found_url (url, title, feed_id, language, published_at, found_at)
-            VALUES (%s, %s, %s, COALESCE(NULLIF(%s,''),'en'), %s, COALESCE(%s, NOW()))
-            ON CONFLICT (url) DO NOTHING;
-            """,
-            (url, title, feed_id, language, published_at, found_at),
-        )
+def calculate_quality_score(
+    title: str, 
+    domain: str, 
+    ticker: str,
+    description: str = ""
+) -> float:
+    """Calculate article quality score (0-100)"""
+    score = 50.0  # Base score
+    
+    # Domain quality
+    if domain in SPAM_DOMAINS:
+        return 0.0  # Auto-reject spam domains
+    
+    if domain in QUALITY_DOMAINS:
+        score += 30
+    elif any(q in domain for q in ["reuters", "bloomberg", "wsj", "ft", "cnbc"]):
+        score += 25
+    
+    # Title relevance
+    if ticker in (title or "").upper():
+        score += 10
+    if "Talen" in (title or ""):
+        score += 10
+    
+    # Negative signals
+    spam_keywords = ["sponsored", "advertisement", "promoted", "partner content"]
+    if any(kw in (title or "").lower() for kw in spam_keywords):
+        score -= 30
+    
+    # Length and substance
+    if len(title or "") > 20:
+        score += 5
+    if len(description or "") > 50:
+        score += 5
+    
+    return max(0, min(100, score))
 
-
-def prune_old_found_urls(default_days: int = DEFAULT_RETAIN_DAYS) -> int:
-    """
-    Deletes rows older than per-feed retain_days; if NULL/0, falls back to `default_days`.
-    Returns number of rows deleted.
-    """
-    ensure_schema()
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            WITH del AS (
-              DELETE FROM found_url f
-              USING source_feed s
-              WHERE s.id = f.feed_id
-                AND f.found_at < NOW() - make_interval(days => CASE
-                      WHEN s.retain_days IS NULL OR s.retain_days = 0 THEN %s
-                      ELSE s.retain_days
-                    END)
-              RETURNING f.id
-            )
-            SELECT COUNT(*) AS deleted FROM del;
-            """,
-            (default_days,),
-        )
-        row = cur.fetchone()
-        deleted = int(row["deleted"]) if row and row["deleted"] is not None else 0
-        LOG.warning("prune_old_found_urls: deleted=%d, default_days=%d, has_retain_days=exists", deleted, default_days)
-        return deleted
-
+def get_url_hash(url: str) -> str:
+    """Generate hash for URL deduplication"""
+    # Normalize URL for better dedup
+    url_lower = url.lower()
+    # Remove common tracking parameters
+    url_clean = re.sub(r'[?&](utm_|ref=|source=).*', '', url_lower)
+    return hashlib.md5(url_clean.encode()).hexdigest()
 
 # ------------------------------------------------------------------------------
-# Feed ingest
+# Feed Processing
 # ------------------------------------------------------------------------------
 def parse_datetime(candidate) -> Optional[datetime]:
-    """Try to normalize times from feedparser entries."""
+    """Parse various datetime formats"""
     if not candidate:
         return None
     if isinstance(candidate, datetime):
-        if candidate.tzinfo is None:
-            return candidate.replace(tzinfo=timezone.utc)
-        return candidate
-    # feedparser provides .published_parsed / .updated_parsed as time.struct_time
-    try:
-        if hasattr(candidate, "tm_year"):
+        return candidate if candidate.tzinfo else candidate.replace(tzinfo=timezone.utc)
+    
+    # Handle struct_time from feedparser
+    if hasattr(candidate, "tm_year"):
+        try:
             return datetime.fromtimestamp(time.mktime(candidate), tz=timezone.utc)
-    except Exception:
-        pass
-    # Fallback: try to parse string-ish
+        except:
+            pass
+    
+    # Try ISO format
     try:
         return datetime.fromisoformat(str(candidate))
-    except Exception:
+    except:
         return None
 
-
-def ingest_one_feed(feed: Dict[str, Any]) -> int:
-    """
-    Parse RSS and insert new links. Returns number of inserted (attempted) rows.
-    """
-    fid = int(feed["id"])
-    furl = feed["url"]
-    flang = feed.get("language") or "en"
-
-    parsed = feedparser.parse(furl)
-    LOG.info("parsed feed: %s", furl)
-    LOG.info("feed entries: %d", len(parsed.entries))
-
-    inserted = 0
-    for e in parsed.entries:
-        url = getattr(e, "link", None)
-        if not url:
-            continue
-        title = getattr(e, "title", None)
-
-        published_at = None
-        # Prefer published, then updated
-        if hasattr(e, "published_parsed") and e.published_parsed:
-            published_at = parse_datetime(e.published_parsed)
-        elif hasattr(e, "updated_parsed") and e.updated_parsed:
-            published_at = parse_datetime(e.updated_parsed)
-
-        try:
-            insert_found_url(
-                url=url,
-                title=title,
-                feed_id=fid,
-                language=flang,
-                published_at=published_at,
+def ingest_feed(feed: Dict) -> Dict[str, int]:
+    """Process a single feed and store articles"""
+    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0}
+    
+    try:
+        parsed = feedparser.parse(feed["url"])
+        LOG.info(f"Processing {feed['name']}: {len(parsed.entries)} entries")
+        
+        for entry in parsed.entries:
+            stats["processed"] += 1
+            
+            # Get URL and resolve if needed
+            original_url = getattr(entry, "link", None)
+            if not original_url:
+                continue
+            
+            resolved_url, domain = resolve_google_news_url(original_url)
+            url_hash = get_url_hash(resolved_url)
+            
+            # Extract metadata
+            title = getattr(entry, "title", "")
+            description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
+            
+            # Calculate quality score
+            quality_score = calculate_quality_score(
+                title, domain, feed["ticker"], description
             )
-            inserted += 1
-        except Exception as ex:
-            # Ignore duplicates etc., but log
-            LOG.warning("ingest error for url %s: %s", url, str(ex))
-
-    return inserted
-
+            
+            if quality_score < 20:
+                stats["low_quality"] += 1
+                LOG.debug(f"Skipping low quality: {title} (score: {quality_score})")
+                continue
+            
+            # Get publication date
+            published_at = None
+            if hasattr(entry, "published_parsed"):
+                published_at = parse_datetime(entry.published_parsed)
+            elif hasattr(entry, "updated_parsed"):
+                published_at = parse_datetime(entry.updated_parsed)
+            
+            # Insert to database
+            try:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO found_url (
+                            url, resolved_url, url_hash, title, description,
+                            feed_id, ticker, domain, quality_score, published_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (url_hash) DO NOTHING
+                        RETURNING id
+                    """, (
+                        original_url, resolved_url, url_hash, title, description,
+                        feed["id"], feed["ticker"], domain, quality_score, published_at
+                    ))
+                    
+                    if cur.fetchone():
+                        stats["inserted"] += 1
+                    else:
+                        stats["duplicates"] += 1
+                        
+            except Exception as e:
+                LOG.error(f"Database insert error: {e}")
+                
+    except Exception as e:
+        LOG.error(f"Feed processing error for {feed['name']}: {e}")
+    
+    return stats
 
 # ------------------------------------------------------------------------------
-# Email
+# Email Digest
 # ------------------------------------------------------------------------------
-def smtp_ready() -> bool:
-    return bool(SMTP_HOST and SMTP_PORT and SMTP_USERNAME and SMTP_PASSWORD and EMAIL_FROM and DIGEST_TO)
+def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: int) -> str:
+    """Build HTML email digest"""
+    html = [
+        "<html><body style='font-family: Arial, sans-serif;'>",
+        f"<h2>📊 Quantbrief Stock Digest - Last {period_days} Days</h2>",
+        f"<p style='color: #666;'>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>"
+    ]
+    
+    for ticker, articles in articles_by_ticker.items():
+        html.append(f"<h3 style='color: #1a73e8; border-bottom: 2px solid #1a73e8;'>{ticker}</h3>")
+        
+        if not articles:
+            html.append("<p style='color: #999;'>No quality articles found for this period.</p>")
+            continue
+        
+        html.append("<ul style='list-style-type: none; padding: 0;'>")
+        
+        for article in articles[:20]:  # Limit to top 20 per stock
+            quality_indicator = "🟢" if article["quality_score"] > 70 else "🟡" if article["quality_score"] > 40 else "🔴"
+            pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
+            
+            html.append(f"""
+                <li style='margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-left: 3px solid #1a73e8;'>
+                    {quality_indicator} <a href='{article["resolved_url"] or article["url"]}' 
+                        style='color: #1a73e8; text-decoration: none; font-weight: bold;'>
+                        {article["title"]}</a>
+                    <br>
+                    <span style='color: #666; font-size: 0.9em;'>
+                        {article["domain"]} • {pub_date} • Score: {article["quality_score"]:.0f}
+                    </span>
+                    {f'<br><span style="color: #888; font-size: 0.85em;">{article["description"][:150]}...</span>' 
+                     if article.get("description") else ""}
+                </li>
+            """)
+        
+        html.append("</ul>")
+    
+    html.append("""
+        <hr style='margin-top: 30px; border: 1px solid #e0e0e0;'>
+        <p style='color: #999; font-size: 0.85em;'>
+            This digest includes articles with quality scores above 20. 
+            Higher scores indicate more reputable sources and relevant content.
+        </p>
+        </body></html>
+    """)
+    
+    return "".join(html)
 
-
-def send_email(subject: str, html: str, text: Optional[str] = None, to: Optional[str] = None) -> None:
-    if not smtp_ready():
-        LOG.error("SMTP not configured. Need SMTP_HOST and EMAIL_FROM/SMTP_FROM.")
-        return
-
-    recipients = [to or DIGEST_TO]
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(recipients)
-
-    if not text:
-        # Simple plaintext fallback
-        text = "Your email client does not support HTML. See HTML version."
-    msg.attach(MIMEText(text, "plain", "utf-8"))
-    msg.attach(MIMEText(html, "html", "utf-8"))
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
-        if SMTP_STARTTLS:
-            s.starttls()
-        s.login(SMTP_USERNAME, SMTP_PASSWORD)
-        s.sendmail(EMAIL_FROM, recipients, msg.as_string())
-
-
-def build_digest_html(rows: List[Dict[str, Any]], minutes: int) -> str:
-    h = []
-    h.append(f"<h2>Quantbrief digest — last {minutes} minutes</h2>")
-    h.append("<ul>")
-    for r in rows:
-        title = r.get("title") or r.get("url")
-        published = r.get("published_at")
-        pub_s = published.strftime("%Y-%m-%d %H:%M") if isinstance(published, datetime) else ""
-        h.append(f"<li><a href='{r['url']}'>{title}</a>"
-                 f" <small>({pub_s})</small>"
-                 f" <em>— {r.get('feed_name','')}</em></li>")
-    h.append("</ul>")
-    return "\n".join(h)
-
-
-def fetch_recent_items(minutes: int) -> List[Dict[str, Any]]:
-    ensure_schema()
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+def fetch_digest_articles(hours: int = 24) -> Dict[str, List[Dict]]:
+    """Fetch articles for digest grouped by ticker"""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    
     with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT f.url, f.title, f.published_at, sf.name AS feed_name
+        cur.execute("""
+            SELECT 
+                f.url, f.resolved_url, f.title, f.description,
+                f.ticker, f.domain, f.quality_score, f.published_at,
+                f.found_at
             FROM found_url f
-            JOIN source_feed sf ON sf.id = f.feed_id
             WHERE f.found_at >= %s
-            ORDER BY COALESCE(f.published_at, f.found_at) DESC
-            """,
-            (cutoff,),
-        )
-        return list(cur.fetchall())
+                AND f.quality_score >= 20
+                AND NOT f.sent_in_digest
+            ORDER BY f.ticker, f.quality_score DESC, f.published_at DESC
+        """, (cutoff,))
+        
+        articles_by_ticker = {}
+        for row in cur.fetchall():
+            ticker = row["ticker"] or "UNKNOWN"
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = []
+            articles_by_ticker[ticker].append(dict(row))
+        
+        # Mark articles as sent
+        cur.execute("""
+            UPDATE found_url
+            SET sent_in_digest = TRUE
+            WHERE found_at >= %s AND quality_score >= 20
+        """, (cutoff,))
+        
+    return articles_by_ticker
 
+def send_email(subject: str, html_body: str, to: str = None):
+    """Send email via SMTP"""
+    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
+        LOG.error("SMTP not fully configured")
+        return False
+    
+    try:
+        recipient = to or DIGEST_TO
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = recipient
+        
+        # Add plain text version
+        text_body = "Please view this email in HTML format."
+        msg.attach(MIMEText(text_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+        
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            if SMTP_STARTTLS:
+                server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
+        
+        LOG.info(f"Email sent to {recipient}")
+        return True
+        
+    except Exception as e:
+        LOG.error(f"Email send failed: {e}")
+        return False
 
 # ------------------------------------------------------------------------------
-# Auth helper
+# Auth Middleware
 # ------------------------------------------------------------------------------
-def require_admin(req: Request) -> None:
-    token = req.headers.get("x-admin-token")
-    if not token:
-        auth = req.headers.get("Authorization", "")
-        if auth.lower().startswith("bearer "):
-            token = auth.split(None, 1)[1]
+def require_admin(request: Request):
+    """Verify admin token"""
+    token = request.headers.get("x-admin-token") or \
+            request.headers.get("authorization", "").replace("Bearer ", "")
+    
     if token != ADMIN_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-
 # ------------------------------------------------------------------------------
-# Routes
+# API Routes
 # ------------------------------------------------------------------------------
 @APP.get("/")
 def root():
-    return PlainTextResponse("Quantbrief Daily — OK")
-
+    return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
 
 @APP.post("/admin/init")
 def admin_init(request: Request):
+    """Initialize database and seed feeds"""
     require_admin(request)
     ensure_schema()
-    # Seed feeds
-    ids = []
-    for f in SEED_FEEDS:
-        fid = upsert_feed(
-            url=f["url"],
-            name=f.get("name"),
-            language=f.get("language", "en"),
-            retain_days=f.get("retain_days"),
-            active=True,
-        )
-        ids.append(fid)
-    LOG.info("Schema ensured; seed feeds upserted.")
-    return JSONResponse({"ok": True, "feed_ids": ids})
-
+    
+    results = []
+    for ticker, feeds in STOCK_FEEDS.items():
+        for feed_config in feeds:
+            feed_id = upsert_feed(
+                url=feed_config["url"],
+                name=feed_config["name"],
+                ticker=ticker,
+                retain_days=DEFAULT_RETAIN_DAYS
+            )
+            results.append({"ticker": ticker, "feed": feed_config["name"], "id": feed_id})
+    
+    return {"status": "initialized", "feeds": results}
 
 @APP.post("/cron/ingest")
-def cron_ingest(request: Request, minutes: Optional[int] = 60 * 24 * 7):
+def cron_ingest(
+    request: Request,
+    minutes: int = Query(default=1440, description="Time window in minutes")
+):
+    """Ingest articles from all feeds"""
     require_admin(request)
     ensure_schema()
+    
     feeds = list_active_feeds()
-
-    total_inserted = 0
-    for f in feeds:
-        try:
-            total_inserted += ingest_one_feed(f)
-        except Exception as ex:
-            LOG.warning("ingest error for feed %s: %s", f.get("url"), str(ex))
-
-    deleted = prune_old_found_urls(DEFAULT_RETAIN_DAYS)
-    LOG.info("pruned %d old found_url rows (older than %d days)", deleted, DEFAULT_RETAIN_DAYS)
-    return JSONResponse({"ok": True, "inserted": total_inserted, "deleted": deleted})
-
+    total_stats = {"feeds_processed": 0, "total_inserted": 0, "total_duplicates": 0}
+    
+    for feed in feeds:
+        stats = ingest_feed(feed)
+        total_stats["feeds_processed"] += 1
+        total_stats["total_inserted"] += stats["inserted"]
+        total_stats["total_duplicates"] += stats["duplicates"]
+        
+        LOG.info(f"Feed {feed['name']}: {stats}")
+    
+    # Clean old articles
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM found_url WHERE found_at < %s", (cutoff,))
+        deleted = cur.rowcount
+    
+    total_stats["old_articles_deleted"] = deleted
+    return total_stats
 
 @APP.post("/cron/digest")
-def cron_digest(request: Request, minutes: Optional[int] = 60 * 24 * 7):
+def cron_digest(
+    request: Request,
+    minutes: int = Query(default=1440, description="Time window in minutes")
+):
+    """Generate and send email digest"""
     require_admin(request)
     ensure_schema()
-    rows = fetch_recent_items(minutes or 1440)
-    html = build_digest_html(rows, minutes or 1440)
-    send_email(
-        subject=f"Quantbrief digest — last {minutes} minutes ({len(rows)} items)",
-        html=html,
-        text=None,
-        to=DIGEST_TO,
-    )
-    return JSONResponse({"ok": True, "items": len(rows), "to": DIGEST_TO})
-
+    
+    hours = minutes / 60
+    days = int(hours / 24) if hours >= 24 else 0
+    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
+    
+    articles = fetch_digest_articles(hours=hours)
+    total_articles = sum(len(arts) for arts in articles.values())
+    
+    if total_articles == 0:
+        return {
+            "status": "no_articles",
+            "message": f"No new quality articles found in the last {period_label}"
+        }
+    
+    html = build_digest_html(articles, days if days > 0 else 1)
+    
+    subject = f"Stock Digest: {', '.join(articles.keys())} - {total_articles} articles"
+    success = send_email(subject, html)
+    
+    # Log digest history
+    if success:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO digest_history (recipient, article_count, tickers)
+                VALUES (%s, %s, %s)
+            """, (DIGEST_TO, total_articles, list(articles.keys())))
+    
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles.keys()),
+        "recipient": DIGEST_TO
+    }
 
 @APP.post("/admin/test-email")
-def admin_test_email(request: Request):
+def test_email(request: Request):
+    """Send test email"""
+    require_admin(request)
+    
+    test_html = """
+    <html><body>
+        <h2>Quantbrief Test Email</h2>
+        <p>Your email configuration is working correctly!</p>
+        <p>Time: {}</p>
+    </body></html>
+    """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    success = send_email("Quantbrief Test Email", test_html)
+    return {"status": "sent" if success else "failed", "recipient": DIGEST_TO}
+
+@APP.get("/admin/stats")
+def get_stats(request: Request):
+    """Get system statistics"""
     require_admin(request)
     ensure_schema()
-    send_email("Quantbrief test email", "<p>Hello from Quantbrief!</p>", "Hello from Quantbrief!", to=DIGEST_TO)
-    return JSONResponse({"ok": True, "to": DIGEST_TO})
-
+    
+    with db() as conn, conn.cursor() as cur:
+        # Article stats
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_articles,
+                COUNT(DISTINCT ticker) as tickers,
+                COUNT(DISTINCT domain) as domains,
+                AVG(quality_score) as avg_quality,
+                MAX(published_at) as latest_article
+            FROM found_url
+            WHERE found_at > NOW() - INTERVAL '7 days'
+        """)
+        stats = dict(cur.fetchone())
+        
+        # Top domains
+        cur.execute("""
+            SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
+            FROM found_url
+            WHERE found_at > NOW() - INTERVAL '7 days'
+            GROUP BY domain
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        stats["top_domains"] = list(cur.fetchall())
+        
+        # Articles by ticker
+        cur.execute("""
+            SELECT ticker, COUNT(*) as count, AVG(quality_score) as avg_score
+            FROM found_url
+            WHERE found_at > NOW() - INTERVAL '7 days'
+            GROUP BY ticker
+            ORDER BY ticker
+        """)
+        stats["by_ticker"] = list(cur.fetchall())
+    
+    return stats
 
 # ------------------------------------------------------------------------------
-# Local run (optional)
+# Main
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-
     port = int(os.getenv("PORT", "10000"))
     uvicorn.run(APP, host="0.0.0.0", port=port)

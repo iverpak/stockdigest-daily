@@ -328,47 +328,40 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
 # Email Digest
 # ------------------------------------------------------------------------------
 def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: int) -> str:
-    """Build HTML email digest"""
+    """Build HTML email digest - compact format"""
     html = [
-        "<html><body style='font-family: Arial, sans-serif;'>",
-        f"<h2>📊 Quantbrief Stock Digest - Last {period_days} Days</h2>",
-        f"<p style='color: #666;'>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>"
+        "<html><body style='font-family: Arial, sans-serif; font-size: 12px;'>",
+        f"<h2>Quantbrief Stock Digest - Last {period_days} Days</h2>",
+        f"<p style='color: #666; margin-bottom: 20px;'>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>"
     ]
     
     for ticker, articles in articles_by_ticker.items():
-        html.append(f"<h3 style='color: #1a73e8; border-bottom: 2px solid #1a73e8;'>{ticker}</h3>")
+        html.append(f"<h3 style='color: #1a73e8; margin: 15px 0 5px 0;'>{ticker}</h3>")
         
         if not articles:
             html.append("<p style='color: #999;'>No quality articles found for this period.</p>")
             continue
         
-        html.append("<ul style='list-style-type: none; padding: 0;'>")
-        
         for article in articles[:100]:  # Limit to top 100 per stock
-            quality_indicator = "🟢" if article["quality_score"] > 70 else "🟡" if article["quality_score"] > 40 else "🔴"
             pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
             
-            html.append(f"""
-                <li style='margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-left: 3px solid #1a73e8;'>
-                    {quality_indicator} <a href='{article["resolved_url"] or article["url"]}' 
-                        style='color: #1a73e8; text-decoration: none; font-weight: bold;'>
-                        {article["title"]}</a>
-                    <br>
-                    <span style='color: #666; font-size: 0.9em;'>
-                        {article["domain"]} • {pub_date} • Score: {article["quality_score"]:.0f}
-                    </span>
-                    {f'<br><span style="color: #888; font-size: 0.85em;">{article["description"][:150]}...</span>' 
-                     if article.get("description") else ""}
-                </li>
-            """)
-        
-        html.append("</ul>")
+            # Get first sentence from description
+            first_sentence = ""
+            if article.get("description"):
+                desc = article["description"].strip()
+                # Find first sentence (look for . followed by space or end of string)
+                sentences = re.split(r'\.(?:\s|$)', desc)
+                if sentences and sentences[0]:
+                    first_sentence = sentences[0].strip()
+                    if not first_sentence.endswith('.'):
+                        first_sentence += '.'
+            
+            html.append(f"""<div style='margin: 2px 0;'><a href='{article["resolved_url"] or article["url"]}' style='color: #1a73e8; text-decoration: none; font-weight: bold;'>{article["title"]}</a> | {article["domain"]} | {pub_date} | Score: {article["quality_score"]:.0f} | {first_sentence}</div>""")
     
     html.append("""
-        <hr style='margin-top: 30px; border: 1px solid #e0e0e0;'>
-        <p style='color: #999; font-size: 0.85em;'>
-            This digest includes articles with quality scores above 20. 
-            Higher scores indicate more reputable sources and relevant content.
+        <hr style='margin-top: 20px; border: 1px solid #e0e0e0;'>
+        <p style='color: #999; font-size: 10px;'>
+            This digest includes articles with quality scores above 20. Higher scores indicate more reputable sources and relevant content.
         </p>
         </body></html>
     """)

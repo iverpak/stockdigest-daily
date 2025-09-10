@@ -61,7 +61,7 @@ EMAIL_FROM = _first(os.getenv("MAILGUN_FROM"), os.getenv("EMAIL_FROM"), SMTP_USE
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
-DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))  # Keep 3 months for summaries
+DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
 # Quality filtering keywords
 SPAM_DOMAINS = {
@@ -114,143 +114,18 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """Initialize database schema"""
-    schema_sql = """
-    -- Create tables if they don't exist
-    CREATE TABLE IF NOT EXISTS source_feed (
-      id           BIGSERIAL PRIMARY KEY,
-      url          TEXT NOT NULL,
-      name         TEXT,
-      active       BOOLEAN NOT NULL DEFAULT TRUE,
-      retain_days  INTEGER DEFAULT 90,
-      language     TEXT NOT NULL DEFAULT 'en',
-      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS found_url (
-      id           BIGSERIAL PRIMARY KEY,
-      url          TEXT NOT NULL,
-      title        TEXT,
-      feed_id      BIGINT,
-      language     TEXT NOT NULL DEFAULT 'en',
-      published_at TIMESTAMPTZ,
-      found_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS digest_history (
-      id            BIGSERIAL PRIMARY KEY,
-      sent_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      recipient     TEXT,
-      article_count INTEGER,
-      tickers       TEXT[]
-    );
-
-    -- Add columns with proper error handling
-    DO $$
-    BEGIN
-        -- Add ticker to source_feed
-        BEGIN
-            ALTER TABLE source_feed ADD COLUMN ticker TEXT;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        -- Add columns to found_url
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN resolved_url TEXT;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN url_hash TEXT;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN description TEXT;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN ticker TEXT;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN quality_score FLOAT DEFAULT 0;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN is_duplicate BOOLEAN DEFAULT FALSE;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN domain TEXT;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        BEGIN
-            ALTER TABLE found_url ADD COLUMN sent_in_digest BOOLEAN DEFAULT FALSE;
-        EXCEPTION
-            WHEN duplicate_column THEN NULL;
-        END;
-        
-        -- Add unique constraint on source_feed.url
-        BEGIN
-            ALTER TABLE source_feed ADD CONSTRAINT uq_source_feed_url UNIQUE (url);
-        EXCEPTION
-            WHEN duplicate_table THEN NULL;
-            WHEN duplicate_object THEN NULL;
-        END;
-        
-        -- Add foreign key if missing
-        BEGIN
-            ALTER TABLE found_url ADD CONSTRAINT found_url_feed_id_fkey 
-            FOREIGN KEY (feed_id) REFERENCES source_feed(id) ON DELETE CASCADE;
-        EXCEPTION
-            WHEN duplicate_table THEN NULL;
-            WHEN duplicate_object THEN NULL;
-        END;
-    END $$;
-
-    -- Create indexes (will skip if they already exist)
-    CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
-    CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
-    CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_found_url_feed_foundat ON found_url(feed_id, found_at DESC);
-
-    -- Update trigger
-    CREATE OR REPLACE FUNCTION update_modified_column()
-    RETURNS TRIGGER AS $$
-    BEGIN
-        NEW.updated_at = NOW();
-        RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-
-    DROP TRIGGER IF EXISTS update_source_feed_modtime ON source_feed;
-    CREATE TRIGGER update_source_feed_modtime
-    BEFORE UPDATE ON source_feed
-    FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-
-    -- Populate url_hash for existing records (where it's NULL)
-    UPDATE found_url SET url_hash = MD5(LOWER(url)) WHERE url_hash IS NULL;
-    """
-    
+    """Initialize database schema - works with clean schema"""
+    # This function now does minimal work since we have a clean schema
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute(schema_sql)
+            # Just ensure the essential indexes exist
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
+                CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_feed_foundat ON found_url(feed_id, found_at DESC);
+            """)
 
 def upsert_feed(url: str, name: str, ticker: str, retain_days: int = 90) -> int:
     """Insert or update a feed source"""
@@ -448,6 +323,7 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
     return stats
+
 # ------------------------------------------------------------------------------
 # Email Digest
 # ------------------------------------------------------------------------------
@@ -671,6 +547,48 @@ def cron_digest(
         "recipient": DIGEST_TO
     }
 
+@APP.post("/admin/force-digest")
+def force_digest(request: Request):
+    """Force digest with existing articles (for testing)"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Get recent articles regardless of sent_in_digest status
+        cur.execute("""
+            SELECT 
+                f.url, f.resolved_url, f.title, f.description,
+                f.ticker, f.domain, f.quality_score, f.published_at,
+                f.found_at
+            FROM found_url f
+            WHERE f.found_at >= NOW() - INTERVAL '7 days'
+                AND f.quality_score >= 20
+            ORDER BY f.ticker, f.quality_score DESC, f.published_at DESC
+            LIMIT 50
+        """)
+        
+        articles_by_ticker = {}
+        for row in cur.fetchall():
+            ticker = row["ticker"] or "UNKNOWN"
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = []
+            articles_by_ticker[ticker].append(dict(row))
+    
+    total_articles = sum(len(arts) for arts in articles_by_ticker.values())
+    
+    if total_articles == 0:
+        return {"status": "no_articles", "message": "No articles found in database"}
+    
+    html = build_digest_html(articles_by_ticker, 7)
+    subject = f"TEST Stock Digest: {', '.join(articles_by_ticker.keys())} - {total_articles} articles"
+    success = send_email(subject, html)
+    
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "recipient": DIGEST_TO
+    }
+
 @APP.post("/admin/test-email")
 def test_email(request: Request):
     """Send test email"""
@@ -729,6 +647,17 @@ def get_stats(request: Request):
         stats["by_ticker"] = list(cur.fetchall())
     
     return stats
+
+@APP.post("/admin/reset-digest-flags")
+def reset_digest_flags(request: Request):
+    """Reset sent_in_digest flags for testing"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
+        count = cur.rowcount
+    
+    return {"status": "reset", "articles_reset": count}
 
 # ------------------------------------------------------------------------------
 # Main

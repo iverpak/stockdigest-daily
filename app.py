@@ -393,8 +393,8 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
             resolved_url, domain = resolve_google_news_url(original_url)
             url_hash = get_url_hash(resolved_url)
             
-            # Extract metadata
-            title = getattr(entry, "title", "")
+            # Extract metadata with proper defaults
+            title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
             # Calculate quality score
@@ -414,58 +414,40 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
             elif hasattr(entry, "updated_parsed"):
                 published_at = parse_datetime(entry.updated_parsed)
             
-            # Insert to database
+            # Insert to database - each insert gets its own transaction
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # First try with ON CONFLICT
-                    try:
-                        cur.execute("""
-                            INSERT INTO found_url (
-                                url, resolved_url, url_hash, title, description,
-                                feed_id, ticker, domain, quality_score, published_at
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (url_hash) DO NOTHING
-                            RETURNING id
-                        """, (
-                            original_url, resolved_url, url_hash, title, description,
-                            feed["id"], feed["ticker"], domain, quality_score, published_at
-                        ))
-                    except Exception as e:
-                        # If constraint doesn't exist, try without ON CONFLICT
-                        if "no unique or exclusion constraint" in str(e):
-                            # Check if already exists
-                            cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
-                            if cur.fetchone():
-                                stats["duplicates"] += 1
-                                continue
-                            
-                            # Insert without ON CONFLICT
-                            cur.execute("""
-                                INSERT INTO found_url (
-                                    url, resolved_url, url_hash, title, description,
-                                    feed_id, ticker, domain, quality_score, published_at
-                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                RETURNING id
-                            """, (
-                                original_url, resolved_url, url_hash, title, description,
-                                feed["id"], feed["ticker"], domain, quality_score, published_at
-                            ))
-                        else:
-                            raise
+                    # Check if already exists first
+                    cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
+                    if cur.fetchone():
+                        stats["duplicates"] += 1
+                        continue
+                    
+                    # Insert new record
+                    cur.execute("""
+                        INSERT INTO found_url (
+                            url, resolved_url, url_hash, title, description,
+                            feed_id, ticker, domain, quality_score, published_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (
+                        original_url, resolved_url, url_hash, title, description,
+                        feed["id"], feed["ticker"], domain, quality_score, published_at
+                    ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                    else:
-                        stats["duplicates"] += 1
+                        LOG.debug(f"Inserted: {title[:50]}...")
                         
             except Exception as e:
-                LOG.error(f"Database insert error: {e}")
+                LOG.error(f"Database insert error for '{title[:50]}': {e}")
+                # Continue processing other articles instead of failing completely
+                continue
                 
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
     return stats
-
 # ------------------------------------------------------------------------------
 # Email Digest
 # ------------------------------------------------------------------------------

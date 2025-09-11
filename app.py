@@ -170,13 +170,7 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
             
         content = result['choices'][0]['message']['content']
         
-        # Clean up the response and parse JSON
-        content = content.strip()
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
-        
+        # With JSON mode, content should be valid JSON without fences
         metadata = json.loads(content)
         
         LOG.info(f"Successfully generated AI metadata for {ticker}")

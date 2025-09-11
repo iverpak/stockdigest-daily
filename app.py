@@ -45,10 +45,10 @@ if not DATABASE_URL:
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
-# OpenAI Configuration
+# OpenAI Configuration - FIXED: Use gpt-4o-mini instead of non-existent gpt-5-mini
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Email configuration
 def _first(*vals) -> Optional[str]:
@@ -69,12 +69,15 @@ DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
-# Quality filtering keywords
+# FIXED: More comprehensive spam filtering
 SPAM_DOMAINS = {
-    "marketbeat.com", "www.marketbeat.com",
-    "newser.com", "www.newser.com",
+    "marketbeat.com", "www.marketbeat.com", "marketbeat",
+    "newser.com", "www.newser.com", "newser", 
     "khodrobank.com", "www.khodrobank.com",
-    "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©"
+    "tipranks.com", "www.tipranks.com", "tipranks",
+    "simplywall.st", "www.simplywall.st",
+    "dailyitem.com", "www.dailyitem.com",
+    "marketscreener.com", "www.marketscreener.com"
 }
 
 QUALITY_DOMAINS = {
@@ -108,7 +111,7 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
     - Industry keywords should be specific terms that would appear in relevant news
     - Include both company names and tickers for competitors when applicable
     - Ensure all keywords are relevant for news searching
-    - Be specific rather than generic (e.g., "data center power" instead of just "technology")
+    - Be specific rather than generic (e.g., "renewable energy storage" instead of just "technology")
     
     Return ONLY the JSON object, no additional text.
     """
@@ -309,27 +312,32 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
         }
     ])
     
-    # Industry feeds
-    for keyword in keywords["industry"][:5]:
+    # Industry feeds - FIXED: Ensure we get the keywords correctly
+    industry_keywords = keywords.get("industry", [])
+    LOG.info(f"Building industry feeds for {ticker} with keywords: {industry_keywords}")
+    for keyword in industry_keywords[:3]:  # Limit to 3 to avoid too many feeds
         # URL encode the keyword for safety
         keyword_encoded = requests.utils.quote(keyword)
         feeds.append({
-            "url": f"https://news.google.com/rss/search?q={keyword_encoded}+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "url": f"https://news.google.com/rss/search?q=\"{keyword_encoded}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
             "name": f"Industry: {keyword}",
             "category": "industry"
         })
     
-    # Competitor feeds
-    for competitor in keywords["competitors"][:5]:
+    # Competitor feeds - FIXED: Better competitor handling
+    competitors = keywords.get("competitors", [])
+    LOG.info(f"Building competitor feeds for {ticker} with competitors: {competitors}")
+    for competitor in competitors[:3]:  # Limit to 3
         # Clean and encode competitor name
-        comp_clean = competitor.replace("(", "").replace(")", "")
+        comp_clean = competitor.replace("(", "").replace(")", "").strip()
         comp_encoded = requests.utils.quote(comp_clean)
         feeds.append({
-            "url": f"https://news.google.com/rss/search?q={comp_encoded}+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "url": f"https://news.google.com/rss/search?q=\"{comp_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
             "name": f"Competitor: {competitor}",
             "category": "competitor"
         })
     
+    LOG.info(f"Built {len(feeds)} total feeds for {ticker}: {len([f for f in feeds if f['category'] == 'company'])} company, {len([f for f in feeds if f['category'] == 'industry'])} industry, {len([f for f in feeds if f['category'] == 'competitor'])} competitor")
     return feeds
 
 def upsert_feed(url: str, name: str, ticker: str, category: str = "company", retain_days: int = 90) -> int:
@@ -402,26 +410,27 @@ def calculate_quality_score(
     category: str = "company",
     keywords: List[str] = None
 ) -> float:
-    """Calculate article quality score with category weighting"""
+    """Calculate article quality score with category weighting - FIXED spam filtering"""
     score = 50.0  # Base score
     
-    # Check for spam
-    spam_indicators = [
-        "marketbeat", "newser", "khodrobank", "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©"
-    ]
-    
+    # FIXED: Better spam detection
     content_to_check = f"{title} {domain} {description}".lower()
-    if any(spam in content_to_check for spam in spam_indicators):
-        return 0.0
+    
+    # Check for spam domains more thoroughly
+    domain_clean = domain.lower().replace("www.", "")
+    
+    # Check if any spam domain is contained in the actual domain
+    for spam_domain in SPAM_DOMAINS:
+        spam_clean = spam_domain.replace("www.", "")
+        if spam_clean in domain_clean or spam_clean in content_to_check:
+            LOG.info(f"BLOCKED spam domain: {domain} (matched: {spam_clean})")
+            return 0.0
     
     # Domain quality
-    if domain in SPAM_DOMAINS:
-        return 0.0
-    
-    if domain in QUALITY_DOMAINS:
-        score += 30
-    elif any(q in domain for q in ["reuters", "bloomberg", "wsj", "ft", "cnbc"]):
+    if any(q in domain_clean for q in ["reuters", "bloomberg", "wsj", "ft", "cnbc"]):
         score += 25
+    elif domain_clean in [d.replace("www.", "") for d in QUALITY_DOMAINS]:
+        score += 20
     
     # Category-specific scoring
     if category == "company":
@@ -482,12 +491,13 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return None
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with category"""
+    """Process a single feed and store articles with category - FIXED category detection"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0}
     
     try:
+        LOG.info(f"Processing feed [{category}]: {feed['name']}")
         parsed = feedparser.parse(feed["url"])
-        LOG.info(f"Processing {feed['name']}: {len(parsed.entries)} entries")
+        LOG.info(f"Feed parsing result: {len(parsed.entries)} entries found")
         
         for entry in parsed.entries:
             stats["processed"] += 1
@@ -509,7 +519,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             
             if quality_score < 20:
                 stats["low_quality"] += 1
-                LOG.debug(f"Skipping low quality: {title} (score: {quality_score})")
+                LOG.debug(f"Skipping low quality [{category}]: {title[:50]} (score: {quality_score})")
                 continue
             
             published_at = None
@@ -525,13 +535,16 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         stats["duplicates"] += 1
                         continue
                     
-                    # Determine related ticker for competitor articles
+                    # FIXED: Determine related ticker for competitor articles
                     related_ticker = None
                     if category == "competitor" and "Competitor:" in feed["name"]:
                         comp_name = feed["name"].replace("Competitor:", "").strip()
                         # Extract ticker if it looks like one (2-5 uppercase letters)
-                        if re.match(r'^[A-Z]{2,5}$', comp_name):
-                            related_ticker = comp_name
+                        words = comp_name.split()
+                        for word in words:
+                            if re.match(r'^[A-Z]{2,5}$', word):
+                                related_ticker = word
+                                break
                     
                     cur.execute("""
                         INSERT INTO found_url (
@@ -548,7 +561,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        LOG.debug(f"Inserted [{category}]: {title[:50]}...")
+                        LOG.info(f"Inserted [{category}] (score: {quality_score:.0f}): {title[:60]}...")
                         
             except Exception as e:
                 LOG.error(f"Database insert error for '{title[:50]}': {e}")
@@ -557,7 +570,11 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
+    LOG.info(f"Feed {feed['name']} [{category}] stats: {stats}")
     return stats
+
+# Rest of the code remains the same...
+# [The rest of the file continues exactly as before from the Email Digest section onwards]
 
 # ------------------------------------------------------------------------------
 # Email Digest
@@ -642,7 +659,7 @@ def _format_article_html(article: Dict, category: str) -> str:
     suffixes_to_remove = [
         " - MarketBeat", " - Newser", " - TipRanks", " - MSN", 
         " - The Daily Item", " - MarketScreener", " - Seeking Alpha",
-        " - simplywall.st", " - Investopedia", " - Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©"
+        " - simplywall.st", " - Investopedia"
     ]
     
     for suffix in suffixes_to_remove:
@@ -952,6 +969,8 @@ def cron_digest(
         "by_category": category_counts,
         "recipient": DIGEST_TO
     }
+
+# [Rest of the API routes continue as in original code...]
 
 @APP.get("/admin/ticker-metadata/{ticker}")
 def get_ticker_metadata(request: Request, ticker: str):

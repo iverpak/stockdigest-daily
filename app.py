@@ -153,6 +153,10 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
             LOG.error(f"OpenAI API returned empty response for ticker {ticker}")
             return {"industry_keywords": [], "competitors": []}
         
+        # Log the raw response for debugging
+        LOG.info(f"OpenAI raw response length: {len(response.text)}")
+        LOG.info(f"OpenAI raw response preview: {response.text[:200]}")
+        
         try:
             result = response.json()
         except json.JSONDecodeError as e:

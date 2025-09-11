@@ -45,7 +45,7 @@ if not DATABASE_URL:
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
-# OpenAI Configuration - FIXED: Use gpt-4o-mini with correct parameter
+# OpenAI Configuration - FIXED: Remove temperature parameter for gpt-4o-mini
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -129,14 +129,13 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
             "Content-Type": "application/json"
         }
         
-        # FIXED: Use max_completion_tokens instead of max_tokens
+        # FIXED: Remove temperature parameter for gpt-4o-mini and use max_completion_tokens
         data = {
             "model": OPENAI_MODEL,
             "messages": [
                 {"role": "system", "content": "You are a financial analyst expert who provides accurate information about companies and their industries."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.3,
             "max_completion_tokens": 500
         }
         
@@ -167,6 +166,7 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
         
         metadata = json.loads(content)
         
+        LOG.info(f"Successfully generated AI metadata for {ticker}")
         return {
             "industry_keywords": metadata.get("industry_keywords", [])[:5],
             "competitors": metadata.get("competitors", [])[:5]
@@ -856,6 +856,30 @@ def require_admin(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 # ------------------------------------------------------------------------------
+# Pydantic Models for Request Bodies - FIXED: Add models for endpoints
+# ------------------------------------------------------------------------------
+class CleanFeedsRequest(BaseModel):
+    tickers: Optional[List[str]] = None
+
+class ResetDigestRequest(BaseModel):
+    tickers: Optional[List[str]] = None
+
+class ForceDigestRequest(BaseModel):
+    tickers: Optional[List[str]] = None
+
+class RegenerateMetadataRequest(BaseModel):
+    ticker: str
+
+class InitRequest(BaseModel):
+    tickers: List[str]
+    force_refresh: bool = False
+
+class CLIRequest(BaseModel):
+    action: str
+    tickers: List[str]
+    minutes: int = 1440
+
+# ------------------------------------------------------------------------------
 # API Routes
 # ------------------------------------------------------------------------------
 @APP.get("/")
@@ -863,11 +887,7 @@ def root():
     return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
 
 @APP.post("/admin/init")
-def admin_init(
-    request: Request,
-    tickers: List[str] = Body(..., description="List of tickers to initialize"),
-    force_refresh: bool = Body(default=False, description="Force regeneration of AI keywords")
-):
+def admin_init(request: Request, body: InitRequest):
     """Initialize database and generate AI-powered feeds for specified tickers"""
     require_admin(request)
     ensure_schema()
@@ -876,11 +896,11 @@ def admin_init(
         return {"status": "error", "message": "OpenAI API key not configured"}
     
     results = []
-    for ticker in tickers:
+    for ticker in body.tickers:
         LOG.info(f"Initializing ticker: {ticker}")
         
         # Get or generate metadata with AI
-        keywords = get_or_create_ticker_metadata(ticker, force_refresh=force_refresh)
+        keywords = get_or_create_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
         # Build feed URLs for all categories
         feeds = build_feed_urls(ticker, keywords)
@@ -904,7 +924,7 @@ def admin_init(
     
     return {
         "status": "initialized",
-        "tickers": tickers,
+        "tickers": body.tickers,
         "feeds": results,
         "message": f"Generated {len(results)} feeds using AI-powered keyword analysis"
     }
@@ -1087,12 +1107,9 @@ def cron_digest(
         "recipient": DIGEST_TO
     }
 
-# ADDED: New endpoint to clean old feeds
+# FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/clean-feeds")
-def clean_old_feeds(
-    request: Request,
-    tickers: List[str] = Body(default=None, description="Clean feeds for specific tickers only")
-):
+def clean_old_feeds(request: Request, body: CleanFeedsRequest):
     """Clean old Reddit/Twitter feeds from database"""
     require_admin(request)
     
@@ -1104,24 +1121,23 @@ def clean_old_feeds(
             "r/ValueInvesting", "r/energy", "@TalenEnergy"
         ]
         
-        if tickers:
+        total_deleted = 0
+        if body.tickers:
             for pattern in cleanup_patterns:
                 cur.execute("""
                     DELETE FROM source_feed 
                     WHERE name LIKE %s AND ticker = ANY(%s)
-                """, (f"%{pattern}%", tickers))
+                """, (f"%{pattern}%", body.tickers))
+                total_deleted += cur.rowcount
         else:
             for pattern in cleanup_patterns:
                 cur.execute("""
                     DELETE FROM source_feed 
                     WHERE name LIKE %s
                 """, (f"%{pattern}%",))
-        
-        # Get total deleted count
-        cur.execute("SELECT COUNT(*) as total FROM source_feed WHERE active = FALSE")
-        total_deleted = cur.fetchone()["total"] if cur.fetchone() else 0
+                total_deleted += cur.rowcount
     
-    return {"status": "cleaned", "feeds_deleted": total_deleted, "tickers": tickers or "all"}
+    return {"status": "cleaned", "feeds_deleted": total_deleted, "tickers": body.tickers or "all"}
 
 @APP.get("/admin/ticker-metadata/{ticker}")
 def get_ticker_metadata(request: Request, ticker: str):
@@ -1140,33 +1156,30 @@ def get_ticker_metadata(request: Request, ticker: str):
     return {"ticker": ticker, "message": "No metadata found. Use /admin/init to generate."}
 
 @APP.post("/admin/regenerate-metadata")
-def regenerate_metadata(
-    request: Request,
-    ticker: str = Body(..., description="Ticker to regenerate metadata for")
-):
+def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
     """Force regeneration of AI metadata for a ticker"""
     require_admin(request)
     
     if not OPENAI_API_KEY:
         return {"status": "error", "message": "OpenAI API key not configured"}
     
-    LOG.info(f"Regenerating metadata for {ticker}")
-    metadata = get_or_create_ticker_metadata(ticker, force_refresh=True)
+    LOG.info(f"Regenerating metadata for {body.ticker}")
+    metadata = get_or_create_ticker_metadata(body.ticker, force_refresh=True)
     
     # Rebuild feeds
-    feeds = build_feed_urls(ticker, metadata)
+    feeds = build_feed_urls(body.ticker, metadata)
     for feed_config in feeds:
         upsert_feed(
             url=feed_config["url"],
             name=feed_config["name"],
-            ticker=ticker,
+            ticker=body.ticker,
             category=feed_config.get("category", "company"),
             retain_days=DEFAULT_RETAIN_DAYS
         )
     
     return {
         "status": "regenerated",
-        "ticker": ticker,
+        "ticker": body.ticker,
         "metadata": metadata,
         "feeds_created": len(feeds)
     }
@@ -1189,16 +1202,13 @@ def list_ticker_configs(request: Request):
     return {"configs": configs, "total": len(configs)}
 
 @APP.post("/admin/force-digest")
-def force_digest(
-    request: Request,
-    tickers: List[str] = Body(default=None, description="Specific tickers for digest")
-):
+def force_digest(request: Request, body: ForceDigestRequest):
     """Force digest with existing articles (for testing)"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
         # Build query based on whether tickers are specified
-        if tickers:
+        if body.tickers:
             cur.execute("""
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
@@ -1209,7 +1219,7 @@ def force_digest(
                     AND f.quality_score >= 15
                     AND f.ticker = ANY(%s)
                 ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
-            """, (datetime.now(timezone.utc) - timedelta(days=7), tickers))
+            """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
         else:
             cur.execute("""
                 SELECT 
@@ -1390,42 +1400,35 @@ def get_stats(
     
     return stats
 
+# FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/reset-digest-flags")
-def reset_digest_flags(
-    request: Request,
-    tickers: List[str] = Body(default=None, description="Reset flags for specific tickers only")
-):
+def reset_digest_flags(request: Request, body: ResetDigestRequest):
     """Reset sent_in_digest flags for testing"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
-        if tickers:
-            cur.execute("UPDATE found_url SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (tickers,))
+        if body.tickers:
+            cur.execute("UPDATE found_url SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (body.tickers,))
         else:
             cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
         count = cur.rowcount
     
-    return {"status": "reset", "articles_reset": count, "tickers": tickers or "all"}
+    return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands
 # ------------------------------------------------------------------------------
 @APP.post("/cli/run")
-def cli_run(
-    request: Request,
-    action: str = Body(..., description="Action to perform: ingest, digest, or both"),
-    tickers: List[str] = Body(..., description="List of tickers to process"),
-    minutes: int = Body(default=1440, description="Time window in minutes")
-):
+def cli_run(request: Request, body: CLIRequest):
     """CLI endpoint for PowerShell commands"""
     require_admin(request)
     
     results = {}
     
-    if action in ["ingest", "both"]:
+    if body.action in ["ingest", "both"]:
         # Initialize feeds if needed
         ensure_schema()
-        for ticker in tickers:
+        for ticker in body.tickers:
             metadata = get_or_create_ticker_metadata(ticker)
             feeds = build_feed_urls(ticker, metadata)
             for feed_config in feeds:
@@ -1438,12 +1441,12 @@ def cli_run(
                 )
         
         # Run ingestion
-        ingest_result = cron_ingest(request, minutes, tickers)
+        ingest_result = cron_ingest(request, body.minutes, body.tickers)
         results["ingest"] = ingest_result
     
-    if action in ["digest", "both"]:
+    if body.action in ["digest", "both"]:
         # Run digest
-        digest_result = cron_digest(request, minutes, tickers)
+        digest_result = cron_digest(request, body.minutes, body.tickers)
         results["digest"] = digest_result
     
     return results

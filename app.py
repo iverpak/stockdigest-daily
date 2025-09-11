@@ -169,9 +169,15 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
             return {"industry_keywords": [], "competitors": []}
             
         content = result['choices'][0]['message']['content']
+        LOG.info(f"OpenAI content: {content}")
         
         # With JSON mode, content should be valid JSON without fences
-        metadata = json.loads(content)
+        try:
+            metadata = json.loads(content)
+        except json.JSONDecodeError as e:
+            LOG.error(f"Failed to parse content as JSON for ticker {ticker}: {e}")
+            LOG.error(f"Content: {content}")
+            return {"industry_keywords": [], "competitors": []}
         
         LOG.info(f"Successfully generated AI metadata for {ticker}")
         return {
@@ -743,18 +749,35 @@ def _format_article_html(article: Dict, category: str) -> str:
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
+    # Determine URL to link to (Yahoo Finance source if available, otherwise resolved URL)
+    link_url = article["resolved_url"] or article["url"]
+    if article.get("yahoo_source_url"):
+        link_url = article["yahoo_source_url"]
+    
+    # Determine domain name to display
     domain = article["domain"] or "unknown"
     domain = domain.replace("www.", "")
+    
+    # Use Yahoo Finance source name if available
+    if article.get("yahoo_source_name"):
+        domain = article["yahoo_source_name"]
     
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
     related = f" | Related: {article.get('related_ticker', '')}" if article.get('related_ticker') else ""
     
+    # Add source styling for original source names
+    source_style = ""
+    if article.get("yahoo_source_name"):
+        source_style = "style='display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; margin-left: 5px;'"
+    
+    source_display = f"<span {source_style}>{domain}</span>" if article.get("yahoo_source_name") else domain
+    
     return f"""
     <div class='article {category}'>
-        <a href='{article["resolved_url"] or article["url"]}' target='_blank'>{title}</a>
-        <span class='meta'> | {domain} | {pub_date}</span>
+        <a href='{link_url}' target='_blank'>{title}</a>
+        <span class='meta'> | {source_display} | {pub_date}</span>
         <span class='score {score_class}'>Score: {score:.0f}</span>
         {related}
     </div>

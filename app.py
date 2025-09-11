@@ -141,20 +141,29 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
         
-        # Better error handling
-        if response.status_code == 400:
-            LOG.error(f"OpenAI API 400 error: {response.text}")
-            # Return fallback for TLN
-            if ticker == "TLN":
-                return {
-                    "industry_keywords": ["renewable energy", "data center power", "nuclear energy", "grid stability", "energy storage"],
-                    "competitors": ["Vistra Corp", "VST", "NRG Energy", "NRG", "Constellation Energy"]
-                }
+        # Enhanced error handling with detailed logging
+        LOG.info(f"OpenAI API response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            LOG.error(f"OpenAI API {response.status_code} error: {response.text}")
             return {"industry_keywords": [], "competitors": []}
             
-        response.raise_for_status()
+        # Check if response is empty
+        if not response.text.strip():
+            LOG.error(f"OpenAI API returned empty response for ticker {ticker}")
+            return {"industry_keywords": [], "competitors": []}
         
-        result = response.json()
+        try:
+            result = response.json()
+        except json.JSONDecodeError as e:
+            LOG.error(f"OpenAI API returned invalid JSON for ticker {ticker}: {e}")
+            LOG.error(f"Raw response: {response.text[:500]}")
+            return {"industry_keywords": [], "competitors": []}
+        
+        if 'choices' not in result or not result['choices']:
+            LOG.error(f"OpenAI API response missing choices for ticker {ticker}: {result}")
+            return {"industry_keywords": [], "competitors": []}
+            
         content = result['choices'][0]['message']['content']
         
         # Clean up the response and parse JSON

@@ -4,14 +4,15 @@ import time
 import logging
 import hashlib
 import re
+import json
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Set
 from contextlib import contextmanager
 from urllib.parse import urlparse, parse_qs, unquote
 
 import psycopg
 from psycopg.rows import dict_row
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException, Query, Body
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
@@ -26,7 +27,7 @@ from bs4 import BeautifulSoup
 # Logging
 # ------------------------------------------------------------------------------
 LOG = logging.getLogger("quantbrief")
-LOG.setLevel(logging.DEBUG)
+LOG.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 if not LOG.handlers:
@@ -43,6 +44,11 @@ if not DATABASE_URL:
     LOG.warning("DATABASE_URL not set - database features disabled")
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
+
+# OpenAI Configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 # Email configuration
 def _first(*vals) -> Optional[str]:
@@ -63,52 +69,91 @@ DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
-# Spam domains
+# Quality filtering keywords
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com",
     "newser.com", "www.newser.com",
-    "khodrobank.com", "www.khodrobank.com"
+    "khodrobank.com", "www.khodrobank.com",
+    "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©"
 }
 
 QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
     "yahoo.com/finance", "finance.yahoo.com",
-    "businesswire.com", "prnewswire.com", "globenewswire.com",
-    "reddit.com", "www.reddit.com"
+    "businesswire.com", "prnewswire.com", "globenewswire.com"
 }
 
 # ------------------------------------------------------------------------------
-# Clean Stock Feed Configuration - NO TWITTER FEEDS
+# OpenAI Integration for Dynamic Keyword Generation
 # ------------------------------------------------------------------------------
-STOCK_FEEDS = {
-    "TLN": [
-        {
-            "url": "https://news.google.com/rss/search?q=Talen+Energy+OR+TLN+when:7d&hl=en-US&gl=US&ceid=US:en",
-            "name": "Google News: Talen Energy (7 days)"
-        },
-        {
-            "url": "https://finance.yahoo.com/rss/headline?s=TLN",
-            "name": "Yahoo Finance: TLN Headlines"
-        },
-        {
-            "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=TLN&region=US&lang=en-US",
-            "name": "Yahoo Finance: TLN News"
-        },
-        {
-            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001903816&type=&dateb=&count=40&output=atom",
-            "name": "SEC EDGAR: Talen Energy Filings"
-        },
-        {
-            "url": "https://www.reddit.com/r/investing/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
-            "name": "Reddit r/investing: Talen Energy"
-        },
-        {
-            "url": "https://www.reddit.com/r/stocks/search.rss?q=Talen+Energy+OR+TLN&restrict_sr=1&sort=new&t=week",
-            "name": "Reddit r/stocks: Talen Energy"
+def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
+    """Use OpenAI to generate industry keywords and competitors for a ticker"""
+    if not OPENAI_API_KEY:
+        LOG.error("OpenAI API key not configured")
+        return {"industry_keywords": [], "competitors": []}
+    
+    prompt = f"""
+    For the stock ticker {ticker}, provide:
+    1. Five industry keywords or trends that are most relevant to this company's business and sector
+    2. Five main publicly-traded competitors (include their tickers if they are well-known)
+    
+    Format your response as a JSON object with this exact structure:
+    {{
+        "industry_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
+        "competitors": ["Competitor1 Name", "TICK1", "Competitor2 Name", "TICK2", "Competitor3"]
+    }}
+    
+    Focus on:
+    - Industry keywords should be specific terms that would appear in relevant news
+    - Include both company names and tickers for competitors when applicable
+    - Ensure all keywords are relevant for news searching
+    - Be specific rather than generic (e.g., "data center power" instead of just "technology")
+    
+    Return ONLY the JSON object, no additional text.
+    """
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
         }
-    ]
-}
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a financial analyst expert who provides accurate information about companies and their industries."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 500
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        content = result['choices'][0]['message']['content']
+        
+        # Clean up the response and parse JSON
+        content = content.strip()
+        # Remove any markdown code blocks if present
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+        
+        metadata = json.loads(content)
+        
+        # Validate and limit the results
+        return {
+            "industry_keywords": metadata.get("industry_keywords", [])[:5],
+            "competitors": metadata.get("competitors", [])[:5]
+        }
+        
+    except Exception as e:
+        LOG.error(f"OpenAI API error for ticker {ticker}: {e}")
+        return {"industry_keywords": [], "competitors": []}
 
 # ------------------------------------------------------------------------------
 # Database helpers
@@ -128,17 +173,167 @@ def db():
         conn.close()
 
 def ensure_schema():
+    """Initialize database schema with enhanced tables"""
     with db() as conn:
         with conn.cursor() as cur:
+            # Create ticker_config table if not exists
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS ticker_config (
+                    ticker VARCHAR(10) PRIMARY KEY,
+                    name VARCHAR(255),
+                    industry_keywords TEXT[],
+                    competitors TEXT[],
+                    active BOOLEAN DEFAULT TRUE,
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
+            
+            # Add category column to found_url if not exists
+            cur.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                 WHERE table_name='found_url' AND column_name='category') 
+                    THEN 
+                        ALTER TABLE found_url ADD COLUMN category VARCHAR(50) DEFAULT 'company';
+                    END IF;
+                END $$;
+            """)
+            
+            # Add related_ticker column to found_url if not exists
+            cur.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                 WHERE table_name='found_url' AND column_name='related_ticker') 
+                    THEN 
+                        ALTER TABLE found_url ADD COLUMN related_ticker VARCHAR(10);
+                    END IF;
+                END $$;
+            """)
+            
+            # Ensure indexes
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_feed_foundat ON found_url(feed_id, found_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_category ON found_url(ticker, category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
             """)
 
-def upsert_feed(url: str, name: str, ticker: str, retain_days: int = 90) -> int:
+def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
+    """Insert or update ticker configuration"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO ticker_config (ticker, name, industry_keywords, competitors, ai_generated)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (ticker) DO UPDATE
+            SET name = EXCLUDED.name,
+                industry_keywords = EXCLUDED.industry_keywords,
+                competitors = EXCLUDED.competitors,
+                ai_generated = EXCLUDED.ai_generated,
+                updated_at = NOW()
+        """, (
+            ticker,
+            metadata.get("name", ticker),
+            metadata.get("industry_keywords", []),
+            metadata.get("competitors", []),
+            ai_generated
+        ))
+
+def get_ticker_config(ticker: str) -> Optional[Dict]:
+    """Get ticker configuration from database"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT ticker, name, industry_keywords, competitors, ai_generated
+            FROM ticker_config
+            WHERE ticker = %s AND active = TRUE
+        """, (ticker,))
+        return cur.fetchone()
+
+def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict[str, List[str]]:
+    """Get ticker metadata from DB or generate with AI if not exists"""
+    # Check database first
+    if not force_refresh:
+        config = get_ticker_config(ticker)
+        if config:
+            LOG.info(f"Using existing metadata for {ticker} (AI generated: {config.get('ai_generated', False)})")
+            return {
+                "company": [ticker],
+                "industry": config.get("industry_keywords", []),
+                "competitors": config.get("competitors", [])
+            }
+    
+    # Generate with AI
+    LOG.info(f"Generating metadata for {ticker} using OpenAI...")
+    ai_metadata = generate_ticker_metadata_with_ai(ticker)
+    
+    # Save to database
+    metadata = {
+        "name": ticker,
+        "industry_keywords": ai_metadata.get("industry_keywords", []),
+        "competitors": ai_metadata.get("competitors", [])
+    }
+    upsert_ticker_config(ticker, metadata, ai_generated=True)
+    
+    return {
+        "company": [ticker],
+        "industry": metadata["industry_keywords"],
+        "competitors": metadata["competitors"]
+    }
+
+def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
+    """Build feed URLs for different categories"""
+    feeds = []
+    
+    # Company-specific feeds
+    feeds.extend([
+        {
+            "url": f"https://news.google.com/rss/search?q={ticker}+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Google News: {ticker} Company",
+            "category": "company"
+        },
+        {
+            "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+            "name": f"Yahoo Finance: {ticker}",
+            "category": "company"
+        },
+        {
+            "url": f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US",
+            "name": f"Yahoo Finance News: {ticker}",
+            "category": "company"
+        }
+    ])
+    
+    # Industry feeds
+    for keyword in keywords["industry"][:5]:
+        # URL encode the keyword for safety
+        keyword_encoded = requests.utils.quote(keyword)
+        feeds.append({
+            "url": f"https://news.google.com/rss/search?q={keyword_encoded}+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Industry: {keyword}",
+            "category": "industry"
+        })
+    
+    # Competitor feeds
+    for competitor in keywords["competitors"][:5]:
+        # Clean and encode competitor name
+        comp_clean = competitor.replace("(", "").replace(")", "")
+        comp_encoded = requests.utils.quote(comp_clean)
+        feeds.append({
+            "url": f"https://news.google.com/rss/search?q={comp_encoded}+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Competitor: {competitor}",
+            "category": "competitor"
+        })
+    
+    return feeds
+
+def upsert_feed(url: str, name: str, ticker: str, category: str = "company", retain_days: int = 90) -> int:
+    """Insert or update a feed source with category"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             INSERT INTO source_feed (url, name, ticker, retain_days, active)
@@ -152,25 +347,37 @@ def upsert_feed(url: str, name: str, ticker: str, retain_days: int = 90) -> int:
         """, (url, name, ticker, retain_days))
         return cur.fetchone()["id"]
 
-def list_active_feeds() -> List[Dict]:
+def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
+    """Get all active feeds, optionally filtered by tickers"""
     with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, url, name, ticker, retain_days
-            FROM source_feed
-            WHERE active = TRUE
-            ORDER BY ticker, id
-        """)
+        if tickers:
+            cur.execute("""
+                SELECT id, url, name, ticker, retain_days
+                FROM source_feed
+                WHERE active = TRUE AND ticker = ANY(%s)
+                ORDER BY ticker, id
+            """, (tickers,))
+        else:
+            cur.execute("""
+                SELECT id, url, name, ticker, retain_days
+                FROM source_feed
+                WHERE active = TRUE
+                ORDER BY ticker, id
+            """)
         return list(cur.fetchall())
 
 # ------------------------------------------------------------------------------
-# Simple URL Resolution and Quality Scoring
+# URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
 def resolve_google_news_url(url: str) -> Tuple[str, str]:
+    """Resolve Google News redirect URL to actual article URL"""
     try:
+        # Extract actual URL from Google News redirect
         if "news.google.com" in url and "/articles/" in url:
             response = requests.get(url, timeout=10, allow_redirects=True)
             return response.url, urlparse(response.url).netloc
         
+        # For direct Google redirect URLs
         if "google.com/url" in url:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
@@ -181,52 +388,74 @@ def resolve_google_news_url(url: str) -> Tuple[str, str]:
                 actual_url = params['q'][0]
                 return actual_url, urlparse(actual_url).netloc
         
+        # Already a direct URL
         return url, urlparse(url).netloc
     except Exception as e:
         LOG.warning(f"Failed to resolve URL {url}: {e}")
         return url, urlparse(url).netloc
 
-def calculate_quality_score(title: str, domain: str, ticker: str, description: str = "") -> float:
-    """Simple quality scoring - no domain_clean variable"""
-    try:
-        LOG.debug(f"Scoring: title='{title}', domain='{domain}'")
-        
-        score = 50.0
-        
-        # Safe string conversion
-        title_text = str(title) if title else ""
-        domain_text = str(domain) if domain else ""
-        description_text = str(description) if description else ""
-        
-        # Clean domain (inline, no separate variable)
-        clean_domain = domain_text.lower().replace("www.", "")
-        
-        # Block spam domains immediately
-        if any(spam in clean_domain for spam in ["khodrobank.com", "marketbeat.com", "newser.com"]):
-            LOG.warning(f"SPAM BLOCKED: {clean_domain}")
-            return 0.0
-        
-        # Quality scoring
-        if "reuters.com" in clean_domain or "bloomberg.com" in clean_domain:
-            score += 30
-        elif "yahoo.com" in clean_domain and "finance" in clean_domain:
-            score += 20
-        elif "reddit.com" in clean_domain:
+def calculate_quality_score(
+    title: str, 
+    domain: str, 
+    ticker: str,
+    description: str = "",
+    category: str = "company",
+    keywords: List[str] = None
+) -> float:
+    """Calculate article quality score with category weighting"""
+    score = 50.0  # Base score
+    
+    # Check for spam
+    spam_indicators = [
+        "marketbeat", "newser", "khodrobank", "Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©"
+    ]
+    
+    content_to_check = f"{title} {domain} {description}".lower()
+    if any(spam in content_to_check for spam in spam_indicators):
+        return 0.0
+    
+    # Domain quality
+    if domain in SPAM_DOMAINS:
+        return 0.0
+    
+    if domain in QUALITY_DOMAINS:
+        score += 30
+    elif any(q in domain for q in ["reuters", "bloomberg", "wsj", "ft", "cnbc"]):
+        score += 25
+    
+    # Category-specific scoring
+    if category == "company":
+        # Direct company news gets higher weight
+        if ticker in (title or "").upper():
+            score += 15
+        if keywords and any(kw.lower() in content_to_check for kw in keywords[:2]):
             score += 10
-        
-        # Title relevance
-        if ticker and ticker.upper() in title_text.upper():
+    elif category == "industry":
+        # Industry news moderate weight
+        score += 5
+        if keywords and any(kw.lower() in content_to_check for kw in keywords):
             score += 10
-        if "Talen" in title_text:
-            score += 10
-        
-        return max(0, min(100, score))
-        
-    except Exception as e:
-        LOG.error(f"Error in quality scoring: {e}")
-        return 50.0
+    elif category == "competitor":
+        # Competitor news lower base weight but can be valuable
+        score += 3
+        if keywords and any(kw.lower() in content_to_check for kw in keywords):
+            score += 7
+    
+    # Negative signals
+    spam_keywords = ["sponsored", "advertisement", "promoted", "partner content"]
+    if any(kw in (title or "").lower() for kw in spam_keywords):
+        score -= 30
+    
+    # Length and substance
+    if len(title or "") > 20:
+        score += 5
+    if len(description or "") > 50:
+        score += 5
+    
+    return max(0, min(100, score))
 
 def get_url_hash(url: str) -> str:
+    """Generate hash for URL deduplication"""
     url_lower = url.lower()
     url_clean = re.sub(r'[?&](utm_|ref=|source=).*', '', url_lower)
     return hashlib.md5(url_clean.encode()).hexdigest()
@@ -235,6 +464,7 @@ def get_url_hash(url: str) -> str:
 # Feed Processing
 # ------------------------------------------------------------------------------
 def parse_datetime(candidate) -> Optional[datetime]:
+    """Parse various datetime formats"""
     if not candidate:
         return None
     if isinstance(candidate, datetime):
@@ -251,12 +481,11 @@ def parse_datetime(candidate) -> Optional[datetime]:
     except:
         return None
 
-def ingest_feed(feed: Dict) -> Dict[str, int]:
-    """Process a single feed and store articles"""
+def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
+    """Process a single feed and store articles with category"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0}
     
     try:
-        LOG.info(f"Processing {feed['name']}: Starting...")
         parsed = feedparser.parse(feed["url"])
         LOG.info(f"Processing {feed['name']}: {len(parsed.entries)} entries")
         
@@ -273,10 +502,14 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            quality_score = calculate_quality_score(title, domain, feed["ticker"], description)
+            # Calculate quality score with category context
+            quality_score = calculate_quality_score(
+                title, domain, feed["ticker"], description, category, keywords
+            )
             
             if quality_score < 20:
                 stats["low_quality"] += 1
+                LOG.debug(f"Skipping low quality: {title} (score: {quality_score})")
                 continue
             
             published_at = None
@@ -292,22 +525,33 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
                         stats["duplicates"] += 1
                         continue
                     
+                    # Determine related ticker for competitor articles
+                    related_ticker = None
+                    if category == "competitor" and "Competitor:" in feed["name"]:
+                        comp_name = feed["name"].replace("Competitor:", "").strip()
+                        # Extract ticker if it looks like one (2-5 uppercase letters)
+                        if re.match(r'^[A-Z]{2,5}$', comp_name):
+                            related_ticker = comp_name
+                    
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
-                            feed_id, ticker, domain, quality_score, published_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            feed_id, ticker, domain, quality_score, published_at,
+                            category, related_ticker
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         original_url, resolved_url, url_hash, title, description,
-                        feed["id"], feed["ticker"], domain, quality_score, published_at
+                        feed["id"], feed["ticker"], domain, quality_score, published_at,
+                        category, related_ticker
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
+                        LOG.debug(f"Inserted [{category}]: {title[:50]}...")
                         
             except Exception as e:
-                LOG.error(f"Database insert error: {e}")
+                LOG.error(f"Database insert error for '{title[:50]}': {e}")
                 continue
                 
     except Exception as e:
@@ -316,324 +560,132 @@ def ingest_feed(feed: Dict) -> Dict[str, int]:
     return stats
 
 # ------------------------------------------------------------------------------
-# Email Functions
+# Email Digest
 # ------------------------------------------------------------------------------
-def build_digest_html(articles_by_ticker: Dict[str, List[Dict]], period_days: int) -> str:
+def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
+    """Build HTML email digest with categorized sections"""
     html = [
-        "<html><body style='font-family: Arial, sans-serif; font-size: 12px;'>",
-        f"<h2>Quantbrief Stock Digest - Last {period_days} Days</h2>",
-        f"<p style='color: #666; margin-bottom: 20px;'>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>"
+        "<html><head><style>",
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+        ".article { margin: 5px 0; padding: 5px; border-left: 3px solid transparent; transition: all 0.3s; }",
+        ".article:hover { background-color: #f8f9fa; border-left-color: #3498db; }",
+        ".company { border-left-color: #27ae60; }",
+        ".industry { border-left-color: #f39c12; }",
+        ".competitor { border-left-color: #e74c3c; }",
+        ".meta { color: #95a5a6; font-size: 11px; }",
+        ".score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; }",
+        ".high-score { background-color: #d4edda; color: #155724; }",
+        ".med-score { background-color: #fff3cd; color: #856404; }",
+        ".low-score { background-color: #f8d7da; color: #721c24; }",
+        "a { color: #2980b9; text-decoration: none; }",
+        "a:hover { text-decoration: underline; }",
+        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+        "</style></head><body>",
+        f"<h1>📊 Quantbrief Stock Intelligence Report</h1>",
+        f"<div class='summary'>",
+        f"<strong>Report Period:</strong> Last {period_days} days<br>",
+        f"<strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC<br>",
+        f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}",
+        "</div>"
     ]
     
-    for ticker, articles in articles_by_ticker.items():
-        html.append(f"<h3 style='color: #1a73e8; margin: 15px 0 5px 0;'>{ticker}</h3>")
+    for ticker, categories in articles_by_ticker.items():
+        total_articles = sum(len(articles) for articles in categories.values())
         
-        if not articles:
-            html.append("<p style='color: #999;'>No quality articles found for this period.</p>")
-            continue
+        html.append(f"<div class='ticker-section'>")
+        html.append(f"<h2>📈 {ticker} - {total_articles} Total Articles</h2>")
         
-        for article in articles[:100]:
-            pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
-            title = article["title"] or "No Title"
-            domain = (article["domain"] or "unknown").replace("www.", "")
-            
-            html.append(f"""<div style='margin: 2px 0;'><a href='{article["resolved_url"] or article["url"]}' style='color: #1a73e8; text-decoration: none; font-weight: bold;'>{title}</a> | {domain} | {pub_date} | Score: {article["quality_score"]:.0f}</div>""")
+        # Company News Section
+        if "company" in categories and categories["company"]:
+            html.append(f"<h3>🏢 Company News ({len(categories['company'])} articles)</h3>")
+            for article in categories["company"][:30]:
+                html.append(_format_article_html(article, "company"))
+        
+        # Industry News Section
+        if "industry" in categories and categories["industry"]:
+            html.append(f"<h3>🏭 Industry & Market News ({len(categories['industry'])} articles)</h3>")
+            for article in categories["industry"][:20]:
+                html.append(_format_article_html(article, "industry"))
+        
+        # Competitor News Section
+        if "competitor" in categories and categories["competitor"]:
+            html.append(f"<h3>🎯 Competitor Intelligence ({len(categories['competitor'])} articles)</h3>")
+            for article in categories["competitor"][:20]:
+                html.append(_format_article_html(article, "competitor"))
+        
+        html.append("</div>")
     
-    html.append("</body></html>")
+    html.append("""
+        <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
+            <strong>About This Report:</strong><br>
+            • <span style='color: #27ae60;'>Company News</span>: Direct mentions and updates about the ticker<br>
+            • <span style='color: #f39c12;'>Industry News</span>: Sector trends and market dynamics<br>
+            • <span style='color: #e74c3c;'>Competitor Intelligence</span>: Updates on key competitors<br>
+            • Quality scores: Higher scores indicate more reputable sources and relevant content (20-100 scale)<br>
+            • Keywords generated by AI analysis for comprehensive coverage
+        </div>
+        </body></html>
+    """)
+    
     return "".join(html)
 
-def fetch_digest_articles(hours: int = 24) -> Dict[str, List[Dict]]:
+def _format_article_html(article: Dict, category: str) -> str:
+    """Format a single article for HTML display"""
+    pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
+    
+    title = article["title"] or "No Title"
+    # Clean up title
+    suffixes_to_remove = [
+        " - MarketBeat", " - Newser", " - TipRanks", " - MSN", 
+        " - The Daily Item", " - MarketScreener", " - Seeking Alpha",
+        " - simplywall.st", " - Investopedia", " - Ø®ÙˆØ¯Ø±Ùˆ Ø¨Ø§Ù†Ú©"
+    ]
+    
+    for suffix in suffixes_to_remove:
+        if title.endswith(suffix):
+            title = title[:-len(suffix)].strip()
+    
+    title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
+    title = re.sub(r'\s+', ' ', title).strip()
+    
+    domain = article["domain"] or "unknown"
+    domain = domain.replace("www.", "")
+    
+    score = article["quality_score"]
+    score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
+    
+    related = f" | Related: {article.get('related_ticker', '')}" if article.get('related_ticker') else ""
+    
+    return f"""
+    <div class='article {category}'>
+        <a href='{article["resolved_url"] or article["url"]}' target='_blank'>{title}</a>
+        <span class='meta'> | {domain} | {pub_date}</span>
+        <span class='score {score_class}'>Score: {score:.0f}</span>
+        {related}
+    </div>
+    """
+
+def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
+    """Fetch categorized articles for digest"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
     with db() as conn, conn.cursor() as cur:
-        cur.execute("""
+        # Build query based on tickers
+        ticker_clause = ""
+        params = [cutoff]
+        if tickers:
+            ticker_clause = "AND f.ticker = ANY(%s)"
+            params.append(tickers)
+        
+        cur.execute(f"""
             SELECT 
                 f.url, f.resolved_url, f.title, f.description,
                 f.ticker, f.domain, f.quality_score, f.published_at,
-                f.found_at
+                f.found_at, f.category, f.related_ticker
             FROM found_url f
             WHERE f.found_at >= %s
-                AND f.quality_score >= 20
-                AND NOT f.sent_in_digest
-            ORDER BY f.ticker, f.quality_score DESC, f.published_at DESC
-        """, (cutoff,))
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = []
-            articles_by_ticker[ticker].append(dict(row))
-        
-        cur.execute("""
-            UPDATE found_url
-            SET sent_in_digest = TRUE
-            WHERE found_at >= %s AND quality_score >= 20
-        """, (cutoff,))
-        
-    return articles_by_ticker
-
-def send_email(subject: str, html_body: str, to: str = None):
-    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
-        LOG.error("SMTP not fully configured")
-        return False
-    
-    try:
-        recipient = to or DIGEST_TO
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = recipient
-        
-        text_body = "Please view this email in HTML format."
-        msg.attach(MIMEText(text_body, "plain"))
-        msg.attach(MIMEText(html_body, "html"))
-        
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            if SMTP_STARTTLS:
-                server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
-        
-        LOG.info(f"Email sent to {recipient}")
-        return True
-        
-    except Exception as e:
-        LOG.error(f"Email send failed: {e}")
-        return False
-
-# ------------------------------------------------------------------------------
-# Auth
-# ------------------------------------------------------------------------------
-def require_admin(request: Request):
-    token = request.headers.get("x-admin-token") or \
-            request.headers.get("authorization", "").replace("Bearer ", "")
-    
-    if token != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-# ------------------------------------------------------------------------------
-# API Routes
-# ------------------------------------------------------------------------------
-@APP.get("/")
-def root():
-    return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
-
-@APP.post("/admin/hard-reset")
-def hard_reset_feeds(request: Request):
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM source_feed")
-        deleted_count = cur.rowcount
-        cur.execute("ALTER SEQUENCE source_feed_id_seq RESTART WITH 1")
-    
-    return {
-        "status": "hard_reset_complete",
-        "deleted_feeds": deleted_count,
-        "message": "All feeds deleted. Run /admin/init to add fresh feeds."
-    }
-
-@APP.get("/admin/list-feeds")
-def list_feeds(request: Request):
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, name, url, active, ticker
-            FROM source_feed
-            ORDER BY active DESC, ticker, id
-        """)
-        feeds = list(cur.fetchall())
-    
-    return {"feeds": feeds}
-
-@APP.post("/admin/init")
-def admin_init(request: Request):
-    require_admin(request)
-    ensure_schema()
-    
-    results = []
-    for ticker, feeds in STOCK_FEEDS.items():
-        for feed_config in feeds:
-            feed_id = upsert_feed(
-                url=feed_config["url"],
-                name=feed_config["name"],
-                ticker=ticker,
-                retain_days=DEFAULT_RETAIN_DAYS
-            )
-            results.append({"ticker": ticker, "feed": feed_config["name"], "id": feed_id})
-    
-    return {"status": "initialized", "feeds": results}
-
-@APP.post("/cron/ingest")
-def cron_ingest(request: Request, minutes: int = Query(default=1440)):
-    require_admin(request)
-    ensure_schema()
-    
-    feeds = list_active_feeds()
-    total_stats = {"feeds_processed": 0, "total_inserted": 0, "total_duplicates": 0}
-    
-    for feed in feeds:
-        stats = ingest_feed(feed)
-        total_stats["feeds_processed"] += 1
-        total_stats["total_inserted"] += stats["inserted"]
-        total_stats["total_duplicates"] += stats["duplicates"]
-        
-        LOG.info(f"Feed {feed['name']}: {stats}")
-    
-    cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM found_url WHERE found_at < %s", (cutoff,))
-        deleted = cur.rowcount
-    
-    total_stats["old_articles_deleted"] = deleted
-    return total_stats
-
-@APP.post("/cron/digest")
-def cron_digest(request: Request, minutes: int = Query(default=1440)):
-    require_admin(request)
-    ensure_schema()
-    
-    hours = minutes / 60
-    days = int(hours / 24) if hours >= 24 else 0
-    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
-    
-    articles = fetch_digest_articles(hours=hours)
-    total_articles = sum(len(arts) for arts in articles.values())
-    
-    if total_articles == 0:
-        return {
-            "status": "no_articles",
-            "message": f"No new quality articles found in the last {period_label}"
-        }
-    
-    html = build_digest_html(articles, days if days > 0 else 1)
-    
-    subject = f"Stock Digest: {', '.join(articles.keys())} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    if success:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO digest_history (recipient, article_count, tickers)
-                VALUES (%s, %s, %s)
-            """, (DIGEST_TO, total_articles, list(articles.keys())))
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles.keys()),
-        "recipient": DIGEST_TO
-    }
-
-@APP.post("/admin/force-digest")
-def force_digest(request: Request):
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT 
-                f.url, f.resolved_url, f.title, f.description,
-                f.ticker, f.domain, f.quality_score, f.published_at,
-                f.found_at
-            FROM found_url f
-            WHERE f.found_at >= NOW() - INTERVAL '7 days'
-                AND f.quality_score >= 20
-            ORDER BY f.ticker, f.quality_score DESC, f.published_at DESC
-        """)
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = []
-            articles_by_ticker[ticker].append(dict(row))
-    
-    total_articles = sum(len(arts) for arts in articles_by_ticker.values())
-    
-    if total_articles == 0:
-        return {"status": "no_articles", "message": "No articles found in database"}
-    
-    html = build_digest_html(articles_by_ticker, 7)
-    subject = f"FULL Stock Digest: {', '.join(articles_by_ticker.keys())} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "recipient": DIGEST_TO
-    }
-
-@APP.post("/admin/test-email")
-def test_email(request: Request):
-    require_admin(request)
-    
-    test_html = """
-    <html><body>
-        <h2>Quantbrief Test Email</h2>
-        <p>Your email configuration is working correctly!</p>
-        <p>Time: {}</p>
-    </body></html>
-    """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    
-    success = send_email("Quantbrief Test Email", test_html)
-    return {"status": "sent" if success else "failed", "recipient": DIGEST_TO}
-
-@APP.get("/admin/stats")
-def get_stats(request: Request):
-    require_admin(request)
-    ensure_schema()
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_articles,
-                COUNT(DISTINCT ticker) as tickers,
-                COUNT(DISTINCT domain) as domains,
-                AVG(quality_score) as avg_quality,
-                MAX(published_at) as latest_article
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-        """)
-        stats = dict(cur.fetchone())
-        
-        cur.execute("""
-            SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-            GROUP BY domain
-            ORDER BY count DESC
-            LIMIT 10
-        """)
-        stats["top_domains"] = list(cur.fetchall())
-        
-        cur.execute("""
-            SELECT ticker, COUNT(*) as count, AVG(quality_score) as avg_score
-            FROM found_url
-            WHERE found_at > NOW() - INTERVAL '7 days'
-            GROUP BY ticker
-            ORDER BY ticker
-        """)
-        stats["by_ticker"] = list(cur.fetchall())
-    
-    return stats
-
-@APP.post("/admin/reset-digest-flags")
-def reset_digest_flags(request: Request):
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
-        count = cur.rowcount
-    
-    return {"status": "reset", "articles_reset": count}
-
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "10000"))
-    uvicorn.run(APP, host="0.0.0.0", port=port)
+                AND f.quality

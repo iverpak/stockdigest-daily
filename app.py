@@ -675,17 +675,16 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
     
     with db() as conn, conn.cursor() as cur:
         # Build query based on tickers
-        ticker_clause = ""
-        params = [cutoff]
         if tickers:
-            ticker_clause = "AND f.ticker = ANY(%s)"
-            params.append(tickers)
-        
-        cur.execute(f"""
-            SELECT 
-                f.url, f.resolved_url, f.title, f.description,
-                f.ticker, f.domain, f.quality_score, f.published_at,
-                f.found_at, f.category, f.related_ticker
-            FROM found_url f
-            WHERE f.found_at >= %s
-                AND f.quality
+            cur.execute("""
+                SELECT 
+                    f.url, f.resolved_url, f.title, f.description,
+                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.found_at, f.category, f.related_ticker
+                FROM found_url f
+                WHERE f.found_at >= %s
+                    AND f.quality_score >= 20
+                    AND NOT f.sent_in_digest
+                    AND f.ticker = ANY(%s)
+                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+            """, (

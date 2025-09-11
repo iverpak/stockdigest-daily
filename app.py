@@ -45,7 +45,7 @@ if not DATABASE_URL:
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
-# OpenAI Configuration - FIXED: Use gpt-4o-mini
+# OpenAI Configuration - FIXED: Use gpt-4o-mini with correct parameter
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -69,15 +69,16 @@ DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
-# FIXED: More comprehensive spam filtering
+# FIXED: Enhanced spam filtering with more comprehensive domain list
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com", "marketbeat",
     "newser.com", "www.newser.com", "newser", 
     "khodrobank.com", "www.khodrobank.com",
     "tipranks.com", "www.tipranks.com", "tipranks",
-    "simplywall.st", "www.simplywall.st",
+    "simplywall.st", "www.simplywall.st", "simplywall",
     "dailyitem.com", "www.dailyitem.com",
-    "marketscreener.com", "www.marketscreener.com"
+    "marketscreener.com", "www.marketscreener.com", "marketscreener",
+    "insidermoneky.com", "seekingalpha.com/pro", "fool.com"
 }
 
 QUALITY_DOMAINS = {
@@ -128,6 +129,7 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
             "Content-Type": "application/json"
         }
         
+        # FIXED: Use max_completion_tokens instead of max_tokens
         data = {
             "model": OPENAI_MODEL,
             "messages": [
@@ -135,7 +137,7 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
-            "max_tokens": 500
+            "max_completion_tokens": 500
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
@@ -392,13 +394,23 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
 # ------------------------------------------------------------------------------
 # URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
-def resolve_google_news_url(url: str) -> Tuple[str, str]:
-    """Resolve Google News redirect URL to actual article URL"""
+def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve Google News redirect URL and check for spam domains - ENHANCED"""
     try:
         # Extract actual URL from Google News redirect
         if "news.google.com" in url and "/articles/" in url:
             response = requests.get(url, timeout=10, allow_redirects=True)
-            return response.url, urlparse(response.url).netloc
+            final_url = response.url
+            domain = urlparse(final_url).netloc.lower()
+            
+            # FIXED: Check if final destination is spam before returning
+            for spam_domain in SPAM_DOMAINS:
+                spam_clean = spam_domain.replace("www.", "").lower()
+                if spam_clean in domain:
+                    LOG.info(f"BLOCKED spam destination after redirect: {domain} (matched: {spam_clean})")
+                    return None, None  # Return None to skip this article
+            
+            return final_url, domain
         
         # For direct Google redirect URLs
         if "google.com/url" in url:
@@ -406,16 +418,44 @@ def resolve_google_news_url(url: str) -> Tuple[str, str]:
             params = parse_qs(parsed.query)
             if 'url' in params:
                 actual_url = params['url'][0]
-                return actual_url, urlparse(actual_url).netloc
+                domain = urlparse(actual_url).netloc.lower()
+                
+                # Check for spam in direct URLs too
+                for spam_domain in SPAM_DOMAINS:
+                    spam_clean = spam_domain.replace("www.", "").lower()
+                    if spam_clean in domain:
+                        LOG.info(f"BLOCKED spam destination in redirect: {domain}")
+                        return None, None
+                        
+                return actual_url, domain
             elif 'q' in params:
                 actual_url = params['q'][0]
-                return actual_url, urlparse(actual_url).netloc
+                domain = urlparse(actual_url).netloc.lower()
+                
+                # Check for spam
+                for spam_domain in SPAM_DOMAINS:
+                    spam_clean = spam_domain.replace("www.", "").lower()
+                    if spam_clean in domain:
+                        LOG.info(f"BLOCKED spam destination in q param: {domain}")
+                        return None, None
+                        
+                return actual_url, domain
         
         # Already a direct URL
-        return url, urlparse(url).netloc
+        domain = urlparse(url).netloc.lower()
+        
+        # Check direct URLs for spam too
+        for spam_domain in SPAM_DOMAINS:
+            spam_clean = spam_domain.replace("www.", "").lower()
+            if spam_clean in domain:
+                LOG.info(f"BLOCKED spam direct URL: {domain}")
+                return None, None
+                
+        return url, domain
+        
     except Exception as e:
         LOG.warning(f"Failed to resolve URL {url}: {e}")
-        return url, urlparse(url).netloc
+        return url, urlparse(url).netloc.lower() if url else None
 
 def calculate_quality_score(
     title: str, 
@@ -425,17 +465,17 @@ def calculate_quality_score(
     category: str = "company",
     keywords: List[str] = None
 ) -> float:
-    """Calculate article quality score - LESS AGGRESSIVE spam filtering"""
+    """Calculate article quality score - ENHANCED spam filtering"""
     score = 50.0
     
     content_to_check = f"{title} {domain} {description}".lower()
-    domain_clean = domain.lower().replace("www.", "")
+    domain_clean = domain.lower().replace("www.", "") if domain else ""
     
-    # Check for spam domains - but be more lenient
-    spam_domains = ["marketbeat.com", "newser.com", "simplywall.st", "tipranks.com"]
-    for spam_domain in spam_domains:
-        if spam_domain in domain_clean:
-            LOG.info(f"BLOCKED spam domain: {domain} (matched: {spam_domain})")
+    # ENHANCED: Check for spam domains more thoroughly
+    for spam_domain in SPAM_DOMAINS:
+        spam_clean = spam_domain.replace("www.", "").lower()
+        if spam_clean in domain_clean or spam_clean in content_to_check:
+            LOG.info(f"BLOCKED spam in quality check: {domain} (matched: {spam_clean})")
             return 0.0
     
     # Boost quality domains
@@ -489,8 +529,8 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return None
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with category - FIXED category detection"""
-    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0}
+    """Process a single feed and store articles with category - ENHANCED spam filtering"""
+    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0}
     
     try:
         LOG.info(f"Processing feed [{category}]: {feed['name']}")
@@ -504,7 +544,16 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             if not original_url:
                 continue
             
-            resolved_url, domain = resolve_google_news_url(original_url)
+            # ENHANCED: URL resolution with spam checking
+            resolved_result = resolve_google_news_url(original_url)
+            if resolved_result[0] is None:  # Spam detected
+                stats["blocked_spam"] += 1
+                continue
+                
+            resolved_url, domain = resolved_result
+            if not resolved_url or not domain:
+                continue
+                
             url_hash = get_url_hash(resolved_url)
             
             title = getattr(entry, "title", "") or "No Title"
@@ -533,7 +582,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         stats["duplicates"] += 1
                         continue
                     
-                    # FIXED: Determine related ticker for competitor articles
+                    # Determine related ticker for competitor articles
                     related_ticker = None
                     if category == "competitor" and "Competitor:" in feed["name"]:
                         comp_name = feed["name"].replace("Competitor:", "").strip()
@@ -626,7 +675,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         if ticker in ticker_metadata:
             metadata = ticker_metadata[ticker]
             html.append("<div class='keywords'>")
-            html.append(f"<strong>Monitoring Keywords:</strong><br>")
+            html.append(f"<strong>AI-Powered Monitoring Keywords:</strong><br>")
             if metadata.get("industry_keywords"):
                 html.append(f"<strong>Industry:</strong> {', '.join(metadata['industry_keywords'])}<br>")
             if metadata.get("competitors"):
@@ -660,7 +709,8 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
             • Industry News: Sector trends and market dynamics<br>
             • Competitor Intelligence: Updates on key competitors<br>
             • Quality scores: Higher scores indicate more reputable sources and relevant content (15-100 scale)<br>
-            • Keywords generated by AI analysis for comprehensive coverage
+            • Keywords generated by AI analysis for comprehensive coverage<br>
+            • Spam domains automatically filtered out for quality
         </div>
         </body></html>
     """)
@@ -879,6 +929,7 @@ def cron_ingest(
         "feeds_processed": 0,
         "total_inserted": 0,
         "total_duplicates": 0,
+        "total_blocked_spam": 0,
         "by_ticker": {},
         "by_category": {"company": 0, "industry": 0, "competitor": 0}
     }
@@ -895,7 +946,7 @@ def cron_ingest(
     for ticker, ticker_feeds in feeds_by_ticker.items():
         # Get metadata for this ticker
         metadata = get_or_create_ticker_metadata(ticker)
-        ticker_stats = {"inserted": 0, "duplicates": 0}
+        ticker_stats = {"inserted": 0, "duplicates": 0, "blocked_spam": 0}
         
         for feed in ticker_feeds:
             # Determine category from feed name
@@ -912,9 +963,11 @@ def cron_ingest(
             total_stats["feeds_processed"] += 1
             total_stats["total_inserted"] += stats["inserted"]
             total_stats["total_duplicates"] += stats["duplicates"]
+            total_stats["total_blocked_spam"] += stats.get("blocked_spam", 0)
             total_stats["by_category"][category] += stats["inserted"]
             ticker_stats["inserted"] += stats["inserted"]
             ticker_stats["duplicates"] += stats["duplicates"]
+            ticker_stats["blocked_spam"] += stats.get("blocked_spam", 0)
             
             LOG.info(f"Feed {feed['name']} [{category}]: {stats}")
         
@@ -1033,6 +1086,42 @@ def cron_digest(
         "by_category": category_counts,
         "recipient": DIGEST_TO
     }
+
+# ADDED: New endpoint to clean old feeds
+@APP.post("/admin/clean-feeds")
+def clean_old_feeds(
+    request: Request,
+    tickers: List[str] = Body(default=None, description="Clean feeds for specific tickers only")
+):
+    """Clean old Reddit/Twitter feeds from database"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Delete feeds that contain Reddit, Twitter, SEC, StockTwits
+        cleanup_patterns = [
+            "Reddit", "Twitter", "SEC EDGAR", "StockTwits", 
+            "r/investing", "r/stocks", "r/SecurityAnalysis", 
+            "r/ValueInvesting", "r/energy", "@TalenEnergy"
+        ]
+        
+        if tickers:
+            for pattern in cleanup_patterns:
+                cur.execute("""
+                    DELETE FROM source_feed 
+                    WHERE name LIKE %s AND ticker = ANY(%s)
+                """, (f"%{pattern}%", tickers))
+        else:
+            for pattern in cleanup_patterns:
+                cur.execute("""
+                    DELETE FROM source_feed 
+                    WHERE name LIKE %s
+                """, (f"%{pattern}%",))
+        
+        # Get total deleted count
+        cur.execute("SELECT COUNT(*) as total FROM source_feed WHERE active = FALSE")
+        total_deleted = cur.fetchone()["total"] if cur.fetchone() else 0
+    
+    return {"status": "cleaned", "feeds_deleted": total_deleted, "tickers": tickers or "all"}
 
 @APP.get("/admin/ticker-metadata/{ticker}")
 def get_ticker_metadata(request: Request, ticker: str):

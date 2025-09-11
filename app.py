@@ -73,19 +73,19 @@ DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com", "marketbeat",
     "newser.com", "www.newser.com", "newser", 
-    "khodrobank.com", "www.khodrobank.com",
-    "tipranks.com", "www.tipranks.com", "tipranks",
-    "simplywall.st", "www.simplywall.st", "simplywall",
-    "dailyitem.com", "www.dailyitem.com",
-    "marketscreener.com", "www.marketscreener.com", "marketscreener",
-    "insidermoneky.com", "seekingalpha.com/pro", "fool.com"
+    "khodrobank.com", "www.khodrobank.com"
 }
 
 QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
     "yahoo.com/finance", "finance.yahoo.com",
-    "businesswire.com", "prnewswire.com", "globenewswire.com"
+    "businesswire.com", "prnewswire.com", "globenewswire.com",
+    "tipranks.com", "www.tipranks.com", "tipranks",
+    "simplywall.st", "www.simplywall.st", "simplywall",
+    "dailyitem.com", "www.dailyitem.com",
+    "marketscreener.com", "www.marketscreener.com", "marketscreener",
+    "insidermoneky.com", "seekingalpha.com/pro", "fool.com"
 }
 
 # ------------------------------------------------------------------------------

@@ -687,4 +687,601 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
                     AND NOT f.sent_in_digest
                     AND f.ticker = ANY(%s)
                 ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
-            """, (
+            """, (cutoff, tickers))
+        else:
+            cur.execute("""
+                SELECT 
+                    f.url, f.resolved_url, f.title, f.description,
+                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.found_at, f.category, f.related_ticker
+                FROM found_url f
+                WHERE f.found_at >= %s
+                    AND f.quality_score >= 20
+                    AND NOT f.sent_in_digest
+                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+            """, (cutoff,))
+        
+        articles_by_ticker = {}
+        for row in cur.fetchall():
+            ticker = row["ticker"] or "UNKNOWN"
+            category = row["category"] or "company"
+            
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = {}
+            if category not in articles_by_ticker[ticker]:
+                articles_by_ticker[ticker][category] = []
+            
+            articles_by_ticker[ticker][category].append(dict(row))
+        
+        # Mark articles as sent
+        if tickers:
+            cur.execute("""
+                UPDATE found_url
+                SET sent_in_digest = TRUE
+                WHERE found_at >= %s AND quality_score >= 20 AND ticker = ANY(%s)
+            """, (cutoff, tickers))
+        else:
+            cur.execute("""
+                UPDATE found_url
+                SET sent_in_digest = TRUE
+                WHERE found_at >= %s AND quality_score >= 20
+            """, (cutoff,))
+    
+    return articles_by_ticker
+
+def send_email(subject: str, html_body: str, to: str = None):
+    """Send email via SMTP"""
+    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
+        LOG.error("SMTP not fully configured")
+        return False
+    
+    try:
+        recipient = to or DIGEST_TO
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = recipient
+        
+        # Add plain text version
+        text_body = "Please view this email in HTML format."
+        msg.attach(MIMEText(text_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+        
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            if SMTP_STARTTLS:
+                server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
+        
+        LOG.info(f"Email sent to {recipient}")
+        return True
+        
+    except Exception as e:
+        LOG.error(f"Email send failed: {e}")
+        return False
+
+# ------------------------------------------------------------------------------
+# Auth Middleware
+# ------------------------------------------------------------------------------
+def require_admin(request: Request):
+    """Verify admin token"""
+    token = request.headers.get("x-admin-token") or \
+            request.headers.get("authorization", "").replace("Bearer ", "")
+    
+    if token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+# ------------------------------------------------------------------------------
+# API Routes
+# ------------------------------------------------------------------------------
+@APP.get("/")
+def root():
+    return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
+
+@APP.post("/admin/init")
+def admin_init(
+    request: Request,
+    tickers: List[str] = Body(..., description="List of tickers to initialize"),
+    force_refresh: bool = Body(default=False, description="Force regeneration of AI keywords")
+):
+    """Initialize database and generate AI-powered feeds for specified tickers"""
+    require_admin(request)
+    ensure_schema()
+    
+    if not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    results = []
+    for ticker in tickers:
+        LOG.info(f"Initializing ticker: {ticker}")
+        
+        # Get or generate metadata with AI
+        keywords = get_or_create_ticker_metadata(ticker, force_refresh=force_refresh)
+        
+        # Build feed URLs for all categories
+        feeds = build_feed_urls(ticker, keywords)
+        
+        for feed_config in feeds:
+            feed_id = upsert_feed(
+                url=feed_config["url"],
+                name=feed_config["name"],
+                ticker=ticker,
+                category=feed_config.get("category", "company"),
+                retain_days=DEFAULT_RETAIN_DAYS
+            )
+            results.append({
+                "ticker": ticker,
+                "feed": feed_config["name"],
+                "category": feed_config.get("category", "company"),
+                "id": feed_id
+            })
+        
+        LOG.info(f"Created {len(feeds)} feeds for {ticker}")
+    
+    return {
+        "status": "initialized",
+        "tickers": tickers,
+        "feeds": results,
+        "message": f"Generated {len(results)} feeds using AI-powered keyword analysis"
+    }
+
+@APP.post("/cron/ingest")
+def cron_ingest(
+    request: Request,
+    minutes: int = Query(default=1440, description="Time window in minutes"),
+    tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
+):
+    """Ingest articles from feeds for specified tickers"""
+    require_admin(request)
+    ensure_schema()
+    
+    # Get feeds for specified tickers
+    feeds = list_active_feeds(tickers)
+    
+    if not feeds:
+        return {"status": "no_feeds", "message": "No active feeds found for specified tickers"}
+    
+    total_stats = {
+        "feeds_processed": 0,
+        "total_inserted": 0,
+        "total_duplicates": 0,
+        "by_ticker": {},
+        "by_category": {"company": 0, "industry": 0, "competitor": 0}
+    }
+    
+    # Group feeds by ticker for better processing
+    feeds_by_ticker = {}
+    for feed in feeds:
+        ticker = feed["ticker"]
+        if ticker not in feeds_by_ticker:
+            feeds_by_ticker[ticker] = []
+        feeds_by_ticker[ticker].append(feed)
+    
+    # Process each ticker's feeds
+    for ticker, ticker_feeds in feeds_by_ticker.items():
+        # Get metadata for this ticker
+        metadata = get_or_create_ticker_metadata(ticker)
+        ticker_stats = {"inserted": 0, "duplicates": 0}
+        
+        for feed in ticker_feeds:
+            # Determine category from feed name
+            category = "company"
+            if "Industry:" in feed["name"]:
+                category = "industry"
+            elif "Competitor:" in feed["name"]:
+                category = "competitor"
+            
+            # Get relevant keywords for this category
+            category_keywords = metadata.get(category, [])
+            
+            stats = ingest_feed(feed, category, category_keywords)
+            total_stats["feeds_processed"] += 1
+            total_stats["total_inserted"] += stats["inserted"]
+            total_stats["total_duplicates"] += stats["duplicates"]
+            total_stats["by_category"][category] += stats["inserted"]
+            ticker_stats["inserted"] += stats["inserted"]
+            ticker_stats["duplicates"] += stats["duplicates"]
+            
+            LOG.info(f"Feed {feed['name']} [{category}]: {stats}")
+        
+        total_stats["by_ticker"][ticker] = ticker_stats
+    
+    # Clean old articles
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
+    with db() as conn, conn.cursor() as cur:
+        if tickers:
+            cur.execute("DELETE FROM found_url WHERE found_at < %s AND ticker = ANY(%s)", (cutoff, tickers))
+        else:
+            cur.execute("DELETE FROM found_url WHERE found_at < %s", (cutoff,))
+        deleted = cur.rowcount
+    
+    total_stats["old_articles_deleted"] = deleted
+    return total_stats
+
+@APP.post("/cron/digest")
+def cron_digest(
+    request: Request,
+    minutes: int = Query(default=1440, description="Time window in minutes"),
+    tickers: List[str] = Query(default=None, description="Specific tickers for digest")
+):
+    """Generate and send email digest for specified tickers"""
+    require_admin(request)
+    ensure_schema()
+    
+    hours = minutes / 60
+    days = int(hours / 24) if hours >= 24 else 0
+    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
+    
+    articles = fetch_digest_articles(hours=hours, tickers=tickers)
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles.values()
+    )
+    
+    if total_articles == 0:
+        return {
+            "status": "no_articles",
+            "message": f"No new quality articles found in the last {period_label}",
+            "tickers": tickers or "all"
+        }
+    
+    html = build_digest_html(articles, days if days > 0 else 1)
+    
+    tickers_str = ', '.join(articles.keys())
+    subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
+    success = send_email(subject, html)
+    
+    # Log digest history
+    if success:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO digest_history (recipient, article_count, tickers)
+                VALUES (%s, %s, %s)
+            """, (DIGEST_TO, total_articles, list(articles.keys())))
+    
+    # Count by category
+    category_counts = {"company": 0, "industry": 0, "competitor": 0}
+    for ticker_cats in articles.values():
+        for cat, arts in ticker_cats.items():
+            category_counts[cat] = category_counts.get(cat, 0) + len(arts)
+    
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles.keys()),
+        "by_category": category_counts,
+        "recipient": DIGEST_TO
+    }
+
+@APP.get("/admin/ticker-metadata/{ticker}")
+def get_ticker_metadata(request: Request, ticker: str):
+    """Get AI-generated metadata for a ticker"""
+    require_admin(request)
+    
+    config = get_ticker_config(ticker)
+    if config:
+        return {
+            "ticker": ticker,
+            "ai_generated": config.get("ai_generated", False),
+            "industry_keywords": config.get("industry_keywords", []),
+            "competitors": config.get("competitors", [])
+        }
+    
+    return {"ticker": ticker, "message": "No metadata found. Use /admin/init to generate."}
+
+@APP.post("/admin/regenerate-metadata")
+def regenerate_metadata(
+    request: Request,
+    ticker: str = Body(..., description="Ticker to regenerate metadata for")
+):
+    """Force regeneration of AI metadata for a ticker"""
+    require_admin(request)
+    
+    if not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    LOG.info(f"Regenerating metadata for {ticker}")
+    metadata = get_or_create_ticker_metadata(ticker, force_refresh=True)
+    
+    # Rebuild feeds
+    feeds = build_feed_urls(ticker, metadata)
+    for feed_config in feeds:
+        upsert_feed(
+            url=feed_config["url"],
+            name=feed_config["name"],
+            ticker=ticker,
+            category=feed_config.get("category", "company"),
+            retain_days=DEFAULT_RETAIN_DAYS
+        )
+    
+    return {
+        "status": "regenerated",
+        "ticker": ticker,
+        "metadata": metadata,
+        "feeds_created": len(feeds)
+    }
+
+@APP.get("/admin/ticker-configs")
+def list_ticker_configs(request: Request):
+    """List all ticker configurations"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT ticker, name, industry_keywords, competitors, ai_generated, 
+                   created_at, updated_at
+            FROM ticker_config
+            WHERE active = TRUE
+            ORDER BY ticker
+        """)
+        configs = list(cur.fetchall())
+    
+    return {"configs": configs, "total": len(configs)}
+
+@APP.post("/admin/force-digest")
+def force_digest(
+    request: Request,
+    tickers: List[str] = Body(default=None, description="Specific tickers for digest")
+):
+    """Force digest with existing articles (for testing)"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Build query based on whether tickers are specified
+        if tickers:
+            cur.execute("""
+                SELECT 
+                    f.url, f.resolved_url, f.title, f.description,
+                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.found_at, f.category, f.related_ticker
+                FROM found_url f
+                WHERE f.found_at >= %s
+                    AND f.quality_score >= 20
+                    AND f.ticker = ANY(%s)
+                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+            """, (datetime.now(timezone.utc) - timedelta(days=7), tickers))
+        else:
+            cur.execute("""
+                SELECT 
+                    f.url, f.resolved_url, f.title, f.description,
+                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.found_at, f.category, f.related_ticker
+                FROM found_url f
+                WHERE f.found_at >= %s
+                    AND f.quality_score >= 20
+                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+            """, (datetime.now(timezone.utc) - timedelta(days=7),))
+        
+        articles_by_ticker = {}
+        for row in cur.fetchall():
+            ticker = row["ticker"] or "UNKNOWN"
+            category = row["category"] or "company"
+            
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = {}
+            if category not in articles_by_ticker[ticker]:
+                articles_by_ticker[ticker][category] = []
+            
+            articles_by_ticker[ticker][category].append(dict(row))
+    
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles_by_ticker.values()
+    )
+    
+    if total_articles == 0:
+        return {"status": "no_articles", "message": "No articles found in database"}
+    
+    html = build_digest_html(articles_by_ticker, 7)
+    tickers_str = ', '.join(articles_by_ticker.keys())
+    subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
+    success = send_email(subject, html)
+    
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "recipient": DIGEST_TO
+    }
+
+@APP.post("/admin/test-email")
+def test_email(request: Request):
+    """Send test email"""
+    require_admin(request)
+    
+    test_html = """
+    <html><body>
+        <h2>Quantbrief Test Email</h2>
+        <p>Your email configuration is working correctly!</p>
+        <p>Time: {}</p>
+        <p>AI Integration: {}</p>
+    </body></html>
+    """.format(
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Enabled" if OPENAI_API_KEY else "Not configured"
+    )
+    
+    success = send_email("Quantbrief Test Email", test_html)
+    return {"status": "sent" if success else "failed", "recipient": DIGEST_TO}
+
+@APP.get("/admin/stats")
+def get_stats(
+    request: Request,
+    tickers: List[str] = Query(default=None, description="Filter stats by tickers")
+):
+    """Get system statistics"""
+    require_admin(request)
+    ensure_schema()
+    
+    with db() as conn, conn.cursor() as cur:
+        # Build queries based on tickers
+        if tickers:
+            # Article stats
+            cur.execute("""
+                SELECT 
+                    COUNT(*) as total_articles,
+                    COUNT(DISTINCT ticker) as tickers,
+                    COUNT(DISTINCT domain) as domains,
+                    AVG(quality_score) as avg_quality,
+                    MAX(published_at) as latest_article
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+                    AND ticker = ANY(%s)
+            """, (tickers,))
+            stats = dict(cur.fetchone())
+            
+            # Stats by category
+            cur.execute("""
+                SELECT category, COUNT(*) as count, AVG(quality_score) as avg_score
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+                    AND ticker = ANY(%s)
+                GROUP BY category
+                ORDER BY category
+            """, (tickers,))
+            stats["by_category"] = list(cur.fetchall())
+            
+            # Top domains
+            cur.execute("""
+                SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+                    AND ticker = ANY(%s)
+                GROUP BY domain
+                ORDER BY count DESC
+                LIMIT 10
+            """, (tickers,))
+            stats["top_domains"] = list(cur.fetchall())
+            
+            # Articles by ticker and category
+            cur.execute("""
+                SELECT ticker, category, COUNT(*) as count, AVG(quality_score) as avg_score
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+                    AND ticker = ANY(%s)
+                GROUP BY ticker, category
+                ORDER BY ticker, category
+            """, (tickers,))
+            stats["by_ticker_category"] = list(cur.fetchall())
+        else:
+            # Article stats
+            cur.execute("""
+                SELECT 
+                    COUNT(*) as total_articles,
+                    COUNT(DISTINCT ticker) as tickers,
+                    COUNT(DISTINCT domain) as domains,
+                    AVG(quality_score) as avg_quality,
+                    MAX(published_at) as latest_article
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+            """)
+            stats = dict(cur.fetchone())
+            
+            # Stats by category
+            cur.execute("""
+                SELECT category, COUNT(*) as count, AVG(quality_score) as avg_score
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+                GROUP BY category
+                ORDER BY category
+            """)
+            stats["by_category"] = list(cur.fetchall())
+            
+            # Top domains
+            cur.execute("""
+                SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+                GROUP BY domain
+                ORDER BY count DESC
+                LIMIT 10
+            """)
+            stats["top_domains"] = list(cur.fetchall())
+            
+            # Articles by ticker and category
+            cur.execute("""
+                SELECT ticker, category, COUNT(*) as count, AVG(quality_score) as avg_score
+                FROM found_url
+                WHERE found_at > NOW() - INTERVAL '7 days'
+                GROUP BY ticker, category
+                ORDER BY ticker, category
+            """)
+            stats["by_ticker_category"] = list(cur.fetchall())
+        
+        # Check AI metadata status
+        cur.execute("""
+            SELECT COUNT(*) as total, 
+                   COUNT(CASE WHEN ai_generated THEN 1 END) as ai_generated
+            FROM ticker_config
+            WHERE active = TRUE
+        """)
+        ai_stats = cur.fetchone()
+        stats["ai_metadata"] = ai_stats
+    
+    return stats
+
+@APP.post("/admin/reset-digest-flags")
+def reset_digest_flags(
+    request: Request,
+    tickers: List[str] = Body(default=None, description="Reset flags for specific tickers only")
+):
+    """Reset sent_in_digest flags for testing"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        if tickers:
+            cur.execute("UPDATE found_url SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (tickers,))
+        else:
+            cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
+        count = cur.rowcount
+    
+    return {"status": "reset", "articles_reset": count, "tickers": tickers or "all"}
+
+# ------------------------------------------------------------------------------
+# CLI Support for PowerShell Commands
+# ------------------------------------------------------------------------------
+@APP.post("/cli/run")
+def cli_run(
+    request: Request,
+    action: str = Body(..., description="Action to perform: ingest, digest, or both"),
+    tickers: List[str] = Body(..., description="List of tickers to process"),
+    minutes: int = Body(default=1440, description="Time window in minutes")
+):
+    """CLI endpoint for PowerShell commands"""
+    require_admin(request)
+    
+    results = {}
+    
+    if action in ["ingest", "both"]:
+        # Initialize feeds if needed
+        ensure_schema()
+        for ticker in tickers:
+            metadata = get_or_create_ticker_metadata(ticker)
+            feeds = build_feed_urls(ticker, metadata)
+            for feed_config in feeds:
+                upsert_feed(
+                    url=feed_config["url"],
+                    name=feed_config["name"],
+                    ticker=ticker,
+                    category=feed_config.get("category", "company"),
+                    retain_days=DEFAULT_RETAIN_DAYS
+                )
+        
+        # Run ingestion
+        ingest_result = cron_ingest(request, minutes, tickers)
+        results["ingest"] = ingest_result
+    
+    if action in ["digest", "both"]:
+        # Run digest
+        digest_result = cron_digest(request, minutes, tickers)
+        results["digest"] = digest_result
+    
+    return results
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "10000"))
+    uvicorn.run(APP, host="0.0.0.0", port=port)

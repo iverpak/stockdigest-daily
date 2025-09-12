@@ -73,7 +73,7 @@ DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com", "marketbeat",
     "newser.com", "www.newser.com", "newser", 
-    "khodrobank.com", "www.khodrobank.com"
+    "khodrobank.com", "www.khodrobank.com", "khodrobank"  # ADD this line
 }
 
 QUALITY_DOMAINS = {
@@ -96,29 +96,26 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
     if not OPENAI_API_KEY:
         LOG.error("OpenAI API key not configured")
         # Return default fallback for TLN
-        if ticker == "TLN":
-            return {
-                "industry_keywords": ["renewable energy", "data center power", "nuclear energy", "grid stability", "energy storage"],
-                "competitors": ["Vistra Corp", "VST", "NRG Energy", "NRG", "Constellation Energy"]
-            }
-        return {"industry_keywords": [], "competitors": []}
     
     prompt = f"""
-    For the stock ticker {ticker}, provide:
-    1. Five industry keywords or trends that are most relevant to this company's business and sector
-    2. Five main publicly-traded competitors (include their tickers if they are well-known)
+    For the publicly traded stock ticker {ticker}, provide ACCURATE and SPECIFIC information:
+    
+    1. Five industry keywords/terms that are most relevant to this company's actual business
+    2. Three main publicly-traded competitors (COMPANY NAMES ONLY, no tickers)
+    
+    IMPORTANT REQUIREMENTS:
+    - Research the actual company behind ticker {ticker}
+    - Industry keywords must be specific to the company's actual business
+    - Avoid generic terms like "technology" or "finance"
+    - Competitors must be real, publicly-traded companies in the same specific business area
+    - Do NOT include ticker symbols in competitor names - only company names
+    - If you're unsure about the company, provide conservative/general industry terms
     
     Format your response as a JSON object with this exact structure:
     {{
-        "industry_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
-        "competitors": ["Competitor1 Name", "TICK1", "Competitor2 Name", "TICK2", "Competitor3"]
+        "industry_keywords": ["specific_keyword1", "specific_keyword2", "specific_keyword3", "specific_keyword4", "specific_keyword5"],
+        "competitors": ["Company Name 1", "Company Name 2", "Company Name 3"]
     }}
-    
-    Focus on:
-    - Industry keywords should be specific terms that would appear in relevant news
-    - Include both company names and tickers for competitors when applicable
-    - Ensure all keywords are relevant for news searching
-    - Be specific rather than generic (e.g. "renewable energy storage" instead of just "technology")
     
     Return ONLY the JSON object, no additional text.
     """
@@ -182,18 +179,11 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
         LOG.info(f"Successfully generated AI metadata for {ticker}")
         return {
             "industry_keywords": metadata.get("industry_keywords", [])[:5],
-            "competitors": metadata.get("competitors", [])[:5]
+            "competitors": metadata.get("competitors", [])[:3]
         }
         
     except Exception as e:
         LOG.error(f"OpenAI API error for ticker {ticker}: {e}")
-        # Return fallback for TLN
-        if ticker == "TLN":
-            return {
-                "industry_keywords": ["renewable energy", "data center power", "nuclear energy", "grid stability", "energy storage"],
-                "competitors": ["Vistra Corp", "VST", "NRG Energy", "NRG", "Constellation Energy"]
-            }
-        return {"industry_keywords": [], "competitors": []}
 
 # ------------------------------------------------------------------------------
 # Database helpers
@@ -287,6 +277,7 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_category ON found_url(ticker, category);
                 CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
                 CREATE INDEX IF NOT EXISTS idx_domain_names_domain ON domain_names(domain);
+                CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
@@ -639,7 +630,8 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                         original_domain = urlparse(original_source_url).netloc.lower()
                         # Spam check on original source
                         for spam_domain in SPAM_DOMAINS:
-                            if spam_domain.replace("www.", "").lower() in original_domain:
+                            if spam_domain.replace("www.", "").lower() in domain:
+                                LOG.info(f"BLOCKED spam domain in redirect: {domain} (matched: {spam_clean})")
                                 return None, None, None
                         return original_source_url, original_domain, actual_url
                         
@@ -678,41 +670,9 @@ def calculate_quality_score(
     category: str = "company",
     keywords: List[str] = None
 ) -> float:
-    """Calculate article quality score - ENHANCED spam filtering"""
-    score = 50.0
-    
-    content_to_check = f"{title} {domain} {description}".lower()
-    domain_clean = domain.lower().replace("www.", "") if domain else ""
-    
-    # ENHANCED: Check for spam domains more thoroughly
-    for spam_domain in SPAM_DOMAINS:
-        spam_clean = spam_domain.replace("www.", "").lower()
-        if spam_clean in domain_clean or spam_clean in content_to_check:
-            LOG.info(f"BLOCKED spam in quality check: {domain} (matched: {spam_clean})")
-            return 0.0
-    
-    # Boost quality domains
-    quality_domains = ["reuters", "bloomberg", "wsj", "ft", "cnbc", "finance.yahoo", "businesswire"]
-    if any(q in domain_clean for q in quality_domains):
-        score += 25
-    
-    # Category scoring
-    if category == "company":
-        if ticker in (title or "").upper():
-            score += 15
-    elif category == "industry":
-        score += 8  # Give industry news a better chance
-    elif category == "competitor":
-        score += 5
-    
-    # Basic quality checks
-    if len(title or "") > 20:
-        score += 5
-    if len(description or "") > 50:
-        score += 5
-        
-    # Don't be too harsh - lower the minimum threshold
-    return max(0, min(100, score))
+    """DISABLED: Always return neutral score - quality scoring needs refinement"""
+    # Quality scoring temporarily disabled - need proper content analysis
+    return 50.0
 
 def get_url_hash(url: str) -> str:
     """Generate hash for URL deduplication"""
@@ -1237,7 +1197,7 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
                     AND f.quality_score >= 15
                     AND NOT f.sent_in_digest
                     AND f.ticker = ANY(%s)
-                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff, tickers))
         else:
             cur.execute("""
@@ -1249,7 +1209,7 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
                     AND NOT f.sent_in_digest
-                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff,))
         
         articles_by_ticker = {}
@@ -1504,7 +1464,7 @@ def cron_digest(
                     AND f.quality_score >= 15
                     AND NOT f.sent_in_digest
                     AND f.ticker = ANY(%s)
-                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff, tickers))
         else:
             cur.execute("""
@@ -1516,7 +1476,7 @@ def cron_digest(
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
                     AND NOT f.sent_in_digest
-                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff,))
         
         articles_by_ticker = {}
@@ -1688,7 +1648,7 @@ def force_digest(request: Request, body: ForceDigestRequest):
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
                     AND f.ticker = ANY(%s)
-                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
         else:
             cur.execute("""
@@ -1699,7 +1659,7 @@ def force_digest(request: Request, body: ForceDigestRequest):
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
-                ORDER BY f.ticker, f.category, f.quality_score DESC, f.published_at DESC
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7),))
         
         articles_by_ticker = {}

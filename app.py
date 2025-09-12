@@ -229,6 +229,17 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
             """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS domain_names (
+                    domain VARCHAR(255) PRIMARY KEY,
+                    formal_name VARCHAR(255) NOT NULL,
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    verified BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
             
             # Add category column to found_url if not exists
             cur.execute("""
@@ -275,6 +286,7 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_feed_foundat ON found_url(feed_id, found_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_category ON found_url(ticker, category);
                 CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
+                CREATE INDEX IF NOT EXISTS idx_domain_names_domain ON domain_names(domain);
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
@@ -765,6 +777,94 @@ def get_url_hash(url: str) -> str:
     url_clean = re.sub(r'[?&](utm_|ref=|source=).*', '', url_lower)
     return hashlib.md5(url_clean.encode()).hexdigest()
 
+def get_formal_domain_name_from_ai(domain: str) -> Optional[str]:
+    """Use OpenAI to get the formal name of a domain"""
+    if not OPENAI_API_KEY:
+        LOG.warning("OpenAI API key not configured for domain name resolution")
+        return None
+    
+    clean_domain = domain.replace("www.", "").lower()
+    
+    prompt = f"""What is the formal, proper name of the website/company "{clean_domain}"?
+
+Please provide ONLY the official name as it would appear in a citation or news article.
+Examples:
+- "investors.com" → "Investor's Business Daily"
+- "barrons.com" → "Barron's" 
+- "zacks.com" → "Zacks Investment Research"
+
+For "{clean_domain}", the formal name is:"""
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a media expert. Provide only the official, formal name of websites/publications. Be concise."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_completion_tokens": 50
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+        
+        if response.status_code != 200:
+            return None
+        
+        result = response.json()
+        if 'choices' not in result or not result['choices']:
+            return None
+            
+        formal_name = result['choices'][0]['message']['content'].strip()
+        formal_name = re.sub(r'^["\']|["\']$', '', formal_name)
+        formal_name = formal_name.strip()
+        
+        if len(formal_name) > 100 or len(formal_name) < 2:
+            return None
+            
+        LOG.info(f"AI resolved domain {domain} to: {formal_name}")
+        return formal_name
+        
+    except Exception as e:
+        LOG.error(f"Error getting formal name for domain {domain}: {e}")
+        return None
+
+def get_or_create_formal_domain_name(domain: str) -> str:
+    """Get formal domain name from cache or generate with AI"""
+    if not domain:
+        return "Unknown"
+    
+    clean_domain = domain.replace("www.", "").lower()
+    
+    # Check database cache first
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT formal_name FROM domain_names WHERE domain = %s", (clean_domain,))
+        result = cur.fetchone()
+        if result:
+            return result["formal_name"]
+    
+    # Generate with AI
+    formal_name = get_formal_domain_name_from_ai(clean_domain)
+    
+    # Fallback if AI fails
+    if not formal_name:
+        formal_name = clean_domain.replace(".com", "").replace(".org", "").replace(".net", "").title()
+    
+    # Store in database
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO domain_names (domain, formal_name, ai_generated)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (domain) DO UPDATE
+            SET formal_name = EXCLUDED.formal_name, updated_at = NOW()
+        """, (clean_domain, formal_name, formal_name != clean_domain.title()))
+    
+    return formal_name
+
 # ------------------------------------------------------------------------------
 # Feed Processing
 # ------------------------------------------------------------------------------
@@ -985,7 +1085,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     return "".join(html)
 
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format a single article for HTML display with improved aesthetics"""
+    """Format a single article for HTML display with dynamic domain resolution"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
     title = article["title"] or "No Title"
@@ -1003,29 +1103,16 @@ def _format_article_html(article: Dict, category: str) -> str:
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
-    # Determine which URL to use for the main link - prioritize resolved_url which contains the original source
+    # Determine which URL to use for the main link
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # Get the resolved domain for display (this is the original source)
+    # Get the resolved domain for display
     resolved_domain = article["domain"] or "unknown"
-    resolved_domain = resolved_domain.replace("www.", "")
     
-    # Clean up domain names for better display
-    domain_display_map = {
-        "zacks.com": "Zacks",
-        "investors.com": "Investor's Business Daily",
-        "barrons.com": "Barron's",
-        "insidermonkey.com": "Insider Monkey",
-        "stockstory.org": "StockStory",
-        "investing.com": "Investing.com",
-        "prnewswire.com": "PR Newswire",
-        "mtnewswires.com": "MT Newswires",
-        "finance.yahoo.com": "Yahoo Finance"
-    }
+    # Use dynamic domain name resolution - THIS IS THE KEY CHANGE
+    display_source = get_or_create_formal_domain_name(resolved_domain)
     
-    display_source = domain_display_map.get(resolved_domain, resolved_domain.capitalize())
-    
-    # Create source badge - always light grey
+    # Create source badge
     source_badge = f"<span class='source-badge'>{display_source}</span>"
     
     score = article["quality_score"]
@@ -1969,6 +2056,21 @@ def debug_yahoo_content(request: Request):
         
     except Exception as e:
         return {"error": str(e)}
+
+@APP.get("/admin/domain-names")
+def list_domain_names(request: Request):
+    """List all cached domain names"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT domain, formal_name, ai_generated, created_at
+            FROM domain_names
+            ORDER BY created_at DESC
+        """)
+        domains = list(cur.fetchall())
+    
+    return {"domains": domains, "total": len(domains)}
 
 # FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/reset-digest-flags")

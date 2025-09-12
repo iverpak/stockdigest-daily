@@ -413,47 +413,63 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
 # ------------------------------------------------------------------------------
 # URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
-def extract_yahoo_finance_source(url: str) -> Optional[str]:
-    """Extract original source URL from Yahoo Finance aggregator pages."""
+
+# Match a JSON string value safely: " ... " with escapes allowed
+_JSON_STRING = r'"((?:[^"\\]|\\.)*)"'
+_YAHOO_KEYS = [
+    r'providerContentUrl',
+    r'providerUniversalUrl',
+    r'contentUrl',
+    r'canonicalUrl',
+    r'clickThroughUrl',   # sometimes points to the source; we’ll filter yahoo.com out
+]
+
+def _json_unescape(s: str) -> str:
     try:
-        if "yahoo.com" not in url:
+        # round-trip through JSON to interpret \u002F, \/, \"
+        return json.loads(f'"{s}"')
+    except Exception:
+        # last-ditch cleanup
+        return s.replace("\\/", "/").replace("\\u002F", "/").replace('\\"', '"')
+
+def extract_yahoo_finance_source(url: str, timeout: int = 12) -> str | None:
+    """
+    Returns the original publisher URL from a Yahoo Finance news page,
+    or None if not found / not a Yahoo page.
+    """
+    try:
+        parsed_in = urlparse(url)
+        if not parsed_in.netloc.endswith("yahoo.com"):
             return None
 
         resp = requests.get(
             url,
-            timeout=12,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            timeout=timeout,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         )
         if resp.status_code != 200 or not resp.text:
             return None
 
-        def _unescape(s: str) -> str:
-            # Handles \/ and \u002F etc. via JSON round-trip
-            try:
-                return json.loads(f'"{s}"')
-            except Exception:
-                return s.replace("\\/", "/")
+        html = resp.text
 
-        # Try a few JSON keys Yahoo uses across templates
-        patterns = [
-            r'"providerContentUrl"\s*:\s*"([^"]+)"',
-            r'"providerUniversalUrl"\s*:\s*"([^"]+)"',
-            r'"contentUrl"\s*:\s*"([^"]+)"',
-            r'"canonicalUrl"\s*:\s*"([^"]+)"',
-        ]
-
-        for pat in patterns:
-            for m in re.findall(pat, resp.text):
-                candidate = _unescape(m)
-                parsed = urlparse(candidate)
-                if parsed.scheme in ("http", "https") and parsed.netloc and "yahoo.com" not in parsed.netloc:
-                    LOG.info(f"Found Yahoo original source: {candidate}")
+        # Try each key with a JSON-safe string capture
+        for key in _YAHOO_KEYS:
+            pattern = re.compile(rf'{key}\s*:\s*{_JSON_STRING}', re.DOTALL)
+            for m in pattern.findall(html):
+                candidate = _json_unescape(m).strip()
+                if not candidate:
+                    continue
+                p = urlparse(candidate)
+                # Only accept real external HTTP(S) links and skip Yahoo-owned domains
+                if p.scheme in ("http", "https") and p.netloc and "yahoo.com" not in p.netloc:
                     return candidate
 
         return None
-
-    except Exception as e:
-        LOG.debug(f"Yahoo source extraction failed for {url}: {e}")
+    except Exception:
         return None
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -636,6 +652,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
 
             # >>> NEW: treat original source as the canonical link we store/use
             link_url_for_db = original_source_url or resolved_url
+            domain = urlparse(link_url_for_db).netloc.lower()
             
             url_hash = get_url_hash(link_url_for_db)
             title = getattr(entry, "title", "") or "No Title"
@@ -688,7 +705,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     
                     cur.execute("""
                         INSERT INTO found_url (
-                            url, resolved_url, url_hash, title, description,
+                            url, link_url_for_db, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
                             category, related_ticker, original_source_url
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)

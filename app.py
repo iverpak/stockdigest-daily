@@ -207,7 +207,7 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """Initialize database schema with enhanced tables"""
+    """Initialize database schema with enhanced tables - UPDATED for search metadata"""
     with db() as conn:
         with conn.cursor() as cur:
             # Create ticker_config table if not exists
@@ -235,7 +235,7 @@ def ensure_schema():
                 );
             """)
             
-            # Add category column to found_url if not exists
+            # ENHANCED: Add search metadata columns to found_url if not exists
             cur.execute("""
                 DO $$ 
                 BEGIN 
@@ -247,7 +247,6 @@ def ensure_schema():
                 END $$;
             """)
             
-            # Add related_ticker column to found_url if not exists
             cur.execute("""
                 DO $$ 
                 BEGIN 
@@ -259,7 +258,6 @@ def ensure_schema():
                 END $$;
             """)
             
-            # Add original_source_url column for Yahoo Finance original sources
             cur.execute("""
                 DO $$ 
                 BEGIN 
@@ -267,6 +265,41 @@ def ensure_schema():
                                  WHERE table_name='found_url' AND column_name='original_source_url') 
                     THEN 
                         ALTER TABLE found_url ADD COLUMN original_source_url TEXT;
+                    END IF;
+                END $$;
+            """)
+            
+            # ENHANCED: Add search keyword column to track what was searched
+            cur.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                 WHERE table_name='found_url' AND column_name='search_keyword') 
+                    THEN 
+                        ALTER TABLE found_url ADD COLUMN search_keyword VARCHAR(255);
+                    END IF;
+                END $$;
+            """)
+            
+            # ENHANCED: Add search metadata columns to source_feed if not exists
+            cur.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                 WHERE table_name='source_feed' AND column_name='search_keyword') 
+                    THEN 
+                        ALTER TABLE source_feed ADD COLUMN search_keyword VARCHAR(255);
+                    END IF;
+                END $$;
+            """)
+            
+            cur.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                 WHERE table_name='source_feed' AND column_name='competitor_ticker') 
+                    THEN 
+                        ALTER TABLE source_feed ADD COLUMN competitor_ticker VARCHAR(10);
                     END IF;
                 END $$;
             """)
@@ -282,6 +315,9 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
                 CREATE INDEX IF NOT EXISTS idx_domain_names_domain ON domain_names(domain);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_search_keyword ON found_url(search_keyword);
+                CREATE INDEX IF NOT EXISTS idx_source_feed_search_keyword ON source_feed(search_keyword);
+                CREATE INDEX IF NOT EXISTS idx_source_feed_competitor_ticker ON source_feed(competitor_ticker);
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
@@ -346,62 +382,112 @@ def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> D
     }
 
 def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
-    """Build feed URLs for different categories - FIXED to only use working feeds"""
+    """Build feed URLs for different categories - ENHANCED with Yahoo feeds and keyword tracking"""
     feeds = []
     
-    # Company-specific feeds (only reliable ones)
+    # Company-specific feeds (Google + Yahoo)
     feeds.extend([
         {
             "url": f"https://news.google.com/rss/search?q={ticker}+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
             "name": f"Google News: {ticker} Company",
-            "category": "company"
+            "category": "company",
+            "search_keyword": ticker
         },
         {
             "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
             "name": f"Yahoo Finance: {ticker}",
-            "category": "company"
+            "category": "company",
+            "search_keyword": ticker
         }
     ])
     
-    # Industry feeds
+    # Industry feeds (Google + Yahoo)
     industry_keywords = keywords.get("industry", [])
     LOG.info(f"Building industry feeds for {ticker} with keywords: {industry_keywords}")
     for keyword in industry_keywords[:3]:
         keyword_encoded = requests.utils.quote(keyword)
-        feeds.append({
-            "url": f"https://news.google.com/rss/search?q=\"{keyword_encoded}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
-            "name": f"Industry: {keyword}",
-            "category": "industry"
-        })
+        feeds.extend([
+            {
+                "url": f"https://news.google.com/rss/search?q=\"{keyword_encoded}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Industry: {keyword}",
+                "category": "industry",
+                "search_keyword": keyword
+            },
+            {
+                "url": f"https://finance.yahoo.com/rss/headline?s={keyword_encoded}",
+                "name": f"Yahoo Industry: {keyword}",
+                "category": "industry", 
+                "search_keyword": keyword
+            }
+        ])
     
-    # Competitor feeds
+    # Competitor feeds (Google + Yahoo)
     competitors = keywords.get("competitors", [])
     LOG.info(f"Building competitor feeds for {ticker} with competitors: {competitors}")
     for competitor in competitors[:3]:
         comp_clean = competitor.replace("(", "").replace(")", "").strip()
         comp_encoded = requests.utils.quote(comp_clean)
-        feeds.append({
-            "url": f"https://news.google.com/rss/search?q=\"{comp_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-            "name": f"Competitor: {competitor}",
-            "category": "competitor"
-        })
+        
+        # Try to extract ticker from competitor name if present
+        competitor_ticker = None
+        words = comp_clean.split()
+        for word in words:
+            if re.match(r'^[A-Z]{2,5}$', word):
+                competitor_ticker = word
+                break
+        
+        feeds.extend([
+            {
+                "url": f"https://news.google.com/rss/search?q=\"{comp_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Competitor: {competitor}",
+                "category": "competitor",
+                "search_keyword": competitor,
+                "competitor_ticker": competitor_ticker
+            },
+            {
+                "url": f"https://finance.yahoo.com/rss/headline?s={comp_encoded}",
+                "name": f"Yahoo Competitor: {competitor}",
+                "category": "competitor",
+                "search_keyword": competitor,
+                "competitor_ticker": competitor_ticker
+            }
+        ])
     
     LOG.info(f"Built {len(feeds)} total feeds for {ticker}: {len([f for f in feeds if f['category'] == 'company'])} company, {len([f for f in feeds if f['category'] == 'industry'])} industry, {len([f for f in feeds if f['category'] == 'competitor'])} competitor")
     return feeds
 
-def upsert_feed(url: str, name: str, ticker: str, category: str = "company", retain_days: int = 90) -> int:
-    """Insert or update a feed source with category"""
+def upsert_feed(url: str, name: str, ticker: str, category: str = "company", retain_days: int = 90, search_keyword: str = None, competitor_ticker: str = None) -> int:
+    """Insert or update a feed source with category and search metadata - ENHANCED"""
     with db() as conn, conn.cursor() as cur:
+        # First, check if we need to add the new columns
         cur.execute("""
-            INSERT INTO source_feed (url, name, ticker, retain_days, active)
-            VALUES (%s, %s, %s, %s, TRUE)
+            DO $$ 
+            BEGIN 
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                             WHERE table_name='source_feed' AND column_name='search_keyword') 
+                THEN 
+                    ALTER TABLE source_feed ADD COLUMN search_keyword VARCHAR(255);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                             WHERE table_name='source_feed' AND column_name='competitor_ticker') 
+                THEN 
+                    ALTER TABLE source_feed ADD COLUMN competitor_ticker VARCHAR(10);
+                END IF;
+            END $$;
+        """)
+        
+        cur.execute("""
+            INSERT INTO source_feed (url, name, ticker, retain_days, active, search_keyword, competitor_ticker)
+            VALUES (%s, %s, %s, %s, TRUE, %s, %s)
             ON CONFLICT (url) DO UPDATE
             SET name = EXCLUDED.name,
                 ticker = EXCLUDED.ticker,
                 retain_days = EXCLUDED.retain_days,
-                active = TRUE
+                active = TRUE,
+                search_keyword = EXCLUDED.search_keyword,
+                competitor_ticker = EXCLUDED.competitor_ticker
             RETURNING id;
-        """, (url, name, ticker, retain_days))
+        """, (url, name, ticker, retain_days, search_keyword, competitor_ticker))
         return cur.fetchone()["id"]
 
 def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
@@ -962,7 +1048,7 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return None
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with category and spam filtering"""
+    """Process a single feed and store articles with enhanced metadata - ENHANCED"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "yahoo_sources_found": 0}
     
     try:
@@ -997,7 +1083,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # NEW: Check for spam in title during ingestion
+            # Check for spam in title during ingestion
             spam_keywords = ["marketbeat", "newser", "khodrobank"]
             if any(spam in title.lower() for spam in spam_keywords):
                 stats["blocked_spam"] += 1
@@ -1028,34 +1114,52 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         stats["duplicates"] += 1
                         continue
                     
-                    # Determine related ticker for competitor articles
+                    # ENHANCED: Determine related ticker and search keyword for better tracking
                     related_ticker = None
-                    if category == "competitor" and "Competitor:" in feed["name"]:
-                        comp_name = feed["name"].replace("Competitor:", "").strip()
-                        # Extract ticker if it looks like one (2-5 uppercase letters)
-                        words = comp_name.split()
-                        for word in words:
-                            if re.match(r'^[A-Z]{2,5}$', word):
-                                related_ticker = word
-                                break
+                    search_keyword = feed.get("search_keyword", "")
+                    
+                    if category == "competitor":
+                        # Use the competitor ticker if available, or extract from name
+                        related_ticker = feed.get("competitor_ticker")
+                        if not related_ticker and "Competitor:" in feed["name"]:
+                            comp_name = feed["name"].replace("Competitor:", "").strip()
+                            words = comp_name.split()
+                            for word in words:
+                                if re.match(r'^[A-Z]{2,5}$', word):
+                                    related_ticker = word
+                                    break
+                    
+                    # ENHANCED: Add columns for search metadata if they don't exist
+                    cur.execute("""
+                        DO $$ 
+                        BEGIN 
+                            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                         WHERE table_name='found_url' AND column_name='search_keyword') 
+                            THEN 
+                                ALTER TABLE found_url ADD COLUMN search_keyword VARCHAR(255);
+                            END IF;
+                        END $$;
+                    """)
                     
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
-                            category, related_ticker, original_source_url
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            category, related_ticker, original_source_url, search_keyword
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         original_url, resolved_url, url_hash, title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, related_ticker, yahoo_source_url
+                        category, related_ticker, yahoo_source_url, search_keyword
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
                         source_note = f" (source: {urlparse(yahoo_source_url).netloc})" if yahoo_source_url else ""
-                        LOG.info(f"Inserted [{category}]{source_note}: {title[:60]}...")
+                        keyword_note = f" [keyword: {search_keyword}]" if search_keyword else ""
+                        ticker_note = f" [related: {related_ticker}]" if related_ticker else ""
+                        LOG.info(f"Inserted [{category}]{source_note}{keyword_note}{ticker_note}: {title[:60]}...")
                         
             except Exception as e:
                 LOG.error(f"Database insert error for '{title[:50]}': {e}")
@@ -1133,19 +1237,19 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         # Company News Section
         if "company" in categories and categories["company"]:
             html.append(f"<h3>Company News ({len(categories['company'])} articles)</h3>")
-            for article in categories["company"][:30]:
+            for article in categories["company"][:50]:
                 html.append(_format_article_html(article, "company"))
         
         # Industry News Section
         if "industry" in categories and categories["industry"]:
             html.append(f"<h3>Industry & Market News ({len(categories['industry'])} articles)</h3>")
-            for article in categories["industry"][:20]:
+            for article in categories["industry"][:50]:
                 html.append(_format_article_html(article, "industry"))
         
         # Competitor News Section
         if "competitor" in categories and categories["competitor"]:
             html.append(f"<h3>Competitor Intelligence ({len(categories['competitor'])} articles)</h3>")
-            for article in categories["competitor"][:20]:
+            for article in categories["competitor"][:50]:
                 html.append(_format_article_html(article, "competitor"))
         
         html.append("</div>")
@@ -1168,7 +1272,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
 
 # Simplified _format_article_html function
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format article HTML with AI-powered title analysis and spam filtering"""
+    """Format article HTML with enhanced metadata display - ENHANCED"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
     original_title = article["title"] or "No Title"
@@ -1202,31 +1306,45 @@ def _format_article_html(article: Dict, category: str) -> str:
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
-    related = f" | Related: {article.get('related_ticker', '')}" if article.get('related_ticker') else ""
+    # ENHANCED: Build metadata string with search keywords and related tickers
+    metadata_parts = []
     
-    # Format: Source | Score | Title | Date
+    # Add related ticker for competitors
+    if article.get('related_ticker'):
+        metadata_parts.append(f"Related: {article['related_ticker']}")
+    
+    # Add search keyword for industry articles
+    if category == "industry" and article.get('search_keyword'):
+        metadata_parts.append(f"Keyword: {article['search_keyword']}")
+    elif category == "competitor" and article.get('search_keyword'):
+        metadata_parts.append(f"Competitor: {article['search_keyword']}")
+    
+    metadata_string = " | " + " | ".join(metadata_parts) if metadata_parts else ""
+    
+    # Format: Source | Score | Title | Date | Enhanced Metadata
     return f"""
     <div class='article {category}'>
         <span class='source-badge'>{display_source}</span>
         <span class='score {score_class}'>Score: {score:.0f}</span>
         <a href='{link_url}' target='_blank'>{title}</a>
         <span class='meta'> | {pub_date}</span>
-        {related}
+        {metadata_string}
     </div>
     """
 
 def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
-    """Fetch categorized articles for digest with original source URLs"""
+    """Fetch categorized articles for digest with enhanced search metadata"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
     with db() as conn, conn.cursor() as cur:
-        # Build query based on tickers
+        # Build query based on tickers - ENHANCED to include search metadata
         if tickers:
             cur.execute("""
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -1239,7 +1357,8 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -1350,7 +1469,7 @@ def root():
 
 @APP.post("/admin/init")
 def admin_init(request: Request, body: InitRequest):
-    """Initialize database and generate AI-powered feeds for specified tickers"""
+    """Initialize database and generate AI-powered feeds for specified tickers - ENHANCED"""
     require_admin(request)
     ensure_schema()
     
@@ -1364,7 +1483,7 @@ def admin_init(request: Request, body: InitRequest):
         # Get or generate metadata with AI
         keywords = get_or_create_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
-        # Build feed URLs for all categories
+        # Build feed URLs for all categories (now includes Yahoo feeds)
         feeds = build_feed_urls(ticker, keywords)
         
         for feed_config in feeds:
@@ -1373,22 +1492,26 @@ def admin_init(request: Request, body: InitRequest):
                 name=feed_config["name"],
                 ticker=ticker,
                 category=feed_config.get("category", "company"),
-                retain_days=DEFAULT_RETAIN_DAYS
+                retain_days=DEFAULT_RETAIN_DAYS,
+                search_keyword=feed_config.get("search_keyword"),
+                competitor_ticker=feed_config.get("competitor_ticker")
             )
             results.append({
                 "ticker": ticker,
                 "feed": feed_config["name"],
                 "category": feed_config.get("category", "company"),
+                "search_keyword": feed_config.get("search_keyword"),
+                "competitor_ticker": feed_config.get("competitor_ticker"),
                 "id": feed_id
             })
         
-        LOG.info(f"Created {len(feeds)} feeds for {ticker}")
+        LOG.info(f"Created {len(feeds)} feeds for {ticker} (including Yahoo feeds)")
     
     return {
         "status": "initialized",
         "tickers": body.tickers,
         "feeds": results,
-        "message": f"Generated {len(results)} feeds using AI-powered keyword analysis"
+        "message": f"Generated {len(results)} feeds using AI-powered keyword analysis (Google + Yahoo sources)"
     }
 
 @APP.post("/cron/ingest")
@@ -1397,12 +1520,27 @@ def cron_ingest(
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
-    """Ingest articles from feeds for specified tickers"""
+    """Ingest articles from feeds for specified tickers - ENHANCED with metadata"""
     require_admin(request)
     ensure_schema()
     
-    # Get feeds for specified tickers
-    feeds = list_active_feeds(tickers)
+    # Get feeds for specified tickers with search metadata
+    with db() as conn, conn.cursor() as cur:
+        if tickers:
+            cur.execute("""
+                SELECT id, url, name, ticker, retain_days, search_keyword, competitor_ticker
+                FROM source_feed
+                WHERE active = TRUE AND ticker = ANY(%s)
+                ORDER BY ticker, id
+            """, (tickers,))
+        else:
+            cur.execute("""
+                SELECT id, url, name, ticker, retain_days, search_keyword, competitor_ticker
+                FROM source_feed
+                WHERE active = TRUE
+                ORDER BY ticker, id
+            """)
+        feeds = list(cur.fetchall())
     
     if not feeds:
         return {"status": "no_feeds", "message": "No active feeds found for specified tickers"}
@@ -1434,9 +1572,9 @@ def cron_ingest(
         for feed in ticker_feeds:
             # Determine category from feed name
             category = "company"
-            if "Industry:" in feed["name"]:
+            if "Industry:" in feed["name"] or "Yahoo Industry:" in feed["name"]:
                 category = "industry"
-            elif "Competitor:" in feed["name"]:
+            elif "Competitor:" in feed["name"] or "Yahoo Competitor:" in feed["name"]:
                 category = "competitor"
             
             # Get relevant keywords for this category
@@ -1476,7 +1614,7 @@ def cron_digest(
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers for digest")
 ):
-    """Generate and send email digest - FIXED to lower quality threshold"""
+    """Generate and send email digest - ENHANCED with search metadata"""
     require_admin(request)
     ensure_schema()
     
@@ -1493,7 +1631,8 @@ def cron_digest(
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -1506,7 +1645,8 @@ def cron_digest(
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15

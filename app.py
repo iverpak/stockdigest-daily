@@ -420,49 +420,34 @@ def extract_yahoo_finance_source(url: str) -> Optional[str]:
         if "finance.yahoo.com" not in url:
             return None
             
-        response = requests.get(url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        response = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
         if response.status_code != 200:
-            LOG.warning(f"Failed to fetch Yahoo Finance page: {response.status_code}")
             return None
         
         # Look for the providerContentUrl pattern in the HTML
-        # Updated regex to handle JSON properly with escaped quotes and slashes
-        pattern = r'"providerContentUrl"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
+        # Using regex to find the pattern in the raw HTML
+        pattern = r'"providerContentUrl"\s*:\s*"([^"]+)"'
         match = re.search(pattern, response.text)
         
         if match:
             original_url = match.group(1)
-            
-            # Properly unescape JSON string
-            # Handle escaped forward slashes
-            original_url = original_url.replace('\\/', '/')
-            # Handle escaped quotes
-            original_url = original_url.replace('\\"', '"')
-            # Handle escaped backslashes
-            original_url = original_url.replace('\\\\', '\\')
+            # Unescape any escaped characters
+            original_url = original_url.replace('\/', '/')
             
             # Validate it's a proper URL
             parsed = urlparse(original_url)
             if parsed.scheme and parsed.netloc:
-                LOG.info(f"Extracted Yahoo Finance source: {original_url}")
+                LOG.info(f"Found Yahoo Finance original source: {original_url}")
                 return original_url
-            else:
-                LOG.warning(f"Invalid URL extracted from Yahoo: {original_url}")
-                return None
-        else:
-            LOG.debug(f"No providerContentUrl found in Yahoo Finance page: {url}")
-            return None
         
-    except requests.RequestException as e:
-        LOG.warning(f"Network error extracting Yahoo Finance source from {url}: {e}")
         return None
+        
     except Exception as e:
-        LOG.error(f"Unexpected error extracting Yahoo Finance source from {url}: {e}")
+        LOG.debug(f"Failed to extract Yahoo Finance source from {url}: {e}")
         return None
-
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Resolve Google News redirect URL and check for spam domains - ENHANCED with Yahoo source extraction"""
@@ -471,26 +456,20 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
     try:
         # Extract actual URL from Google News redirect
         if "news.google.com" in url and "/articles/" in url:
-            response = requests.get(url, timeout=10, allow_redirects=True, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
+            response = requests.get(url, timeout=10, allow_redirects=True)
             final_url = response.url
             domain = urlparse(final_url).netloc.lower()
             
-            # Check if final destination is spam before returning
+            # FIXED: Check if final destination is spam before returning
             for spam_domain in SPAM_DOMAINS:
                 spam_clean = spam_domain.replace("www.", "").lower()
                 if spam_clean in domain:
                     LOG.info(f"BLOCKED spam destination after redirect: {domain} (matched: {spam_clean})")
-                    return None, None, None
+                    return None, None, None  # Return None to skip this article
             
             # Check if it's Yahoo Finance and extract original source
             if "finance.yahoo.com" in final_url:
                 original_source_url = extract_yahoo_finance_source(final_url)
-                # If we successfully extracted a source, use that as the main URL
-                if original_source_url:
-                    LOG.info(f"Using extracted source as main URL: {original_source_url}")
-                    return original_source_url, urlparse(original_source_url).netloc.lower(), final_url
             
             return final_url, domain, original_source_url
         
@@ -512,10 +491,6 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 # Check if it's Yahoo Finance and extract original source
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
-                    # If we successfully extracted a source, use that as the main URL
-                    if original_source_url:
-                        LOG.info(f"Using extracted source as main URL: {original_source_url}")
-                        return original_source_url, urlparse(original_source_url).netloc.lower(), actual_url
                         
                 return actual_url, domain, original_source_url
             elif 'q' in params:
@@ -532,10 +507,6 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 # Check if it's Yahoo Finance and extract original source
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
-                    # If we successfully extracted a source, use that as the main URL
-                    if original_source_url:
-                        LOG.info(f"Using extracted source as main URL: {original_source_url}")
-                        return original_source_url, urlparse(original_source_url).netloc.lower(), actual_url
                         
                 return actual_url, domain, original_source_url
         
@@ -552,10 +523,6 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         # Check if it's Yahoo Finance and extract original source
         if "finance.yahoo.com" in url:
             original_source_url = extract_yahoo_finance_source(url)
-            # If we successfully extracted a source, use that as the main URL
-            if original_source_url:
-                LOG.info(f"Using extracted source as main URL: {original_source_url}")
-                return original_source_url, urlparse(original_source_url).netloc.lower(), url
                 
         return url, domain, original_source_url
         
@@ -832,7 +799,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     return "".join(html)
 
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format a single article for HTML display with proper source linking"""
+    """Format a single article for HTML display with original source support"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
     title = article["title"] or "No Title"
@@ -850,18 +817,20 @@ def _format_article_html(article: Dict, category: str) -> str:
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
-    # Use the resolved_url as the main link (which now contains the extracted source if available)
-    link_url = article["resolved_url"] or article["url"]
+    # Determine which URL to use for the main link
+    link_url = article.get("original_source_url") or article["resolved_url"] or article["url"]
     
     # Get domain for display
     domain = article["domain"] or "unknown"
     domain = domain.replace("www.", "")
     
-    # Show source information if we tracked a Yahoo->source extraction
-    source_info = ""
+    # Add source indicator if we found an original source
+    source_indicator = ""
     if article.get("original_source_url"):
-        # This means we stored the Yahoo URL in original_source_url for reference
-        source_info = f"<span class='source-indicator'>[via Yahoo Finance]</span>"
+        original_domain = urlparse(article["original_source_url"]).netloc.replace("www.", "")
+        source_indicator = f"<span class='source-indicator'>[SOURCE: {original_domain}]</span>"
+        # Update domain display if we have original source
+        domain = f"Yahoo→{original_domain}"
     
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
@@ -871,7 +840,7 @@ def _format_article_html(article: Dict, category: str) -> str:
     return f"""
     <div class='article {category}'>
         <a href='{link_url}' target='_blank'>{title}</a>
-        {source_info}
+        {source_indicator}
         <span class='meta'> | {domain} | {pub_date}</span>
         <span class='score {score_class}'>Score: {score:.0f}</span>
         {related}

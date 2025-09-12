@@ -1361,6 +1361,53 @@ def force_digest(request: Request, body: ForceDigestRequest):
         "recipient": DIGEST_TO
     }
 
+@APP.post("/admin/test-yahoo-extraction")
+def test_yahoo_extraction(request: Request):
+    """Test Yahoo Finance source extraction with a sample URL"""
+    require_admin(request)
+    
+    # Use the URL you provided as a test case
+    test_url = request.headers.get("test-url", "https://finance.yahoo.com/news/why-bloom-energy-stock-trading-162542112.html")
+    
+    LOG.info(f"Testing Yahoo extraction on: {test_url}")
+    
+    result = {
+        "test_url": test_url,
+        "extraction_attempted": True
+    }
+    
+    # Try extraction
+    original_source = extract_yahoo_finance_source(test_url)
+    
+    if original_source:
+        result["extraction_successful"] = True
+        result["original_source_url"] = original_source
+        result["original_domain"] = urlparse(original_source).netloc
+    else:
+        result["extraction_successful"] = False
+        result["error"] = "Could not find providerContentUrl in page content"
+        
+        # Try to fetch the page for debugging
+        try:
+            response = requests.get(test_url, timeout=15, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            
+            # Check if providerContentUrl exists anywhere in the page
+            if "providerContentUrl" in response.text:
+                result["pattern_found"] = True
+                # Extract a snippet around the pattern for debugging
+                idx = response.text.find("providerContentUrl")
+                snippet = response.text[max(0, idx-100):min(len(response.text), idx+200)]
+                result["snippet"] = snippet[:300]
+            else:
+                result["pattern_found"] = False
+                result["note"] = "providerContentUrl not found in page - may be Yahoo original content"
+        except Exception as e:
+            result["fetch_error"] = str(e)
+    
+    return result
+
 @APP.post("/admin/test-email")
 def test_email(request: Request):
     """Send test email"""

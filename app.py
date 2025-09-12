@@ -419,6 +419,67 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
 # ------------------------------------------------------------------------------
 # URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
+@APP.post("/admin/debug-yahoo-content")
+def debug_yahoo_content(request: Request):
+    """Debug what's actually in the Yahoo Finance page"""
+    require_admin(request)
+    
+    test_url = request.headers.get("test-url", "https://finance.yahoo.com/news/why-bloom-energy-shares-soaring-155542226.html")
+    
+    try:
+        response = requests.get(test_url, timeout=15, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        html_content = response.text
+        
+        # Find the specific section you mentioned
+        # Look for the pattern around "providerContentUrl"
+        pattern_index = html_content.find('providerContentUrl')
+        
+        result = {
+            "url": test_url,
+            "content_length": len(html_content),
+            "provider_url_found": pattern_index != -1
+        }
+        
+        if pattern_index != -1:
+            # Extract 500 characters around the match for analysis
+            start = max(0, pattern_index - 250)
+            end = min(len(html_content), pattern_index + 250)
+            context = html_content[start:end]
+            
+            result["context_snippet"] = context
+            result["provider_url_position"] = pattern_index
+            
+            # Try different regex patterns to see what matches
+            patterns_to_test = [
+                r'"providerContentUrl"\s*:\s*"([^"]*)"',
+                r'"providerContentUrl":"([^"]*)"',
+                r'providerContentUrl["\s]*:["\s]*([^",\s]*)',
+                r'"providerContentUrl"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
+            ]
+            
+            matches_found = {}
+            for i, pattern in enumerate(patterns_to_test):
+                matches = re.findall(pattern, html_content)
+                matches_found[f"pattern_{i+1}"] = {
+                    "pattern": pattern,
+                    "matches": matches[:3]  # First 3 matches only
+                }
+            
+            result["regex_test_results"] = matches_found
+            
+            # Also look for any stockstory.org URLs anywhere in the page
+            stockstory_pattern = r'https?://stockstory\.org[^"\s,]*'
+            stockstory_matches = re.findall(stockstory_pattern, html_content)
+            result["all_stockstory_urls"] = stockstory_matches[:5]  # First 5 matches
+        
+        return result
+        
+    except Exception as e:
+        return {"error": str(e)}
+
 def extract_yahoo_finance_source(url: str) -> Optional[str]:
     """Extract original source URL from Yahoo Finance article - FIXED for real JSON patterns"""
     try:

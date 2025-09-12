@@ -92,7 +92,7 @@ QUALITY_DOMAINS = {
 # OpenAI Integration for Dynamic Keyword Generation
 # ------------------------------------------------------------------------------
 def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
-    """Use OpenAI to generate industry keywords and competitors for a ticker"""
+    """Use OpenAI to generate industry keywords and competitors for a ticker - FIXED JSON parsing"""
     if not OPENAI_API_KEY:
         LOG.error("OpenAI API key not configured")
         # Return default fallback for TLN
@@ -129,14 +129,15 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
             "Content-Type": "application/json"
         }
         
-        # FIXED: Remove temperature parameter for gpt-4o-mini and use max_completion_tokens
+        # Add response_format to ensure JSON output
         data = {
             "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a financial analyst expert who provides accurate information about companies and their industries."},
+                {"role": "system", "content": "You are a financial analyst expert who provides accurate information about companies and their industries. Always respond with valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
-            "max_completion_tokens": 500
+            "max_completion_tokens": 500,
+            "response_format": {"type": "json_object"}  # ADDED: Force JSON response
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
@@ -155,7 +156,6 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
         
         # Log the raw response for debugging
         LOG.info(f"OpenAI raw response length: {len(response.text)}")
-        LOG.info(f"OpenAI raw response preview: {response.text[:200]}")
         
         try:
             result = response.json()
@@ -169,9 +169,15 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
             return {"industry_keywords": [], "competitors": []}
             
         content = result['choices'][0]['message']['content']
+        LOG.info(f"OpenAI content preview: {content[:200]}")  # ADDED: Log content for debugging
         
-        # With JSON mode, content should be valid JSON without fences
-        metadata = json.loads(content)
+        # FIXED: Parse the content directly as JSON (no quotes needed with json_object format)
+        try:
+            metadata = json.loads(content)
+        except json.JSONDecodeError as e:
+            LOG.error(f"Failed to parse OpenAI content as JSON for ticker {ticker}: {e}")
+            LOG.error(f"Content: {content[:500]}")
+            return {"industry_keywords": [], "competitors": []}
         
         LOG.info(f"Successfully generated AI metadata for {ticker}")
         return {
@@ -658,7 +664,7 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return None
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with category - ENHANCED with Yahoo source extraction"""
+    """Process a single feed and store articles with category - FIXED variable scope issues"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "yahoo_sources_found": 0}
     
     try:
@@ -673,13 +679,13 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             if not original_url:
                 continue
             
-            # ENHANCED: URL resolution with spam checking and Yahoo source extraction
+            # FIXED: URL resolution with proper variable names
             resolved_result = resolve_google_news_url(original_url)
             if resolved_result[0] is None:  # Spam detected
                 stats["blocked_spam"] += 1
                 continue
                 
-            resolved_url, domain, yahoo_source_url = resolved_result
+            resolved_url, domain, yahoo_source_url = resolved_result  # FIXED: Proper unpacking
             if not resolved_url or not domain:
                 continue
             
@@ -727,6 +733,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                                 related_ticker = word
                                 break
                     
+                    # FIXED: Use proper variable name yahoo_source_url instead of original_source_url
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -735,17 +742,14 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
-                        original_url,           # The original RSS feed URL
-                        resolved_url,           # Now the original source URL (not Yahoo)
-                        url_hash,               # Hash of the original source URL
-                        title, description,
+                        original_url, resolved_url, url_hash, title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, related_ticker, yahoo_source_url  # Yahoo URL stored as reference
+                        category, related_ticker, yahoo_source_url  # FIXED: Use yahoo_source_url
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        source_note = f" (source: {urlparse(original_source_url).netloc})" if original_source_url else ""
+                        source_note = f" (source: {urlparse(yahoo_source_url).netloc})" if yahoo_source_url else ""
                         LOG.info(f"Inserted [{category}] (score: {quality_score:.0f}){source_note}: {title[:60]}...")
                         
             except Exception as e:

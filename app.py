@@ -1361,6 +1361,172 @@ def force_digest(request: Request, body: ForceDigestRequest):
         "recipient": DIGEST_TO
     }
 
+@APP.post("/admin/wipe-database")
+def wipe_database(request: Request):
+    """DANGER: Completely wipe all feeds, ticker configs, and articles from database"""
+    require_admin(request)
+    
+    # Extra safety check - require a confirmation header
+    confirm = request.headers.get("x-confirm-wipe", "")
+    if confirm != "YES-WIPE-EVERYTHING":
+        raise HTTPException(
+            status_code=400, 
+            detail="Safety check failed. Add header 'X-Confirm-Wipe: YES-WIPE-EVERYTHING' to confirm"
+        )
+    
+    with db() as conn, conn.cursor() as cur:
+        # Delete everything in order of dependencies
+        deleted_stats = {}
+        
+        # Delete all articles
+        cur.execute("DELETE FROM found_url")
+        deleted_stats["articles"] = cur.rowcount
+        
+        # Delete all feeds
+        cur.execute("DELETE FROM source_feed")
+        deleted_stats["feeds"] = cur.rowcount
+        
+        # Delete all ticker configurations (keywords, competitors, etc.)
+        cur.execute("DELETE FROM ticker_config")
+        deleted_stats["ticker_configs"] = cur.rowcount
+        
+        LOG.warning(f"DATABASE WIPED: {deleted_stats}")
+    
+    return {
+        "status": "database_wiped",
+        "deleted": deleted_stats,
+        "warning": "All feeds, ticker configurations, and articles have been deleted"
+    }
+
+@APP.post("/admin/wipe-ticker")
+def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
+    """Wipe all data for a specific ticker"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        deleted_stats = {}
+        
+        # Delete articles for this ticker
+        cur.execute("DELETE FROM found_url WHERE ticker = %s", (ticker,))
+        deleted_stats["articles"] = cur.rowcount
+        
+        # Delete feeds for this ticker
+        cur.execute("DELETE FROM source_feed WHERE ticker = %s", (ticker,))
+        deleted_stats["feeds"] = cur.rowcount
+        
+        # Delete ticker configuration
+        cur.execute("DELETE FROM ticker_config WHERE ticker = %s", (ticker,))
+        deleted_stats["ticker_config"] = cur.rowcount
+        
+        LOG.info(f"Wiped all data for ticker {ticker}: {deleted_stats}")
+    
+    return {
+        "status": "ticker_wiped",
+        "ticker": ticker,
+        "deleted": deleted_stats
+    }
+
+@APP.post("/admin/extract-yahoo-sources")
+def extract_yahoo_sources(request: Request, body: ForceDigestRequest):
+    """Retroactively extract original sources from Yahoo Finance articles in database"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Find Yahoo Finance articles without original_source_url
+        if body.tickers:
+            cur.execute("""
+                SELECT id, resolved_url
+                FROM found_url
+                WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
+                    AND original_source_url IS NULL
+                    AND ticker = ANY(%s)
+                ORDER BY found_at DESC
+                LIMIT 100
+            """, (body.tickers,))
+        else:
+            cur.execute("""
+                SELECT id, resolved_url
+                FROM found_url
+                WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
+                    AND original_source_url IS NULL
+                ORDER BY found_at DESC
+                LIMIT 100
+            """)
+        
+        articles = cur.fetchall()
+        
+        updated_count = 0
+        failed_count = 0
+        
+        for article in articles:
+            if article['resolved_url'] and 'finance.yahoo.com' in article['resolved_url']:
+                LOG.info(f"Processing article ID {article['id']}: {article['resolved_url'][:80]}...")
+                
+                original_source = extract_yahoo_finance_source(article['resolved_url'])
+                
+                if original_source:
+                    cur.execute("""
+                        UPDATE found_url
+                        SET original_source_url = %s
+                        WHERE id = %s
+                    """, (original_source, article['id']))
+                    updated_count += 1
+                    LOG.info(f"Updated article {article['id']} with source: {original_source}")
+                else:
+                    failed_count += 1
+                    LOG.warning(f"Could not extract source for article {article['id']}")
+                
+                # Add a small delay to avoid rate limiting
+                time.sleep(0.5)
+    
+    return {
+        "status": "completed",
+        "articles_processed": len(articles),
+        "sources_extracted": updated_count,
+        "extraction_failed": failed_count,
+        "tickers": body.tickers or "all"
+    }
+
+@APP.get("/admin/yahoo-stats")
+def get_yahoo_stats(request: Request):
+    """Get statistics about Yahoo Finance articles and source extraction"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_yahoo_articles,
+                COUNT(original_source_url) as sources_extracted,
+                COUNT(*) - COUNT(original_source_url) as sources_missing
+            FROM found_url
+            WHERE domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%'
+        """)
+        stats = dict(cur.fetchone())
+        
+        # Get recent examples with sources
+        cur.execute("""
+            SELECT ticker, title, resolved_url, original_source_url, found_at
+            FROM found_url
+            WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
+                AND original_source_url IS NOT NULL
+            ORDER BY found_at DESC
+            LIMIT 5
+        """)
+        stats["recent_extractions"] = list(cur.fetchall())
+        
+        # Get articles missing sources
+        cur.execute("""
+            SELECT ticker, title, resolved_url, found_at
+            FROM found_url
+            WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
+                AND original_source_url IS NULL
+            ORDER BY found_at DESC
+            LIMIT 5
+        """)
+        stats["missing_sources"] = list(cur.fetchall())
+    
+    return stats
+
 @APP.post("/admin/test-yahoo-extraction")
 def test_yahoo_extraction(request: Request):
     """Test Yahoo Finance source extraction with a sample URL"""

@@ -1004,8 +1004,8 @@ def _format_article_html(article: Dict, category: str) -> str:
     title = re.sub(r'\s+', ' ', title).strip()
     
     # Determine which URL to use for the main link
-    link_url = article.get("original_source_url") or article["resolved_url"] or article["url"]
-    
+    link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]    
+
     # Get domain for display
     domain = article["domain"] or "unknown"
     domain = domain.replace("www.", "")

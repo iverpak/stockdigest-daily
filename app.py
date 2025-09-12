@@ -1085,7 +1085,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     return "".join(html)
 
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format a single article for HTML display with dynamic domain resolution"""
+    """Format a single article for HTML display - UPDATED: Source, Score, Title, Date format"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
     title = article["title"] or "No Title"
@@ -1093,7 +1093,7 @@ def _format_article_html(article: Dict, category: str) -> str:
     suffixes_to_remove = [
         " - MarketBeat", " - Newser", " - TipRanks", " - MSN", 
         " - The Daily Item", " - MarketScreener", " - Seeking Alpha",
-        " - simplywall.st", " - Investopedia"
+        " - simplywall.st", " - Investopedia", " - Google News", " - Yahoo Finance"
     ]
     
     for suffix in suffixes_to_remove:
@@ -1109,23 +1109,21 @@ def _format_article_html(article: Dict, category: str) -> str:
     # Get the resolved domain for display
     resolved_domain = article["domain"] or "unknown"
     
-    # Use dynamic domain name resolution - THIS IS THE KEY CHANGE
+    # Use dynamic domain name resolution
     display_source = get_or_create_formal_domain_name(resolved_domain)
-    
-    # Create source badge
-    source_badge = f"<span class='source-badge'>{display_source}</span>"
     
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
     related = f" | Related: {article.get('related_ticker', '')}" if article.get('related_ticker') else ""
     
+    # NEW FORMAT: Source | Score | Title | Date
     return f"""
     <div class='article {category}'>
-        <a href='{link_url}' target='_blank'>{title}</a>
-        {source_badge}
-        <span class='meta'> | {pub_date}</span>
+        <span class='source-badge'>{display_source}</span>
         <span class='score {score_class}'>Score: {score:.0f}</span>
+        <a href='{link_url}' target='_blank'>{title}</a>
+        <span class='meta'> | {pub_date}</span>
         {related}
     </div>
     """
@@ -2086,6 +2084,55 @@ def reset_digest_flags(request: Request, body: ResetDigestRequest):
         count = cur.rowcount
     
     return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
+
+@APP.post("/admin/debug-google-resolution")
+def debug_google_resolution(request: Request):
+    """Debug Google News URL resolution process"""
+    require_admin(request)
+    
+    # Test URL from your example
+    test_url = request.headers.get("test-url", "https://news.google.com/rss/articles/CBMiyAFBVV95cUxPRlpMdS1fSVJfMWo3VTNyVndlQVpEUlF4aENOS2p0QXoxRVB6cGJ0VEwzNVhaa3JYSmRVNnR5T244OGM0VVZjSVNKMXRsRVRmWVVqWl9BaEVQYXdJakFmTVRDNm1NUE5sSTBwYlhmQkxwU3g3TUVZaUFpdkxsME5PbHF2RUt5cHNneGZCamhhMUxhaGFiSEZEU1pQYlBXa1M3bkRTNXNxb2toZ1p3MFV0bGNiR2pPSkY4Y291clZjQ1dEX01OdFFoag?oc=5&hl=en-US&gl=US&ceid=US:en")
+    
+    LOG.info(f"Testing Google News resolution on: {test_url}")
+    
+    result = {
+        "test_url": test_url,
+        "resolution_attempted": True
+    }
+    
+    try:
+        # Test the resolve_google_news_url function
+        resolved_result = resolve_google_news_url(test_url)
+        
+        if resolved_result[0] is None:
+            result["resolution_status"] = "blocked_or_failed"
+            result["resolved_url"] = None
+            result["domain"] = None
+            result["yahoo_source_url"] = None
+        else:
+            resolved_url, domain, yahoo_source_url = resolved_result
+            result["resolution_status"] = "success"
+            result["resolved_url"] = resolved_url
+            result["domain"] = domain
+            result["yahoo_source_url"] = yahoo_source_url
+            
+            # Test domain name resolution
+            if domain:
+                formal_name = get_or_create_formal_domain_name(domain)
+                result["formal_domain_name"] = formal_name
+                result["ai_generated"] = True  # Check if it was generated or cached
+                
+                # Check what's in the database for this domain
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT * FROM domain_names WHERE domain = %s", (domain.replace("www.", "").lower(),))
+                    domain_record = cur.fetchone()
+                    result["domain_record"] = dict(domain_record) if domain_record else None
+    
+    except Exception as e:
+        result["error"] = str(e)
+        LOG.error(f"Error testing Google News resolution: {e}")
+    
+    return result
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

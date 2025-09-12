@@ -413,67 +413,64 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
 # ------------------------------------------------------------------------------
 # URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
-
-# Match a JSON string value safely: " ... " with escapes allowed
-_JSON_STRING = r'"((?:[^"\\]|\\.)*)"'
-_YAHOO_KEYS = [
-    r'providerContentUrl',
-    r'providerUniversalUrl',
-    r'contentUrl',
-    r'canonicalUrl',
-    r'clickThroughUrl',   # sometimes points to the source; we’ll filter yahoo.com out
-]
-
-def _json_unescape(s: str) -> str:
+def extract_yahoo_finance_source(url: str) -> Optional[str]:
+    """Extract original source URL from Yahoo Finance article - ENHANCED JSON handling"""
     try:
-        # round-trip through JSON to interpret \u002F, \/, \"
-        return json.loads(f'"{s}"')
-    except Exception:
-        # last-ditch cleanup
-        return s.replace("\\/", "/").replace("\\u002F", "/").replace('\\"', '"')
-
-def extract_yahoo_finance_source(url: str, timeout: int = 12) -> str | None:
-    """
-    Returns the original publisher URL from a Yahoo Finance news page,
-    or None if not found / not a Yahoo page.
-    """
-    try:
-        parsed_in = urlparse(url)
-        if not parsed_in.netloc.endswith("yahoo.com"):
+        # Only process Yahoo Finance URLs
+        if "finance.yahoo.com" not in url:
             return None
-
-        resp = requests.get(
-            url,
-            timeout=timeout,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        )
-        if resp.status_code != 200 or not resp.text:
+            
+        response = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        if response.status_code != 200:
             return None
-
-        html = resp.text
-
-        # Try each key with a JSON-safe string capture
-        for key in _YAHOO_KEYS:
-            pattern = re.compile(rf'{key}\s*:\s*{_JSON_STRING}', re.DOTALL)
-            for m in pattern.findall(html):
-                candidate = _json_unescape(m).strip()
-                if not candidate:
-                    continue
-                p = urlparse(candidate)
-                # Only accept real external HTTP(S) links and skip Yahoo-owned domains
-                if p.scheme in ("http", "https") and p.netloc and "yahoo.com" not in p.netloc:
-                    return candidate
-
+        
+        # Try multiple field names Yahoo might use
+        field_patterns = [
+            'providerContentUrl',
+            'sourceUrl', 
+            'originalUrl',
+            'contentUrl'
+        ]
+        
+        for field_name in field_patterns:
+            # Look for the field in a JSON context - match the full JSON string
+            pattern = rf'"{field_name}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
+            match = re.search(pattern, response.text)
+            
+            if match:
+                # Extract the raw JSON string value
+                raw_url = match.group(1)
+                
+                try:
+                    # Use json.loads to properly unescape the URL
+                    # Wrap in quotes to make it valid JSON string
+                    unescaped_url = json.loads(f'"{raw_url}"')
+                    
+                    # Validate it's a proper URL
+                    parsed = urlparse(unescaped_url)
+                    if parsed.scheme and parsed.netloc:
+                        LOG.info(f"Found Yahoo Finance original source via {field_name}: {unescaped_url}")
+                        return unescaped_url
+                        
+                except json.JSONDecodeError:
+                    # If JSON decoding fails, try simple unescape
+                    simple_unescaped = raw_url.replace('\\/', '/')
+                    parsed = urlparse(simple_unescaped)
+                    if parsed.scheme and parsed.netloc:
+                        LOG.info(f"Found Yahoo Finance source via simple unescape: {simple_unescaped}")
+                        return simple_unescaped
+        
         return None
-    except Exception:
+        
+    except Exception as e:
+        LOG.debug(f"Failed to extract Yahoo Finance source from {url}: {e}")
         return None
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Resolve Google News redirect URL and check for spam domains - ENHANCED with Yahoo source extraction"""
+    """Resolve Google News redirect URL and extract Yahoo sources - ENHANCED for original URL priority"""
     original_source_url = None
     
     try:
@@ -493,6 +490,18 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
             # Check if it's Yahoo Finance and extract original source
             if "finance.yahoo.com" in final_url:
                 original_source_url = extract_yahoo_finance_source(final_url)
+                if original_source_url:
+                    # Use the ORIGINAL source as the main URL, not Yahoo
+                    original_domain = urlparse(original_source_url).netloc.lower()
+                    # Check if original source is spam too
+                    for spam_domain in SPAM_DOMAINS:
+                        spam_clean = spam_domain.replace("www.", "").lower()
+                        if spam_clean in original_domain:
+                            LOG.info(f"BLOCKED original source as spam: {original_domain}")
+                            return None, None, None
+                    
+                    LOG.info(f"Using original source instead of Yahoo: {original_source_url}")
+                    return original_source_url, original_domain, final_url  # Return original as main URL, Yahoo as source
             
             return final_url, domain, original_source_url
         
@@ -514,6 +523,15 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 # Check if it's Yahoo Finance and extract original source
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
+                    if original_source_url:
+                        original_domain = urlparse(original_source_url).netloc.lower()
+                        # Check spam on original
+                        for spam_domain in SPAM_DOMAINS:
+                            spam_clean = spam_domain.replace("www.", "").lower()
+                            if spam_clean in original_domain:
+                                LOG.info(f"BLOCKED original source as spam: {original_domain}")
+                                return None, None, None
+                        return original_source_url, original_domain, actual_url
                         
                 return actual_url, domain, original_source_url
             elif 'q' in params:
@@ -530,6 +548,13 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 # Check if it's Yahoo Finance and extract original source
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
+                    if original_source_url:
+                        original_domain = urlparse(original_source_url).netloc.lower()
+                        for spam_domain in SPAM_DOMAINS:
+                            spam_clean = spam_domain.replace("www.", "").lower()
+                            if spam_clean in original_domain:
+                                return None, None, None
+                        return original_source_url, original_domain, actual_url
                         
                 return actual_url, domain, original_source_url
         
@@ -546,6 +571,14 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         # Check if it's Yahoo Finance and extract original source
         if "finance.yahoo.com" in url:
             original_source_url = extract_yahoo_finance_source(url)
+            if original_source_url:
+                original_domain = urlparse(original_source_url).netloc.lower()
+                # Check spam on original
+                for spam_domain in SPAM_DOMAINS:
+                    spam_clean = spam_domain.replace("www.", "").lower()
+                    if spam_clean in original_domain:
+                        return None, None, None
+                return original_source_url, original_domain, url
                 
         return url, domain, original_source_url
         
@@ -642,27 +675,18 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             
             # ENHANCED: URL resolution with spam checking and Yahoo source extraction
             resolved_result = resolve_google_news_url(original_url)
-            if resolved_result[0] is None:
+            if resolved_result[0] is None:  # Spam detected
                 stats["blocked_spam"] += 1
                 continue
-            
-            resolved_url, domain, original_source_url = resolved_result
+                
+            resolved_url, domain, yahoo_source_url = resolved_result
             if not resolved_url or not domain:
                 continue
-
-            # >>> NEW: treat original source as the canonical link we store/use
-            link_url_for_db = original_source_url or resolved_url
-            domain = urlparse(link_url_for_db).netloc.lower()
             
-            url_hash = get_url_hash(link_url_for_db)
-            title = getattr(entry, "title", "") or "No Title"
-            description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
-
-
             # Track Yahoo source extractions
-            if original_source_url:
+            if yahoo_source_url:
                 stats["yahoo_sources_found"] += 1
-                LOG.info(f"Yahoo Finance article resolved to: {original_source_url}")
+                LOG.info(f"Yahoo Finance article resolved to original: {resolved_url}")
                 
             url_hash = get_url_hash(resolved_url)
             
@@ -705,17 +729,18 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     
                     cur.execute("""
                         INSERT INTO found_url (
-                            url, link_url_for_db, url_hash, title, description,
+                            url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
                             category, related_ticker, original_source_url
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
-                        original_url,                 # the raw feed link
-                        link_url_for_db,              # <<< now the true article URL
-                        url_hash, title, description,
+                        original_url,           # The original RSS feed URL
+                        resolved_url,           # Now the original source URL (not Yahoo)
+                        url_hash,               # Hash of the original source URL
+                        title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, related_ticker, original_source_url
+                        category, related_ticker, yahoo_source_url  # Yahoo URL stored as reference
                     ))
                     
                     if cur.fetchone():

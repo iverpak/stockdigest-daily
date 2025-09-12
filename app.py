@@ -99,9 +99,13 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
     
     prompt = f"""
     For the publicly traded stock ticker {ticker}, provide ACCURATE and SPECIFIC information:
+
+    CRITICAL: First verify that {ticker} is the correct ticker symbol you're analyzing.
     
-    1. Five industry keywords/terms that are most relevant to this company's actual business
-    2. Three main publicly-traded competitors (COMPANY NAMES ONLY, no tickers)
+    1. Five industry keywords/terms that are most relevant to THIS SPECIFIC COMPANY's business
+    2. Three main competitors of THIS SPECIFIC COMPANY (company names only)
+    
+    The ticker {ticker} should be your primary focus - do not confuse it with other companies.
     
     IMPORTANT REQUIREMENTS:
     - Research the actual company behind ticker {ticker}
@@ -642,7 +646,9 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         
         # Spam check
         for spam_domain in SPAM_DOMAINS:
-            if spam_domain.replace("www.", "").lower() in domain:
+            spam_clean = spam_domain.replace("www.", "").lower()
+            if spam_clean in domain:
+                LOG.info(f"BLOCKED spam domain: {domain} (matched: {spam_clean})")
                 return None, None, None
         
         # Yahoo Finance handling
@@ -833,6 +839,15 @@ Examples:
                     if source == "null" or source == "None":
                         source = None
                     
+                    # NEW: Add spam filtering here
+                    if source:
+                        source_lower = source.lower()
+                        spam_sources = ["marketbeat", "newser", "khodrobank"]
+                        for spam in spam_sources:
+                            if spam in source_lower:
+                                LOG.info(f"BLOCKED spam source in title: {source}")
+                                return None, None  # Return None to signal spam
+                    
                     LOG.info(f"AI title analysis: '{title[:60]}...' → source: '{source}', title: '{clean_title[:40]}...'")
                     return clean_title, source
                     
@@ -853,6 +868,15 @@ Examples:
         if match:
             source = match.group(1).strip()
             clean_title = re.sub(pattern, '', title).strip()
+            
+            # NEW: Add spam filtering to fallback too
+            source_lower = source.lower()
+            spam_sources = ["marketbeat", "newser", "khodrobank"]
+            for spam in spam_sources:
+                if spam in source_lower:
+                    LOG.info(f"BLOCKED spam source in fallback: {source}")
+                    return None, None
+            
             LOG.info(f"Fallback title extraction: source: '{source}', title: '{clean_title[:40]}...'")
             return clean_title, source
     
@@ -938,7 +962,7 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return None
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with category - FIXED variable scope issues"""
+    """Process a single feed and store articles with category and spam filtering"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "yahoo_sources_found": 0}
     
     try:
@@ -953,13 +977,13 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             if not original_url:
                 continue
             
-            # FIXED: URL resolution with proper variable names
+            # URL resolution with proper variable names
             resolved_result = resolve_google_news_url(original_url)
-            if resolved_result[0] is None:  # Spam detected
+            if resolved_result[0] is None:  # Spam detected at URL level
                 stats["blocked_spam"] += 1
                 continue
                 
-            resolved_url, domain, yahoo_source_url = resolved_result  # FIXED: Proper unpacking
+            resolved_url, domain, yahoo_source_url = resolved_result
             if not resolved_url or not domain:
                 continue
             
@@ -973,12 +997,20 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # Calculate quality score with category context
+            # NEW: Check for spam in title during ingestion
+            spam_keywords = ["marketbeat", "newser", "khodrobank"]
+            if any(spam in title.lower() for spam in spam_keywords):
+                stats["blocked_spam"] += 1
+                LOG.info(f"BLOCKED spam in title during ingestion: {title[:50]}")
+                continue
+            
+            # Calculate quality score (currently disabled, returns 50.0)
             quality_score = calculate_quality_score(
                 title, domain, feed["ticker"], description, category, keywords
             )
             
-            if quality_score < 15:  # Lowered threshold
+            # Lower threshold since scoring is disabled
+            if quality_score < 1:
                 stats["low_quality"] += 1
                 LOG.debug(f"Skipping low quality [{category}]: {title[:50]} (score: {quality_score})")
                 continue
@@ -1007,7 +1039,6 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                                 related_ticker = word
                                 break
                     
-                    # FIXED: Use proper variable name yahoo_source_url instead of original_source_url
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1018,13 +1049,13 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     """, (
                         original_url, resolved_url, url_hash, title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, related_ticker, yahoo_source_url  # FIXED: Use yahoo_source_url
+                        category, related_ticker, yahoo_source_url
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
                         source_note = f" (source: {urlparse(yahoo_source_url).netloc})" if yahoo_source_url else ""
-                        LOG.info(f"Inserted [{category}] (score: {quality_score:.0f}){source_note}: {title[:60]}...")
+                        LOG.info(f"Inserted [{category}]{source_note}: {title[:60]}...")
                         
             except Exception as e:
                 LOG.error(f"Database insert error for '{title[:50]}': {e}")
@@ -1137,7 +1168,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
 
 # Simplified _format_article_html function
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format article HTML with AI-powered title analysis"""
+    """Format article HTML with AI-powered title analysis and spam filtering"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
     original_title = article["title"] or "No Title"
@@ -1147,6 +1178,10 @@ def _format_article_html(article: Dict, category: str) -> str:
     if "news.google.com" in resolved_domain:
         # Use AI to analyze Google News titles
         title, extracted_source = extract_source_with_ai(original_title)
+        
+        # Check if spam was detected
+        if title is None:  # Spam detected
+            return ""  # Return empty string to skip this article
         
         if extracted_source:
             display_source = enhance_source_name(extracted_source)

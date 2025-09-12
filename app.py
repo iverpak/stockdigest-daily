@@ -414,39 +414,46 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
 # URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
 def extract_yahoo_finance_source(url: str) -> Optional[str]:
-    """Extract original source URL from Yahoo Finance article"""
+    """Extract original source URL from Yahoo Finance aggregator pages."""
     try:
-        # Only process Yahoo Finance URLs
-        if "finance.yahoo.com" not in url:
+        if "yahoo.com" not in url:
             return None
-            
-        response = requests.get(url, timeout=10, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        
-        if response.status_code != 200:
+
+        resp = requests.get(
+            url,
+            timeout=12,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        if resp.status_code != 200 or not resp.text:
             return None
-        
-        # Look for the providerContentUrl pattern in the HTML
-        # Using regex to find the pattern in the raw HTML
-        pattern = r'"providerContentUrl"\s*:\s*"([^"]+)"'
-        match = re.search(pattern, response.text)
-        
-        if match:
-            original_url = match.group(1)
-            # Unescape any escaped characters
-            original_url = original_url.replace('\/', '/')
-            
-            # Validate it's a proper URL
-            parsed = urlparse(original_url)
-            if parsed.scheme and parsed.netloc:
-                LOG.info(f"Found Yahoo Finance original source: {original_url}")
-                return original_url
-        
+
+        def _unescape(s: str) -> str:
+            # Handles \/ and \u002F etc. via JSON round-trip
+            try:
+                return json.loads(f'"{s}"')
+            except Exception:
+                return s.replace("\\/", "/")
+
+        # Try a few JSON keys Yahoo uses across templates
+        patterns = [
+            r'"providerContentUrl"\s*:\s*"([^"]+)"',
+            r'"providerUniversalUrl"\s*:\s*"([^"]+)"',
+            r'"contentUrl"\s*:\s*"([^"]+)"',
+            r'"canonicalUrl"\s*:\s*"([^"]+)"',
+        ]
+
+        for pat in patterns:
+            for m in re.findall(pat, resp.text):
+                candidate = _unescape(m)
+                parsed = urlparse(candidate)
+                if parsed.scheme in ("http", "https") and parsed.netloc and "yahoo.com" not in parsed.netloc:
+                    LOG.info(f"Found Yahoo original source: {candidate}")
+                    return candidate
+
         return None
-        
+
     except Exception as e:
-        LOG.debug(f"Failed to extract Yahoo Finance source from {url}: {e}")
+        LOG.debug(f"Yahoo source extraction failed for {url}: {e}")
         return None
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -619,14 +626,22 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             
             # ENHANCED: URL resolution with spam checking and Yahoo source extraction
             resolved_result = resolve_google_news_url(original_url)
-            if resolved_result[0] is None:  # Spam detected
+            if resolved_result[0] is None:
                 stats["blocked_spam"] += 1
                 continue
-                
+            
             resolved_url, domain, original_source_url = resolved_result
             if not resolved_url or not domain:
                 continue
+
+            # >>> NEW: treat original source as the canonical link we store/use
+            link_url_for_db = original_source_url or resolved_url
             
+            url_hash = get_url_hash(link_url_for_db)
+            title = getattr(entry, "title", "") or "No Title"
+            description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
+
+
             # Track Yahoo source extractions
             if original_source_url:
                 stats["yahoo_sources_found"] += 1
@@ -679,7 +694,9 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
-                        original_url, resolved_url, url_hash, title, description,
+                        original_url,                 # the raw feed link
+                        link_url_for_db,              # <<< now the true article URL
+                        url_hash, title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
                         category, related_ticker, original_source_url
                     ))

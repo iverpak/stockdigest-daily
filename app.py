@@ -449,14 +449,14 @@ def extract_yahoo_finance_source(url: str) -> Optional[str]:
         for field_name in field_patterns:
             # Multiple regex patterns to handle different JSON formatting
             patterns = [
-                # Pattern 1: Handle JSON escaping properly
-                rf'"{field_name}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"',
-                # Pattern 2: Capture everything until closing quote
-                rf'"{field_name}"\s*:\s*"([^"]*?)"',
-                # Pattern 3: Specifically look for stockstory URLs
-                rf'"{field_name}"\s*:\s*"(https?://stockstory\.org[^"]*)"',
-                # Pattern 4: Very permissive - capture long URLs
-                rf'"{field_name}"\s*:\s*"(https?://[^"\s]{20,})"'
+                # Pattern 1: Handle heavily escaped JSON (the actual format)
+                rf'\\\\\\"{field_name}\\\\\\":\\\\\\\"([^\\\\]*?)\\\\\\\"',
+                # Pattern 2: Handle escaped JSON  
+                rf'\\"{field_name}\\":\\\"([^\\"]*)\\\"',
+                # Pattern 3: Standard JSON
+                rf'"{field_name}"\s*:\s*"([^"]*)"',
+                # Pattern 4: Specifically target the stockstory URL we see in debug
+                rf'{field_name}[^:]*:[^"]*"([^"]*stockstory\.org[^"]*)"'
             ]
             
             for i, pattern in enumerate(patterns):

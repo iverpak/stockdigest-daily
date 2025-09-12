@@ -809,6 +809,100 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         LOG.warning(f"Failed to resolve URL {url}: {e}")
         return url, urlparse(url).netloc.lower() if url else None, None
 
+def extract_source_from_title(title: str) -> Tuple[str, str]:
+    """Extract source information from Google News article titles"""
+    if not title:
+        return title, None
+    
+    original_title = title
+    extracted_source = None
+    
+    # Pattern 1: " - Source Name" at the end
+    title_source_patterns = [
+        r'\s*-\s*([^-]+\.(com|org|net|co\.uk|in))$',  # Domain patterns
+        r'\s*-\s*(Markets?\s+Mojo|StockTradersDaily|Market\s+Watch|Business\s+Wire|PR\s+Newswire|Globe\s+Newswire)$',  # Known sources
+        r'\s*-\s*([A-Za-z\s&]+(?:News|Times|Post|Journal|Tribune|Herald|Gazette|Wire|Report|Today|Daily|Weekly))$',  # News outlet patterns
+        r'\s*-\s*([A-Za-z\s&]+(?:Financial|Finance|Business|Economic|Market|Investment))$',  # Financial publication patterns
+        r'\s*-\s*(Yahoo\s+Finance|Google\s+News|Reuters|Bloomberg|CNBC|MarketWatch|Seeking\s+Alpha|Motley\s+Fool)$'  # Major sources
+    ]
+    
+    for pattern in title_source_patterns:
+        match = re.search(pattern, title, re.IGNORECASE)
+        if match:
+            extracted_source = match.group(1).strip()
+            # Remove the source from title
+            title = re.sub(pattern, '', title, flags=re.IGNORECASE).strip()
+            break
+    
+    # Pattern 2: Domain at the end without " - "
+    if not extracted_source:
+        domain_pattern = r'\s*([a-zA-Z0-9.-]+\.(com|org|net|co\.uk|in))$'
+        match = re.search(domain_pattern, title)
+        if match:
+            extracted_source = match.group(1).strip()
+            title = re.sub(domain_pattern, '', title).strip()
+    
+    return title, extracted_source
+
+def enhance_source_with_ai(raw_source: str) -> str:
+    """Use OpenAI to enhance raw source names extracted from titles"""
+    if not raw_source or not OPENAI_API_KEY:
+        return raw_source or "Unknown"
+    
+    # Check if it looks like a domain
+    if '.' in raw_source and any(tld in raw_source.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
+        # It's a domain, use existing domain resolution
+        return get_or_create_formal_domain_name(raw_source)
+    
+    # It's a publication name, enhance it with AI
+    prompt = f"""The following text was extracted from a news article title as the source publication: "{raw_source}"
+
+Please provide the proper, formal name of this publication as it would appear in citations.
+
+Examples:
+- "Markets Mojo" → "Markets Mojo"
+- "StockTradersDaily" → "Stock Traders Daily"  
+- "Business Wire" → "Business Wire"
+- "Market Watch" → "MarketWatch"
+
+For "{raw_source}", the formal name is:"""
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a media expert. Provide only the proper, formal name of publications. Be concise and accurate."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_completion_tokens": 30
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=10)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'choices' in result and result['choices']:
+                formal_name = result['choices'][0]['message']['content'].strip()
+                formal_name = re.sub(r'^["\']|["\']$', '', formal_name)  # Remove quotes
+                formal_name = formal_name.strip()
+                
+                if len(formal_name) > 2 and len(formal_name) < 100:
+                    LOG.info(f"AI enhanced source: '{raw_source}' → '{formal_name}'")
+                    return formal_name
+                    
+    except Exception as e:
+        LOG.debug(f"AI source enhancement failed for '{raw_source}': {e}")
+    
+    # Fallback: Clean up the raw source
+    cleaned = raw_source.replace('.com', '').replace('.org', '').replace('.net', '')
+    cleaned = re.sub(r'([a-z])([A-Z])', r'\1 \2', cleaned)  # Add spaces between camelCase
+    return cleaned.title()
+
 def calculate_quality_score(
     title: str, 
     domain: str, 
@@ -1167,11 +1261,32 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     return "".join(html)
 
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format a single article for HTML display - UPDATED: Source, Score, Title, Date format"""
+    """Format a single article for HTML display with Google News title processing"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
-    title = article["title"] or "No Title"
-    # Clean up title
+    original_title = article["title"] or "No Title"
+    resolved_domain = article["domain"] or "unknown"
+    
+    # Check if this is a Google News article that needs title processing
+    is_google_news = "news.google.com" in resolved_domain
+    display_source = None
+    title = original_title
+    
+    if is_google_news:
+        # Extract source from title for Google News articles
+        title, extracted_source = extract_source_from_title(original_title)
+        
+        if extracted_source:
+            # Use AI to enhance the extracted source
+            display_source = enhance_source_with_ai(extracted_source)
+        else:
+            # Fallback to domain resolution
+            display_source = get_or_create_formal_domain_name(resolved_domain)
+    else:
+        # Use normal domain resolution for non-Google sources
+        display_source = get_or_create_formal_domain_name(resolved_domain)
+    
+    # Clean up remaining title suffixes
     suffixes_to_remove = [
         " - MarketBeat", " - Newser", " - TipRanks", " - MSN", 
         " - The Daily Item", " - MarketScreener", " - Seeking Alpha",
@@ -1182,24 +1297,19 @@ def _format_article_html(article: Dict, category: str) -> str:
         if title.endswith(suffix):
             title = title[:-len(suffix)].strip()
     
+    # Remove ticker symbols and extra spaces
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
     # Determine which URL to use for the main link
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # Get the resolved domain for display
-    resolved_domain = article["domain"] or "unknown"
-    
-    # Use dynamic domain name resolution
-    display_source = get_or_create_formal_domain_name(resolved_domain)
-    
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
     related = f" | Related: {article.get('related_ticker', '')}" if article.get('related_ticker') else ""
     
-    # NEW FORMAT: Source | Score | Title | Date
+    # Format: Source | Score | Title | Date
     return f"""
     <div class='article {category}'>
         <span class='source-badge'>{display_source}</span>
@@ -2213,6 +2323,33 @@ def debug_google_resolution(request: Request):
     except Exception as e:
         result["error"] = str(e)
         LOG.error(f"Error testing Google News resolution: {e}")
+    
+    return result
+
+@APP.post("/admin/test-title-extraction")
+def test_title_extraction(request: Request):
+    """Test Google News title source extraction"""
+    require_admin(request)
+    
+    test_title = request.headers.get("test-title", "CCL Products Reaches All-Time High Amidst Market Volatility and Sector Underperformance - Markets Mojo")
+    
+    result = {
+        "original_title": test_title,
+        "extraction_attempted": True
+    }
+    
+    try:
+        # Test the extraction
+        cleaned_title, extracted_source = extract_source_from_title(test_title)
+        result["cleaned_title"] = cleaned_title
+        result["extracted_source"] = extracted_source
+        
+        if extracted_source:
+            enhanced_source = enhance_source_with_ai(extracted_source)
+            result["enhanced_source"] = enhanced_source
+        
+    except Exception as e:
+        result["error"] = str(e)
     
     return result
 

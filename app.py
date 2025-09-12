@@ -611,15 +611,15 @@ def test_yahoo_extraction_detailed(request: Request):
     return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Resolve URLs - SIMPLIFIED: Skip Google News redirect attempts"""
+    """Resolve URLs - simplified version"""
     original_source_url = None
     
     try:
-        # For Google News URLs, don't attempt redirects - just return as-is
+        # For Google News URLs, return as-is
         if "news.google.com" in url:
             return url, "news.google.com", None
         
-        # For direct Google redirect URLs (google.com/url pattern)
+        # For direct Google redirect URLs
         if "google.com/url" in url:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
@@ -627,147 +627,48 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 actual_url = params['url'][0]
                 domain = urlparse(actual_url).netloc.lower()
                 
-                # Check for spam in direct URLs too
+                # Spam check
                 for spam_domain in SPAM_DOMAINS:
-                    spam_clean = spam_domain.replace("www.", "").lower()
-                    if spam_clean in domain:
-                        LOG.info(f"BLOCKED spam destination in redirect: {domain}")
+                    if spam_domain.replace("www.", "").lower() in domain:
                         return None, None, None
                 
-                # Check if it's Yahoo Finance and extract original source
+                # Yahoo Finance source extraction
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
                     if original_source_url:
                         original_domain = urlparse(original_source_url).netloc.lower()
+                        # Spam check on original source
                         for spam_domain in SPAM_DOMAINS:
-                            spam_clean = spam_domain.replace("www.", "").lower()
-                            if spam_clean in original_domain:
+                            if spam_domain.replace("www.", "").lower() in original_domain:
                                 return None, None, None
                         return original_source_url, original_domain, actual_url
                         
-                return actual_url, domain, original_source_url
+                return actual_url, domain, None
         
         # Direct URL handling
         domain = urlparse(url).netloc.lower()
         
+        # Spam check
         for spam_domain in SPAM_DOMAINS:
-            spam_clean = spam_domain.replace("www.", "").lower()
-            if spam_clean in domain:
-                LOG.info(f"BLOCKED spam direct URL: {domain}")
+            if spam_domain.replace("www.", "").lower() in domain:
                 return None, None, None
         
+        # Yahoo Finance handling
         if "finance.yahoo.com" in url:
             original_source_url = extract_yahoo_finance_source(url)
             if original_source_url:
                 original_domain = urlparse(original_source_url).netloc.lower()
+                # Spam check on original source
                 for spam_domain in SPAM_DOMAINS:
-                    spam_clean = spam_domain.replace("www.", "").lower()
-                    if spam_clean in original_domain:
+                    if spam_domain.replace("www.", "").lower() in original_domain:
                         return None, None, None
                 return original_source_url, original_domain, url
                 
-        return url, domain, original_source_url
+        return url, domain, None
         
     except Exception as e:
         LOG.warning(f"Failed to resolve URL {url}: {e}")
         return url, urlparse(url).netloc.lower() if url else None, None
-
-def extract_source_from_title(title: str) -> Tuple[str, str]:
-    """Extract source information from Google News article titles - ENHANCED patterns"""
-    if not title:
-        return title, None
-    
-    original_title = title
-    extracted_source = None
-    
-    # Enhanced patterns to catch more sources including your examples
-    title_source_patterns = [
-        # Pattern 1: " - Source Name" (most common)
-        r'\s*-\s*(GuruFocus|Benzinga|MarketWatch|Seeking\s+Alpha|Motley\s+Fool|Zacks|TipRanks)$',
-        r'\s*-\s*(Yahoo\s+Finance|Google\s+News|Reuters|Bloomberg|CNBC|Wall\s+Street\s+Journal)$',
-        r'\s*-\s*(Business\s+Wire|PR\s+Newswire|Globe\s+Newswire|Market\s+Screener)$',
-        r'\s*-\s*(Stock\s+Traders\s+Daily|Markets?\s+Mojo|Insider\s+Monkey|Simply\s+Wall\s+St)$',
-        r'\s*-\s*(Barron\'?s|Investor\'?s?\s+Business\s+Daily|Financial\s+Times)$',
-        
-        # Pattern 2: Domain patterns
-        r'\s*-\s*([a-zA-Z0-9.-]*\.(?:com|org|net|co\.uk|in))$',
-        
-        # Pattern 3: Generic news outlet patterns  
-        r'\s*-\s*([A-Za-z\s&\']+(?:News|Times|Post|Journal|Tribune|Herald|Gazette|Wire|Report|Today|Daily|Weekly|Finance|Financial))$',
-        
-        # Pattern 4: Just the domain at the end (no dash)
-        r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net|co\.uk))$'
-    ]
-    
-    for pattern in title_source_patterns:
-        match = re.search(pattern, title, re.IGNORECASE)
-        if match:
-            extracted_source = match.group(1).strip()
-            # Remove the source from title
-            title = re.sub(pattern, '', title, flags=re.IGNORECASE).strip()
-            LOG.debug(f"Extracted source '{extracted_source}' from title")
-            break
-    
-    return title, extracted_source
-
-def enhance_source_with_ai(raw_source: str) -> str:
-    """Use OpenAI to enhance raw source names extracted from titles"""
-    if not raw_source or not OPENAI_API_KEY:
-        return raw_source or "Unknown"
-    
-    # Check if it looks like a domain
-    if '.' in raw_source and any(tld in raw_source.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
-        # It's a domain, use existing domain resolution
-        return get_or_create_formal_domain_name(raw_source)
-    
-    # It's a publication name, enhance it with AI
-    prompt = f"""The following text was extracted from a news article title as the source publication: "{raw_source}"
-
-Please provide the proper, formal name of this publication as it would appear in citations.
-
-Examples:
-- "Markets Mojo" → "Markets Mojo"
-- "StockTradersDaily" → "Stock Traders Daily"  
-- "Business Wire" → "Business Wire"
-- "Market Watch" → "MarketWatch"
-
-For "{raw_source}", the formal name is:"""
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a media expert. Provide only the proper, formal name of publications. Be concise and accurate."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_completion_tokens": 30
-        }
-        
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=10)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if 'choices' in result and result['choices']:
-                formal_name = result['choices'][0]['message']['content'].strip()
-                formal_name = re.sub(r'^["\']|["\']$', '', formal_name)  # Remove quotes
-                formal_name = formal_name.strip()
-                
-                if len(formal_name) > 2 and len(formal_name) < 100:
-                    LOG.info(f"AI enhanced source: '{raw_source}' → '{formal_name}'")
-                    return formal_name
-                    
-    except Exception as e:
-        LOG.debug(f"AI source enhancement failed for '{raw_source}': {e}")
-    
-    # Fallback: Clean up the raw source
-    cleaned = raw_source.replace('.com', '').replace('.org', '').replace('.net', '')
-    cleaned = re.sub(r'([a-z])([A-Z])', r'\1 \2', cleaned)  # Add spaces between camelCase
-    return cleaned.title()
 
 def calculate_quality_score(
     title: str, 
@@ -1999,53 +1900,6 @@ def get_yahoo_stats(request: Request):
     
     return stats
 
-@APP.post("/admin/test-yahoo-extraction")
-def test_yahoo_extraction(request: Request):
-    """Test Yahoo Finance source extraction with a sample URL"""
-    require_admin(request)
-    
-    # Use the URL you provided as a test case
-    test_url = request.headers.get("test-url", "https://finance.yahoo.com/news/why-bloom-energy-stock-trading-162542112.html")
-    
-    LOG.info(f"Testing Yahoo extraction on: {test_url}")
-    
-    result = {
-        "test_url": test_url,
-        "extraction_attempted": True
-    }
-    
-    # Try extraction
-    original_source = extract_yahoo_finance_source(test_url)
-    
-    if original_source:
-        result["extraction_successful"] = True
-        result["original_source_url"] = original_source
-        result["original_domain"] = urlparse(original_source).netloc
-    else:
-        result["extraction_successful"] = False
-        result["error"] = "Could not find providerContentUrl in page content"
-        
-        # Try to fetch the page for debugging
-        try:
-            response = requests.get(test_url, timeout=15, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
-            
-            # Check if providerContentUrl exists anywhere in the page
-            if "providerContentUrl" in response.text:
-                result["pattern_found"] = True
-                # Extract a snippet around the pattern for debugging
-                idx = response.text.find("providerContentUrl")
-                snippet = response.text[max(0, idx-100):min(len(response.text), idx+200)]
-                result["snippet"] = snippet[:300]
-            else:
-                result["pattern_found"] = False
-                result["note"] = "providerContentUrl not found in page - may be Yahoo original content"
-        except Exception as e:
-            result["fetch_error"] = str(e)
-    
-    return result
-
 @APP.post("/admin/test-email")
 def test_email(request: Request):
     """Send test email"""
@@ -2185,67 +2039,6 @@ def get_stats(
     
     return stats
 
-@APP.post("/admin/debug-yahoo-content")
-def debug_yahoo_content(request: Request):
-    """Debug what's actually in the Yahoo Finance page"""
-    require_admin(request)
-    
-    test_url = request.headers.get("test-url", "https://finance.yahoo.com/news/why-bloom-energy-shares-soaring-155542226.html")
-    
-    try:
-        response = requests.get(test_url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        
-        html_content = response.text
-        
-        # Find the specific section you mentioned
-        # Look for the pattern around "providerContentUrl"
-        pattern_index = html_content.find('providerContentUrl')
-        
-        result = {
-            "url": test_url,
-            "content_length": len(html_content),
-            "provider_url_found": pattern_index != -1
-        }
-        
-        if pattern_index != -1:
-            # Extract 500 characters around the match for analysis
-            start = max(0, pattern_index - 250)
-            end = min(len(html_content), pattern_index + 250)
-            context = html_content[start:end]
-            
-            result["context_snippet"] = context
-            result["provider_url_position"] = pattern_index
-            
-            # Try different regex patterns to see what matches
-            patterns_to_test = [
-                r'"providerContentUrl"\s*:\s*"([^"]*)"',
-                r'"providerContentUrl":"([^"]*)"',
-                r'providerContentUrl["\s]*:["\s]*([^",\s]*)',
-                r'"providerContentUrl"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
-            ]
-            
-            matches_found = {}
-            for i, pattern in enumerate(patterns_to_test):
-                matches = re.findall(pattern, html_content)
-                matches_found[f"pattern_{i+1}"] = {
-                    "pattern": pattern,
-                    "matches": matches[:3]  # First 3 matches only
-                }
-            
-            result["regex_test_results"] = matches_found
-            
-            # Also look for any stockstory.org URLs anywhere in the page
-            stockstory_pattern = r'https?://stockstory\.org[^"\s,]*'
-            stockstory_matches = re.findall(stockstory_pattern, html_content)
-            result["all_stockstory_urls"] = stockstory_matches[:5]  # First 5 matches
-        
-        return result
-        
-    except Exception as e:
-        return {"error": str(e)}
-
 @APP.get("/admin/domain-names")
 def list_domain_names(request: Request):
     """List all cached domain names"""
@@ -2275,110 +2068,6 @@ def reset_digest_flags(request: Request, body: ResetDigestRequest):
         count = cur.rowcount
     
     return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
-
-@APP.post("/admin/debug-google-resolution")
-def debug_google_resolution(request: Request):
-    """Debug Google News URL resolution process"""
-    require_admin(request)
-    
-    # Test URL from your example
-    test_url = request.headers.get("test-url", "https://news.google.com/rss/articles/CBMiyAFBVV95cUxPRlpMdS1fSVJfMWo3VTNyVndlQVpEUlF4aENOS2p0QXoxRVB6cGJ0VEwzNVhaa3JYSmRVNnR5T244OGM0VVZjSVNKMXRsRVRmWVVqWl9BaEVQYXdJakFmTVRDNm1NUE5sSTBwYlhmQkxwU3g3TUVZaUFpdkxsME5PbHF2RUt5cHNneGZCamhhMUxhaGFiSEZEU1pQYlBXa1M3bkRTNXNxb2toZ1p3MFV0bGNiR2pPSkY4Y291clZjQ1dEX01OdFFoag?oc=5&hl=en-US&gl=US&ceid=US:en")
-    
-    LOG.info(f"Testing Google News resolution on: {test_url}")
-    
-    result = {
-        "test_url": test_url,
-        "resolution_attempted": True
-    }
-    
-    try:
-        # Test the resolve_google_news_url function
-        resolved_result = resolve_google_news_url(test_url)
-        
-        if resolved_result[0] is None:
-            result["resolution_status"] = "blocked_or_failed"
-            result["resolved_url"] = None
-            result["domain"] = None
-            result["yahoo_source_url"] = None
-        else:
-            resolved_url, domain, yahoo_source_url = resolved_result
-            result["resolution_status"] = "success"
-            result["resolved_url"] = resolved_url
-            result["domain"] = domain
-            result["yahoo_source_url"] = yahoo_source_url
-            
-            # Test domain name resolution
-            if domain:
-                formal_name = get_or_create_formal_domain_name(domain)
-                result["formal_domain_name"] = formal_name
-                result["ai_generated"] = True  # Check if it was generated or cached
-                
-                # Check what's in the database for this domain
-                with db() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT * FROM domain_names WHERE domain = %s", (domain.replace("www.", "").lower(),))
-                    domain_record = cur.fetchone()
-                    result["domain_record"] = dict(domain_record) if domain_record else None
-    
-    except Exception as e:
-        result["error"] = str(e)
-        LOG.error(f"Error testing Google News resolution: {e}")
-    
-    return result
-
-@APP.post("/admin/test-title-extraction")
-def test_title_extraction(request: Request):
-    """Test Google News title source extraction"""
-    require_admin(request)
-    
-    test_title = request.headers.get("test-title", "CCL Products Reaches All-Time High Amidst Market Volatility and Sector Underperformance - Markets Mojo")
-    
-    result = {
-        "original_title": test_title,
-        "extraction_attempted": True
-    }
-    
-    try:
-        # Test the extraction
-        cleaned_title, extracted_source = extract_source_from_title(test_title)
-        result["cleaned_title"] = cleaned_title
-        result["extracted_source"] = extracted_source
-        
-        if extracted_source:
-            enhanced_source = enhance_source_with_ai(extracted_source)
-            result["enhanced_source"] = enhanced_source
-        
-    except Exception as e:
-        result["error"] = str(e)
-    
-    return result
-
-# Test endpoint for AI title analysis
-@APP.post("/admin/test-ai-title-analysis")
-def test_ai_title_analysis(request: Request):
-    """Test AI-powered title analysis"""
-    require_admin(request)
-    
-    test_title = request.headers.get("test-title", "Boeing Stock Drops 3% Following CEO's Conference Remarks - GuruFocus")
-    
-    result = {
-        "original_title": test_title,
-        "ai_analysis_attempted": True
-    }
-    
-    try:
-        # Test the AI extraction
-        clean_title, extracted_source = extract_source_with_ai(test_title)
-        result["clean_title"] = clean_title
-        result["extracted_source"] = extracted_source
-        
-        if extracted_source:
-            enhanced_source = enhance_source_name(extracted_source)
-            result["enhanced_source"] = enhanced_source
-        
-    except Exception as e:
-        result["error"] = str(e)
-    
-    return result
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

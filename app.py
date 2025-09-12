@@ -611,132 +611,15 @@ def test_yahoo_extraction_detailed(request: Request):
     return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Resolve Google News redirect URL - ENHANCED with multiple strategies"""
+    """Resolve URLs - SIMPLIFIED: Skip Google News redirect attempts"""
     original_source_url = None
     
     try:
-        # Handle Google News article URLs
-        if "news.google.com" in url and ("/articles/" in url or "/rss/" in url):
-            LOG.debug(f"Processing Google News URL: {url[:100]}...")
-            
-            # Strategy 1: Try multiple redirect approaches
-            final_url = None
-            domain = None
-            
-            # Try different request methods
-            strategies = [
-                # Strategy 1: Standard redirect with different headers
-                {
-                    'headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.5',
-                        'Accept-Encoding': 'gzip, deflate',
-                        'DNT': '1',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1'
-                    },
-                    'timeout': 20
-                },
-                # Strategy 2: Simpler headers
-                {
-                    'headers': {
-                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
-                    },
-                    'timeout': 15
-                },
-                # Strategy 3: Minimal approach
-                {
-                    'headers': {
-                        'User-Agent': 'curl/7.68.0'
-                    },
-                    'timeout': 10
-                }
-            ]
-            
-            for i, strategy in enumerate(strategies):
-                try:
-                    LOG.debug(f"Trying Google News redirect strategy {i+1}")
-                    response = requests.get(url, allow_redirects=True, **strategy)
-                    
-                    if response.url != url and "news.google.com" not in response.url:
-                        final_url = response.url
-                        domain = urlparse(final_url).netloc.lower()
-                        LOG.info(f"Google News redirect SUCCESS with strategy {i+1}: {url[:80]}... → {final_url}")
-                        break
-                    elif response.status_code == 200:
-                        # Check if the response contains a meta redirect or JavaScript redirect
-                        content = response.text
-                        
-                        # Look for meta refresh
-                        meta_redirect = re.search(r'<meta[^>]*http-equiv=["\']refresh["\'][^>]*content=["\'][^"\']*url=([^"\']*)["\']', content, re.IGNORECASE)
-                        if meta_redirect:
-                            redirect_url = meta_redirect.group(1)
-                            if redirect_url and "news.google.com" not in redirect_url:
-                                final_url = redirect_url
-                                domain = urlparse(final_url).netloc.lower()
-                                LOG.info(f"Google News meta redirect found: {redirect_url}")
-                                break
-                        
-                        # Look for JavaScript redirect
-                        js_redirect = re.search(r'window\.location\.href\s*=\s*["\']([^"\']*)["\']', content)
-                        if js_redirect:
-                            redirect_url = js_redirect.group(1)
-                            if redirect_url and "news.google.com" not in redirect_url:
-                                final_url = redirect_url
-                                domain = urlparse(final_url).netloc.lower()
-                                LOG.info(f"Google News JS redirect found: {redirect_url}")
-                                break
-                                
-                except Exception as e:
-                    LOG.debug(f"Strategy {i+1} failed: {e}")
-                    continue
-            
-            # If no redirect worked, fall back to manual URL decoding
-            if not final_url:
-                LOG.warning("All Google News redirect strategies failed, trying manual decode")
-                try:
-                    # Try to extract from the URL structure
-                    if "/articles/" in url:
-                        # Extract the base64-like encoded part
-                        match = re.search(r'/articles/([^?]+)', url)
-                        if match:
-                            encoded_part = match.group(1)
-                            # This is complex - Google uses proprietary encoding
-                            # For now, we'll have to accept that some Google News URLs won't redirect
-                            LOG.debug(f"Could not decode Google News URL: {encoded_part[:50]}...")
-                except Exception as e:
-                    LOG.debug(f"Manual decode failed: {e}")
-            
-            # If we still don't have a final URL, return the original with Google domain
-            if not final_url:
-                LOG.warning(f"Google News redirect completely failed for: {url[:100]}...")
-                return url, "news.google.com", None
-            
-            # Check if final destination is spam
-            for spam_domain in SPAM_DOMAINS:
-                spam_clean = spam_domain.replace("www.", "").lower()
-                if spam_clean in domain:
-                    LOG.info(f"BLOCKED spam destination after Google redirect: {domain} (matched: {spam_clean})")
-                    return None, None, None
-            
-            # Check if it's Yahoo Finance and extract original source
-            if "finance.yahoo.com" in final_url:
-                original_source_url = extract_yahoo_finance_source(final_url)
-                if original_source_url:
-                    original_domain = urlparse(original_source_url).netloc.lower()
-                    for spam_domain in SPAM_DOMAINS:
-                        spam_clean = spam_domain.replace("www.", "").lower()
-                        if spam_clean in original_domain:
-                            LOG.info(f"BLOCKED original source as spam: {original_domain}")
-                            return None, None, None
-                    
-                    LOG.info(f"Using original source instead of Yahoo: {original_source_url}")
-                    return original_source_url, original_domain, final_url
-            
-            return final_url, domain, original_source_url
+        # For Google News URLs, don't attempt redirects - just return as-is
+        if "news.google.com" in url:
+            return url, "news.google.com", None
         
-        # Handle other URL types (unchanged from original)
+        # For direct Google redirect URLs (google.com/url pattern)
         if "google.com/url" in url:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
@@ -744,34 +627,14 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 actual_url = params['url'][0]
                 domain = urlparse(actual_url).netloc.lower()
                 
+                # Check for spam in direct URLs too
                 for spam_domain in SPAM_DOMAINS:
                     spam_clean = spam_domain.replace("www.", "").lower()
                     if spam_clean in domain:
                         LOG.info(f"BLOCKED spam destination in redirect: {domain}")
                         return None, None, None
                 
-                if "finance.yahoo.com" in actual_url:
-                    original_source_url = extract_yahoo_finance_source(actual_url)
-                    if original_source_url:
-                        original_domain = urlparse(original_source_url).netloc.lower()
-                        for spam_domain in SPAM_DOMAINS:
-                            spam_clean = spam_domain.replace("www.", "").lower()
-                            if spam_clean in original_domain:
-                                LOG.info(f"BLOCKED original source as spam: {original_domain}")
-                                return None, None, None
-                        return original_source_url, original_domain, actual_url
-                        
-                return actual_url, domain, original_source_url
-            elif 'q' in params:
-                actual_url = params['q'][0]
-                domain = urlparse(actual_url).netloc.lower()
-                
-                for spam_domain in SPAM_DOMAINS:
-                    spam_clean = spam_domain.replace("www.", "").lower()
-                    if spam_clean in domain:
-                        LOG.info(f"BLOCKED spam destination in q param: {domain}")
-                        return None, None, None
-                
+                # Check if it's Yahoo Finance and extract original source
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
                     if original_source_url:
@@ -810,20 +673,30 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         return url, urlparse(url).netloc.lower() if url else None, None
 
 def extract_source_from_title(title: str) -> Tuple[str, str]:
-    """Extract source information from Google News article titles"""
+    """Extract source information from Google News article titles - ENHANCED patterns"""
     if not title:
         return title, None
     
     original_title = title
     extracted_source = None
     
-    # Pattern 1: " - Source Name" at the end
+    # Enhanced patterns to catch more sources including your examples
     title_source_patterns = [
-        r'\s*-\s*([^-]+\.(com|org|net|co\.uk|in))$',  # Domain patterns
-        r'\s*-\s*(Markets?\s+Mojo|StockTradersDaily|Market\s+Watch|Business\s+Wire|PR\s+Newswire|Globe\s+Newswire)$',  # Known sources
-        r'\s*-\s*([A-Za-z\s&]+(?:News|Times|Post|Journal|Tribune|Herald|Gazette|Wire|Report|Today|Daily|Weekly))$',  # News outlet patterns
-        r'\s*-\s*([A-Za-z\s&]+(?:Financial|Finance|Business|Economic|Market|Investment))$',  # Financial publication patterns
-        r'\s*-\s*(Yahoo\s+Finance|Google\s+News|Reuters|Bloomberg|CNBC|MarketWatch|Seeking\s+Alpha|Motley\s+Fool)$'  # Major sources
+        # Pattern 1: " - Source Name" (most common)
+        r'\s*-\s*(GuruFocus|Benzinga|MarketWatch|Seeking\s+Alpha|Motley\s+Fool|Zacks|TipRanks)$',
+        r'\s*-\s*(Yahoo\s+Finance|Google\s+News|Reuters|Bloomberg|CNBC|Wall\s+Street\s+Journal)$',
+        r'\s*-\s*(Business\s+Wire|PR\s+Newswire|Globe\s+Newswire|Market\s+Screener)$',
+        r'\s*-\s*(Stock\s+Traders\s+Daily|Markets?\s+Mojo|Insider\s+Monkey|Simply\s+Wall\s+St)$',
+        r'\s*-\s*(Barron\'?s|Investor\'?s?\s+Business\s+Daily|Financial\s+Times)$',
+        
+        # Pattern 2: Domain patterns
+        r'\s*-\s*([a-zA-Z0-9.-]*\.(?:com|org|net|co\.uk|in))$',
+        
+        # Pattern 3: Generic news outlet patterns  
+        r'\s*-\s*([A-Za-z\s&\']+(?:News|Times|Post|Journal|Tribune|Herald|Gazette|Wire|Report|Today|Daily|Weekly|Finance|Financial))$',
+        
+        # Pattern 4: Just the domain at the end (no dash)
+        r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net|co\.uk))$'
     ]
     
     for pattern in title_source_patterns:
@@ -832,15 +705,8 @@ def extract_source_from_title(title: str) -> Tuple[str, str]:
             extracted_source = match.group(1).strip()
             # Remove the source from title
             title = re.sub(pattern, '', title, flags=re.IGNORECASE).strip()
+            LOG.debug(f"Extracted source '{extracted_source}' from title")
             break
-    
-    # Pattern 2: Domain at the end without " - "
-    if not extracted_source:
-        domain_pattern = r'\s*([a-zA-Z0-9.-]+\.(com|org|net|co\.uk|in))$'
-        match = re.search(domain_pattern, title)
-        if match:
-            extracted_source = match.group(1).strip()
-            title = re.sub(domain_pattern, '', title).strip()
     
     return title, extracted_source
 
@@ -1040,6 +906,154 @@ def get_or_create_formal_domain_name(domain: str) -> str:
         """, (clean_domain, formal_name, formal_name != clean_domain.title()))
     
     return formal_name
+
+# Replace the title extraction functions with this AI-powered approach
+
+def extract_source_with_ai(title: str) -> Tuple[str, str]:
+    """Use OpenAI to intelligently extract source from news article titles"""
+    if not title or not OPENAI_API_KEY:
+        return title, None
+    
+    prompt = f"""Analyze this news article title and extract the source publication/website name:
+
+Title: "{title}"
+
+Please identify:
+1. The source publication or website (e.g., "GuruFocus", "Benzinga", "Wall Street Journal", "news.stocktradersdaily.com")
+2. The clean article title without the source name
+
+Rules:
+- Look for patterns like "Article Title - Source Name" or "Article Title Source.com"
+- The source is usually at the end after a dash or space
+- If no clear source is found, return null for source
+- Clean up the title by removing the source portion
+
+Respond in JSON format:
+{{
+    "source": "source name or null",
+    "clean_title": "article title without source"
+}}
+
+Examples:
+- "Boeing Stock Drops 3% - GuruFocus" → {{"source": "GuruFocus", "clean_title": "Boeing Stock Drops 3%"}}
+- "Market Analysis - news.stocktradersdaily.com" → {{"source": "Stock Traders Daily", "clean_title": "Market Analysis"}}
+- "Tesla Earnings Beat Estimates" → {{"source": null, "clean_title": "Tesla Earnings Beat Estimates"}}
+"""
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are an expert at analyzing news article titles and identifying source publications. Always respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_completion_tokens": 150,
+            "response_format": {"type": "json_object"}
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'choices' in result and result['choices']:
+                content = result['choices'][0]['message']['content']
+                
+                try:
+                    parsed = json.loads(content)
+                    source = parsed.get("source")
+                    clean_title = parsed.get("clean_title", title)
+                    
+                    # If source is "null" string, convert to None
+                    if source == "null" or source == "None":
+                        source = None
+                    
+                    LOG.info(f"AI title analysis: '{title[:60]}...' → source: '{source}', title: '{clean_title[:40]}...'")
+                    return clean_title, source
+                    
+                except json.JSONDecodeError as e:
+                    LOG.warning(f"AI title analysis JSON error: {e}")
+                    
+    except Exception as e:
+        LOG.warning(f"AI title analysis failed: {e}")
+    
+    # Fallback: Try simple regex patterns as backup
+    fallback_patterns = [
+        r'\s*-\s*([^-]+)$',  # " - Something" at the end
+        r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net))$'  # domain at the end
+    ]
+    
+    for pattern in fallback_patterns:
+        match = re.search(pattern, title)
+        if match:
+            source = match.group(1).strip()
+            clean_title = re.sub(pattern, '', title).strip()
+            LOG.info(f"Fallback title extraction: source: '{source}', title: '{clean_title[:40]}...'")
+            return clean_title, source
+    
+    return title, None
+
+def enhance_source_name(raw_source: str) -> str:
+    """Use OpenAI to enhance/formalize source names"""
+    if not raw_source or not OPENAI_API_KEY:
+        return raw_source or "Unknown"
+    
+    # If it looks like a domain, use existing domain resolution
+    if '.' in raw_source and any(tld in raw_source.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
+        return get_or_create_formal_domain_name(raw_source)
+    
+    # Use AI to enhance publication names
+    prompt = f"""Convert this source name to its proper formal name:
+
+Source: "{raw_source}"
+
+Provide the official, formal name as it would appear in citations.
+
+Examples:
+- "GuruFocus" → "GuruFocus"
+- "Benzinga" → "Benzinga"  
+- "WSJ" → "Wall Street Journal"
+- "marketwatch" → "MarketWatch"
+- "seekingalpha" → "Seeking Alpha"
+
+Formal name:"""
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a media expert. Provide only the proper, formal name of publications. Be concise."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_completion_tokens": 30
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=10)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'choices' in result and result['choices']:
+                formal_name = result['choices'][0]['message']['content'].strip()
+                formal_name = re.sub(r'^["\']|["\']$', '', formal_name)
+                
+                if len(formal_name) > 2 and len(formal_name) < 100:
+                    LOG.info(f"AI enhanced source: '{raw_source}' → '{formal_name}'")
+                    return formal_name
+                    
+    except Exception as e:
+        LOG.debug(f"AI source enhancement failed for '{raw_source}': {e}")
+    
+    # Fallback: Basic cleanup
+    return raw_source.title()
 
 # ------------------------------------------------------------------------------
 # Feed Processing
@@ -1260,48 +1274,33 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     
     return "".join(html)
 
+# Simplified _format_article_html function
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format a single article for HTML display with Google News title processing"""
+    """Format article HTML with AI-powered title analysis"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
     original_title = article["title"] or "No Title"
     resolved_domain = article["domain"] or "unknown"
     
-    # Check if this is a Google News article that needs title processing
-    is_google_news = "news.google.com" in resolved_domain
-    display_source = None
-    title = original_title
-    
-    if is_google_news:
-        # Extract source from title for Google News articles
-        title, extracted_source = extract_source_from_title(original_title)
+    # Determine source and clean title
+    if "news.google.com" in resolved_domain:
+        # Use AI to analyze Google News titles
+        title, extracted_source = extract_source_with_ai(original_title)
         
         if extracted_source:
-            # Use AI to enhance the extracted source
-            display_source = enhance_source_with_ai(extracted_source)
+            display_source = enhance_source_name(extracted_source)
         else:
-            # Fallback to domain resolution
-            display_source = get_or_create_formal_domain_name(resolved_domain)
+            display_source = "Google News"  # Fallback
     else:
-        # Use normal domain resolution for non-Google sources
+        # Non-Google articles use normal domain resolution
+        title = original_title
         display_source = get_or_create_formal_domain_name(resolved_domain)
     
-    # Clean up remaining title suffixes
-    suffixes_to_remove = [
-        " - MarketBeat", " - Newser", " - TipRanks", " - MSN", 
-        " - The Daily Item", " - MarketScreener", " - Seeking Alpha",
-        " - simplywall.st", " - Investopedia", " - Google News", " - Yahoo Finance"
-    ]
-    
-    for suffix in suffixes_to_remove:
-        if title.endswith(suffix):
-            title = title[:-len(suffix)].strip()
-    
-    # Remove ticker symbols and extra spaces
+    # Final cleanup of any remaining artifacts
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
-    # Determine which URL to use for the main link
+    # Determine link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
     score = article["quality_score"]
@@ -2346,6 +2345,34 @@ def test_title_extraction(request: Request):
         
         if extracted_source:
             enhanced_source = enhance_source_with_ai(extracted_source)
+            result["enhanced_source"] = enhanced_source
+        
+    except Exception as e:
+        result["error"] = str(e)
+    
+    return result
+
+# Test endpoint for AI title analysis
+@APP.post("/admin/test-ai-title-analysis")
+def test_ai_title_analysis(request: Request):
+    """Test AI-powered title analysis"""
+    require_admin(request)
+    
+    test_title = request.headers.get("test-title", "Boeing Stock Drops 3% Following CEO's Conference Remarks - GuruFocus")
+    
+    result = {
+        "original_title": test_title,
+        "ai_analysis_attempted": True
+    }
+    
+    try:
+        # Test the AI extraction
+        clean_title, extracted_source = extract_source_with_ai(test_title)
+        result["clean_title"] = clean_title
+        result["extracted_source"] = extracted_source
+        
+        if extracted_source:
+            enhanced_source = enhance_source_name(extracted_source)
             result["enhanced_source"] = enhanced_source
         
     except Exception as e:

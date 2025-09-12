@@ -420,60 +420,181 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
 # URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
 def extract_yahoo_finance_source(url: str) -> Optional[str]:
-    """Extract original source URL from Yahoo Finance article - ENHANCED JSON handling"""
+    """Extract original source URL from Yahoo Finance article - FIXED for real JSON patterns"""
     try:
         # Only process Yahoo Finance URLs
         if "finance.yahoo.com" not in url:
             return None
             
-        response = requests.get(url, timeout=10, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        response = requests.get(url, timeout=15, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
         
         if response.status_code != 200:
+            LOG.warning(f"HTTP {response.status_code} when fetching Yahoo URL: {url}")
             return None
+        
+        html_content = response.text
+        LOG.debug(f"Yahoo page content length: {len(html_content)}")
         
         # Try multiple field names Yahoo might use
         field_patterns = [
             'providerContentUrl',
             'sourceUrl', 
             'originalUrl',
-            'contentUrl'
+            'contentUrl',
+            'canonicalUrl'
         ]
         
         for field_name in field_patterns:
-            # Look for the field in a JSON context - match the full JSON string
-            pattern = rf'"{field_name}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
-            match = re.search(pattern, response.text)
+            # Multiple regex patterns to handle different JSON formatting
+            patterns = [
+                # Pattern 1: Standard JSON with potential escaping
+                rf'"{field_name}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"',
+                # Pattern 2: Look for the field anywhere with URL-like content  
+                rf'"{field_name}"\s*:\s*"([^"]*)"',
+                # Pattern 3: More flexible - find field followed by URL
+                rf'"{field_name}"\s*:\s*"(https?://[^"]*)"'
+            ]
             
-            if match:
-                # Extract the raw JSON string value
-                raw_url = match.group(1)
+            for i, pattern in enumerate(patterns):
+                matches = re.finditer(pattern, html_content)
                 
-                try:
-                    # Use json.loads to properly unescape the URL
-                    # Wrap in quotes to make it valid JSON string
-                    unescaped_url = json.loads(f'"{raw_url}"')
+                for match in matches:
+                    raw_url = match.group(1)
+                    LOG.debug(f"Found {field_name} candidate with pattern {i+1}: {raw_url[:100]}")
                     
-                    # Validate it's a proper URL
-                    parsed = urlparse(unescaped_url)
-                    if parsed.scheme and parsed.netloc:
-                        LOG.info(f"Found Yahoo Finance original source via {field_name}: {unescaped_url}")
-                        return unescaped_url
-                        
-                except json.JSONDecodeError:
-                    # If JSON decoding fails, try simple unescape
-                    simple_unescaped = raw_url.replace('\\/', '/')
-                    parsed = urlparse(simple_unescaped)
-                    if parsed.scheme and parsed.netloc:
-                        LOG.info(f"Found Yahoo Finance source via simple unescape: {simple_unescaped}")
-                        return simple_unescaped
+                    # Try to clean up the URL
+                    cleaned_urls = []
+                    
+                    # Method 1: JSON unescape
+                    try:
+                        unescaped_url = json.loads(f'"{raw_url}"')
+                        cleaned_urls.append(unescaped_url)
+                    except json.JSONDecodeError:
+                        pass
+                    
+                    # Method 2: Simple unescape
+                    simple_unescaped = raw_url.replace('\\/', '/').replace('\\"', '"')
+                    cleaned_urls.append(simple_unescaped)
+                    
+                    # Method 3: Use raw URL as-is
+                    cleaned_urls.append(raw_url)
+                    
+                    # Test each cleaned URL
+                    for cleaned_url in cleaned_urls:
+                        try:
+                            parsed = urlparse(cleaned_url)
+                            if (parsed.scheme in ['http', 'https'] and 
+                                parsed.netloc and 
+                                len(cleaned_url) > 20 and
+                                'finance.yahoo.com' not in cleaned_url):  # Don't return Yahoo URLs
+                                
+                                LOG.info(f"Found Yahoo Finance original source via {field_name}: {cleaned_url}")
+                                return cleaned_url
+                        except Exception:
+                            continue
         
+        # If no structured extraction worked, try a more aggressive search
+        # Look for any URL patterns that might be the source
+        url_patterns = [
+            r'https://stockstory\.org/[^"\s]*',
+            r'https://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[^"\s]*(?:stock|news|article|finance)[^"\s]*',
+        ]
+        
+        for pattern in url_patterns:
+            matches = re.finditer(pattern, html_content)
+            for match in matches:
+                candidate_url = match.group(0).rstrip('",')
+                try:
+                    parsed = urlparse(candidate_url)
+                    if parsed.scheme and parsed.netloc and 'finance.yahoo.com' not in candidate_url:
+                        LOG.info(f"Found Yahoo source via URL pattern search: {candidate_url}")
+                        return candidate_url
+                except Exception:
+                    continue
+        
+        LOG.debug(f"No original source found for Yahoo URL: {url}")
         return None
         
     except Exception as e:
-        LOG.debug(f"Failed to extract Yahoo Finance source from {url}: {e}")
+        LOG.warning(f"Failed to extract Yahoo Finance source from {url}: {e}")
         return None
+
+@APP.post("/admin/test-yahoo-extraction-detailed")
+def test_yahoo_extraction_detailed(request: Request):
+    """Enhanced test for Yahoo Finance source extraction with detailed debugging"""
+    require_admin(request)
+    
+    # Use your specific example URL
+    test_url = request.headers.get("test-url", "https://finance.yahoo.com/news/why-bloom-energy-shares-soaring-155542226.html")
+    
+    LOG.info(f"Testing detailed Yahoo extraction on: {test_url}")
+    
+    result = {
+        "test_url": test_url,
+        "extraction_attempted": True
+    }
+    
+    try:
+        # Fetch the page content
+        response = requests.get(test_url, timeout=15, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        if response.status_code != 200:
+            result["error"] = f"HTTP {response.status_code}"
+            return result
+        
+        html_content = response.text
+        result["page_length"] = len(html_content)
+        
+        # Check for your specific pattern
+        if "providerContentUrl" in html_content:
+            result["providerContentUrl_found"] = True
+            
+            # Find all occurrences
+            pattern = r'"providerContentUrl"\s*:\s*"([^"]*)"'
+            matches = re.findall(pattern, html_content)
+            result["providerContentUrl_matches"] = matches
+            
+            if matches:
+                raw_url = matches[0]
+                result["raw_extracted"] = raw_url
+                
+                # Try different unescaping methods
+                try:
+                    json_unescaped = json.loads(f'"{raw_url}"')
+                    result["json_unescaped"] = json_unescaped
+                except:
+                    pass
+                
+                simple_unescaped = raw_url.replace('\\/', '/')
+                result["simple_unescaped"] = simple_unescaped
+                
+                # Check the specific stockstory.org pattern
+                if "stockstory.org" in raw_url:
+                    result["stockstory_detected"] = True
+        else:
+            result["providerContentUrl_found"] = False
+            
+            # Search for any stockstory.org URLs
+            stockstory_pattern = r'https://stockstory\.org/[^"\s]*'
+            stockstory_matches = re.findall(stockstory_pattern, html_content)
+            result["stockstory_urls_found"] = stockstory_matches
+        
+        # Test the actual function
+        extracted_url = extract_yahoo_finance_source(test_url)
+        result["function_result"] = extracted_url
+        result["extraction_successful"] = extracted_url is not None
+        
+        if extracted_url:
+            result["final_domain"] = urlparse(extracted_url).netloc
+        
+    except Exception as e:
+        result["error"] = str(e)
+    
+    return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Resolve Google News redirect URL and extract Yahoo sources - ENHANCED for original URL priority"""

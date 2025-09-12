@@ -611,23 +611,107 @@ def test_yahoo_extraction_detailed(request: Request):
     return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Resolve Google News redirect URL and extract Yahoo sources - FIXED Google redirect handling"""
+    """Resolve Google News redirect URL - ENHANCED with multiple strategies"""
     original_source_url = None
     
     try:
-        # Handle Google News article URLs that need redirect following
+        # Handle Google News article URLs
         if "news.google.com" in url and ("/articles/" in url or "/rss/" in url):
             LOG.debug(f"Processing Google News URL: {url[:100]}...")
             
-            # Follow redirects to get the final destination
-            response = requests.get(url, timeout=15, allow_redirects=True, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            })
+            # Strategy 1: Try multiple redirect approaches
+            final_url = None
+            domain = None
             
-            final_url = response.url
-            domain = urlparse(final_url).netloc.lower()
+            # Try different request methods
+            strategies = [
+                # Strategy 1: Standard redirect with different headers
+                {
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1'
+                    },
+                    'timeout': 20
+                },
+                # Strategy 2: Simpler headers
+                {
+                    'headers': {
+                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+                    },
+                    'timeout': 15
+                },
+                # Strategy 3: Minimal approach
+                {
+                    'headers': {
+                        'User-Agent': 'curl/7.68.0'
+                    },
+                    'timeout': 10
+                }
+            ]
             
-            LOG.info(f"Google News redirect: {url[:80]}... → {final_url}")
+            for i, strategy in enumerate(strategies):
+                try:
+                    LOG.debug(f"Trying Google News redirect strategy {i+1}")
+                    response = requests.get(url, allow_redirects=True, **strategy)
+                    
+                    if response.url != url and "news.google.com" not in response.url:
+                        final_url = response.url
+                        domain = urlparse(final_url).netloc.lower()
+                        LOG.info(f"Google News redirect SUCCESS with strategy {i+1}: {url[:80]}... → {final_url}")
+                        break
+                    elif response.status_code == 200:
+                        # Check if the response contains a meta redirect or JavaScript redirect
+                        content = response.text
+                        
+                        # Look for meta refresh
+                        meta_redirect = re.search(r'<meta[^>]*http-equiv=["\']refresh["\'][^>]*content=["\'][^"\']*url=([^"\']*)["\']', content, re.IGNORECASE)
+                        if meta_redirect:
+                            redirect_url = meta_redirect.group(1)
+                            if redirect_url and "news.google.com" not in redirect_url:
+                                final_url = redirect_url
+                                domain = urlparse(final_url).netloc.lower()
+                                LOG.info(f"Google News meta redirect found: {redirect_url}")
+                                break
+                        
+                        # Look for JavaScript redirect
+                        js_redirect = re.search(r'window\.location\.href\s*=\s*["\']([^"\']*)["\']', content)
+                        if js_redirect:
+                            redirect_url = js_redirect.group(1)
+                            if redirect_url and "news.google.com" not in redirect_url:
+                                final_url = redirect_url
+                                domain = urlparse(final_url).netloc.lower()
+                                LOG.info(f"Google News JS redirect found: {redirect_url}")
+                                break
+                                
+                except Exception as e:
+                    LOG.debug(f"Strategy {i+1} failed: {e}")
+                    continue
+            
+            # If no redirect worked, fall back to manual URL decoding
+            if not final_url:
+                LOG.warning("All Google News redirect strategies failed, trying manual decode")
+                try:
+                    # Try to extract from the URL structure
+                    if "/articles/" in url:
+                        # Extract the base64-like encoded part
+                        match = re.search(r'/articles/([^?]+)', url)
+                        if match:
+                            encoded_part = match.group(1)
+                            # This is complex - Google uses proprietary encoding
+                            # For now, we'll have to accept that some Google News URLs won't redirect
+                            LOG.debug(f"Could not decode Google News URL: {encoded_part[:50]}...")
+                except Exception as e:
+                    LOG.debug(f"Manual decode failed: {e}")
+            
+            # If we still don't have a final URL, return the original with Google domain
+            if not final_url:
+                LOG.warning(f"Google News redirect completely failed for: {url[:100]}...")
+                return url, "news.google.com", None
             
             # Check if final destination is spam
             for spam_domain in SPAM_DOMAINS:
@@ -636,30 +720,11 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                     LOG.info(f"BLOCKED spam destination after Google redirect: {domain} (matched: {spam_clean})")
                     return None, None, None
             
-            # Check if the final destination is still Google News (redirect failed)
-            if "news.google.com" in final_url:
-                LOG.warning(f"Google News redirect failed, still on Google: {final_url}")
-                # Try alternative redirect method
-                try:
-                    # Extract the article URL from the Google News URL structure
-                    import base64
-                    import urllib.parse
-                    
-                    # Look for encoded URL in the Google News URL
-                    if "/articles/" in url:
-                        # Try to decode the Google News encoded URL
-                        # This is a fallback if normal redirect doesn't work
-                        pass  # For now, let it fall through to normal processing
-                except:
-                    pass
-            
             # Check if it's Yahoo Finance and extract original source
             if "finance.yahoo.com" in final_url:
                 original_source_url = extract_yahoo_finance_source(final_url)
                 if original_source_url:
-                    # Use the ORIGINAL source as the main URL, not Yahoo
                     original_domain = urlparse(original_source_url).netloc.lower()
-                    # Check if original source is spam too
                     for spam_domain in SPAM_DOMAINS:
                         spam_clean = spam_domain.replace("www.", "").lower()
                         if spam_clean in original_domain:
@@ -671,7 +736,7 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
             
             return final_url, domain, original_source_url
         
-        # For direct Google redirect URLs (google.com/url pattern)
+        # Handle other URL types (unchanged from original)
         if "google.com/url" in url:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
@@ -679,19 +744,16 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 actual_url = params['url'][0]
                 domain = urlparse(actual_url).netloc.lower()
                 
-                # Check for spam in direct URLs too
                 for spam_domain in SPAM_DOMAINS:
                     spam_clean = spam_domain.replace("www.", "").lower()
                     if spam_clean in domain:
                         LOG.info(f"BLOCKED spam destination in redirect: {domain}")
                         return None, None, None
                 
-                # Check if it's Yahoo Finance and extract original source
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
                     if original_source_url:
                         original_domain = urlparse(original_source_url).netloc.lower()
-                        # Check spam on original
                         for spam_domain in SPAM_DOMAINS:
                             spam_clean = spam_domain.replace("www.", "").lower()
                             if spam_clean in original_domain:
@@ -704,14 +766,12 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 actual_url = params['q'][0]
                 domain = urlparse(actual_url).netloc.lower()
                 
-                # Check for spam
                 for spam_domain in SPAM_DOMAINS:
                     spam_clean = spam_domain.replace("www.", "").lower()
                     if spam_clean in domain:
                         LOG.info(f"BLOCKED spam destination in q param: {domain}")
                         return None, None, None
                 
-                # Check if it's Yahoo Finance and extract original source
                 if "finance.yahoo.com" in actual_url:
                     original_source_url = extract_yahoo_finance_source(actual_url)
                     if original_source_url:
@@ -724,22 +784,19 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                         
                 return actual_url, domain, original_source_url
         
-        # Already a direct URL
+        # Direct URL handling
         domain = urlparse(url).netloc.lower()
         
-        # Check direct URLs for spam too
         for spam_domain in SPAM_DOMAINS:
             spam_clean = spam_domain.replace("www.", "").lower()
             if spam_clean in domain:
                 LOG.info(f"BLOCKED spam direct URL: {domain}")
                 return None, None, None
         
-        # Check if it's Yahoo Finance and extract original source
         if "finance.yahoo.com" in url:
             original_source_url = extract_yahoo_finance_source(url)
             if original_source_url:
                 original_domain = urlparse(original_source_url).netloc.lower()
-                # Check spam on original
                 for spam_domain in SPAM_DOMAINS:
                     spam_clean = spam_domain.replace("www.", "").lower()
                     if spam_clean in original_domain:

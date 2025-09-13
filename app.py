@@ -118,8 +118,10 @@ Company ticker: {ticker}
 
 {{"industry_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]}}"""
 
-    # ENHANCED: Updated competitor prompt to get both company names AND tickers
+    # ENHANCED: Updated competitor prompt to exclude target ticker
     competitor_prompt = f"""For the publicly traded stock ticker {ticker}, identify exactly three main direct competitors that are also publicly traded companies. Focus on companies in the same specific business segment with similar revenue models.
+
+IMPORTANT: Do NOT include {ticker} itself in the list of competitors.
 
 For each competitor, provide both the full company name AND the stock ticker symbol.
 

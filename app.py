@@ -1235,9 +1235,9 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return datetime.fromisoformat(str(candidate))
     except:
         return None
-
+        
 def format_timestamp_est(dt: datetime) -> str:
-    """Format datetime to EST with proper format like 'September 13, 2025, 2:23pm EST'"""
+    """Format datetime to EST with format like 'Sep 12, 2:08pm EST'"""
     if not dt:
         return "N/A"
     
@@ -1249,15 +1249,13 @@ def format_timestamp_est(dt: datetime) -> str:
     eastern = pytz.timezone('US/Eastern')
     est_time = dt.astimezone(eastern)
     
-    # Format as requested: "September 13, 2025, 2:23pm EST"
+    # Format as requested: "Sep 12, 2:08pm EST"
     # Handle AM/PM formatting
     time_part = est_time.strftime("%I:%M%p").lower().lstrip('0')
-    date_part = est_time.strftime("%B %d, %Y")
+    date_part = est_time.strftime("%b %d")  # Changed from %B to %b for abbreviated month
     
-    # Get timezone abbreviation (EST or EDT)
-    tz_abbrev = est_time.strftime("%Z")
-    
-    return f"{date_part}, {time_part} {tz_abbrev}"
+    # Always use "EST" instead of dynamic timezone abbreviation
+    return f"{date_part}, {time_part} EST"
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
     """Process a single feed and store articles with enhanced metadata and non-Latin script filtering"""

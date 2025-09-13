@@ -1252,9 +1252,9 @@ def format_timestamp_est(dt: datetime) -> str:
     # Format as requested: "Sep 12, 2:08pm EST"
     # Handle AM/PM formatting
     time_part = est_time.strftime("%I:%M%p").lower().lstrip('0')
-    date_part = est_time.strftime("%b %d")  # Changed from %B to %b for abbreviated month
+    date_part = est_time.strftime("%b %d")
     
-    # Always use "EST" instead of dynamic timezone abbreviation
+    # FIXED: Always use "EST" instead of dynamic timezone abbreviation
     return f"{date_part}, {time_part} EST"
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
@@ -1509,7 +1509,7 @@ def _format_article_html(article: Dict, category: str) -> str:
         est_time = pub_dt.astimezone(eastern)
         pub_date = est_time.strftime("%b %d, %I:%M%p").lower().replace(' 0', ' ').replace('0:', ':')
         tz_abbrev = est_time.strftime("%Z")
-        pub_date = f"{pub_date} {tz_abbrev}"
+        pub_date = f"{pub_date} EST"
     else:
         pub_date = "N/A"
     

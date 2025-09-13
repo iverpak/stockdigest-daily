@@ -422,6 +422,15 @@ def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False
             ai_generated
         ))
 
+def get_ticker_config(ticker: str) -> Optional[Dict]:
+    """Get ticker configuration from database"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT ticker, name, industry_keywords, competitors, ai_generated
+            FROM ticker_config
+            WHERE ticker = %s AND active = TRUE
+        """, (ticker,))
+        return cur.fetchone()
 
 def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict[str, List[str]]:
     """Get ticker metadata from DB or generate with AI if not exists - UPDATED for new competitor structure"""

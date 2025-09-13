@@ -2234,9 +2234,9 @@ def reset_digest_flags(request: Request, body: ResetDigestRequest):
     
     return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
 
-APP.get("/admin/feed-metadata")
+@APP.get("/admin/feed-metadata")  # Add the missing @
 def get_feed_metadata(request: Request, ticker: str = Query(None)):
-    """Get feed metadata including search keywords and competitor tickers"""
+"""Get feed metadata including search keywords and competitor tickers"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
@@ -2324,30 +2324,8 @@ def get_search_analytics(request: Request, days: int = Query(default=7)):
         "keyword_performance": keyword_stats,
         "competitor_tracking": competitor_stats,
         "source_distribution": source_distribution
-    }
+    }  # Make sure this ends cleanly
             
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = {}
-            if category not in articles_by_ticker[ticker]:
-                articles_by_ticker[ticker][category] = []
-            
-            articles_by_ticker[ticker][category].append(dict(row))
-        
-        # Mark articles as sent
-        if tickers:
-            cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s)
-            """, (cutoff, tickers))
-        else:
-            cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15
-            """, (cutoff,))
-    
-    return articles_by_ticker
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

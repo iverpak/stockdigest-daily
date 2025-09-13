@@ -4,6 +4,7 @@ import time
 import logging
 import hashlib
 import re
+import pytz
 import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set
@@ -92,10 +93,23 @@ QUALITY_DOMAINS = {
 # OpenAI Integration for Dynamic Keyword Generation
 # ------------------------------------------------------------------------------
 def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
-    """Use OpenAI to generate industry keywords and competitors for a ticker - UPDATED with hedge fund prompt"""
+    """Use OpenAI to generate industry keywords and competitors for a ticker - UPDATED with company name and competitor tickers"""
     if not OPENAI_API_KEY:
         LOG.error("OpenAI API key not configured")
-        return {"industry_keywords": [], "competitors": []}
+        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
+
+    # NEW: Get the full company name first
+    company_name_prompt = f"""For the stock ticker "{ticker}", what is the full, official company name?
+
+Provide only the official company name as it appears in SEC filings, without "Inc.", "Corp.", "Ltd." unless critical for identification.
+
+Examples:
+- AAPL → Apple
+- TSLA → Tesla
+- JPM → JPMorgan Chase
+- BRK.B → Berkshire Hathaway
+
+Company name for {ticker}:"""
 
     # Hedge fund research assistant prompt for industry keywords
     industry_prompt = f"""You are a hedge-fund research assistant. Given a public company (name or ticker), output exactly five short tracking keywords an analyst would monitor for THIS specific business. Focus on concrete revenue drivers, products/sub-industry, supply chain/market structure, and—if material—regulatory bodies/markets (e.g., FAA, FCC, PJM, FDA). Avoid generic terms ("technology," "finance") and people names unless central to the thesis. Each keyword ≤ 3 words. No explanations. Return strict JSON:
@@ -104,12 +118,18 @@ Company ticker: {ticker}
 
 {{"industry_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]}}"""
 
-    # Separate prompt for competitors to maintain focus
+    # ENHANCED: Updated competitor prompt to get both company names AND tickers
     competitor_prompt = f"""For the publicly traded stock ticker {ticker}, identify exactly three main direct competitors that are also publicly traded companies. Focus on companies in the same specific business segment with similar revenue models.
 
-Return ONLY company names (no ticker symbols). Format as strict JSON:
+For each competitor, provide both the full company name AND the stock ticker symbol.
 
-{{"competitors": ["Company Name 1", "Company Name 2", "Company Name 3"]}}"""
+Return in strict JSON format:
+
+{{"competitors": [
+    {{"name": "Full Company Name 1", "ticker": "TICK1"}},
+    {{"name": "Full Company Name 2", "ticker": "TICK2"}},
+    {{"name": "Full Company Name 3", "ticker": "TICK3"}}
+]}}"""
 
     try:
         headers = {
@@ -117,18 +137,42 @@ Return ONLY company names (no ticker symbols). Format as strict JSON:
             "Content-Type": "application/json",
         }
 
-        # Optimized parameters for consistency and precision
+        # Base parameters for all requests
         base_data = {
             "model": OPENAI_MODEL,
-            "temperature": 0.15,               # tighter, consistent output
-            "max_tokens": 60,                  # (fix) use max_tokens with chat completions
-            "response_format": {"type": "json_object"},  # JSON mode
-            # "seed": 7,  # optional: add for extra reproducibility if supported in your account
+            "temperature": 0.15,
+            "max_tokens": 80,  # Increased for more complex responses
         }
+
+        # Get company name
+        company_name_data = {
+            **base_data,
+            "max_tokens": 30,
+            "messages": [
+                {"role": "system", "content": "You are a financial data expert. Provide only the official company name, nothing else."},
+                {"role": "user", "content": company_name_prompt},
+            ],
+        }
+
+        LOG.info(f"Requesting company name for {ticker} from {OPENAI_MODEL}")
+        company_name_response = requests.post(OPENAI_API_URL, headers=headers, json=company_name_data, timeout=30)
+        
+        company_name = ticker  # Fallback
+        if company_name_response.status_code == 200:
+            try:
+                company_result = company_name_response.json()
+                company_name = company_result["choices"][0]["message"]["content"].strip()
+                # Clean up any quotes or extra formatting
+                company_name = re.sub(r'^["\']|["\']$', '', company_name)
+                LOG.info(f"Retrieved company name for {ticker}: {company_name}")
+            except Exception as e:
+                LOG.warning(f"Failed to parse company name for {ticker}: {e}")
 
         # Get industry keywords
         industry_data = {
             **base_data,
+            "max_tokens": 60,
+            "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": "You are a hedge-fund research assistant who provides precise, actionable tracking keywords for equity research. Always respond with valid JSON only."},
                 {"role": "user", "content": industry_prompt},
@@ -139,50 +183,79 @@ Return ONLY company names (no ticker symbols). Format as strict JSON:
         industry_response = requests.post(OPENAI_API_URL, headers=headers, json=industry_data, timeout=30)
         if industry_response.status_code != 200:
             LOG.error(f"OpenAI API {industry_response.status_code} error for industry keywords: {industry_response.text}")
-            return {"industry_keywords": [], "competitors": []}
+            return {"industry_keywords": [], "competitors": [], "company_name": company_name}
 
-        # Get competitors
+        # Get competitors with tickers
         competitor_data = {
             **base_data,
+            "max_tokens": 120,  # More tokens for structured competitor data
+            "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": "You are a financial analyst expert who identifies direct competitors of public companies. Always respond with valid JSON only."},
+                {"role": "system", "content": "You are a financial analyst expert who identifies direct competitors with their ticker symbols. Always respond with valid JSON only."},
                 {"role": "user", "content": competitor_prompt},
             ],
         }
 
-        LOG.info(f"Requesting competitors for {ticker} from {OPENAI_MODEL}")
+        LOG.info(f"Requesting competitors with tickers for {ticker} from {OPENAI_MODEL}")
         competitor_response = requests.post(OPENAI_API_URL, headers=headers, json=competitor_data, timeout=30)
         if competitor_response.status_code != 200:
             LOG.error(f"OpenAI API {competitor_response.status_code} error for competitors: {competitor_response.text}")
-            return {"industry_keywords": [], "competitors": []}
+            return {"industry_keywords": [], "competitors": [], "company_name": company_name}
 
         # Parse industry keywords
         try:
             industry_result = industry_response.json()
             industry_content = industry_result["choices"][0]["message"]["content"]
             industry_metadata = json.loads(industry_content)
-            industry_keywords = industry_metadata.get("industry_keywords", [])[:5]
+            raw_keywords = industry_metadata.get("industry_keywords", [])[:5]
+            
+            # Capitalize industry keywords properly
+            industry_keywords = []
+            for keyword in raw_keywords:
+                capitalized = ' '.join(word.capitalize() for word in keyword.split())
+                industry_keywords.append(capitalized)
+            
         except (json.JSONDecodeError, KeyError) as e:
             LOG.error(f"Failed to parse industry keywords for {ticker}: {e}")
             industry_keywords = []
 
-        # Parse competitors
+        # Parse competitors with enhanced structure
         try:
             competitor_result = competitor_response.json()
             competitor_content = competitor_result["choices"][0]["message"]["content"]
             competitor_metadata = json.loads(competitor_content)
-            competitors = competitor_metadata.get("competitors", [])[:3]
+            raw_competitors = competitor_metadata.get("competitors", [])[:3]
+            
+            # Process competitors to handle both old and new format
+            competitors = []
+            for comp in raw_competitors:
+                if isinstance(comp, dict) and 'name' in comp and 'ticker' in comp:
+                    # New format with name and ticker
+                    competitors.append({
+                        "name": comp['name'],
+                        "ticker": comp['ticker']
+                    })
+                elif isinstance(comp, str):
+                    # Old format - just company name
+                    competitors.append({
+                        "name": comp,
+                        "ticker": None
+                    })
+            
         except (json.JSONDecodeError, KeyError) as e:
             LOG.error(f"Failed to parse competitors for {ticker}: {e}")
             competitors = []
 
-        LOG.info(f"Successfully generated AI metadata for {ticker}: {len(industry_keywords)} keywords, {len(competitors)} competitors")
-        return {"industry_keywords": industry_keywords, "competitors": competitors}
+        LOG.info(f"Successfully generated AI metadata for {ticker}: company='{company_name}', {len(industry_keywords)} keywords, {len(competitors)} competitors with tickers")
+        return {
+            "industry_keywords": industry_keywords, 
+            "competitors": competitors,
+            "company_name": company_name
+        }
 
     except Exception as e:
         LOG.error(f"OpenAI API error for ticker {ticker}: {e}")
-        return {"industry_keywords": [], "competitors": []}
-
+        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
 # ------------------------------------------------------------------------------
 # Database helpers
 # ------------------------------------------------------------------------------
@@ -315,8 +388,23 @@ def ensure_schema():
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
-    """Insert or update ticker configuration"""
+    """Insert or update ticker configuration with enhanced competitor structure"""
     with db() as conn, conn.cursor() as cur:
+        # Convert new competitor format to store both name and ticker info
+        competitors_for_db = []
+        raw_competitors = metadata.get("competitors", [])
+        
+        for comp in raw_competitors:
+            if isinstance(comp, dict):
+                # New format - store as "Name (TICKER)" or just "Name" if no ticker
+                if comp.get('ticker'):
+                    competitors_for_db.append(f"{comp['name']} ({comp['ticker']})")
+                else:
+                    competitors_for_db.append(comp['name'])
+            else:
+                # Old format - just the string
+                competitors_for_db.append(str(comp))
+        
         cur.execute("""
             INSERT INTO ticker_config (ticker, name, industry_keywords, competitors, ai_generated)
             VALUES (%s, %s, %s, %s, %s)
@@ -328,33 +416,45 @@ def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False
                 updated_at = NOW()
         """, (
             ticker,
-            metadata.get("name", ticker),
+            metadata.get("company_name", ticker),
             metadata.get("industry_keywords", []),
-            metadata.get("competitors", []),
+            competitors_for_db,
             ai_generated
         ))
 
-def get_ticker_config(ticker: str) -> Optional[Dict]:
-    """Get ticker configuration from database"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT ticker, name, industry_keywords, competitors, ai_generated
-            FROM ticker_config
-            WHERE ticker = %s AND active = TRUE
-        """, (ticker,))
-        return cur.fetchone()
 
 def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict[str, List[str]]:
-    """Get ticker metadata from DB or generate with AI if not exists"""
+    """Get ticker metadata from DB or generate with AI if not exists - UPDATED for new competitor structure"""
     # Check database first
     if not force_refresh:
         config = get_ticker_config(ticker)
         if config:
             LOG.info(f"Using existing metadata for {ticker} (AI generated: {config.get('ai_generated', False)})")
+            
+            # Process stored competitors back to structured format
+            stored_competitors = config.get("competitors", [])
+            processed_competitors = []
+            
+            for comp_str in stored_competitors:
+                # Check if it's in "Name (TICKER)" format
+                ticker_match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                if ticker_match:
+                    processed_competitors.append({
+                        "name": ticker_match.group(1).strip(),
+                        "ticker": ticker_match.group(2)
+                    })
+                else:
+                    # Just company name
+                    processed_competitors.append({
+                        "name": comp_str,
+                        "ticker": None
+                    })
+            
             return {
+                "company_name": config.get("name", ticker),
                 "company": [ticker],
                 "industry": config.get("industry_keywords", []),
-                "competitors": config.get("competitors", [])
+                "competitors": processed_competitors
             }
     
     # Generate with AI
@@ -363,39 +463,45 @@ def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> D
     
     # Save to database
     metadata = {
-        "name": ticker,
+        "company_name": ai_metadata.get("company_name", ticker),
+        "name": ai_metadata.get("company_name", ticker),
         "industry_keywords": ai_metadata.get("industry_keywords", []),
         "competitors": ai_metadata.get("competitors", [])
     }
     upsert_ticker_config(ticker, metadata, ai_generated=True)
     
     return {
+        "company_name": metadata["company_name"],
         "company": [ticker],
         "industry": metadata["industry_keywords"],
         "competitors": metadata["competitors"]
     }
 
 def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
-    """Build feed URLs for different categories - ENHANCED with Yahoo feeds and keyword tracking"""
+    """Build feed URLs for different categories - ENHANCED with proper company name usage"""
     feeds = []
     
-    # Company-specific feeds (Google + Yahoo)
+    company_name = keywords.get("company_name", ticker)
+    LOG.info(f"Building feeds for {ticker} (company: {company_name})")
+    
+    # FIX #3 & #4: Company-specific feeds using full company name for Google, ticker for Yahoo
+    company_name_encoded = requests.utils.quote(company_name)
     feeds.extend([
         {
-            "url": f"https://news.google.com/rss/search?q={ticker}+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-            "name": f"Google News: {ticker} Company",
+            "url": f"https://news.google.com/rss/search?q=\"{company_name_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Google News: {company_name}",
             "category": "company",
-            "search_keyword": ticker
+            "search_keyword": company_name
         },
         {
             "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
             "name": f"Yahoo Finance: {ticker}",
-            "category": "company",
+            "category": "company", 
             "search_keyword": ticker
         }
     ])
     
-    # Industry feeds (Google + Yahoo)
+    # Industry feeds (unchanged)
     industry_keywords = keywords.get("industry", [])
     LOG.info(f"Building industry feeds for {ticker} with keywords: {industry_keywords}")
     for keyword in industry_keywords[:3]:
@@ -410,46 +516,71 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
             {
                 "url": f"https://finance.yahoo.com/rss/headline?s={keyword_encoded}",
                 "name": f"Yahoo Industry: {keyword}",
-                "category": "industry", 
+                "category": "industry",
                 "search_keyword": keyword
             }
         ])
     
-    # Competitor feeds (Google + Yahoo)
+    # FIX #3: Enhanced competitor feeds with proper name/ticker handling
     competitors = keywords.get("competitors", [])
     LOG.info(f"Building competitor feeds for {ticker} with competitors: {competitors}")
-    for competitor in competitors[:3]:
-        comp_clean = competitor.replace("(", "").replace(")", "").strip()
-        comp_encoded = requests.utils.quote(comp_clean)
-        
-        # Try to extract ticker from competitor name if present
-        competitor_ticker = None
-        words = comp_clean.split()
-        for word in words:
-            if re.match(r'^[A-Z]{2,5}$', word):
-                competitor_ticker = word
-                break
-        
-        feeds.extend([
-            {
-                "url": f"https://news.google.com/rss/search?q=\"{comp_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                "name": f"Competitor: {competitor}",
+    
+    for comp in competitors[:3]:
+        if isinstance(comp, dict):
+            # New structured format
+            comp_name = comp.get('name', '')
+            comp_ticker = comp.get('ticker')
+            
+            if comp_name:
+                # Use company name for Google search
+                comp_name_encoded = requests.utils.quote(comp_name)
+                feeds.append({
+                    "url": f"https://news.google.com/rss/search?q=\"{comp_name_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    "name": f"Competitor: {comp_name}",
+                    "category": "competitor",
+                    "search_keyword": comp_name,
+                    "competitor_ticker": comp_ticker
+                })
+                
+                # Use ticker for Yahoo search if available
+                if comp_ticker:
+                    feeds.append({
+                        "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                        "name": f"Yahoo Competitor: {comp_name}",
+                        "category": "competitor",
+                        "search_keyword": comp_name,
+                        "competitor_ticker": comp_ticker
+                    })
+        else:
+            # Old format - just company name string
+            comp_clean = str(comp).replace("(", "").replace(")", "").strip()
+            
+            # Try to extract ticker if present in format "Name (TICKER)"
+            ticker_match = re.search(r'\(([A-Z]{1,5})\)', comp_clean)
+            extracted_ticker = ticker_match.group(1) if ticker_match else None
+            comp_name_only = re.sub(r'\s*\([^)]*\)', '', comp_clean).strip()
+            
+            comp_name_encoded = requests.utils.quote(comp_name_only)
+            feeds.append({
+                "url": f"https://news.google.com/rss/search?q=\"{comp_name_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Competitor: {comp_name_only}",
                 "category": "competitor",
-                "search_keyword": competitor,
-                "competitor_ticker": competitor_ticker
-            },
-            {
-                "url": f"https://finance.yahoo.com/rss/headline?s={comp_encoded}",
-                "name": f"Yahoo Competitor: {competitor}",
-                "category": "competitor",
-                "search_keyword": competitor,
-                "competitor_ticker": competitor_ticker
-            }
-        ])
+                "search_keyword": comp_name_only,
+                "competitor_ticker": extracted_ticker
+            })
+            
+            if extracted_ticker:
+                feeds.append({
+                    "url": f"https://finance.yahoo.com/rss/headline?s={extracted_ticker}",
+                    "name": f"Yahoo Competitor: {comp_name_only}",
+                    "category": "competitor", 
+                    "search_keyword": comp_name_only,
+                    "competitor_ticker": extracted_ticker
+                })
     
     LOG.info(f"Built {len(feeds)} total feeds for {ticker}: {len([f for f in feeds if f['category'] == 'company'])} company, {len([f for f in feeds if f['category'] == 'industry'])} industry, {len([f for f in feeds if f['category'] == 'competitor'])} competitor")
     return feeds
-
+    
 def upsert_feed(url: str, name: str, ticker: str, category: str = "company", retain_days: int = 90, search_keyword: str = None, competitor_ticker: str = None) -> int:
     """Insert or update a feed source with category and search metadata - ENHANCED"""
     with db() as conn, conn.cursor() as cur:
@@ -506,6 +637,50 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
 # ------------------------------------------------------------------------------
 # URL Resolution and Quality Scoring
 # ------------------------------------------------------------------------------
+# FIX #6: Add function to detect non-Latin script
+def contains_non_latin_script(text: str) -> bool:
+    """Detect if text contains non-Latin script characters (Arabic, Chinese, etc.)"""
+    if not text:
+        return False
+    
+    # Unicode ranges for non-Latin scripts that commonly appear in spam
+    non_latin_ranges = [
+        # Arabic and Arabic Supplement
+        (0x0600, 0x06FF),  # Arabic
+        (0x0750, 0x077F),  # Arabic Supplement
+        (0x08A0, 0x08FF),  # Arabic Extended-A
+        (0xFB50, 0xFDFF),  # Arabic Presentation Forms-A
+        (0xFE70, 0xFEFF),  # Arabic Presentation Forms-B
+        
+        # Chinese, Japanese, Korean
+        (0x4E00, 0x9FFF),  # CJK Unified Ideographs
+        (0x3400, 0x4DBF),  # CJK Extension A
+        (0x3040, 0x309F),  # Hiragana
+        (0x30A0, 0x30FF),  # Katakana
+        (0xAC00, 0xD7AF),  # Hangul Syllables
+        
+        # Cyrillic
+        (0x0400, 0x04FF),  # Cyrillic
+        (0x0500, 0x052F),  # Cyrillic Supplement
+        
+        # Hebrew
+        (0x0590, 0x05FF),  # Hebrew
+        
+        # Thai
+        (0x0E00, 0x0E7F),  # Thai
+        
+        # Devanagari (Hindi, Sanskrit)
+        (0x0900, 0x097F),  # Devanagari
+    ]
+    
+    for char in text:
+        char_code = ord(char)
+        for start, end in non_latin_ranges:
+            if start <= char_code <= end:
+                return True
+    
+    return False
+
 def extract_yahoo_finance_source(url: str) -> Optional[str]:
     """Extract original source URL from Yahoo Finance article - FIXED for real JSON patterns"""
     try:
@@ -856,10 +1031,16 @@ def get_or_create_formal_domain_name(domain: str) -> str:
 
 # Replace the title extraction functions with this AI-powered approach
 
+# FIX #6: Updated extract_source_with_ai function with non-Latin script filtering
 def extract_source_with_ai(title: str) -> Tuple[str, str]:
-    """Use OpenAI to intelligently extract source from news article titles"""
+    """Use OpenAI to intelligently extract source from news article titles with non-Latin script filtering"""
     if not title or not OPENAI_API_KEY:
         return title, None
+    
+    # FIX #6: Check for non-Latin script in title before processing
+    if contains_non_latin_script(title):
+        LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}...")
+        return None, None  # Return None to signal spam detection
     
     prompt = f"""Analyze this news article title and extract the source publication/website name:
 
@@ -919,14 +1100,19 @@ Examples:
                     if source == "null" or source == "None":
                         source = None
                     
-                    # NEW: Add spam filtering here
+                    # FIX #6: Add non-Latin script check for extracted source too
+                    if source and contains_non_latin_script(source):
+                        LOG.info(f"BLOCKED non-Latin script in extracted source: {source}")
+                        return None, None
+                    
+                    # Existing spam filtering for sources
                     if source:
                         source_lower = source.lower()
                         spam_sources = ["marketbeat", "newser", "khodrobank"]
                         for spam in spam_sources:
                             if spam in source_lower:
                                 LOG.info(f"BLOCKED spam source in title: {source}")
-                                return None, None  # Return None to signal spam
+                                return None, None
                     
                     LOG.info(f"AI title analysis: '{title[:60]}...' → source: '{source}', title: '{clean_title[:40]}...'")
                     return clean_title, source
@@ -937,7 +1123,7 @@ Examples:
     except Exception as e:
         LOG.warning(f"AI title analysis failed: {e}")
     
-    # Fallback: Try simple regex patterns as backup
+    # Fallback: Try simple regex patterns as backup, but check for non-Latin script first
     fallback_patterns = [
         r'\s*-\s*([^-]+)$',  # " - Something" at the end
         r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net))$'  # domain at the end
@@ -949,7 +1135,12 @@ Examples:
             source = match.group(1).strip()
             clean_title = re.sub(pattern, '', title).strip()
             
-            # NEW: Add spam filtering to fallback too
+            # FIX #6: Check fallback extracted source for non-Latin script
+            if contains_non_latin_script(source):
+                LOG.info(f"BLOCKED non-Latin script in fallback source: {source}")
+                return None, None
+            
+            # Existing spam filtering for fallback
             source_lower = source.lower()
             spam_sources = ["marketbeat", "newser", "khodrobank"]
             for spam in spam_sources:
@@ -1041,9 +1232,32 @@ def parse_datetime(candidate) -> Optional[datetime]:
     except:
         return None
 
+def format_timestamp_est(dt: datetime) -> str:
+    """Format datetime to EST with proper format like 'September 13, 2025, 2:23pm EST'"""
+    if not dt:
+        return "N/A"
+    
+    # Ensure we have a timezone-aware datetime
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    
+    # Convert to Eastern Time
+    eastern = pytz.timezone('US/Eastern')
+    est_time = dt.astimezone(eastern)
+    
+    # Format as requested: "September 13, 2025, 2:23pm EST"
+    # Handle AM/PM formatting
+    time_part = est_time.strftime("%I:%M%p").lower().lstrip('0')
+    date_part = est_time.strftime("%B %d, %Y")
+    
+    # Get timezone abbreviation (EST or EDT)
+    tz_abbrev = est_time.strftime("%Z")
+    
+    return f"{date_part}, {time_part} {tz_abbrev}"
+
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with enhanced metadata - ENHANCED"""
-    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "yahoo_sources_found": 0}
+    """Process a single feed and store articles with enhanced metadata and non-Latin script filtering"""
+    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0}
     
     try:
         LOG.info(f"Processing feed [{category}]: {feed['name']}")
@@ -1077,7 +1291,13 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # Check for spam in title during ingestion
+            # FIX #6: Check for non-Latin script in title during ingestion
+            if contains_non_latin_script(title):
+                stats["blocked_non_latin"] += 1
+                LOG.info(f"BLOCKED non-Latin script in title during ingestion: {title[:50]}")
+                continue
+            
+            # Existing spam keyword filtering
             spam_keywords = ["marketbeat", "newser", "khodrobank"]
             if any(spam in title.lower() for spam in spam_keywords):
                 stats["blocked_spam"] += 1
@@ -1108,12 +1328,11 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         stats["duplicates"] += 1
                         continue
                     
-                    # ENHANCED: Determine related ticker and search keyword for better tracking
+                    # Determine related ticker and search keyword for better tracking
                     related_ticker = None
                     search_keyword = feed.get("search_keyword", "")
                     
                     if category == "competitor":
-                        # Use the competitor ticker if available, or extract from name
                         related_ticker = feed.get("competitor_ticker")
                         if not related_ticker and "Competitor:" in feed["name"]:
                             comp_name = feed["name"].replace("Competitor:", "").strip()
@@ -1123,7 +1342,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                                     related_ticker = word
                                     break
                     
-                    # ENHANCED: Add columns for search metadata if they don't exist
+                    # Add columns for search metadata if they don't exist
                     cur.execute("""
                         DO $$ 
                         BEGIN 
@@ -1164,13 +1383,13 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
     
     LOG.info(f"Feed {feed['name']} [{category}] stats: {stats}")
     return stats
-
+    
 # ------------------------------------------------------------------------------
 # Email Digest
 # ------------------------------------------------------------------------------
 # Enhanced CSS styles to be added to the build_digest_html function
 def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
-    """Build HTML email digest with enhanced styling including improved badge design"""
+    """Build HTML email digest with enhanced styling and improved timestamp formatting"""
     # Get ticker metadata for display
     ticker_metadata = {}
     for ticker in articles_by_ticker.keys():
@@ -1180,6 +1399,9 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
                 "industry_keywords": config.get("industry_keywords", []),
                 "competitors": config.get("competitors", [])
             }
+    
+    # FIX #5: Use the new timestamp formatting
+    current_time_est = format_timestamp_est(datetime.now(timezone.utc))
     
     html = [
         "<html><head><style>",
@@ -1198,11 +1420,8 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
         ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
-        
-        # ENHANCED: New badge styles for industry and competitor keywords
-        ".competitor-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
-        ".industry-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
-        
+        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
+        ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
         ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
         "a { color: #2980b9; text-decoration: none; }",
         "a:hover { text-decoration: underline; }",
@@ -1212,7 +1431,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         f"<h1>Stock Intelligence Report</h1>",
         f"<div class='summary'>",
         f"<strong>Report Period:</strong> Last {period_days} days<br>",
-        f"<strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC<br>",
+        f"<strong>Generated:</strong> {current_time_est}<br>",  # FIX #5: Better timestamp
         f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}",
         "</div>"
     ]
@@ -1274,10 +1493,23 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     
     return "".join(html)
 
-# Simplified _format_article_html function
+# FIX #2: Updated _format_article_html function with better badge handling
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format article HTML with enhanced colored metadata and consistent visual badges"""
-    pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
+    """Format article HTML with better timestamp formatting"""
+    # FIX #5: Use better date formatting for individual articles
+    if article["published_at"]:
+        # For individual articles, use a shorter format like "Sep 13, 2:23pm EST"
+        eastern = pytz.timezone('US/Eastern')
+        pub_dt = article["published_at"]
+        if pub_dt.tzinfo is None:
+            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+        
+        est_time = pub_dt.astimezone(eastern)
+        pub_date = est_time.strftime("%b %d, %I:%M%p").lower().replace(' 0', ' ').replace('0:', ':')
+        tz_abbrev = est_time.strftime("%Z")
+        pub_date = f"{pub_date} {tz_abbrev}"
+    else:
+        pub_date = "N/A"
     
     original_title = article["title"] or "No Title"
     resolved_domain = article["domain"] or "unknown"
@@ -1310,21 +1542,17 @@ def _format_article_html(article: Dict, category: str) -> str:
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
-    # ENHANCED: Build metadata badges with consistent styling
+    # Build metadata badges with NO truncation
     metadata_badges = []
     
-    # Add category-specific badges with improved styling
+    # Add category-specific badges with full text display
     if category == "competitor" and article.get('search_keyword'):
         competitor_name = article['search_keyword']
-        # Truncate long competitor names for better display
-        display_name = competitor_name if len(competitor_name) <= 20 else competitor_name[:17] + "..."
-        metadata_badges.append(f'<span class="competitor-badge">🏢 {display_name}</span>')
+        metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
     
     elif category == "industry" and article.get('search_keyword'):
         industry_keyword = article['search_keyword']
-        # Truncate long keywords for better display
-        display_keyword = industry_keyword if len(industry_keyword) <= 18 else industry_keyword[:15] + "..."
-        metadata_badges.append(f'<span class="industry-badge">🏭 {display_keyword}</span>')
+        metadata_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
     
     # Join all metadata badges
     enhanced_metadata = "".join(metadata_badges)

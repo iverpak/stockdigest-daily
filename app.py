@@ -92,102 +92,96 @@ QUALITY_DOMAINS = {
 # OpenAI Integration for Dynamic Keyword Generation
 # ------------------------------------------------------------------------------
 def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
-    """Use OpenAI to generate industry keywords and competitors for a ticker - FIXED JSON parsing"""
+    """Use OpenAI to generate industry keywords and competitors for a ticker - UPDATED with hedge fund prompt"""
     if not OPENAI_API_KEY:
         LOG.error("OpenAI API key not configured")
-        # Return default fallback for TLN
-    
-    prompt = f"""
-    For the publicly traded stock ticker {ticker}, provide ACCURATE and SPECIFIC information:
+        return {"industry_keywords": [], "competitors": []}
 
-    CRITICAL: First verify that {ticker} is the correct ticker symbol you're analyzing.
-    
-    1. Five industry keywords/terms that are most relevant to THIS SPECIFIC COMPANY's business
-    2. Three main competitors of THIS SPECIFIC COMPANY (company names only)
-    
-    The ticker {ticker} should be your primary focus - do not confuse it with other companies.
-    
-    IMPORTANT REQUIREMENTS:
-    - Research the actual company behind ticker {ticker}
-    - Industry keywords must be specific to the company's actual business
-    - Avoid generic terms like "technology" or "finance"
-    - Competitors must be real, publicly-traded companies in the same specific business area
-    - Do NOT include ticker symbols in competitor names - only company names
-    - If you're unsure about the company, provide conservative/general industry terms
-    
-    Format your response as a JSON object with this exact structure:
-    {{
-        "industry_keywords": ["specific_keyword1", "specific_keyword2", "specific_keyword3", "specific_keyword4", "specific_keyword5"],
-        "competitors": ["Company Name 1", "Company Name 2", "Company Name 3"]
-    }}
-    
-    Return ONLY the JSON object, no additional text.
-    """
-    
+    # Hedge fund research assistant prompt for industry keywords
+    industry_prompt = f"""You are a hedge-fund research assistant. Given a public company (name or ticker), output exactly five short tracking keywords an analyst would monitor for THIS specific business. Focus on concrete revenue drivers, products/sub-industry, supply chain/market structure, and—if material—regulatory bodies/markets (e.g., FAA, FCC, PJM, FDA). Avoid generic terms ("technology," "finance") and people names unless central to the thesis. Each keyword ≤ 3 words. No explanations. Return strict JSON:
+
+Company ticker: {ticker}
+
+{{"industry_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]}}"""
+
+    # Separate prompt for competitors to maintain focus
+    competitor_prompt = f"""For the publicly traded stock ticker {ticker}, identify exactly three main direct competitors that are also publicly traded companies. Focus on companies in the same specific business segment with similar revenue models.
+
+Return ONLY company names (no ticker symbols). Format as strict JSON:
+
+{{"competitors": ["Company Name 1", "Company Name 2", "Company Name 3"]}}"""
+
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        
-        # Add response_format to ensure JSON output
-        data = {
+
+        # Optimized parameters for consistency and precision
+        base_data = {
             "model": OPENAI_MODEL,
+            "temperature": 0.15,               # tighter, consistent output
+            "max_tokens": 60,                  # (fix) use max_tokens with chat completions
+            "response_format": {"type": "json_object"},  # JSON mode
+            # "seed": 7,  # optional: add for extra reproducibility if supported in your account
+        }
+
+        # Get industry keywords
+        industry_data = {
+            **base_data,
             "messages": [
-                {"role": "system", "content": "You are a financial analyst expert who provides accurate information about companies and their industries. Always respond with valid JSON only."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "You are a hedge-fund research assistant who provides precise, actionable tracking keywords for equity research. Always respond with valid JSON only."},
+                {"role": "user", "content": industry_prompt},
             ],
-            "max_completion_tokens": 500,
-            "response_format": {"type": "json_object"}  # ADDED: Force JSON response
         }
-        
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
-        
-        # Enhanced error handling with detailed logging
-        LOG.info(f"OpenAI API response status: {response.status_code}")
-        
-        if response.status_code != 200:
-            LOG.error(f"OpenAI API {response.status_code} error: {response.text}")
+
+        LOG.info(f"Requesting industry keywords for {ticker} from {OPENAI_MODEL}")
+        industry_response = requests.post(OPENAI_API_URL, headers=headers, json=industry_data, timeout=30)
+        if industry_response.status_code != 200:
+            LOG.error(f"OpenAI API {industry_response.status_code} error for industry keywords: {industry_response.text}")
             return {"industry_keywords": [], "competitors": []}
-            
-        # Check if response is empty
-        if not response.text.strip():
-            LOG.error(f"OpenAI API returned empty response for ticker {ticker}")
-            return {"industry_keywords": [], "competitors": []}
-        
-        # Log the raw response for debugging
-        LOG.info(f"OpenAI raw response length: {len(response.text)}")
-        
-        try:
-            result = response.json()
-        except json.JSONDecodeError as e:
-            LOG.error(f"OpenAI API returned invalid JSON for ticker {ticker}: {e}")
-            LOG.error(f"Raw response: {response.text[:500]}")
-            return {"industry_keywords": [], "competitors": []}
-        
-        if 'choices' not in result or not result['choices']:
-            LOG.error(f"OpenAI API response missing choices for ticker {ticker}: {result}")
-            return {"industry_keywords": [], "competitors": []}
-            
-        content = result['choices'][0]['message']['content']
-        LOG.info(f"OpenAI content preview: {content[:200]}")  # ADDED: Log content for debugging
-        
-        # FIXED: Parse the content directly as JSON (no quotes needed with json_object format)
-        try:
-            metadata = json.loads(content)
-        except json.JSONDecodeError as e:
-            LOG.error(f"Failed to parse OpenAI content as JSON for ticker {ticker}: {e}")
-            LOG.error(f"Content: {content[:500]}")
-            return {"industry_keywords": [], "competitors": []}
-        
-        LOG.info(f"Successfully generated AI metadata for {ticker}")
-        return {
-            "industry_keywords": metadata.get("industry_keywords", [])[:5],
-            "competitors": metadata.get("competitors", [])[:3]
+
+        # Get competitors
+        competitor_data = {
+            **base_data,
+            "messages": [
+                {"role": "system", "content": "You are a financial analyst expert who identifies direct competitors of public companies. Always respond with valid JSON only."},
+                {"role": "user", "content": competitor_prompt},
+            ],
         }
-        
+
+        LOG.info(f"Requesting competitors for {ticker} from {OPENAI_MODEL}")
+        competitor_response = requests.post(OPENAI_API_URL, headers=headers, json=competitor_data, timeout=30)
+        if competitor_response.status_code != 200:
+            LOG.error(f"OpenAI API {competitor_response.status_code} error for competitors: {competitor_response.text}")
+            return {"industry_keywords": [], "competitors": []}
+
+        # Parse industry keywords
+        try:
+            industry_result = industry_response.json()
+            industry_content = industry_result["choices"][0]["message"]["content"]
+            industry_metadata = json.loads(industry_content)
+            industry_keywords = industry_metadata.get("industry_keywords", [])[:5]
+        except (json.JSONDecodeError, KeyError) as e:
+            LOG.error(f"Failed to parse industry keywords for {ticker}: {e}")
+            industry_keywords = []
+
+        # Parse competitors
+        try:
+            competitor_result = competitor_response.json()
+            competitor_content = competitor_result["choices"][0]["message"]["content"]
+            competitor_metadata = json.loads(competitor_content)
+            competitors = competitor_metadata.get("competitors", [])[:3]
+        except (json.JSONDecodeError, KeyError) as e:
+            LOG.error(f"Failed to parse competitors for {ticker}: {e}")
+            competitors = []
+
+        LOG.info(f"Successfully generated AI metadata for {ticker}: {len(industry_keywords)} keywords, {len(competitors)} competitors")
+        return {"industry_keywords": industry_keywords, "competitors": competitors}
+
     except Exception as e:
         LOG.error(f"OpenAI API error for ticker {ticker}: {e}")
+        return {"industry_keywords": [], "competitors": []}
 
 # ------------------------------------------------------------------------------
 # Database helpers

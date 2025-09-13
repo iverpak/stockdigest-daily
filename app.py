@@ -487,13 +487,13 @@ def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> D
     }
 
 def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
-    """Build feed URLs for different categories - ENHANCED with proper company name usage"""
+    """Build feed URLs for different categories - FIXED Yahoo Finance ticker feeds"""
     feeds = []
     
     company_name = keywords.get("company_name", ticker)
     LOG.info(f"Building feeds for {ticker} (company: {company_name})")
     
-    # FIX #3 & #4: Company-specific feeds using full company name for Google, ticker for Yahoo
+    # FIX: Company-specific feeds - use company name for Google, ticker for Yahoo
     company_name_encoded = requests.utils.quote(company_name)
     feeds.extend([
         {
@@ -510,27 +510,20 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
         }
     ])
     
-    # Industry feeds (unchanged)
+    # Industry feeds (Google only - Yahoo doesn't work with keywords)
     industry_keywords = keywords.get("industry", [])
     LOG.info(f"Building industry feeds for {ticker} with keywords: {industry_keywords}")
     for keyword in industry_keywords[:3]:
         keyword_encoded = requests.utils.quote(keyword)
-        feeds.extend([
-            {
-                "url": f"https://news.google.com/rss/search?q=\"{keyword_encoded}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
-                "name": f"Industry: {keyword}",
-                "category": "industry",
-                "search_keyword": keyword
-            },
-            {
-                "url": f"https://finance.yahoo.com/rss/headline?s={keyword_encoded}",
-                "name": f"Yahoo Industry: {keyword}",
-                "category": "industry",
-                "search_keyword": keyword
-            }
-        ])
+        feeds.append({
+            "url": f"https://news.google.com/rss/search?q=\"{keyword_encoded}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Industry: {keyword}",
+            "category": "industry",
+            "search_keyword": keyword
+        })
+        # REMOVED: Yahoo industry feed (doesn't work with keywords)
     
-    # FIX #3: Enhanced competitor feeds with proper name/ticker handling
+    # Competitor feeds with proper name/ticker handling
     competitors = keywords.get("competitors", [])
     LOG.info(f"Building competitor feeds for {ticker} with competitors: {competitors}")
     

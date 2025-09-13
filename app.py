@@ -2324,7 +2324,7 @@ def get_search_analytics(request: Request, days: int = Query(default=7)):
         "keyword_performance": keyword_stats,
         "competitor_tracking": competitor_stats,
         "source_distribution": source_distribution
-    }"
+    }
             
             if ticker not in articles_by_ticker:
                 articles_by_ticker[ticker] = {}

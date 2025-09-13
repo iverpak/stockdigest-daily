@@ -1347,8 +1347,9 @@ def format_timestamp_est(dt: datetime) -> str:
     # FIXED: Always use "EST" instead of dynamic timezone abbreviation
     return f"{date_part}, {time_part} EST"
 
+# FIXED: Updated ingest_feed function with proper spam detection
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with AI scoring"""
+    """Process a single feed and store articles - FIXED spam detection logic"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0}
     
     try:
@@ -1382,17 +1383,9 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # Check for non-Latin script
-            if contains_non_latin_script(title):
-                stats["blocked_non_latin"] += 1
-                LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}")
-                continue
-            
-            # Basic spam keyword filtering
-            spam_keywords = ["marketbeat", "newser", "khodrobank"]
-            if any(spam in title.lower() for spam in spam_keywords):
+            # FIXED: Use new spam detection function
+            if is_spam_content(title, domain, description):
                 stats["blocked_spam"] += 1
-                LOG.info(f"BLOCKED spam in title: {title[:50]}")
                 continue
             
             # Get source for AI scoring - prefer original source
@@ -1400,17 +1393,18 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             if yahoo_source_url:
                 original_source = urlparse(yahoo_source_url).netloc
             
-            # AI-powered scoring with spam detection
+            # AI-powered scoring (no spam detection, only quality)
             quality_score, is_spam = calculate_quality_score_with_ai(
                 title, domain, feed["ticker"], description, category, keywords, original_source
             )
             
+            # FIXED: is_spam should always be False from AI function now
             if is_spam:
                 stats["blocked_spam"] += 1
-                LOG.info(f"BLOCKED spam by AI: {title[:50]}")
                 continue
             
-            if quality_score < 15:
+            # FIXED: Lower quality threshold since we're not using AI for spam detection
+            if quality_score < 25:
                 stats["low_quality"] += 1
                 LOG.debug(f"Skipping low quality: {title[:50]} (score: {quality_score})")
                 continue
@@ -1444,7 +1438,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     """, (
                         original_url, resolved_url, url_hash, title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, related_ticker, yahoo_source_url, search_keyword, is_spam
+                        category, related_ticker, yahoo_source_url, search_keyword, False  # FIXED: Always False for is_spam since we filter earlier
                     ))
                     
                     if cur.fetchone():

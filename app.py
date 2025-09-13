@@ -98,38 +98,55 @@ def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
         LOG.error("OpenAI API key not configured")
         return {"industry_keywords": [], "competitors": [], "company_name": ticker}
 
-    # NEW: Get the full company name first
-    company_name_prompt = f"""For the stock ticker "{ticker}", what is the full, official company name?
+    # Get the full company name first
+    company_name_prompt = f"""What is the exact, official company name for stock ticker "{ticker}"?
 
-Provide only the official company name as it appears in SEC filings, without "Inc.", "Corp.", "Ltd." unless critical for identification.
+Look up the current public company trading under this ticker symbol. Provide only the official corporate name.
 
 Examples:
-- AAPL → Apple
-- TSLA → Tesla
-- JPM → JPMorgan Chase
-- BRK.B → Berkshire Hathaway
+- AAPL → Apple Inc.
+- TSLA → Tesla, Inc.
+- TLN → Talen Energy Corporation
+- VST → Vistra Corp.
 
-Company name for {ticker}:"""
+Official company name for {ticker}:"""
 
-    # Hedge fund research assistant prompt for industry keywords
-    industry_prompt = f"""You are a hedge-fund research assistant. Given a public company (name or ticker), output exactly five short tracking keywords an analyst would monitor for THIS specific business. Focus on concrete revenue drivers, products/sub-industry, supply chain/market structure, and—if material—regulatory bodies/markets (e.g., FAA, FCC, PJM, FDA). Avoid generic terms ("technology," "finance") and people names unless central to the thesis. Each keyword ≤ 3 words. No explanations. Return strict JSON:
+    # Industry keywords prompt - generic for all sectors
+    industry_prompt = f"""You are analyzing the stock ticker {ticker}. Generate exactly 5 specific industry keywords that analysts would monitor for this company's business operations.
 
-Company ticker: {ticker}
+Focus on:
+- Core business segments and revenue drivers  
+- Key market dynamics and regulatory factors
+- Supply chain and operational elements
+- Technology or infrastructure components
+- Market positioning terms
 
+Avoid generic terms. Be specific to the company's actual business model and sector.
+
+Return strict JSON format:
 {{"industry_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]}}"""
 
-    # ENHANCED: Updated competitor prompt to exclude target ticker
-    competitor_prompt = f"""For the publicly traded stock ticker {ticker}, identify exactly three main direct competitors that are also publicly traded companies. Focus on companies in the same specific business segment with similar revenue models.
+    # Generic competitor prompt for any industry
+    competitor_prompt = f"""Identify exactly 3 direct publicly-traded competitors for ticker {ticker}.
 
-IMPORTANT: Do NOT include {ticker} itself in the list of competitors.
+Research requirements:
+1. Find the actual company name for {ticker}
+2. Identify its primary business sector and operations  
+3. Find 3 major public companies in the same specific business segment
+4. Provide both company names AND their stock ticker symbols
 
-For each competitor, provide both the full company name AND the stock ticker symbol.
+Focus on companies with similar:
+- Business models and revenue streams
+- Market segments and customer bases
+- Geographic presence or operational scope
+- Industry positioning and competitive dynamics
 
-Return in strict JSON format:
+CRITICAL: Do NOT include {ticker} itself. Only list actual competitors.
 
+Return strict JSON:
 {{"competitors": [
     {{"name": "Full Company Name 1", "ticker": "TICK1"}},
-    {{"name": "Full Company Name 2", "ticker": "TICK2"}},
+    {{"name": "Full Company Name 2", "ticker": "TICK2"}},  
     {{"name": "Full Company Name 3", "ticker": "TICK3"}}
 ]}}"""
 
@@ -142,16 +159,16 @@ Return in strict JSON format:
         # Base parameters for all requests
         base_data = {
             "model": OPENAI_MODEL,
-            "temperature": 0.15,
-            "max_tokens": 80,  # Increased for more complex responses
+            "temperature": 0.1,  # Lower temperature for more consistent results
+            "max_tokens": 80,
         }
 
         # Get company name
         company_name_data = {
             **base_data,
-            "max_tokens": 30,
+            "max_tokens": 50,
             "messages": [
-                {"role": "system", "content": "You are a financial data expert. Provide only the official company name, nothing else."},
+                {"role": "system", "content": "You are a financial data expert with access to current stock market information. Provide only the exact official company name."},
                 {"role": "user", "content": company_name_prompt},
             ],
         }
@@ -173,10 +190,10 @@ Return in strict JSON format:
         # Get industry keywords
         industry_data = {
             **base_data,
-            "max_tokens": 60,
+            "max_tokens": 80,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": "You are a hedge-fund research assistant who provides precise, actionable tracking keywords for equity research. Always respond with valid JSON only."},
+                {"role": "system", "content": f"You are a financial analyst. The company {ticker} is {company_name}. Provide precise, actionable industry keywords for tracking this company's business."},
                 {"role": "user", "content": industry_prompt},
             ],
         }
@@ -190,10 +207,10 @@ Return in strict JSON format:
         # Get competitors with tickers
         competitor_data = {
             **base_data,
-            "max_tokens": 120,  # More tokens for structured competitor data
+            "max_tokens": 150,  # More tokens for structured competitor data
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": "You are a financial analyst expert who identifies direct competitors with their ticker symbols. Always respond with valid JSON only."},
+                {"role": "system", "content": f"You are a financial analyst expert. {ticker} is {company_name}. Find real, specific publicly-traded competitors in the same business sector."},
                 {"role": "user", "content": competitor_prompt},
             ],
         }
@@ -303,6 +320,19 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
             """)
+
+            # NEW: Create source statistics table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS source_stats (
+                    id SERIAL PRIMARY KEY,
+                    source_name VARCHAR(255) NOT NULL,
+                    source_domain VARCHAR(255),
+                    article_count INTEGER DEFAULT 1,
+                    first_seen TIMESTAMP DEFAULT NOW(),
+                    last_seen TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(source_name, source_domain)
+                );
+            """)
             
             # ENHANCED: Add search metadata columns to found_url if not exists
             cur.execute("""
@@ -372,7 +402,23 @@ def ensure_schema():
                     END IF;
                 END $$;
             """)
-            
+
+            # Add source tracking columns to found_url if not exists
+            cur.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                 WHERE table_name='found_url' AND column_name='source_name') 
+                    THEN 
+                        ALTER TABLE found_url ADD COLUMN source_name VARCHAR(255);
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                 WHERE table_name='found_url' AND column_name='source_domain') 
+                    THEN 
+                        ALTER TABLE found_url ADD COLUMN source_domain VARCHAR(255);
+                    END IF;
+                END $$;
+            """)
             # Ensure indexes
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
@@ -387,6 +433,9 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_search_keyword ON found_url(search_keyword);
                 CREATE INDEX IF NOT EXISTS idx_source_feed_search_keyword ON source_feed(search_keyword);
                 CREATE INDEX IF NOT EXISTS idx_source_feed_competitor_ticker ON source_feed(competitor_ticker);
+                CREATE INDEX IF NOT EXISTS idx_source_stats_name ON source_stats(source_name);
+                CREATE INDEX IF NOT EXISTS idx_source_stats_count ON source_stats(article_count DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_source_name ON found_url(source_name);
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
@@ -1037,40 +1086,28 @@ def get_or_create_formal_domain_name(domain: str) -> str:
 
 # FIX #6: Updated extract_source_with_ai function with non-Latin script filtering
 def extract_source_with_ai(title: str) -> Tuple[str, str]:
-    """Use OpenAI to intelligently extract source from news article titles with non-Latin script filtering"""
+    """Use OpenAI to intelligently extract source with FIXED spam detection"""
     if not title or not OPENAI_API_KEY:
         return title, None
     
-    # FIX #6: Check for non-Latin script in title before processing
+    # FIXED: Only block non-Latin script, not other content
     if contains_non_latin_script(title):
         LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}...")
-        return None, None  # Return None to signal spam detection
+        return None, None
     
-    prompt = f"""Analyze this news article title and extract the source publication/website name:
+    # ENHANCED: Better prompt for source extraction
+    prompt = f"""Analyze this news article title and extract the source publication:
 
 Title: "{title}"
 
-Please identify:
-1. The source publication or website (e.g., "GuruFocus", "Benzinga", "Wall Street Journal", "news.stocktradersdaily.com")
-2. The clean article title without the source name
-
 Rules:
-- Look for patterns like "Article Title - Source Name" or "Article Title Source.com"
-- The source is usually at the end after a dash or space
-- If no clear source is found, return null for source
-- Clean up the title by removing the source portion
+1. Look for source indicators like "Title - Source" or "Title | Source"
+2. Common sources: Reuters, Bloomberg, Yahoo Finance, Seeking Alpha, etc.
+3. Clean the title by removing source information
+4. If no clear source pattern, return null for source
 
-Respond in JSON format:
-{{
-    "source": "source name or null",
-    "clean_title": "article title without source"
-}}
-
-Examples:
-- "Boeing Stock Drops 3% - GuruFocus" → {{"source": "GuruFocus", "clean_title": "Boeing Stock Drops 3%"}}
-- "Market Analysis - news.stocktradersdaily.com" → {{"source": "Stock Traders Daily", "clean_title": "Market Analysis"}}
-- "Tesla Earnings Beat Estimates" → {{"source": null, "clean_title": "Tesla Earnings Beat Estimates"}}
-"""
+Return JSON:
+{{"source": "source name or null", "clean_title": "title without source"}}"""
     
     try:
         headers = {
@@ -1081,10 +1118,11 @@ Examples:
         data = {
             "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are an expert at analyzing news article titles and identifying source publications. Always respond with valid JSON only."},
+                {"role": "system", "content": "You extract news source information accurately. Focus only on identifying legitimate news sources."},
                 {"role": "user", "content": prompt}
             ],
-            "max_completion_tokens": 150,
+            "max_tokens": 150,
+            "temperature": 0.1,
             "response_format": {"type": "json_object"}
         }
         
@@ -1100,60 +1138,26 @@ Examples:
                     source = parsed.get("source")
                     clean_title = parsed.get("clean_title", title)
                     
-                    # If source is "null" string, convert to None
                     if source == "null" or source == "None":
                         source = None
                     
-                    # FIX #6: Add non-Latin script check for extracted source too
-                    if source and contains_non_latin_script(source):
-                        LOG.info(f"BLOCKED non-Latin script in extracted source: {source}")
-                        return None, None
-                    
-                    # Existing spam filtering for sources
+                    # REMOVED: Aggressive spam filtering based on source names
+                    # Only check against the actual banned domains list
                     if source:
                         source_lower = source.lower()
-                        spam_sources = ["marketbeat", "newser", "khodrobank"]
-                        for spam in spam_sources:
-                            if spam in source_lower:
-                                LOG.info(f"BLOCKED spam source in title: {source}")
+                        banned_sources = ["marketbeat", "newser", "khodrobank"]
+                        for banned in banned_sources:
+                            if banned in source_lower:
+                                LOG.info(f"BLOCKED banned source: {source}")
                                 return None, None
                     
-                    LOG.info(f"AI title analysis: '{title[:60]}...' → source: '{source}', title: '{clean_title[:40]}...'")
                     return clean_title, source
                     
                 except json.JSONDecodeError as e:
-                    LOG.warning(f"AI title analysis JSON error: {e}")
+                    LOG.warning(f"AI source extraction JSON error: {e}")
                     
     except Exception as e:
-        LOG.warning(f"AI title analysis failed: {e}")
-    
-    # Fallback: Try simple regex patterns as backup, but check for non-Latin script first
-    fallback_patterns = [
-        r'\s*-\s*([^-]+)$',  # " - Something" at the end
-        r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net))$'  # domain at the end
-    ]
-    
-    for pattern in fallback_patterns:
-        match = re.search(pattern, title)
-        if match:
-            source = match.group(1).strip()
-            clean_title = re.sub(pattern, '', title).strip()
-            
-            # FIX #6: Check fallback extracted source for non-Latin script
-            if contains_non_latin_script(source):
-                LOG.info(f"BLOCKED non-Latin script in fallback source: {source}")
-                return None, None
-            
-            # Existing spam filtering for fallback
-            source_lower = source.lower()
-            spam_sources = ["marketbeat", "newser", "khodrobank"]
-            for spam in spam_sources:
-                if spam in source_lower:
-                    LOG.info(f"BLOCKED spam source in fallback: {source}")
-                    return None, None
-            
-            LOG.info(f"Fallback title extraction: source: '{source}', title: '{clean_title[:40]}...'")
-            return clean_title, source
+        LOG.warning(f"AI source extraction failed: {e}")
     
     return title, None
 
@@ -1258,7 +1262,7 @@ def format_timestamp_est(dt: datetime) -> str:
     return f"{date_part}, {time_part} EST"
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with enhanced metadata and non-Latin script filtering"""
+    """Process a single feed and store articles with FIXED spam filtering"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0}
     
     try:
@@ -1273,9 +1277,9 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             if not original_url:
                 continue
             
-            # URL resolution with proper variable names
+            # URL resolution with domain-based spam filtering ONLY
             resolved_result = resolve_google_news_url(original_url)
-            if resolved_result[0] is None:  # Spam detected at URL level
+            if resolved_result[0] is None:  # Spam detected at domain level only
                 stats["blocked_spam"] += 1
                 continue
                 
@@ -1293,20 +1297,15 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # FIX #6: Check for non-Latin script in title during ingestion
+            # FIXED: Only block non-Latin script, remove content-based spam filtering
             if contains_non_latin_script(title):
                 stats["blocked_non_latin"] += 1
-                LOG.info(f"BLOCKED non-Latin script in title during ingestion: {title[:50]}")
+                LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}")
                 continue
             
-            # Existing spam keyword filtering
-            spam_keywords = ["marketbeat", "newser", "khodrobank"]
-            if any(spam in title.lower() for spam in spam_keywords):
-                stats["blocked_spam"] += 1
-                LOG.info(f"BLOCKED spam in title during ingestion: {title[:50]}")
-                continue
+            # REMOVED: Content-based spam keyword filtering - only domain filtering now
             
-            # Calculate quality score (currently disabled, returns 50.0)
+            # Calculate quality score (currently disabled)
             quality_score = calculate_quality_score(
                 title, domain, feed["ticker"], description, category, keywords
             )
@@ -1314,7 +1313,6 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             # Lower threshold since scoring is disabled
             if quality_score < 1:
                 stats["low_quality"] += 1
-                LOG.debug(f"Skipping low quality [{category}]: {title[:50]} (score: {quality_score})")
                 continue
             
             published_at = None
@@ -1323,58 +1321,67 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             elif hasattr(entry, "updated_parsed"):
                 published_at = parse_datetime(entry.updated_parsed)
             
+            # ENHANCED: Track original source for both Google News and Yahoo Finance
+            original_source_domain = None
+            original_source_name = None
+            
+            if yahoo_source_url:
+                # Yahoo Finance with extracted source
+                original_source_domain = urlparse(yahoo_source_url).netloc.lower()
+                original_source_name = get_or_create_formal_domain_name(original_source_domain)
+            elif "news.google.com" in domain:
+                # Google News - extract source from title
+                clean_title, extracted_source = extract_source_with_ai(title)
+                if clean_title is None:  # AI detected spam in title
+                    stats["blocked_spam"] += 1
+                    continue
+                title = clean_title or title
+                if extracted_source:
+                    original_source_name = enhance_source_name(extracted_source)
+                    original_source_domain = "google_news_extracted"  # Special marker
+            else:
+                # Direct source
+                original_source_domain = domain
+                original_source_name = get_or_create_formal_domain_name(domain)
+            
             try:
                 with db() as conn, conn.cursor() as cur:
+                    # Check for duplicates
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
                         continue
                     
-                    # Determine related ticker and search keyword for better tracking
+                    # Determine related ticker and search keyword
                     related_ticker = None
                     search_keyword = feed.get("search_keyword", "")
                     
                     if category == "competitor":
                         related_ticker = feed.get("competitor_ticker")
-                        if not related_ticker and "Competitor:" in feed["name"]:
-                            comp_name = feed["name"].replace("Competitor:", "").strip()
-                            words = comp_name.split()
-                            for word in words:
-                                if re.match(r'^[A-Z]{2,5}$', word):
-                                    related_ticker = word
-                                    break
                     
-                    # Add columns for search metadata if they don't exist
-                    cur.execute("""
-                        DO $$ 
-                        BEGIN 
-                            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                         WHERE table_name='found_url' AND column_name='search_keyword') 
-                            THEN 
-                                ALTER TABLE found_url ADD COLUMN search_keyword VARCHAR(255);
-                            END IF;
-                        END $$;
-                    """)
-                    
+                    # Insert article with enhanced source tracking
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
-                            category, related_ticker, original_source_url, search_keyword
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            category, related_ticker, original_source_url, search_keyword,
+                            source_name, source_domain
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         original_url, resolved_url, url_hash, title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, related_ticker, yahoo_source_url, search_keyword
+                        category, related_ticker, yahoo_source_url, search_keyword,
+                        original_source_name, original_source_domain
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        source_note = f" (source: {urlparse(yahoo_source_url).netloc})" if yahoo_source_url else ""
-                        keyword_note = f" [keyword: {search_keyword}]" if search_keyword else ""
-                        ticker_note = f" [related: {related_ticker}]" if related_ticker else ""
-                        LOG.info(f"Inserted [{category}]{source_note}{keyword_note}{ticker_note}: {title[:60]}...")
+                        
+                        # ENHANCED: Update source statistics
+                        update_source_stats(original_source_name, original_source_domain)
+                        
+                        LOG.info(f"Inserted [{category}] from {original_source_name}: {title[:60]}...")
                         
             except Exception as e:
                 LOG.error(f"Database insert error for '{title[:50]}': {e}")
@@ -1383,8 +1390,21 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
-    LOG.info(f"Feed {feed['name']} [{category}] stats: {stats}")
     return stats
+
+def update_source_stats(source_name: str, source_domain: str):
+    """Update source statistics table"""
+    if not source_name:
+        return
+        
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO source_stats (source_name, source_domain, article_count, first_seen, last_seen)
+            VALUES (%s, %s, 1, NOW(), NOW())
+            ON CONFLICT (source_name, source_domain) DO UPDATE
+            SET article_count = source_stats.article_count + 1,
+                last_seen = NOW()
+        """, (source_name, source_domain))
     
 # ------------------------------------------------------------------------------
 # Email Digest
@@ -2563,6 +2583,29 @@ def get_search_analytics(request: Request, days: int = Query(default=7)):
         "source_distribution": source_distribution
     }  # Make sure this ends cleanly
             
+@APP.get("/admin/source-stats")
+def get_source_stats(request: Request, limit: int = Query(default=50)):
+    """Get source statistics showing most frequent sources"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT source_name, source_domain, article_count, first_seen, last_seen
+            FROM source_stats
+            ORDER BY article_count DESC, source_name
+            LIMIT %s
+        """, (limit,))
+        sources = list(cur.fetchall())
+        
+        # Get total unique sources
+        cur.execute("SELECT COUNT(*) as total FROM source_stats")
+        total = cur.fetchone()["total"]
+    
+    return {
+        "sources": sources,
+        "total_unique_sources": total,
+        "showing": len(sources)
+    }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

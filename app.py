@@ -1272,7 +1272,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
 
 # Simplified _format_article_html function
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format article HTML with enhanced metadata display - ENHANCED"""
+    """Format article HTML with enhanced colored metadata - CLEANED UP"""
     pub_date = article["published_at"].strftime("%m/%d %H:%M") if article["published_at"] else "N/A"
     
     original_title = article["title"] or "No Title"
@@ -1306,29 +1306,29 @@ def _format_article_html(article: Dict, category: str) -> str:
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
-    # ENHANCED: Build metadata string with search keywords and related tickers
+    # ENHANCED: Build metadata with clean, colored badges
     metadata_parts = []
     
-    # Add related ticker for competitors
-    if article.get('related_ticker'):
-        metadata_parts.append(f"Related: {article['related_ticker']}")
+    # Add competitor name for competitor articles (clean format)
+    if category == "competitor" and article.get('search_keyword'):
+        competitor_name = article['search_keyword']
+        metadata_parts.append(f"<span class='competitor-badge'>{competitor_name}</span>")
     
-    # Add search keyword for industry articles
-    if category == "industry" and article.get('search_keyword'):
-        metadata_parts.append(f"Keyword: {article['search_keyword']}")
-    elif category == "competitor" and article.get('search_keyword'):
-        metadata_parts.append(f"Competitor: {article['search_keyword']}")
+    # Add industry keyword for industry articles (clean format)  
+    elif category == "industry" and article.get('search_keyword'):
+        industry_keyword = article['search_keyword']
+        metadata_parts.append(f"<span class='industry-badge'>{industry_keyword}</span>")
     
-    metadata_string = " | " + " | ".join(metadata_parts) if metadata_parts else ""
+    # Format: Source | Enhanced Badges | Score | Title | Date
+    enhanced_metadata = "".join(metadata_parts)
     
-    # Format: Source | Score | Title | Date | Enhanced Metadata
     return f"""
     <div class='article {category}'>
         <span class='source-badge'>{display_source}</span>
+        {enhanced_metadata}
         <span class='score {score_class}'>Score: {score:.0f}</span>
         <a href='{link_url}' target='_blank'>{title}</a>
         <span class='meta'> | {pub_date}</span>
-        {metadata_string}
     </div>
     """
 
@@ -1392,7 +1392,37 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
                 WHERE found_at >= %s AND quality_score >= 15
             """, (cutoff,))
     
-    return articles_by_ticker
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles_by_ticker.values()
+    )
+    
+    if total_articles == 0:
+        return {
+            "status": "no_articles",
+            "message": f"No new quality articles found in the last {period_label}",
+            "tickers": tickers or "all"
+        }
+    
+    html = build_digest_html(articles_by_ticker, days if days > 0 else 1)
+    
+    tickers_str = ', '.join(articles_by_ticker.keys())
+    subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
+    success = send_email(subject, html)
+    
+    # Count by category
+    category_counts = {"company": 0, "industry": 0, "competitor": 0}
+    for ticker_cats in articles_by_ticker.values():
+        for cat, arts in ticker_cats.items():
+            category_counts[cat] = category_counts.get(cat, 0) + len(arts)
+    
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "by_category": category_counts,
+        "recipient": DIGEST_TO
+    }
 
 def send_email(subject: str, html_body: str, to: str = None):
     """Send email via SMTP"""
@@ -1711,7 +1741,7 @@ def cron_digest(
         "by_category": category_counts,
         "recipient": DIGEST_TO
     }
-
+    
 # FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/clean-feeds")
 def clean_old_feeds(request: Request, body: CleanFeedsRequest):
@@ -2203,6 +2233,121 @@ def reset_digest_flags(request: Request, body: ResetDigestRequest):
         count = cur.rowcount
     
     return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
+
+APP.get("/admin/feed-metadata")
+def get_feed_metadata(request: Request, ticker: str = Query(None)):
+    """Get feed metadata including search keywords and competitor tickers"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        if ticker:
+            cur.execute("""
+                SELECT id, url, name, ticker, search_keyword, competitor_ticker,
+                       active, created_at
+                FROM source_feed
+                WHERE ticker = %s
+                ORDER BY name
+            """, (ticker,))
+        else:
+            cur.execute("""
+                SELECT id, url, name, ticker, search_keyword, competitor_ticker,
+                       active, created_at
+                FROM source_feed
+                ORDER BY ticker, name
+            """)
+        feeds = list(cur.fetchall())
+    
+    return {
+        "feeds": feeds,
+        "total": len(feeds),
+        "ticker_filter": ticker
+    }
+
+@APP.get("/admin/search-analytics")
+def get_search_analytics(request: Request, days: int = Query(default=7)):
+    """Get analytics on search keywords and their performance"""
+    require_admin(request)
+    
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Analytics by search keyword
+        cur.execute("""
+            SELECT 
+                search_keyword,
+                category,
+                COUNT(*) as article_count,
+                AVG(quality_score) as avg_quality,
+                COUNT(DISTINCT domain) as unique_sources
+            FROM found_url
+            WHERE found_at >= %s 
+                AND search_keyword IS NOT NULL
+            GROUP BY search_keyword, category
+            ORDER BY article_count DESC
+        """, (cutoff,))
+        keyword_stats = list(cur.fetchall())
+        
+        # Analytics by related ticker (competitors)
+        cur.execute("""
+            SELECT 
+                related_ticker,
+                ticker as main_ticker,
+                COUNT(*) as article_count,
+                AVG(quality_score) as avg_quality
+            FROM found_url
+            WHERE found_at >= %s 
+                AND related_ticker IS NOT NULL
+            GROUP BY related_ticker, ticker
+            ORDER BY article_count DESC
+        """, (cutoff,))
+        competitor_stats = list(cur.fetchall())
+        
+        # Source distribution
+        cur.execute("""
+            SELECT 
+                CASE 
+                    WHEN domain LIKE '%yahoo%' THEN 'Yahoo Finance'
+                    WHEN domain LIKE '%google%' THEN 'Google News'
+                    ELSE 'Other'
+                END as source_type,
+                category,
+                COUNT(*) as article_count
+            FROM found_url
+            WHERE found_at >= %s
+            GROUP BY source_type, category
+            ORDER BY article_count DESC
+        """, (cutoff,))
+        source_distribution = list(cur.fetchall())
+    
+    return {
+        "period_days": days,
+        "keyword_performance": keyword_stats,
+        "competitor_tracking": competitor_stats,
+        "source_distribution": source_distribution
+    }"
+            
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = {}
+            if category not in articles_by_ticker[ticker]:
+                articles_by_ticker[ticker][category] = []
+            
+            articles_by_ticker[ticker][category].append(dict(row))
+        
+        # Mark articles as sent
+        if tickers:
+            cur.execute("""
+                UPDATE found_url
+                SET sent_in_digest = TRUE
+                WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s)
+            """, (cutoff, tickers))
+        else:
+            cur.execute("""
+                UPDATE found_url
+                SET sent_in_digest = TRUE
+                WHERE found_at >= %s AND quality_score >= 15
+            """, (cutoff,))
+    
+    return articles_by_ticker
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

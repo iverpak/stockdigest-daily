@@ -2234,9 +2234,9 @@ def reset_digest_flags(request: Request, body: ResetDigestRequest):
     
     return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
 
-@APP.get("/admin/feed-metadata")  # Add the missing @
+@APP.get("/admin/feed-metadata")
 def get_feed_metadata(request: Request, ticker: str = Query(None)):
-"""Get feed metadata including search keywords and competitor tickers"""
+    """Get feed metadata including search keywords and competitor tickers"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:

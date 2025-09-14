@@ -1559,18 +1559,10 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                 with db() as conn, conn.cursor() as cur:
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
-                        stats["inserted"] += 1
-                        
-                        # Update domain statistics
-                        upsert_domain_stats(normalized_domain, quality_score, category)
-                        
-                        # Get or create formal domain name for better display
-                        formal_domain_name = get_or_create_formal_domain_name(normalized_domain)
-                        
-                        # Log with formal name
-                        source_note = f" (source: {formal_domain_name})" if formal_domain_name != normalized_domain else f" (source: {normalized_domain})"
-                                        
-                    # Normalize domain before storing
+                        stats["duplicates"] += 1
+                        continue
+                    
+                    # FIXED: Normalize domain BEFORE using it
                     normalized_domain = normalize_domain(domain)
                     
                     # Determine related ticker and search keyword for better tracking

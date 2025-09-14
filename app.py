@@ -1024,11 +1024,11 @@ def test_yahoo_extraction_detailed(request: Request):
     return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Enhanced Google News URL resolution that uses title extraction for domain resolution"""
+    """Enhanced Google News URL resolution that NEVER stores news.google.com domains"""
     original_source_url = None
     
     try:
-        # For Google News URLs, use a different strategy
+        # For Google News URLs, use enhanced strategy
         if "news.google.com" in url:
             # First try direct resolution
             try:
@@ -1052,6 +1052,9 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                     
             except Exception as e:
                 LOG.debug(f"Direct Google News resolution failed for {url}: {e}")
+            
+            # ENHANCED: Return special marker for title extraction processing
+            return url, "google-news-title-extraction-needed", None
             
             # ENHANCED: Instead of returning "google-news-unresolved", return a special marker
             # that will be processed later during ingestion when we have the title
@@ -1125,11 +1128,71 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         
     except Exception as e:
         LOG.warning(f"Failed to resolve URL {url}: {e}")
-        if url:
+        # FIXED: Never return news.google.com as fallback
+        if url and "news.google.com" in url:
+            return url, "google-news-unresolved", None
+        else:
             fallback_domain = urlparse(url).netloc.lower() if url else None
             normalized_fallback = normalize_domain(fallback_domain) if fallback_domain else None
             return url, normalized_fallback, None
-        return None, None, None
+
+def enhanced_google_domain_resolution(domain: str, title: str) -> str:
+    """Enhanced domain resolution specifically for Google News articles"""
+    if domain != "google-news-title-extraction-needed":
+        return domain
+    
+    # Extract source from title using AI
+    title_result = extract_source_with_ai(title)
+    
+    if title_result[0] is None:  # Spam detected
+        return None
+    
+    clean_title, extracted_source = title_result
+    
+    if extracted_source:
+        # Try to get domain from formal name
+        actual_domain = get_domain_from_formal_name(extracted_source)
+        if actual_domain:
+            final_domain = normalize_domain(actual_domain)
+            LOG.info(f"Resolved Google News domain: '{extracted_source}' -> '{final_domain}'")
+            return final_domain
+        else:
+            # ENHANCED: Better fallback - create meaningful pseudo-domain
+            pseudo_domain = extracted_source.lower().replace(" ", "").replace(".", "").replace(",", "")
+            # Remove common suffixes that don't help
+            pseudo_domain = re.sub(r'(news|media|magazine|newspaper|online|daily|times|post|journal)$', '', pseudo_domain)
+            if len(pseudo_domain) > 3:  # Only use if meaningful
+                LOG.info(f"Using enhanced pseudo-domain for '{extracted_source}': {pseudo_domain}")
+                return pseudo_domain
+    
+    # FINAL FALLBACK: Extract domain hints from title itself
+    domain_hints = extract_domain_hints_from_title(title)
+    if domain_hints:
+        return domain_hints[0]
+    
+    # LAST RESORT: Use a generic but identifiable marker
+    return "unresolved-google-source"
+
+def extract_domain_hints_from_title(title: str) -> List[str]:
+    """Extract potential domain hints from article titles"""
+    hints = []
+    
+    # Look for common domain patterns in titles
+    domain_patterns = [
+        r'([a-zA-Z0-9-]+\.(?:com|org|net|co\.uk|co|io|ai))',  # Explicit domains
+        r'([A-Z][a-zA-Z]+(?:News|Times|Post|Daily|Journal|Tribune|Herald))',  # News outlets
+        r'((?:The\s+)?[A-Z][a-zA-Z\s]+(?:Magazine|Report|Review|Wire|Brief))',  # Publications
+    ]
+    
+    for pattern in domain_patterns:
+        matches = re.findall(pattern, title, re.IGNORECASE)
+        for match in matches:
+            clean_match = match.strip().lower()
+            if len(clean_match) > 3 and clean_match not in ['the', 'and', 'for', 'with']:
+                hints.append(normalize_domain(clean_match))
+    
+    return hints[:3]  # Return top 3 hints
+
 
 def calculate_quality_score(
     title: str, 
@@ -1566,9 +1629,12 @@ def format_timestamp_est(dt: datetime) -> str:
     # Always use "EST" instead of dynamic timezone abbreviation
     return f"{date_part}, {time_part} EST"
 
+# ENHANCED: Update the ingest_feed function
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Enhanced feed processing that properly handles Google News domain resolution"""
-    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0, "google_domains_resolved": 0}
+    """Enhanced feed processing with improved Google News handling"""
+    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, 
+             "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0, 
+             "google_domains_resolved": 0, "google_unresolved": 0}
     
     try:
         LOG.info(f"Processing feed [{category}]: {feed['name']}")
@@ -1615,9 +1681,23 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                 LOG.info(f"BLOCKED spam in title during ingestion: {title[:50]}")
                 continue
             
-            # ENHANCED: Handle Google News domain resolution using title
-            final_domain = domain
-            if domain == "google-news-title-extraction-needed":
+            # ENHANCED: Handle Google News domain resolution
+            final_domain = enhanced_google_domain_resolution(domain, title)
+            
+            # CRITICAL: Never store news.google.com or google-news variants
+            if final_domain and "google" in final_domain.lower() and "news" in final_domain.lower():
+                stats["google_unresolved"] += 1
+                LOG.warning(f"Skipping Google News article - could not resolve domain: {title[:60]}")
+                continue
+            
+            if final_domain == "google-news-title-extraction-needed":
+                stats["google_unresolved"] += 1
+                LOG.warning(f"Skipping unresolved Google News article: {title[:60]}")
+                continue
+            
+            if final_domain and final_domain not in ["google-news-unresolved", "unresolved-google-source"]:
+                stats["google_domains_resolved"] += 1
+               
                 # Extract source from title using AI
                 title_result = extract_source_with_ai(title)
                 

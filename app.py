@@ -584,6 +584,60 @@ def get_domain_stats(domain: str = None) -> List[Dict]:
             """)
             return list(cur.fetchall())
 
+def cache_missing_domain_names(limit: int = 50) -> Dict[str, int]:
+    """Bulk cache formal names for domains that don't have them yet - OPTIMIZED batch processing"""
+    
+    with db() as conn, conn.cursor() as cur:
+        # Find domains without formal names, ordered by frequency
+        cur.execute("""
+            SELECT f.domain, COUNT(*) as usage_count
+            FROM found_url f
+            LEFT JOIN domain_names dn ON dn.domain = f.domain
+            WHERE f.domain IS NOT NULL 
+              AND f.domain != 'news.google.com'
+              AND f.domain != 'google-news-unresolved'
+              AND dn.domain IS NULL
+            GROUP BY f.domain
+            ORDER BY usage_count DESC
+            LIMIT %s
+        """, (limit,))
+        
+        missing_domains = list(cur.fetchall())
+    
+    if not missing_domains:
+        LOG.info("No missing domain names found")
+        return {"processed": 0, "cached": 0, "failed": 0}
+    
+    LOG.info(f"Found {len(missing_domains)} domains needing formal names")
+    
+    stats = {"processed": 0, "cached": 0, "failed": 0}
+    
+    for domain_row in missing_domains:
+        domain = domain_row['domain']
+        usage_count = domain_row['usage_count']
+        
+        stats["processed"] += 1
+        LOG.info(f"Processing domain {domain} (used in {usage_count} articles)...")
+        
+        # Get formal name (this will cache it automatically)
+        try:
+            formal_name = get_or_create_formal_domain_name(domain)
+            if formal_name and formal_name != domain:
+                stats["cached"] += 1
+                LOG.info(f"Successfully cached: {domain} -> {formal_name}")
+            else:
+                stats["failed"] += 1
+                LOG.warning(f"Failed to get good formal name for {domain}")
+        except Exception as e:
+            stats["failed"] += 1
+            LOG.error(f"Error processing domain {domain}: {e}")
+        
+        # Small delay to avoid rate limiting
+        time.sleep(0.2)
+    
+    LOG.info(f"Domain caching completed: {stats}")
+    return stats
+
 def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
     """Build feed URLs for different categories - FIXED Yahoo Finance ticker feeds"""
     feeds = []
@@ -1152,18 +1206,23 @@ For "{clean_domain}", the formal name is:"""
         return None
 
 def get_or_create_formal_domain_name(domain: str) -> str:
-    """Get formal domain name from cache or generate with AI"""
+    """Get formal domain name from cache or generate with AI - OPTIMIZED to avoid redundant API calls"""
     if not domain:
         return "Unknown"
     
-    clean_domain = domain.replace("www.", "").lower()
+    clean_domain = normalize_domain(domain)
+    if not clean_domain:
+        return "Unknown"
     
     # Check database cache first
     with db() as conn, conn.cursor() as cur:
         cur.execute("SELECT formal_name FROM domain_names WHERE domain = %s", (clean_domain,))
         result = cur.fetchone()
         if result:
+            LOG.debug(f"Using cached formal name for {clean_domain}: {result['formal_name']}")
             return result["formal_name"]
+    
+    LOG.info(f"No cached formal name found for {clean_domain}, generating with AI...")
     
     # Generate with AI
     formal_name = get_formal_domain_name_from_ai(clean_domain)
@@ -1171,27 +1230,31 @@ def get_or_create_formal_domain_name(domain: str) -> str:
     # Fallback if AI fails
     if not formal_name:
         formal_name = clean_domain.replace(".com", "").replace(".org", "").replace(".net", "").title()
+        LOG.info(f"AI failed for {clean_domain}, using fallback: {formal_name}")
     
-    # Store in database
+    # Store in database for future use
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             INSERT INTO domain_names (domain, formal_name, ai_generated)
             VALUES (%s, %s, %s)
             ON CONFLICT (domain) DO UPDATE
-            SET formal_name = EXCLUDED.formal_name, updated_at = NOW()
+            SET formal_name = EXCLUDED.formal_name, 
+                updated_at = NOW(),
+                ai_generated = EXCLUDED.ai_generated
         """, (clean_domain, formal_name, formal_name != clean_domain.title()))
     
+    LOG.info(f"Cached new formal name: {clean_domain} -> {formal_name}")
     return formal_name
 
 # Replace the title extraction functions with this AI-powered approach
 
 # FIX #6: Updated extract_source_with_ai function with non-Latin script filtering
 def extract_source_with_ai(title: str) -> Tuple[str, str]:
-    """Use OpenAI to intelligently extract source from news article titles with non-Latin script filtering"""
+    """Use OpenAI to intelligently extract source from news article titles with non-Latin script filtering and domain caching"""
     if not title or not OPENAI_API_KEY:
         return title, None
     
-    # FIX #6: Check for non-Latin script in title before processing
+    # Check for non-Latin script in title before processing
     if contains_non_latin_script(title):
         LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}...")
         return None, None  # Return None to signal spam detection
@@ -1254,7 +1317,7 @@ Examples:
                     if source == "null" or source == "None":
                         source = None
                     
-                    # FIX #6: Add non-Latin script check for extracted source too
+                    # Check non-Latin script for extracted source too
                     if source and contains_non_latin_script(source):
                         LOG.info(f"BLOCKED non-Latin script in extracted source: {source}")
                         return None, None
@@ -1268,8 +1331,20 @@ Examples:
                                 LOG.info(f"BLOCKED spam source in title: {source}")
                                 return None, None
                     
-                    LOG.info(f"AI title analysis: '{title[:60]}...' → source: '{source}', title: '{clean_title[:40]}...'")
-                    return clean_title, source
+                    # ENHANCED: Get or create formal domain name if source looks like a domain
+                    if source and ('.' in source and any(tld in source.lower() for tld in ['.com', '.org', '.net', '.co.uk'])):
+                        # This looks like a domain, get the formal name
+                        formal_source = get_or_create_formal_domain_name(source)
+                        LOG.info(f"AI title analysis with domain lookup: '{title[:60]}...' → source: '{source}' → formal: '{formal_source}', title: '{clean_title[:40]}...'")
+                        return clean_title, formal_source
+                    elif source:
+                        # This is already a publication name, enhance it
+                        enhanced_source = enhance_source_name(source)
+                        LOG.info(f"AI title analysis with name enhancement: '{title[:60]}...' → source: '{source}' → enhanced: '{enhanced_source}', title: '{clean_title[:40]}...'")
+                        return clean_title, enhanced_source
+                    else:
+                        LOG.info(f"AI title analysis: '{title[:60]}...' → no source found, title: '{clean_title[:40]}...'")
+                        return clean_title, None
                     
                 except json.JSONDecodeError as e:
                     LOG.warning(f"AI title analysis JSON error: {e}")
@@ -1289,7 +1364,7 @@ Examples:
             source = match.group(1).strip()
             clean_title = re.sub(pattern, '', title).strip()
             
-            # FIX #6: Check fallback extracted source for non-Latin script
+            # Check fallback extracted source for non-Latin script
             if contains_non_latin_script(source):
                 LOG.info(f"BLOCKED non-Latin script in fallback source: {source}")
                 return None, None
@@ -1302,8 +1377,15 @@ Examples:
                     LOG.info(f"BLOCKED spam source in fallback: {source}")
                     return None, None
             
-            LOG.info(f"Fallback title extraction: source: '{source}', title: '{clean_title[:40]}...'")
-            return clean_title, source
+            # ENHANCED: Use cached domain lookup for fallback too
+            if '.' in source and any(tld in source.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
+                formal_source = get_or_create_formal_domain_name(source)
+                LOG.info(f"Fallback title extraction with domain lookup: source: '{source}' → formal: '{formal_source}', title: '{clean_title[:40]}...'")
+                return clean_title, formal_source
+            else:
+                enhanced_source = enhance_source_name(source)
+                LOG.info(f"Fallback title extraction with enhancement: source: '{source}' → enhanced: '{enhanced_source}', title: '{clean_title[:40]}...'")
+                return clean_title, enhanced_source
     
     return title, None
 
@@ -2819,6 +2901,24 @@ def get_resolved_domains(request: Request, ticker: str = Query(None)):
         "domains": enhanced_results,
         "ticker_filter": ticker,
         "total_domains": len(set(r['raw_domain'] for r in enhanced_results))
+    }
+
+@APP.post("/admin/cache-domain-names")
+def cache_domain_names_endpoint(request: Request, limit: int = Query(default=50)):
+    """Bulk cache formal names for domains that don't have them yet"""
+    require_admin(request)
+    
+    if not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    stats = cache_missing_domain_names(limit)
+    
+    return {
+        "status": "completed",
+        "domains_processed": stats["processed"],
+        "domains_cached": stats["cached"],
+        "domains_failed": stats["failed"],
+        "message": f"Cached formal names for {stats['cached']} out of {stats['processed']} domains"
     }
 
 # ------------------------------------------------------------------------------

@@ -846,14 +846,16 @@ def contains_non_latin_script(text: str) -> bool:
 
 def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
     """
-    Optimized Yahoo Finance source extraction with better error handling
+    Fixed Yahoo Finance source extraction - properly handles HTML parsing
     """
     try:
         if "finance.yahoo.com" not in url:
             return None
             
+        LOG.info(f"Extracting Yahoo Finance source from: {url}")
+        
         response = requests.get(url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
         
         if response.status_code != 200:
@@ -861,55 +863,87 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
             return None
         
         html_content = response.text
+        LOG.debug(f"Yahoo page content length: {len(html_content)}")
         
-        # Try most reliable patterns first
-        patterns = [
+        # Try the most reliable patterns in order of preference
+        extraction_patterns = [
+            # Pattern 1: Standard providerContentUrl
             r'"providerContentUrl"\s*:\s*"([^"]*)"',
+            # Pattern 2: Alternative sourceUrl
             r'"sourceUrl"\s*:\s*"([^"]*)"',
-            r'"originalUrl"\s*:\s*"([^"]*)"'
+            # Pattern 3: originalUrl
+            r'"originalUrl"\s*:\s*"([^"]*)"',
+            # Pattern 4: Escaped JSON patterns
+            r'\\+"providerContentUrl\\+"\s*:\s*\\+"([^\\]*?)\\+"'
         ]
         
-        for pattern in patterns:
+        for i, pattern in enumerate(extraction_patterns):
             matches = re.findall(pattern, html_content)
+            LOG.debug(f"Pattern {i+1} found {len(matches)} matches")
+            
             for match in matches:
                 try:
-                    # Clean up escaped JSON
-                    cleaned_url = json.loads(f'"{match}"')
-                    parsed = urlparse(cleaned_url)
+                    # Try different unescaping methods
+                    candidate_urls = []
                     
-                    if (parsed.scheme in ['http', 'https'] and 
-                        parsed.netloc and 
-                        len(cleaned_url) > 20 and
-                        'finance.yahoo.com' not in cleaned_url):
-                        
-                        LOG.info(f"Yahoo Finance source extraction successful: {cleaned_url}")
-                        return cleaned_url
-                except Exception:
+                    # Method 1: JSON unescape
+                    try:
+                        unescaped_url = json.loads(f'"{match}"')
+                        candidate_urls.append(unescaped_url)
+                    except json.JSONDecodeError:
+                        pass
+                    
+                    # Method 2: Simple replace
+                    simple_unescaped = match.replace('\\/', '/').replace('\\"', '"')
+                    candidate_urls.append(simple_unescaped)
+                    
+                    # Method 3: Raw match
+                    candidate_urls.append(match)
+                    
+                    # Test each candidate
+                    for candidate_url in candidate_urls:
+                        try:
+                            parsed = urlparse(candidate_url)
+                            if (parsed.scheme in ['http', 'https'] and 
+                                parsed.netloc and 
+                                len(candidate_url) > 20 and
+                                'finance.yahoo.com' not in candidate_url and
+                                not candidate_url.startswith('//') and
+                                '.' in parsed.netloc):
+                                
+                                LOG.info(f"Successfully extracted Yahoo source: {candidate_url}")
+                                return candidate_url
+                        except Exception as e:
+                            LOG.debug(f"URL validation failed for {candidate_url}: {e}")
+                            continue
+                            
+                except Exception as e:
+                    LOG.debug(f"Processing match failed: {e}")
                     continue
         
-        # Fallback pattern search
-        url_patterns = [
-            r'https://stockstory\.org/[^"\s]*',
-            r'https://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[^"\s]*(?:stock|news|article|finance)[^"\s]*',
+        # Fallback: Look for any reasonable URLs in the content
+        fallback_patterns = [
+            r'https://(?!finance\.yahoo\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[^\s"<>]*(?:news|article|story|press)[^\s"<>]*',
+            r'https://stockstory\.org/[^\s"<>]*',
         ]
         
-        for pattern in url_patterns:
+        for pattern in fallback_patterns:
             matches = re.finditer(pattern, html_content)
             for match in matches:
                 candidate_url = match.group(0).rstrip('",')
                 try:
                     parsed = urlparse(candidate_url)
-                    if parsed.scheme and parsed.netloc and 'finance.yahoo.com' not in candidate_url:
-                        LOG.info(f"Yahoo source via pattern search: {candidate_url}")
+                    if parsed.scheme and parsed.netloc:
+                        LOG.info(f"Fallback extraction successful: {candidate_url}")
                         return candidate_url
                 except Exception:
                     continue
         
-        LOG.debug(f"No original source found for Yahoo URL: {url}")
+        LOG.warning(f"No original source found for Yahoo URL: {url}")
         return None
         
     except Exception as e:
-        LOG.warning(f"Failed to extract Yahoo Finance source from {url}: {e}")
+        LOG.error(f"Yahoo Finance source extraction failed for {url}: {e}")
         return None
 
 @APP.post("/admin/test-yahoo-extraction-detailed")
@@ -989,7 +1023,7 @@ def test_yahoo_extraction_detailed(request: Request):
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Enhanced Google News URL resolution - returns URL for title processing
+    Fixed Google News URL resolution with proper title processing workflow
     """
     try:
         if "news.google.com" in url:
@@ -1000,6 +1034,7 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 })
                 final_url = response.url
                 
+                # Check if we got redirected to the actual source
                 if final_url != url and "news.google.com" not in final_url:
                     domain = urlparse(final_url).netloc.lower()
                     normalized_domain = normalize_domain(domain)
@@ -1008,15 +1043,17 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                     for spam_domain in SPAM_DOMAINS:
                         spam_clean = normalize_domain(spam_domain)
                         if spam_clean and spam_clean in normalized_domain:
+                            LOG.info(f"BLOCKED spam domain from Google redirect: {normalized_domain}")
                             return None, None, None
                     
-                    LOG.info(f"Successfully resolved Google News URL: {url} -> {final_url}")
+                    LOG.info(f"Google News direct resolution successful: {url} -> {final_url}")
                     return final_url, normalized_domain, None
                     
             except Exception as e:
                 LOG.debug(f"Direct Google News resolution failed for {url}: {e}")
             
-            # Return URL with special marker for title-based processing
+            # Return special marker for title-based processing
+            LOG.debug(f"Google News URL needs title processing: {url}")
             return url, "google-news-needs-title-processing", None
         
         # Handle direct Google redirect URLs
@@ -1046,9 +1083,10 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                         for spam_domain in SPAM_DOMAINS:
                             spam_clean = normalize_domain(spam_domain)
                             if spam_clean and spam_clean in original_normalized_domain:
-                                LOG.info(f"BLOCKED spam domain in original source: {original_normalized_domain}")
+                                LOG.info(f"BLOCKED spam domain in Yahoo source: {original_normalized_domain}")
                                 return None, None, None
                         
+                        LOG.info(f"Yahoo redirect resolved: {actual_url} -> {original_source_url}")
                         return original_source_url, original_normalized_domain, actual_url
                         
                 return actual_url, normalized_domain, None
@@ -1064,7 +1102,7 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 LOG.info(f"BLOCKED spam domain: {normalized_domain}")
                 return None, None, None
         
-        # Yahoo Finance handling
+        # Yahoo Finance handling for direct URLs
         if "finance.yahoo.com" in url:
             original_source_url = extract_yahoo_finance_source_optimized(url)
             if original_source_url:
@@ -1075,15 +1113,16 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 for spam_domain in SPAM_DOMAINS:
                     spam_clean = normalize_domain(spam_domain)
                     if spam_clean and spam_clean in original_normalized_domain:
-                        LOG.info(f"BLOCKED spam domain in Yahoo original source: {original_normalized_domain}")
+                        LOG.info(f"BLOCKED spam domain in direct Yahoo source: {original_normalized_domain}")
                         return None, None, None
                 
+                LOG.info(f"Direct Yahoo Finance resolved: {url} -> {original_source_url}")
                 return original_source_url, original_normalized_domain, url
                 
         return url, normalized_domain, None
         
     except Exception as e:
-        LOG.warning(f"Failed to resolve URL {url}: {e}")
+        LOG.warning(f"URL resolution failed for {url}: {e}")
         if url and "news.google.com" in url:
             return url, "google-news-unresolved", None
         else:
@@ -1093,7 +1132,7 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
 
 def process_google_news_with_title(url: str, title: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Process Google News URL using title to extract source domain
+    Process Google News URL using title to extract proper source domain
     """
     if not title:
         LOG.warning(f"No title provided for Google News URL: {url}")
@@ -1104,7 +1143,7 @@ def process_google_news_with_title(url: str, title: str) -> Tuple[Optional[str],
         LOG.info(f"BLOCKED non-Latin script in Google News title: {title[:50]}")
         return None, None
     
-    # Extract source from title
+    # Extract source from title using smart extraction
     clean_title, extracted_source = extract_source_from_title_smart(title)
     
     if extracted_source:
@@ -1637,10 +1676,9 @@ def format_timestamp_est(dt: datetime) -> str:
     # Always use "EST" instead of dynamic timezone abbreviation
     return f"{date_part}, {time_part} EST"
 
-# ENHANCED: Update the ingest_feed function
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
     """
-    Enhanced feed processing with optimized Google News and Yahoo Finance handling
+    Fixed feed processing with proper Yahoo Finance and Google News handling
     """
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, 
              "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0, 
@@ -1651,11 +1689,16 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
         parsed = feedparser.parse(feed["url"])
         LOG.info(f"Feed parsing result: {len(parsed.entries)} entries found")
         
+        if len(parsed.entries) == 0:
+            LOG.warning(f"No entries found in feed: {feed['url']}")
+            return stats
+        
         for entry in parsed.entries:
             stats["processed"] += 1
             
             original_url = getattr(entry, "link", None)
             if not original_url:
+                LOG.debug("Skipping entry with no link")
                 continue
             
             title = getattr(entry, "title", "") or "No Title"
@@ -1674,37 +1717,49 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                 LOG.info(f"BLOCKED spam in title: {title[:50]}")
                 continue
             
-            # URL resolution
-            resolved_result = resolve_google_news_url(original_url)
-            if resolved_result[0] is None:  # Spam detected at URL level
-                stats["blocked_spam"] += 1
-                continue
+            # URL resolution with proper error handling
+            try:
+                resolved_result = resolve_google_news_url(original_url)
+                if resolved_result[0] is None:  # Spam detected at URL level
+                    stats["blocked_spam"] += 1
+                    continue
+                    
+                resolved_url, domain, yahoo_source_url = resolved_result
+                if not resolved_url or not domain:
+                    LOG.debug(f"Skipping article with no resolved URL or domain: {title[:50]}")
+                    continue
                 
-            resolved_url, domain, yahoo_source_url = resolved_result
-            if not resolved_url or not domain:
+            except Exception as e:
+                LOG.error(f"URL resolution failed for {original_url}: {e}")
                 continue
             
             # Handle Google News special processing
             if domain == "google-news-needs-title-processing":
-                title_result = process_google_news_with_title(resolved_url, title)
-                if title_result[0] is None:  # Spam detected in title processing
-                    stats["blocked_spam"] += 1
-                    continue
-                
-                resolved_url, domain = title_result
-                
-                # Track resolution success
-                if domain and "google-news" not in domain:
-                    stats["google_domains_resolved"] += 1
-                    # Extract and clean the title
-                    clean_title, _ = extract_source_from_title_smart(title)
-                    if clean_title:
-                        title = clean_title
-                else:
-                    stats["google_unresolved"] += 1
-                    if domain == "google-news-unresolved":
-                        LOG.warning(f"Skipping unresolved Google News: {title[:60]}")
+                try:
+                    title_result = process_google_news_with_title(resolved_url, title)
+                    if title_result[0] is None:  # Spam detected in title processing
+                        stats["blocked_spam"] += 1
                         continue
+                    
+                    resolved_url, domain = title_result
+                    
+                    # Track resolution success
+                    if domain and "google-news" not in domain:
+                        stats["google_domains_resolved"] += 1
+                        # Extract and clean the title
+                        clean_title, _ = extract_source_from_title_smart(title)
+                        if clean_title:
+                            title = clean_title
+                    else:
+                        stats["google_unresolved"] += 1
+                        if domain == "google-news-unresolved":
+                            LOG.warning(f"Skipping unresolved Google News: {title[:60]}")
+                            continue
+                            
+                except Exception as e:
+                    LOG.error(f"Google News title processing failed for {title[:50]}: {e}")
+                    stats["google_unresolved"] += 1
+                    continue
             
             # Track Yahoo source extractions
             if yahoo_source_url:
@@ -1730,6 +1785,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             
             try:
                 with db() as conn, conn.cursor() as cur:
+                    # Check for duplicates
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
@@ -1745,6 +1801,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     if category == "competitor":
                         related_ticker = feed.get("competitor_ticker")
                     
+                    # Insert article with all metadata
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1758,7 +1815,8 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         category, related_ticker, yahoo_source_url, search_keyword
                     ))
                     
-                    if cur.fetchone():
+                    result = cur.fetchone()
+                    if result:
                         stats["inserted"] += 1
                         
                         # Update domain statistics
@@ -1782,7 +1840,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
-    LOG.info(f"Feed {feed['name']} [{category}] stats: {stats}")
+    LOG.info(f"Feed {feed['name']} [{category}] completed: {stats}")
     return stats
     
 # ------------------------------------------------------------------------------

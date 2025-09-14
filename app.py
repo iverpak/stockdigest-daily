@@ -90,175 +90,6 @@ QUALITY_DOMAINS = {
 }
 
 # ------------------------------------------------------------------------------
-# OpenAI Integration for Dynamic Keyword Generation
-# ------------------------------------------------------------------------------
-def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, List[str]]:
-    """Use OpenAI to generate industry keywords and competitors for a ticker - UPDATED with company name and competitor tickers"""
-    if not OPENAI_API_KEY:
-        LOG.error("OpenAI API key not configured")
-        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
-
-    # NEW: Get the full company name first
-    company_name_prompt = f"""For the stock ticker "{ticker}", what is the full, official company name?
-
-Provide only the official company name as it appears in SEC filings, without "Inc.", "Corp.", "Ltd." unless critical for identification.
-
-Examples:
-- AAPL → Apple
-- TSLA → Tesla
-- JPM → JPMorgan Chase
-- BRK.B → Berkshire Hathaway
-
-Company name for {ticker}:"""
-
-    # Hedge fund research assistant prompt for industry keywords
-    industry_prompt = f"""You are a hedge-fund research assistant. Given a public company (name or ticker), output exactly five short tracking keywords an analyst would monitor for THIS specific business. Focus on concrete revenue drivers, products/sub-industry, supply chain/market structure, and—if material—regulatory bodies/markets (e.g., FAA, FCC, PJM, FDA). Avoid generic terms ("technology," "finance") and people names unless central to the thesis. Each keyword ≤ 3 words. No explanations. Return strict JSON:
-
-Company ticker: {ticker}
-
-{{"industry_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]}}"""
-
-    # ENHANCED: Updated competitor prompt to exclude target ticker
-    competitor_prompt = f"""For the publicly traded stock ticker {ticker}, identify exactly three main direct competitors that are also publicly traded companies. Focus on companies in the same specific business segment with similar revenue models.
-
-IMPORTANT: Do NOT include {ticker} itself in the list of competitors.
-
-For each competitor, provide both the full company name AND the stock ticker symbol.
-
-Return in strict JSON format:
-
-{{"competitors": [
-    {{"name": "Full Company Name 1", "ticker": "TICK1"}},
-    {{"name": "Full Company Name 2", "ticker": "TICK2"}},
-    {{"name": "Full Company Name 3", "ticker": "TICK3"}}
-]}}"""
-
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        }
-
-        # Base parameters for all requests
-        base_data = {
-            "model": OPENAI_MODEL,
-            "temperature": 0.15,
-            "max_tokens": 80,  # Increased for more complex responses
-        }
-
-        # Get company name
-        company_name_data = {
-            **base_data,
-            "max_tokens": 30,
-            "messages": [
-                {"role": "system", "content": "You are a financial data expert. Provide only the official company name, nothing else."},
-                {"role": "user", "content": company_name_prompt},
-            ],
-        }
-
-        LOG.info(f"Requesting company name for {ticker} from {OPENAI_MODEL}")
-        company_name_response = requests.post(OPENAI_API_URL, headers=headers, json=company_name_data, timeout=30)
-        
-        company_name = ticker  # Fallback
-        if company_name_response.status_code == 200:
-            try:
-                company_result = company_name_response.json()
-                company_name = company_result["choices"][0]["message"]["content"].strip()
-                # Clean up any quotes or extra formatting
-                company_name = re.sub(r'^["\']|["\']$', '', company_name)
-                LOG.info(f"Retrieved company name for {ticker}: {company_name}")
-            except Exception as e:
-                LOG.warning(f"Failed to parse company name for {ticker}: {e}")
-
-        # Get industry keywords
-        industry_data = {
-            **base_data,
-            "max_tokens": 60,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": "You are a hedge-fund research assistant who provides precise, actionable tracking keywords for equity research. Always respond with valid JSON only."},
-                {"role": "user", "content": industry_prompt},
-            ],
-        }
-
-        LOG.info(f"Requesting industry keywords for {ticker} from {OPENAI_MODEL}")
-        industry_response = requests.post(OPENAI_API_URL, headers=headers, json=industry_data, timeout=30)
-        if industry_response.status_code != 200:
-            LOG.error(f"OpenAI API {industry_response.status_code} error for industry keywords: {industry_response.text}")
-            return {"industry_keywords": [], "competitors": [], "company_name": company_name}
-
-        # Get competitors with tickers
-        competitor_data = {
-            **base_data,
-            "max_tokens": 120,  # More tokens for structured competitor data
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": "You are a financial analyst expert who identifies direct competitors with their ticker symbols. Always respond with valid JSON only."},
-                {"role": "user", "content": competitor_prompt},
-            ],
-        }
-
-        LOG.info(f"Requesting competitors with tickers for {ticker} from {OPENAI_MODEL}")
-        competitor_response = requests.post(OPENAI_API_URL, headers=headers, json=competitor_data, timeout=30)
-        if competitor_response.status_code != 200:
-            LOG.error(f"OpenAI API {competitor_response.status_code} error for competitors: {competitor_response.text}")
-            return {"industry_keywords": [], "competitors": [], "company_name": company_name}
-
-        # Parse industry keywords
-        try:
-            industry_result = industry_response.json()
-            industry_content = industry_result["choices"][0]["message"]["content"]
-            industry_metadata = json.loads(industry_content)
-            raw_keywords = industry_metadata.get("industry_keywords", [])[:5]
-            
-            # Capitalize industry keywords properly
-            industry_keywords = []
-            for keyword in raw_keywords:
-                capitalized = ' '.join(word.capitalize() for word in keyword.split())
-                industry_keywords.append(capitalized)
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            LOG.error(f"Failed to parse industry keywords for {ticker}: {e}")
-            industry_keywords = []
-
-        # Parse competitors with enhanced structure
-        try:
-            competitor_result = competitor_response.json()
-            competitor_content = competitor_result["choices"][0]["message"]["content"]
-            competitor_metadata = json.loads(competitor_content)
-            raw_competitors = competitor_metadata.get("competitors", [])[:3]
-            
-            # Process competitors to handle both old and new format
-            competitors = []
-            for comp in raw_competitors:
-                if isinstance(comp, dict) and 'name' in comp and 'ticker' in comp:
-                    # New format with name and ticker
-                    competitors.append({
-                        "name": comp['name'],
-                        "ticker": comp['ticker']
-                    })
-                elif isinstance(comp, str):
-                    # Old format - just company name
-                    competitors.append({
-                        "name": comp,
-                        "ticker": None
-                    })
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            LOG.error(f"Failed to parse competitors for {ticker}: {e}")
-            competitors = []
-
-        LOG.info(f"Successfully generated AI metadata for {ticker}: company='{company_name}', {len(industry_keywords)} keywords, {len(competitors)} competitors with tickers")
-        return {
-            "industry_keywords": industry_keywords, 
-            "competitors": competitors,
-            "company_name": company_name
-        }
-
-    except Exception as e:
-        LOG.error(f"OpenAI API error for ticker {ticker}: {e}")
-        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
-# ------------------------------------------------------------------------------
 # Database helpers
 # ------------------------------------------------------------------------------
 @contextmanager
@@ -354,7 +185,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
 
 def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
     """Wrapper for backward compatibility"""
-    return ticker_manager.get_or_create_metadata(ticker, force_refresh
+    return ticker_manager.get_or_create_metadata(ticker, force_refresh)
 
 def build_feed_urls(ticker: str, keywords: Dict) -> List[Dict]:
     """Wrapper for backward compatibility"""
@@ -581,6 +412,16 @@ def get_url_hash(url: str) -> str:
     url_lower = url.lower()
     url_clean = re.sub(r'[?&](utm_|ref=|source=).*', '', url_lower)
     return hashlib.md5(url_clean.encode()).hexdigest()
+
+def normalize_domain(domain: str) -> str:
+    """Normalize domain for consistent storage"""
+    if not domain:
+        return None
+    
+    normalized = domain.lower().strip()
+    if normalized.startswith('www.') and normalized != 'www.':
+        normalized = normalized[4:]
+    return normalized.rstrip('/')
 
 class DomainResolver:
     def __init__(self):
@@ -1235,7 +1076,7 @@ def _format_article_html(article: Dict, category: str) -> str:
     # Determine source and clean title based on domain type
     if "news.google.com" in resolved_domain or resolved_domain == "google-news-unresolved":
         # Use AI to analyze Google News titles and extract source from title
-        title_result = extract_source_with_ai(original_title)
+        title_result = extract_source_from_title_smart(original_title)
         
         # Check if spam was detected during title analysis
         if title_result[0] is None:  # Spam detected

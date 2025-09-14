@@ -591,7 +591,7 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
     company_name = keywords.get("company_name", ticker)
     LOG.info(f"Building feeds for {ticker} (company: {company_name})")
     
-    # FIX: Company-specific feeds - use company name for Google, ticker for Yahoo
+    # FIXED: Company-specific feeds - use company name for Google, ticker for Yahoo
     company_name_encoded = requests.utils.quote(company_name)
     feeds.extend([
         {
@@ -604,7 +604,7 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
             "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
             "name": f"Yahoo Finance: {ticker}",
             "category": "company", 
-            "search_keyword": ticker
+            "search_keyword": ticker  # FIXED: Use ticker for Yahoo feeds
         }
     ])
     
@@ -619,9 +619,8 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
             "category": "industry",
             "search_keyword": keyword
         })
-        # REMOVED: Yahoo industry feed (doesn't work with keywords)
     
-    # Competitor feeds with proper name/ticker handling
+    # FIXED: Competitor feeds with better validation to prevent cross-contamination
     competitors = keywords.get("competitors", [])
     LOG.info(f"Building competitor feeds for {ticker} with competitors: {competitors}")
     
@@ -630,6 +629,11 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
             # New structured format
             comp_name = comp.get('name', '')
             comp_ticker = comp.get('ticker')
+            
+            # FIXED: Validate competitor ticker is different from main ticker
+            if comp_ticker and comp_ticker.upper() == ticker.upper():
+                LOG.warning(f"Skipping competitor {comp_name} ({comp_ticker}) - same as main ticker {ticker}")
+                continue
             
             if comp_name:
                 # Use company name for Google search
@@ -642,13 +646,13 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
                     "competitor_ticker": comp_ticker
                 })
                 
-                # Use ticker for Yahoo search if available
-                if comp_ticker:
+                # Use ticker for Yahoo search if available and different from main ticker
+                if comp_ticker and comp_ticker.upper() != ticker.upper():
                     feeds.append({
                         "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                        "name": f"Yahoo Competitor: {comp_name}",
+                        "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
                         "category": "competitor",
-                        "search_keyword": comp_name,
+                        "search_keyword": comp_ticker,  # FIXED: Use competitor ticker
                         "competitor_ticker": comp_ticker
                     })
         else:
@@ -656,9 +660,14 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
             comp_clean = str(comp).replace("(", "").replace(")", "").strip()
             
             # Try to extract ticker if present in format "Name (TICKER)"
-            ticker_match = re.search(r'\(([A-Z]{1,5})\)', comp_clean)
+            ticker_match = re.search(r'\(([A-Z]{1,5})\)', str(comp))
             extracted_ticker = ticker_match.group(1) if ticker_match else None
             comp_name_only = re.sub(r'\s*\([^)]*\)', '', comp_clean).strip()
+            
+            # FIXED: Validate extracted ticker is different from main ticker
+            if extracted_ticker and extracted_ticker.upper() == ticker.upper():
+                LOG.warning(f"Skipping competitor {comp_name_only} ({extracted_ticker}) - same as main ticker {ticker}")
+                continue
             
             comp_name_encoded = requests.utils.quote(comp_name_only)
             feeds.append({
@@ -669,12 +678,12 @@ def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
                 "competitor_ticker": extracted_ticker
             })
             
-            if extracted_ticker:
+            if extracted_ticker and extracted_ticker.upper() != ticker.upper():
                 feeds.append({
                     "url": f"https://finance.yahoo.com/rss/headline?s={extracted_ticker}",
-                    "name": f"Yahoo Competitor: {comp_name_only}",
+                    "name": f"Yahoo Competitor: {comp_name_only} ({extracted_ticker})",
                     "category": "competitor", 
-                    "search_keyword": comp_name_only,
+                    "search_keyword": extracted_ticker,  # FIXED: Use competitor ticker
                     "competitor_ticker": extracted_ticker
                 })
     

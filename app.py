@@ -22,7 +22,6 @@ import requests
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from bs4 import BeautifulSoup
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -1311,7 +1310,7 @@ def admin_init(request: Request, body: InitRequest):
         keywords = get_or_create_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
         # Build feed URLs for all categories (now includes Yahoo feeds)
-        feeds = build_feed_urls(ticker, keywords)
+        feeds = feed_manager.create_feeds_for_ticker(ticker, keywords)
         
         for feed_config in feeds:
             feed_id = upsert_feed(
@@ -1393,7 +1392,7 @@ def cron_ingest(
     # Process each ticker's feeds
     for ticker, ticker_feeds in feeds_by_ticker.items():
         # Get metadata for this ticker
-        metadata = get_or_create_ticker_metadata(ticker)
+        metadata = ticker_manager.get_or_create_metadata(ticker)
         ticker_stats = {"inserted": 0, "duplicates": 0, "blocked_spam": 0, "yahoo_sources": 0}
         
         for feed in ticker_feeds:
@@ -1596,10 +1595,10 @@ def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
         return {"status": "error", "message": "OpenAI API key not configured"}
     
     LOG.info(f"Regenerating metadata for {body.ticker}")
-    metadata = get_or_create_ticker_metadata(body.ticker, force_refresh=True)
+    metadata = ticker_manager.get_or_create_metadata(body.ticker, force_refresh=True)
     
     # Rebuild feeds
-    feeds = build_feed_urls(body.ticker, metadata)
+    feeds = feed_manager.create_feeds_for_ticker(body.ticker, metadata)
     for feed_config in feeds:
         upsert_feed(
             url=feed_config["url"],
@@ -1928,8 +1927,8 @@ def cli_run(request: Request, body: CLIRequest):
         # Initialize feeds if needed
         ensure_schema()
         for ticker in body.tickers:
-            metadata = get_or_create_ticker_metadata(ticker)
-            feeds = build_feed_urls(ticker, metadata)
+            metadata = ticker_manager.get_or_create_metadata(ticker)
+            feeds = feed_manager.create_feeds_for_ticker(ticker, metadata)
             for feed_config in feeds:
                 upsert_feed(
                     url=feed_config["url"],

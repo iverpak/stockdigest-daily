@@ -1743,8 +1743,8 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
 
 # FIX #2: Updated _format_article_html function with better badge handling
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format article HTML with better timestamp formatting"""
-    # FIX #5: Use better date formatting for individual articles
+    """Format article HTML with better timestamp formatting and Google News title trimming"""
+    # Format timestamp for individual articles
     if article["published_at"]:
         # For individual articles, use a shorter format like "Sep 13, 2:23pm EST"
         eastern = pytz.timezone('US/Eastern')
@@ -1762,42 +1762,45 @@ def _format_article_html(article: Dict, category: str) -> str:
     original_title = article["title"] or "No Title"
     resolved_domain = article["domain"] or "unknown"
     
-    # Determine source and clean title
-    if "news.google.com" in resolved_domain:
-        # Use AI to analyze Google News titles
-        title, extracted_source = extract_source_with_ai(original_title)
+    # Determine source and clean title based on domain type
+    if "news.google.com" in resolved_domain or resolved_domain == "google-news-unresolved":
+        # Use AI to analyze Google News titles and extract source from title
+        title_result = extract_source_with_ai(original_title)
         
-        # Check if spam was detected
-        if title is None:  # Spam detected
+        # Check if spam was detected during title analysis
+        if title_result[0] is None:  # Spam detected
             return ""  # Return empty string to skip this article
         
+        title, extracted_source = title_result
+        
         if extracted_source:
-            display_source = enhance_source_name(extracted_source)
+            # Get formal name for the extracted source
+            display_source = get_or_create_formal_domain_name(extracted_source)
         else:
-            display_source = "Google News"  # Fallback
+            display_source = "Google News"  # Fallback if no source extracted
     else:
-        # Non-Google articles use normal domain resolution
+        # Non-Google articles use the title as-is and resolve domain normally
         title = original_title
         display_source = get_or_create_formal_domain_name(resolved_domain)
     
-    # Final cleanup of any remaining artifacts
+    # Additional title cleanup - remove any remaining ticker artifacts
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
-    # Determine link URL
+    # Determine the actual link URL (prefer resolved/original over raw feed URL)
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
+    # Quality score styling
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
-    # Build metadata badges with NO truncation
+    # Build metadata badges for category-specific information
     metadata_badges = []
     
     # Add category-specific badges with full text display
     if category == "competitor" and article.get('search_keyword'):
         competitor_name = article['search_keyword']
         metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
-    
     elif category == "industry" and article.get('search_keyword'):
         industry_keyword = article['search_keyword']
         metadata_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')

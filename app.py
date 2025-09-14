@@ -970,14 +970,37 @@ def test_yahoo_extraction_detailed(request: Request):
     return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Resolve URLs - simplified version with normalized domain output"""
+    """Resolve URLs - enhanced version that always resolves Google News URLs"""
     original_source_url = None
     
     try:
-        # For Google News URLs, return as-is
+        # For Google News URLs, try to extract the actual article URL first
         if "news.google.com" in url:
-            normalized_domain = normalize_domain("news.google.com")
-            return url, normalized_domain, None
+            # Try to extract the actual URL from Google News redirect
+            if "/articles/" in url or "/read/" in url:
+                # Make a request to get the actual redirect
+                try:
+                    response = requests.get(url, timeout=10, allow_redirects=True, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    })
+                    final_url = response.url
+                    
+                    if final_url != url and "news.google.com" not in final_url:
+                        domain = urlparse(final_url).netloc.lower()
+                        normalized_domain = normalize_domain(domain)
+                        
+                        # Spam check
+                        for spam_domain in SPAM_DOMAINS:
+                            spam_clean = normalize_domain(spam_domain)
+                            if spam_clean and spam_clean in normalized_domain:
+                                return None, None, None
+                        
+                        return final_url, normalized_domain, None
+                except Exception as e:
+                    LOG.debug(f"Failed to resolve Google News URL {url}: {e}")
+            
+            # Fallback: return as Google News but mark for later processing
+            return url, "google-news-unresolved", None
         
         # For direct Google redirect URLs
         if "google.com/url" in url:
@@ -1454,9 +1477,17 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                 with db() as conn, conn.cursor() as cur:
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
-                        stats["duplicates"] += 1
-                        continue
-                    
+                        stats["inserted"] += 1
+                        
+                        # Update domain statistics
+                        upsert_domain_stats(normalized_domain, quality_score, category)
+                        
+                        # Get or create formal domain name for better display
+                        formal_domain_name = get_or_create_formal_domain_name(normalized_domain)
+                        
+                        # Log with formal name
+                        source_note = f" (source: {formal_domain_name})" if formal_domain_name != normalized_domain else f" (source: {normalized_domain})"
+                                        
                     # Normalize domain before storing
                     normalized_domain = normalize_domain(domain)
                     
@@ -2738,6 +2769,56 @@ def get_domain_statistics(request: Request, limit: int = Query(default=50)):
         "domains": stats,
         "quality_domains_tracked": len([d for d in stats if d['classification'] == 'quality']),
         "spam_domains_tracked": len([d for d in stats if d['classification'] == 'spam'])
+    }
+
+@APP.get("/admin/resolved-domains")
+def get_resolved_domains(request: Request, ticker: str = Query(None)):
+    """Get resolved domains with formal names for scoring"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        base_query = """
+            SELECT 
+                f.domain as raw_domain,
+                dn.formal_name,
+                f.category,
+                COUNT(*) as article_count,
+                AVG(f.quality_score) as avg_quality,
+                MAX(f.found_at) as last_seen
+            FROM found_url f
+            LEFT JOIN domain_names dn ON dn.domain = f.domain
+            WHERE f.domain IS NOT NULL 
+              AND f.domain != 'google-news-unresolved'
+        """
+        
+        params = []
+        if ticker:
+            base_query += " AND f.ticker = %s"
+            params.append(ticker)
+        
+        base_query += """
+            GROUP BY f.domain, dn.formal_name, f.category
+            ORDER BY article_count DESC
+        """
+        
+        cur.execute(base_query, params)
+        results = list(cur.fetchall())
+        
+        # Process results to ensure all domains have formal names
+        enhanced_results = []
+        for row in results:
+            if not row['formal_name']:
+                # Generate formal name if missing
+                formal_name = get_or_create_formal_domain_name(row['raw_domain'])
+                row = dict(row)
+                row['formal_name'] = formal_name
+            
+            enhanced_results.append(row)
+    
+    return {
+        "domains": enhanced_results,
+        "ticker_filter": ticker,
+        "total_domains": len(set(r['raw_domain'] for r in enhanced_results))
     }
 
 # ------------------------------------------------------------------------------

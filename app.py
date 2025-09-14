@@ -844,15 +844,16 @@ def contains_non_latin_script(text: str) -> bool:
     
     return False
 
-def extract_yahoo_finance_source(url: str) -> Optional[str]:
-    """Extract original source URL from Yahoo Finance article - FIXED for real JSON patterns"""
+def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
+    """
+    Optimized Yahoo Finance source extraction with better error handling
+    """
     try:
-        # Only process Yahoo Finance URLs
         if "finance.yahoo.com" not in url:
             return None
             
         response = requests.get(url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
         if response.status_code != 200:
@@ -860,70 +861,33 @@ def extract_yahoo_finance_source(url: str) -> Optional[str]:
             return None
         
         html_content = response.text
-        LOG.debug(f"Yahoo page content length: {len(html_content)}")
         
-        # Try multiple field names Yahoo might use
-        field_patterns = [
-            'providerContentUrl',
-            'sourceUrl', 
-            'originalUrl',
-            'contentUrl',
-            'canonicalUrl'
+        # Try most reliable patterns first
+        patterns = [
+            r'"providerContentUrl"\s*:\s*"([^"]*)"',
+            r'"sourceUrl"\s*:\s*"([^"]*)"',
+            r'"originalUrl"\s*:\s*"([^"]*)"'
         ]
         
-        for field_name in field_patterns:
-            # Multiple regex patterns to handle different JSON formatting
-            patterns = [
-                # Pattern 1: Handle heavily escaped JSON (the actual format)
-                rf'\\\\\\"{field_name}\\\\\\":\\\\\\\"([^\\\\]*?)\\\\\\\"',
-                # Pattern 2: Handle escaped JSON  
-                rf'\\"{field_name}\\":\\\"([^\\"]*)\\\"',
-                # Pattern 3: Standard JSON
-                rf'"{field_name}"\s*:\s*"([^"]*)"',
-                # Pattern 4: Specifically target the stockstory URL we see in debug
-                rf'{field_name}[^:]*:[^"]*"([^"]*stockstory\.org[^"]*)"'
-            ]
-            
-            for i, pattern in enumerate(patterns):
-                matches = re.finditer(pattern, html_content)
-                
-                for match in matches:
-                    raw_url = match.group(1)
-                    LOG.debug(f"Found {field_name} candidate with pattern {i+1}: {raw_url[:100]}")
+        for pattern in patterns:
+            matches = re.findall(pattern, html_content)
+            for match in matches:
+                try:
+                    # Clean up escaped JSON
+                    cleaned_url = json.loads(f'"{match}"')
+                    parsed = urlparse(cleaned_url)
                     
-                    # Try to clean up the URL
-                    cleaned_urls = []
-                    
-                    # Method 1: JSON unescape
-                    try:
-                        unescaped_url = json.loads(f'"{raw_url}"')
-                        cleaned_urls.append(unescaped_url)
-                    except json.JSONDecodeError:
-                        pass
-                    
-                    # Method 2: Simple unescape
-                    simple_unescaped = raw_url.replace('\\/', '/').replace('\\"', '"')
-                    cleaned_urls.append(simple_unescaped)
-                    
-                    # Method 3: Use raw URL as-is
-                    cleaned_urls.append(raw_url)
-                    
-                    # Test each cleaned URL
-                    for cleaned_url in cleaned_urls:
-                        try:
-                            parsed = urlparse(cleaned_url)
-                            if (parsed.scheme in ['http', 'https'] and 
-                                parsed.netloc and 
-                                len(cleaned_url) > 20 and
-                                'finance.yahoo.com' not in cleaned_url):  # Don't return Yahoo URLs
-                                
-                                LOG.info(f"Found Yahoo Finance original source via {field_name}: {cleaned_url}")
-                                return cleaned_url
-                        except Exception:
-                            continue
+                    if (parsed.scheme in ['http', 'https'] and 
+                        parsed.netloc and 
+                        len(cleaned_url) > 20 and
+                        'finance.yahoo.com' not in cleaned_url):
+                        
+                        LOG.info(f"Yahoo Finance source extraction successful: {cleaned_url}")
+                        return cleaned_url
+                except Exception:
+                    continue
         
-        # If no structured extraction worked, try a more aggressive search
-        # Look for any URL patterns that might be the source
+        # Fallback pattern search
         url_patterns = [
             r'https://stockstory\.org/[^"\s]*',
             r'https://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[^"\s]*(?:stock|news|article|finance)[^"\s]*',
@@ -936,7 +900,7 @@ def extract_yahoo_finance_source(url: str) -> Optional[str]:
                 try:
                     parsed = urlparse(candidate_url)
                     if parsed.scheme and parsed.netloc and 'finance.yahoo.com' not in candidate_url:
-                        LOG.info(f"Found Yahoo source via URL pattern search: {candidate_url}")
+                        LOG.info(f"Yahoo source via pattern search: {candidate_url}")
                         return candidate_url
                 except Exception:
                     continue
@@ -1024,13 +988,12 @@ def test_yahoo_extraction_detailed(request: Request):
     return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Enhanced Google News URL resolution that NEVER stores news.google.com domains"""
-    original_source_url = None
-    
+    """
+    Enhanced Google News URL resolution - returns URL for title processing
+    """
     try:
-        # For Google News URLs, use enhanced strategy
         if "news.google.com" in url:
-            # First try direct resolution
+            # Try direct resolution first
             try:
                 response = requests.get(url, timeout=10, allow_redirects=True, headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -1053,17 +1016,10 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
             except Exception as e:
                 LOG.debug(f"Direct Google News resolution failed for {url}: {e}")
             
-            # ENHANCED: Return special marker for title extraction processing
-            return url, "google-news-title-extraction-needed", None
-            
-            # ENHANCED: Instead of returning "google-news-unresolved", return a special marker
-            # that will be processed later during ingestion when we have the title
-            return url, "google-news-title-extraction-needed", None
+            # Return URL with special marker for title-based processing
+            return url, "google-news-needs-title-processing", None
         
-        # Rest of the function remains the same for non-Google URLs...
-        # [Previous URL resolution logic for non-Google URLs]
-        
-        # For direct Google redirect URLs
+        # Handle direct Google redirect URLs
         if "google.com/url" in url:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
@@ -1072,16 +1028,16 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 domain = urlparse(actual_url).netloc.lower()
                 normalized_domain = normalize_domain(domain)
                 
-                # Spam check with normalized domain
+                # Spam check
                 for spam_domain in SPAM_DOMAINS:
                     spam_clean = normalize_domain(spam_domain)
                     if spam_clean and spam_clean in normalized_domain:
-                        LOG.info(f"BLOCKED spam domain in redirect: {normalized_domain} (matched: {spam_clean})")
+                        LOG.info(f"BLOCKED spam domain in redirect: {normalized_domain}")
                         return None, None, None
                 
                 # Yahoo Finance source extraction
                 if "finance.yahoo.com" in actual_url:
-                    original_source_url = extract_yahoo_finance_source(actual_url)
+                    original_source_url = extract_yahoo_finance_source_optimized(actual_url)
                     if original_source_url:
                         original_domain = urlparse(original_source_url).netloc.lower()
                         original_normalized_domain = normalize_domain(original_domain)
@@ -1090,7 +1046,7 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                         for spam_domain in SPAM_DOMAINS:
                             spam_clean = normalize_domain(spam_domain)
                             if spam_clean and spam_clean in original_normalized_domain:
-                                LOG.info(f"BLOCKED spam domain in original source: {original_normalized_domain} (matched: {spam_clean})")
+                                LOG.info(f"BLOCKED spam domain in original source: {original_normalized_domain}")
                                 return None, None, None
                         
                         return original_source_url, original_normalized_domain, actual_url
@@ -1101,16 +1057,16 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         domain = urlparse(url).netloc.lower()
         normalized_domain = normalize_domain(domain)
         
-        # Spam check with normalized domain
+        # Spam check
         for spam_domain in SPAM_DOMAINS:
             spam_clean = normalize_domain(spam_domain)
             if spam_clean and spam_clean in normalized_domain:
-                LOG.info(f"BLOCKED spam domain: {normalized_domain} (matched: {spam_clean})")
+                LOG.info(f"BLOCKED spam domain: {normalized_domain}")
                 return None, None, None
         
         # Yahoo Finance handling
         if "finance.yahoo.com" in url:
-            original_source_url = extract_yahoo_finance_source(url)
+            original_source_url = extract_yahoo_finance_source_optimized(url)
             if original_source_url:
                 original_domain = urlparse(original_source_url).netloc.lower()
                 original_normalized_domain = normalize_domain(original_domain)
@@ -1119,7 +1075,7 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                 for spam_domain in SPAM_DOMAINS:
                     spam_clean = normalize_domain(spam_domain)
                     if spam_clean and spam_clean in original_normalized_domain:
-                        LOG.info(f"BLOCKED spam domain in Yahoo original source: {original_normalized_domain} (matched: {spam_clean})")
+                        LOG.info(f"BLOCKED spam domain in Yahoo original source: {original_normalized_domain}")
                         return None, None, None
                 
                 return original_source_url, original_normalized_domain, url
@@ -1128,7 +1084,6 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
         
     except Exception as e:
         LOG.warning(f"Failed to resolve URL {url}: {e}")
-        # FIXED: Never return news.google.com as fallback
         if url and "news.google.com" in url:
             return url, "google-news-unresolved", None
         else:
@@ -1136,43 +1091,79 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
             normalized_fallback = normalize_domain(fallback_domain) if fallback_domain else None
             return url, normalized_fallback, None
 
-def enhanced_google_domain_resolution(domain: str, title: str) -> str:
-    """Enhanced domain resolution specifically for Google News articles"""
-    if domain != "google-news-title-extraction-needed":
-        return domain
+def process_google_news_with_title(url: str, title: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Process Google News URL using title to extract source domain
+    """
+    if not title:
+        LOG.warning(f"No title provided for Google News URL: {url}")
+        return url, "google-news-no-title"
     
-    # Extract source from title using AI
-    title_result = extract_source_with_ai(title)
+    # Check for spam/non-Latin content first
+    if contains_non_latin_script(title):
+        LOG.info(f"BLOCKED non-Latin script in Google News title: {title[:50]}")
+        return None, None
     
-    if title_result[0] is None:  # Spam detected
-        return None
-    
-    clean_title, extracted_source = title_result
+    # Extract source from title
+    clean_title, extracted_source = extract_source_from_title_smart(title)
     
     if extracted_source:
-        # Try to get domain from formal name
-        actual_domain = get_domain_from_formal_name(extracted_source)
-        if actual_domain:
-            final_domain = normalize_domain(actual_domain)
-            LOG.info(f"Resolved Google News domain: '{extracted_source}' -> '{final_domain}'")
-            return final_domain
-        else:
-            # ENHANCED: Better fallback - create meaningful pseudo-domain
-            pseudo_domain = extracted_source.lower().replace(" ", "").replace(".", "").replace(",", "")
-            # Remove common suffixes that don't help
-            pseudo_domain = re.sub(r'(news|media|magazine|newspaper|online|daily|times|post|journal)$', '', pseudo_domain)
-            if len(pseudo_domain) > 3:  # Only use if meaningful
-                LOG.info(f"Using enhanced pseudo-domain for '{extracted_source}': {pseudo_domain}")
-                return pseudo_domain
+        # Try to get cached domain from database first
+        domain = get_cached_domain_for_source(extracted_source)
+        if domain:
+            LOG.info(f"Using cached domain for '{extracted_source}': {domain}")
+            return url, domain
+        
+        # Try to resolve domain from source name
+        domain = resolve_source_name_to_domain(extracted_source)
+        if domain:
+            # Cache this mapping for future use
+            cache_source_domain_mapping(extracted_source, domain)
+            LOG.info(f"Resolved Google News source: '{extracted_source}' -> '{domain}'")
+            return url, domain
     
-    # FINAL FALLBACK: Extract domain hints from title itself
-    domain_hints = extract_domain_hints_from_title(title)
-    if domain_hints:
-        return domain_hints[0]
-    
-    # LAST RESORT: Use a generic but identifiable marker
-    return "unresolved-google-source"
+    # Fallback for unresolvable Google News
+    LOG.warning(f"Could not extract source from Google News title: {title[:60]}")
+    return url, "google-news-unresolved"
 
+def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
+    """
+    Smart source extraction from title with regex-first approach
+    """
+    if not title:
+        return title, None
+    
+    # Try simple regex patterns first (faster than AI)
+    source_patterns = [
+        r'\s*-\s*([^-]+)$',  # " - Source" at the end
+        r'\s*\|\s*([^|]+)$',  # " | Source" at the end  
+        r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net|co\.uk))$'  # domain at the end
+    ]
+    
+    for pattern in source_patterns:
+        match = re.search(pattern, title)
+        if match:
+            potential_source = match.group(1).strip()
+            clean_title = re.sub(pattern, '', title).strip()
+            
+            # Validate this looks like a real source
+            if 2 < len(potential_source) < 50:
+                # Check for spam
+                source_lower = potential_source.lower()
+                spam_sources = ["marketbeat", "newser", "khodrobank"]
+                if any(spam in source_lower for spam in spam_sources):
+                    LOG.info(f"BLOCKED spam source in title: {potential_source}")
+                    return None, None
+                
+                LOG.info(f"Regex extracted source: '{potential_source}' from title: '{title[:60]}'")
+                return clean_title, potential_source
+    
+    # Fallback to AI if regex fails
+    if OPENAI_API_KEY:
+        return extract_source_with_ai_optimized(title)
+    
+    return title, None
+    
 def extract_domain_hints_from_title(title: str) -> List[str]:
     """Extract potential domain hints from article titles"""
     hints = []
@@ -1192,7 +1183,6 @@ def extract_domain_hints_from_title(title: str) -> List[str]:
                 hints.append(normalize_domain(clean_match))
     
     return hints[:3]  # Return top 3 hints
-
 
 def calculate_quality_score(
     title: str, 
@@ -1312,118 +1302,98 @@ def get_or_create_formal_domain_name(domain: str) -> str:
 # Replace the title extraction functions with this AI-powered approach
 
 # Add this new function to convert formal names to domains
-def get_domain_from_formal_name(formal_name: str) -> Optional[str]:
-    """Convert formal publication name to domain URL using AI and database lookup"""
-    if not formal_name or not OPENAI_API_KEY:
-        return None
+def get_or_create_formal_domain_name(domain: str) -> str:
+    """
+    Optimized version that checks cache first, uses common mappings, then AI
+    """
+    if not domain:
+        return "Unknown"
     
-    # Check if we already have this mapping in reverse
+    clean_domain = normalize_domain(domain)
+    if not clean_domain:
+        return "Unknown"
+    
+    # Check database cache first
     with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT domain FROM domain_names 
-            WHERE LOWER(formal_name) = LOWER(%s) 
-            LIMIT 1
-        """, (formal_name,))
+        cur.execute("SELECT formal_name FROM domain_names WHERE domain = %s", (clean_domain,))
         result = cur.fetchone()
         if result:
-            LOG.info(f"Found existing domain mapping: '{formal_name}' -> '{result['domain']}'")
-            return result["domain"]
+            return result["formal_name"]
     
-    # Use AI to convert formal name to domain
-    prompt = f"""Convert this formal publication name to its website domain:
-
-Publication: "{formal_name}"
-
-Provide ONLY the domain (like "example.com") without http/https or www.
-
-Examples:
-- "The Globe and Mail" → "theglobeandmail.com"
-- "Wall Street Journal" → "wsj.com"  
-- "Barron's" → "barrons.com"
-- "TipRanks" → "tipranks.com"
-- "Zacks Investment Research" → "zacks.com"
-- "Yahoo Finance" → "finance.yahoo.com"
-
-Domain for "{formal_name}":"""
+    # Check common mappings
+    common_formal_names = {
+        'reuters.com': 'Reuters',
+        'bloomberg.com': 'Bloomberg',
+        'wsj.com': 'Wall Street Journal',
+        'ft.com': 'Financial Times',
+        'barrons.com': "Barron's",
+        'cnbc.com': 'CNBC',
+        'marketwatch.com': 'MarketWatch',
+        'finance.yahoo.com': 'Yahoo Finance',
+        'businesswire.com': 'Business Wire',
+        'zacks.com': 'Zacks Investment Research',
+        'seekingalpha.com': 'Seeking Alpha',
+        'tipranks.com': 'TipRanks',
+        'theglobeandmail.com': 'The Globe and Mail',
+        'msn.com': 'MSN',
+        'defensenews.com': 'Defense News',
+        'stocktitan.com': 'Stock Titan'
+    }
     
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a web expert. Provide only the domain name, nothing else."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_completion_tokens": 30
-        }
-        
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if 'choices' in result and result['choices']:
-                domain = result['choices'][0]['message']['content'].strip()
-                domain = re.sub(r'^["\']|["\']$', '', domain)
-                domain = domain.lower().strip()
-                
-                # Basic validation
-                if '.' in domain and len(domain) > 4 and len(domain) < 50:
-                    # Cache this mapping for future use
-                    with db() as conn, conn.cursor() as cur:
-                        cur.execute("""
-                            INSERT INTO domain_names (domain, formal_name, ai_generated)
-                            VALUES (%s, %s, %s)
-                            ON CONFLICT (domain) DO NOTHING
-                        """, (domain, formal_name, True))
-                    
-                    LOG.info(f"AI converted formal name to domain: '{formal_name}' -> '{domain}'")
-                    return domain
-                    
-    except Exception as e:
-        LOG.error(f"Failed to convert formal name '{formal_name}' to domain: {e}")
+    if clean_domain in common_formal_names:
+        formal_name = common_formal_names[clean_domain]
+        # Cache it
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO domain_names (domain, formal_name, ai_generated)
+                VALUES (%s, %s, FALSE)
+                ON CONFLICT (domain) DO NOTHING
+            """, (clean_domain, formal_name))
+        LOG.info(f"Used common formal name: {clean_domain} -> {formal_name}")
+        return formal_name
     
-    return None
+    # Use AI as last resort
+    if OPENAI_API_KEY:
+        formal_name = get_formal_domain_name_from_ai(clean_domain)
+        if formal_name:
+            return formal_name
+    
+    # Fallback
+    fallback_name = clean_domain.replace(".com", "").replace(".org", "").replace(".net", "").title()
+    
+    # Cache the fallback
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO domain_names (domain, formal_name, ai_generated)
+            VALUES (%s, %s, FALSE)
+            ON CONFLICT (domain) DO NOTHING
+        """, (clean_domain, fallback_name))
+    
+    return fallback_name
 
-# FIX #6: Updated extract_source_with_ai function with non-Latin script filtering
-def extract_source_with_ai(title: str) -> Tuple[str, str]:
-    """Use OpenAI to intelligently extract source from news article titles with non-Latin script filtering and domain caching"""
+def extract_source_with_ai_optimized(title: str) -> Tuple[str, Optional[str]]:
+    """
+    Optimized AI source extraction with spam filtering
+    """
     if not title or not OPENAI_API_KEY:
         return title, None
     
-    # Check for non-Latin script in title before processing
+    # Check for non-Latin script first
     if contains_non_latin_script(title):
-        LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}...")
-        return None, None  # Return None to signal spam detection
+        LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}")
+        return None, None
     
-    prompt = f"""Analyze this news article title and extract the source publication/website name:
+    prompt = f"""Extract the source publication from this news title:
 
 Title: "{title}"
 
-Please identify:
-1. The source publication or website (e.g., "GuruFocus", "Benzinga", "Wall Street Journal", "news.stocktradersdaily.com")
-2. The clean article title without the source name
-
 Rules:
-- Look for patterns like "Article Title - Source Name" or "Article Title Source.com"
-- The source is usually at the end after a dash or space
-- If no clear source is found, return null for source
-- Clean up the title by removing the source portion
+- Look for source at the end after dash or space
+- Return just the publication name (like "Reuters", "Bloomberg", "Barron's")
+- If no clear source found, return null
 
-Respond in JSON format:
-{{
-    "source": "source name or null",
-    "clean_title": "article title without source"
-}}
-
-Examples:
-- "Boeing Stock Drops 3% - GuruFocus" → {{"source": "GuruFocus", "clean_title": "Boeing Stock Drops 3%"}}
-- "Market Analysis - news.stocktradersdaily.com" → {{"source": "Stock Traders Daily", "clean_title": "Market Analysis"}}
-- "Tesla Earnings Beat Estimates" → {{"source": null, "clean_title": "Tesla Earnings Beat Estimates"}}
-"""
+JSON format:
+{{"source": "publication name or null", "clean_title": "title without source"}}"""
     
     try:
         headers = {
@@ -1434,10 +1404,10 @@ Examples:
         data = {
             "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are an expert at analyzing news article titles and identifying source publications. Always respond with valid JSON only."},
+                {"role": "system", "content": "Extract news publication sources from titles. Respond with valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
-            "max_completion_tokens": 150,
+            "max_completion_tokens": 100,
             "response_format": {"type": "json_object"}
         }
         
@@ -1453,106 +1423,130 @@ Examples:
                     source = parsed.get("source")
                     clean_title = parsed.get("clean_title", title)
                     
-                    # If source is "null" string, convert to None
                     if source == "null" or source == "None":
                         source = None
                     
-                    # Check non-Latin script for extracted source too
-                    if source and contains_non_latin_script(source):
-                        LOG.info(f"BLOCKED non-Latin script in extracted source: {source}")
-                        return None, None
-                    
-                    # Existing spam filtering for sources
+                    # Spam filtering for extracted source
                     if source:
                         source_lower = source.lower()
                         spam_sources = ["marketbeat", "newser", "khodrobank"]
                         for spam in spam_sources:
                             if spam in source_lower:
-                                LOG.info(f"BLOCKED spam source in title: {source}")
+                                LOG.info(f"BLOCKED spam source from AI: {source}")
                                 return None, None
                     
-                    # ENHANCED: Get or create formal domain name if source looks like a domain
-                    if source and ('.' in source and any(tld in source.lower() for tld in ['.com', '.org', '.net', '.co.uk'])):
-                        # This looks like a domain, get the formal name
-                        formal_source = get_or_create_formal_domain_name(source)
-                        LOG.info(f"AI title analysis with domain lookup: '{title[:60]}...' → source: '{source}' → formal: '{formal_source}', title: '{clean_title[:40]}...'")
-                        return clean_title, formal_source
-                    elif source:
-                        # This is already a publication name, enhance it
-                        enhanced_source = enhance_source_name(source)
-                        LOG.info(f"AI title analysis with name enhancement: '{title[:60]}...' → source: '{source}' → enhanced: '{enhanced_source}', title: '{clean_title[:40]}...'")
-                        return clean_title, enhanced_source
-                    else:
-                        LOG.info(f"AI title analysis: '{title[:60]}...' → no source found, title: '{clean_title[:40]}...'")
-                        return clean_title, None
+                    LOG.info(f"AI extracted source: '{source}' from title: '{title[:60]}'")
+                    return clean_title, source
                     
                 except json.JSONDecodeError as e:
-                    LOG.warning(f"AI title analysis JSON error: {e}")
+                    LOG.warning(f"AI response JSON error: {e}")
                     
     except Exception as e:
-        LOG.warning(f"AI title analysis failed: {e}")
-    
-    # Fallback: Try simple regex patterns as backup, but check for non-Latin script first
-    fallback_patterns = [
-        r'\s*-\s*([^-]+)$',  # " - Something" at the end
-        r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net))$'  # domain at the end
-    ]
-    
-    for pattern in fallback_patterns:
-        match = re.search(pattern, title)
-        if match:
-            source = match.group(1).strip()
-            clean_title = re.sub(pattern, '', title).strip()
-            
-            # Check fallback extracted source for non-Latin script
-            if contains_non_latin_script(source):
-                LOG.info(f"BLOCKED non-Latin script in fallback source: {source}")
-                return None, None
-            
-            # Existing spam filtering for fallback
-            source_lower = source.lower()
-            spam_sources = ["marketbeat", "newser", "khodrobank"]
-            for spam in spam_sources:
-                if spam in source_lower:
-                    LOG.info(f"BLOCKED spam source in fallback: {source}")
-                    return None, None
-            
-            # ENHANCED: Use cached domain lookup for fallback too
-            if '.' in source and any(tld in source.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
-                formal_source = get_or_create_formal_domain_name(source)
-                LOG.info(f"Fallback title extraction with domain lookup: source: '{source}' → formal: '{formal_source}', title: '{clean_title[:40]}...'")
-                return clean_title, formal_source
-            else:
-                enhanced_source = enhance_source_name(source)
-                LOG.info(f"Fallback title extraction with enhancement: source: '{source}' → enhanced: '{enhanced_source}', title: '{clean_title[:40]}...'")
-                return clean_title, enhanced_source
+        LOG.warning(f"AI source extraction failed: {e}")
     
     return title, None
 
-def enhance_source_name(raw_source: str) -> str:
-    """Use OpenAI to enhance/formalize source names"""
-    if not raw_source or not OPENAI_API_KEY:
-        return raw_source or "Unknown"
+def get_cached_domain_for_source(source_name: str) -> Optional[str]:
+    """
+    Check database for existing domain mapping for a source name
+    """
+    with db() as conn, conn.cursor() as cur:
+        # Check if we have this source name mapped to a domain
+        cur.execute("""
+            SELECT domain FROM domain_names 
+            WHERE LOWER(formal_name) = LOWER(%s)
+            LIMIT 1
+        """, (source_name,))
+        
+        result = cur.fetchone()
+        if result:
+            return result['domain']
+        
+        # Also check if the source name itself is a domain we know
+        normalized_source = normalize_domain(source_name)
+        if normalized_source:
+            cur.execute("""
+                SELECT formal_name FROM domain_names 
+                WHERE domain = %s
+                LIMIT 1
+            """, (normalized_source,))
+            
+            result = cur.fetchone()
+            if result:
+                return normalized_source
     
-    # If it looks like a domain, use existing domain resolution
-    if '.' in raw_source and any(tld in raw_source.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
-        return get_or_create_formal_domain_name(raw_source)
+    return None
+
+def resolve_source_name_to_domain(source_name: str) -> Optional[str]:
+    """
+    Convert source name to domain with minimal AI usage
+    """
+    # First check if it already looks like a domain
+    if '.' in source_name and any(tld in source_name.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
+        return normalize_domain(source_name)
     
-    # Use AI to enhance publication names
-    prompt = f"""Convert this source name to its proper formal name:
+    # Check common mappings without AI
+    common_mappings = {
+        'reuters': 'reuters.com',
+        'bloomberg': 'bloomberg.com', 
+        'wall street journal': 'wsj.com',
+        'wsj': 'wsj.com',
+        'financial times': 'ft.com',
+        'barrons': 'barrons.com',
+        "barron's": 'barrons.com',
+        'cnbc': 'cnbc.com',
+        'marketwatch': 'marketwatch.com',
+        'yahoo finance': 'finance.yahoo.com',
+        'business wire': 'businesswire.com',
+        'zacks': 'zacks.com',
+        'zacks investment research': 'zacks.com',
+        'seeking alpha': 'seekingalpha.com',
+        'tipranks': 'tipranks.com',
+        'the globe and mail': 'theglobeandmail.com',
+        'globe and mail': 'theglobeandmail.com',
+        'msn': 'msn.com',
+        'microsoft news': 'msn.com',
+        'msn news': 'msn.com',
+        'defense news': 'defensenews.com',
+        'stock titan': 'stocktitan.com'
+    }
+    
+    source_lower = source_name.lower().strip()
+    if source_lower in common_mappings:
+        domain = common_mappings[source_lower]
+        LOG.info(f"Used common mapping: '{source_name}' -> '{domain}'")
+        return domain
+    
+    # Use AI as last resort
+    if OPENAI_API_KEY:
+        return get_domain_from_formal_name_ai_optimized(source_name)
+    
+    # Final fallback - create a reasonable domain-like string
+    clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', source_name).lower().replace(' ', '')
+    if len(clean_name) > 3:
+        return f"{clean_name[:20]}.com"
+    
+    return None
 
-Source: "{raw_source}"
+def get_domain_from_formal_name_ai_optimized(formal_name: str) -> Optional[str]:
+    """
+    Use AI to convert formal publication name to domain (optimized)
+    """
+    if not formal_name or not OPENAI_API_KEY:
+        return None
+    
+    prompt = f"""Convert this publication name to its website domain:
 
-Provide the official, formal name as it would appear in citations.
+Publication: "{formal_name}"
+
+Provide ONLY the domain (like "example.com") without http/https or www.
 
 Examples:
-- "GuruFocus" → "GuruFocus"
-- "Benzinga" → "Benzinga"  
-- "WSJ" → "Wall Street Journal"
-- "marketwatch" → "MarketWatch"
-- "seekingalpha" → "Seeking Alpha"
+- "Wall Street Journal" → "wsj.com"
+- "Barron's" → "barrons.com"
+- "TipRanks" → "tipranks.com"
 
-Formal name:"""
+Domain for "{formal_name}":|"""
     
     try:
         headers = {
@@ -1563,29 +1557,43 @@ Formal name:"""
         data = {
             "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a media expert. Provide only the proper, formal name of publications. Be concise."},
+                {"role": "system", "content": "Convert publication names to domains. Provide only the domain name."},
                 {"role": "user", "content": prompt}
             ],
             "max_completion_tokens": 30
         }
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=10)
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
         
         if response.status_code == 200:
             result = response.json()
             if 'choices' in result and result['choices']:
-                formal_name = result['choices'][0]['message']['content'].strip()
-                formal_name = re.sub(r'^["\']|["\']$', '', formal_name)
+                domain = result['choices'][0]['message']['content'].strip()
+                domain = re.sub(r'^["\']|["\']$', '', domain)
+                domain = domain.lower().strip()
                 
-                if len(formal_name) > 2 and len(formal_name) < 100:
-                    LOG.info(f"AI enhanced source: '{raw_source}' → '{formal_name}'")
-                    return formal_name
+                # Basic validation
+                if '.' in domain and 4 < len(domain) < 50:
+                    LOG.info(f"AI converted publication to domain: '{formal_name}' -> '{domain}'")
+                    return domain
                     
     except Exception as e:
-        LOG.debug(f"AI source enhancement failed for '{raw_source}': {e}")
+        LOG.error(f"Failed to convert formal name '{formal_name}' to domain: {e}")
     
-    # Fallback: Basic cleanup
-    return raw_source.title()
+    return None
+
+def cache_source_domain_mapping(source_name: str, domain: str):
+    """
+    Cache the source name to domain mapping in database
+    """
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO domain_names (domain, formal_name, ai_generated)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (domain) DO UPDATE
+            SET formal_name = EXCLUDED.formal_name,
+                updated_at = NOW()
+        """, (normalize_domain(domain), source_name, False))
 
 # ------------------------------------------------------------------------------
 # Feed Processing
@@ -1631,7 +1639,9 @@ def format_timestamp_est(dt: datetime) -> str:
 
 # ENHANCED: Update the ingest_feed function
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Enhanced feed processing with improved Google News handling"""
+    """
+    Enhanced feed processing with optimized Google News and Yahoo Finance handling
+    """
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, 
              "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0, 
              "google_domains_resolved": 0, "google_unresolved": 0}
@@ -1648,7 +1658,23 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             if not original_url:
                 continue
             
-            # URL resolution with enhanced Google News handling
+            title = getattr(entry, "title", "") or "No Title"
+            description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
+            
+            # Check for non-Latin script in title
+            if contains_non_latin_script(title):
+                stats["blocked_non_latin"] += 1
+                LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}")
+                continue
+            
+            # Spam keyword filtering
+            spam_keywords = ["marketbeat", "newser", "khodrobank"]
+            if any(spam in title.lower() for spam in spam_keywords):
+                stats["blocked_spam"] += 1
+                LOG.info(f"BLOCKED spam in title: {title[:50]}")
+                continue
+            
+            # URL resolution
             resolved_result = resolve_google_news_url(original_url)
             if resolved_result[0] is None:  # Spam detected at URL level
                 stats["blocked_spam"] += 1
@@ -1658,6 +1684,28 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             if not resolved_url or not domain:
                 continue
             
+            # Handle Google News special processing
+            if domain == "google-news-needs-title-processing":
+                title_result = process_google_news_with_title(resolved_url, title)
+                if title_result[0] is None:  # Spam detected in title processing
+                    stats["blocked_spam"] += 1
+                    continue
+                
+                resolved_url, domain = title_result
+                
+                # Track resolution success
+                if domain and "google-news" not in domain:
+                    stats["google_domains_resolved"] += 1
+                    # Extract and clean the title
+                    clean_title, _ = extract_source_from_title_smart(title)
+                    if clean_title:
+                        title = clean_title
+                else:
+                    stats["google_unresolved"] += 1
+                    if domain == "google-news-unresolved":
+                        LOG.warning(f"Skipping unresolved Google News: {title[:60]}")
+                        continue
+            
             # Track Yahoo source extractions
             if yahoo_source_url:
                 stats["yahoo_sources_found"] += 1
@@ -1665,75 +1713,13 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             
             url_hash = get_url_hash(resolved_url)
             
-            title = getattr(entry, "title", "") or "No Title"
-            description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
-            
-            # Check for non-Latin script in title during ingestion
-            if contains_non_latin_script(title):
-                stats["blocked_non_latin"] += 1
-                LOG.info(f"BLOCKED non-Latin script in title during ingestion: {title[:50]}")
-                continue
-            
-            # Existing spam keyword filtering
-            spam_keywords = ["marketbeat", "newser", "khodrobank"]
-            if any(spam in title.lower() for spam in spam_keywords):
-                stats["blocked_spam"] += 1
-                LOG.info(f"BLOCKED spam in title during ingestion: {title[:50]}")
-                continue
-            
-            # ENHANCED: Handle Google News domain resolution
-            final_domain = enhanced_google_domain_resolution(domain, title)
-            
-            # CRITICAL: Never store news.google.com or google-news variants
-            if final_domain and "google" in final_domain.lower() and "news" in final_domain.lower():
-                stats["google_unresolved"] += 1
-                LOG.warning(f"Skipping Google News article - could not resolve domain: {title[:60]}")
-                continue
-            
-            if final_domain == "google-news-title-extraction-needed":
-                stats["google_unresolved"] += 1
-                LOG.warning(f"Skipping unresolved Google News article: {title[:60]}")
-                continue
-            
-            if final_domain and final_domain not in ["google-news-unresolved", "unresolved-google-source"]:
-                stats["google_domains_resolved"] += 1
-               
-                # Extract source from title using AI
-                title_result = extract_source_with_ai(title)
-                
-                if title_result[0] is None:  # Spam detected in title
-                    stats["blocked_spam"] += 1
-                    continue
-                
-                clean_title, extracted_source = title_result
-                
-                if extracted_source:
-                    # Try to get domain from formal name
-                    actual_domain = get_domain_from_formal_name(extracted_source)
-                    if actual_domain:
-                        final_domain = normalize_domain(actual_domain)
-                        stats["google_domains_resolved"] += 1
-                        LOG.info(f"Resolved Google News domain: '{extracted_source}' -> '{final_domain}'")
-                        # Update title to clean version
-                        title = clean_title
-                    else:
-                        # Fallback: use the extracted source as a pseudo-domain
-                        final_domain = normalize_domain(extracted_source.lower().replace(" ", ""))
-                        LOG.warning(f"Could not resolve domain for '{extracted_source}', using pseudo-domain: {final_domain}")
-                else:
-                    # Complete fallback
-                    final_domain = "google-news-unresolved"
-                    LOG.warning(f"Could not extract source from Google News title: {title[:60]}...")
-            
             # Calculate quality score (currently disabled, returns 50.0)
             quality_score = calculate_quality_score(
-                title, final_domain, feed["ticker"], description, category, keywords
+                title, domain, feed["ticker"], description, category, keywords
             )
             
-            # Lower threshold since scoring is disabled
             if quality_score < 1:
                 stats["low_quality"] += 1
-                LOG.debug(f"Skipping low quality [{category}]: {title[:50]} (score: {quality_score})")
                 continue
             
             published_at = None
@@ -1750,7 +1736,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         continue
                     
                     # Use the resolved domain
-                    normalized_domain = normalize_domain(final_domain)
+                    normalized_domain = normalize_domain(domain)
                     
                     # Determine related ticker and search keyword for better tracking
                     related_ticker = None
@@ -1758,25 +1744,6 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     
                     if category == "competitor":
                         related_ticker = feed.get("competitor_ticker")
-                        if not related_ticker and "Competitor:" in feed["name"]:
-                            comp_name = feed["name"].replace("Competitor:", "").strip()
-                            words = comp_name.split()
-                            for word in words:
-                                if re.match(r'^[A-Z]{2,5}$', word):
-                                    related_ticker = word
-                                    break
-                    
-                    # Add columns for search metadata if they don't exist
-                    cur.execute("""
-                        DO $$ 
-                        BEGIN 
-                            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                         WHERE table_name='found_url' AND column_name='search_keyword') 
-                            THEN 
-                                ALTER TABLE found_url ADD COLUMN search_keyword VARCHAR(255);
-                            END IF;
-                        END $$;
-                    """)
                     
                     cur.execute("""
                         INSERT INTO found_url (
@@ -1803,11 +1770,10 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                             if original_domain:
                                 upsert_domain_stats(original_domain, quality_score, f"{category}_original")
                         
-                        source_note = f" (source: {urlparse(yahoo_source_url).netloc})" if yahoo_source_url else ""
-                        keyword_note = f" [keyword: {search_keyword}]" if search_keyword else ""
-                        ticker_note = f" [related: {related_ticker}]" if related_ticker else ""
-                        domain_note = f" [domain: {normalized_domain}]"
-                        LOG.info(f"Inserted [{category}]{source_note}{keyword_note}{ticker_note}{domain_note}: {title[:60]}...")
+                        # Get display name for logging
+                        display_name = get_or_create_formal_domain_name(normalized_domain)
+                        
+                        LOG.info(f"Inserted [{category}] from {display_name}: {title[:60]}...")
                         
             except Exception as e:
                 LOG.error(f"Database insert error for '{title[:50]}': {e}")

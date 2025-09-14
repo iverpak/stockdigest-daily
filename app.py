@@ -276,10 +276,10 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """Initialize database schema with enhanced tables - UPDATED for search metadata"""
+    """Simplified database schema initialization"""
     with db() as conn:
         with conn.cursor() as cur:
-            # Create ticker_config table if not exists
+            # Core tables only
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ticker_config (
                     ticker VARCHAR(10) PRIMARY KEY,
@@ -291,118 +291,20 @@ def ensure_schema():
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
-            """)
-
-            cur.execute("""
+                
                 CREATE TABLE IF NOT EXISTS domain_names (
                     domain VARCHAR(255) PRIMARY KEY,
                     formal_name VARCHAR(255) NOT NULL,
                     ai_generated BOOLEAN DEFAULT FALSE,
-                    verified BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
-            """)
-
-            # ADD THIS: Create domain statistics table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS domain_stats (
-                    domain VARCHAR(255) PRIMARY KEY,
-                    total_articles INT DEFAULT 0,
-                    avg_quality_score FLOAT DEFAULT 50.0,
-                    first_seen TIMESTAMP DEFAULT NOW(),
-                    last_seen TIMESTAMP DEFAULT NOW(),
-                    category_counts JSONB DEFAULT '{}',
-                    updated_at TIMESTAMP DEFAULT NOW()
-                );
-            """)
-            
-            # ENHANCED: Add search metadata columns to found_url if not exists
-            cur.execute("""
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                 WHERE table_name='found_url' AND column_name='category') 
-                    THEN 
-                        ALTER TABLE found_url ADD COLUMN category VARCHAR(50) DEFAULT 'company';
-                    END IF;
-                END $$;
-            """)
-            
-            cur.execute("""
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                 WHERE table_name='found_url' AND column_name='related_ticker') 
-                    THEN 
-                        ALTER TABLE found_url ADD COLUMN related_ticker VARCHAR(10);
-                    END IF;
-                END $$;
-            """)
-            
-            cur.execute("""
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                 WHERE table_name='found_url' AND column_name='original_source_url') 
-                    THEN 
-                        ALTER TABLE found_url ADD COLUMN original_source_url TEXT;
-                    END IF;
-                END $$;
-            """)
-            
-            # ENHANCED: Add search keyword column to track what was searched
-            cur.execute("""
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                 WHERE table_name='found_url' AND column_name='search_keyword') 
-                    THEN 
-                        ALTER TABLE found_url ADD COLUMN search_keyword VARCHAR(255);
-                    END IF;
-                END $$;
-            """)
-            
-            # ENHANCED: Add search metadata columns to source_feed if not exists
-            cur.execute("""
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                 WHERE table_name='source_feed' AND column_name='search_keyword') 
-                    THEN 
-                        ALTER TABLE source_feed ADD COLUMN search_keyword VARCHAR(255);
-                    END IF;
-                END $$;
-            """)
-            
-            cur.execute("""
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                 WHERE table_name='source_feed' AND column_name='competitor_ticker') 
-                    THEN 
-                        ALTER TABLE source_feed ADD COLUMN competitor_ticker VARCHAR(10);
-                    END IF;
-                END $$;
-            """)
-            
-            # Ensure indexes
-            cur.execute("""
+                
+                -- Essential indexes only
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
-                CREATE INDEX IF NOT EXISTS idx_found_url_ticker_quality ON found_url(ticker, quality_score DESC);
-                CREATE INDEX IF NOT EXISTS idx_found_url_published ON found_url(published_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_found_url_feed_foundat ON found_url(feed_id, found_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_found_url_category ON found_url(ticker, category);
-                CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
-                CREATE INDEX IF NOT EXISTS idx_domain_names_domain ON domain_names(domain);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_found_url_search_keyword ON found_url(search_keyword);
-                CREATE INDEX IF NOT EXISTS idx_source_feed_search_keyword ON source_feed(search_keyword);
-                CREATE INDEX IF NOT EXISTS idx_source_feed_competitor_ticker ON source_feed(competitor_ticker);
-                CREATE INDEX IF NOT EXISTS idx_domain_stats_total_articles ON domain_stats(total_articles DESC);
-                CREATE INDEX IF NOT EXISTS idx_domain_stats_avg_quality ON domain_stats(avg_quality_score DESC);
-                CREATE INDEX IF NOT EXISTS idx_domain_stats_last_seen ON domain_stats(last_seen DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
@@ -450,330 +352,23 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
         """, (ticker,))
         return cur.fetchone()
 
-def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict[str, List[str]]:
-    """Get ticker metadata from DB or generate with AI if not exists - UPDATED for new competitor structure"""
-    # Check database first
-    if not force_refresh:
-        config = get_ticker_config(ticker)
-        if config:
-            LOG.info(f"Using existing metadata for {ticker} (AI generated: {config.get('ai_generated', False)})")
-            
-            # Process stored competitors back to structured format
-            stored_competitors = config.get("competitors", [])
-            processed_competitors = []
-            
-            for comp_str in stored_competitors:
-                # Check if it's in "Name (TICKER)" format
-                ticker_match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
-                if ticker_match:
-                    processed_competitors.append({
-                        "name": ticker_match.group(1).strip(),
-                        "ticker": ticker_match.group(2)
-                    })
-                else:
-                    # Just company name
-                    processed_competitors.append({
-                        "name": comp_str,
-                        "ticker": None
-                    })
-            
-            return {
-                "company_name": config.get("name", ticker),
-                "company": [ticker],
-                "industry": config.get("industry_keywords", []),
-                "competitors": processed_competitors
-            }
-    
-    # Generate with AI
-    LOG.info(f"Generating metadata for {ticker} using OpenAI...")
-    ai_metadata = generate_ticker_metadata_with_ai(ticker)
-    
-    # Save to database
-    metadata = {
-        "company_name": ai_metadata.get("company_name", ticker),
-        "name": ai_metadata.get("company_name", ticker),
-        "industry_keywords": ai_metadata.get("industry_keywords", []),
-        "competitors": ai_metadata.get("competitors", [])
-    }
-    upsert_ticker_config(ticker, metadata, ai_generated=True)
-    
-    return {
-        "company_name": metadata["company_name"],
-        "company": [ticker],
-        "industry": metadata["industry_keywords"],
-        "competitors": metadata["competitors"]
-    }
+def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
+    """Wrapper for backward compatibility"""
+    return ticker_manager.get_or_create_metadata(ticker, force_refresh
 
-# ADD THE NEW DOMAIN TRACKING FUNCTIONS HERE:
-
-def normalize_domain(domain: str) -> str:
-    """Normalize domain for consistent storage"""
-    if not domain:
-        return None
+def build_feed_urls(ticker: str, keywords: Dict) -> List[Dict]:
+    """Wrapper for backward compatibility"""
+    return feed_manager.create_feeds_for_ticker(ticker, keywords)
     
-    # Convert to lowercase and remove common prefixes
-    normalized = domain.lower().strip()
-    
-    # Remove www. prefix for consistency (except for specific cases)
-    if normalized.startswith('www.') and normalized != 'www.':
-        normalized = normalized[4:]
-    
-    # Remove trailing slashes
-    normalized = normalized.rstrip('/')
-    
-    return normalized
-
-def upsert_domain_stats(domain: str, quality_score: float, category: str = "company"):
-    """Update domain statistics when a new article is added"""
-    if not domain:
-        return
-        
-    normalized_domain = normalize_domain(domain)
-    
+def upsert_feed(url: str, name: str, ticker: str, category: str = "company", 
+                retain_days: int = 90, search_keyword: str = None, 
+                competitor_ticker: str = None) -> int:
+    """Simplified feed upsert"""
     with db() as conn, conn.cursor() as cur:
-        # Check if domain exists
-        cur.execute("SELECT total_articles, category_counts FROM domain_stats WHERE domain = %s", (normalized_domain,))
-        existing = cur.fetchone()
-        
-        if existing:
-            # Update existing domain stats
-            new_total = existing['total_articles'] + 1
-            category_counts = existing.get('category_counts') or {}
-            category_counts[category] = category_counts.get(category, 0) + 1
-            
-            cur.execute("""
-                UPDATE domain_stats 
-                SET total_articles = %s,
-                    avg_quality_score = (
-                        (avg_quality_score * %s + %s) / %s
-                    ),
-                    last_seen = NOW(),
-                    category_counts = %s,
-                    updated_at = NOW()
-                WHERE domain = %s
-            """, (new_total, existing['total_articles'], quality_score, new_total, 
-                  json.dumps(category_counts), normalized_domain))
-        else:
-            # Insert new domain
-            category_counts = {category: 1}
-            cur.execute("""
-                INSERT INTO domain_stats (domain, total_articles, avg_quality_score, 
-                                        first_seen, last_seen, category_counts)
-                VALUES (%s, 1, %s, NOW(), NOW(), %s)
-            """, (normalized_domain, quality_score, json.dumps(category_counts)))
-
-def get_domain_stats(domain: str = None) -> List[Dict]:
-    """Get domain statistics for scoring improvements"""
-    with db() as conn, conn.cursor() as cur:
-        if domain:
-            cur.execute("""
-                SELECT domain, total_articles, avg_quality_score, 
-                       first_seen, last_seen, category_counts
-                FROM domain_stats 
-                WHERE domain = %s
-            """, (normalize_domain(domain),))
-            result = cur.fetchone()
-            return dict(result) if result else None
-        else:
-            cur.execute("""
-                SELECT domain, total_articles, avg_quality_score,
-                       first_seen, last_seen, category_counts
-                FROM domain_stats 
-                ORDER BY total_articles DESC
-                LIMIT 100
-            """)
-            return list(cur.fetchall())
-
-def cache_missing_domain_names(limit: int = 50) -> Dict[str, int]:
-    """Bulk cache formal names for domains that don't have them yet - OPTIMIZED batch processing"""
-    
-    with db() as conn, conn.cursor() as cur:
-        # Find domains without formal names, ordered by frequency
-        cur.execute("""
-            SELECT f.domain, COUNT(*) as usage_count
-            FROM found_url f
-            LEFT JOIN domain_names dn ON dn.domain = f.domain
-            WHERE f.domain IS NOT NULL 
-              AND f.domain != 'news.google.com'
-              AND f.domain != 'google-news-unresolved'
-              AND dn.domain IS NULL
-            GROUP BY f.domain
-            ORDER BY usage_count DESC
-            LIMIT %s
-        """, (limit,))
-        
-        missing_domains = list(cur.fetchall())
-    
-    if not missing_domains:
-        LOG.info("No missing domain names found")
-        return {"processed": 0, "cached": 0, "failed": 0}
-    
-    LOG.info(f"Found {len(missing_domains)} domains needing formal names")
-    
-    stats = {"processed": 0, "cached": 0, "failed": 0}
-    
-    for domain_row in missing_domains:
-        domain = domain_row['domain']
-        usage_count = domain_row['usage_count']
-        
-        stats["processed"] += 1
-        LOG.info(f"Processing domain {domain} (used in {usage_count} articles)...")
-        
-        # Get formal name (this will cache it automatically)
-        try:
-            formal_name = get_or_create_formal_domain_name(domain)
-            if formal_name and formal_name != domain:
-                stats["cached"] += 1
-                LOG.info(f"Successfully cached: {domain} -> {formal_name}")
-            else:
-                stats["failed"] += 1
-                LOG.warning(f"Failed to get good formal name for {domain}")
-        except Exception as e:
-            stats["failed"] += 1
-            LOG.error(f"Error processing domain {domain}: {e}")
-        
-        # Small delay to avoid rate limiting
-        time.sleep(0.2)
-    
-    LOG.info(f"Domain caching completed: {stats}")
-    return stats
-
-def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
-    """Build feed URLs for different categories - FIXED Yahoo Finance ticker feeds"""
-    feeds = []
-    
-    company_name = keywords.get("company_name", ticker)
-    LOG.info(f"Building feeds for {ticker} (company: {company_name})")
-    
-    # FIXED: Company-specific feeds - use company name for Google, ticker for Yahoo
-    company_name_encoded = requests.utils.quote(company_name)
-    feeds.extend([
-        {
-            "url": f"https://news.google.com/rss/search?q=\"{company_name_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-            "name": f"Google News: {company_name}",
-            "category": "company",
-            "search_keyword": company_name
-        },
-        {
-            "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
-            "name": f"Yahoo Finance: {ticker}",
-            "category": "company", 
-            "search_keyword": ticker  # FIXED: Use ticker for Yahoo feeds
-        }
-    ])
-    
-    # Industry feeds (Google only - Yahoo doesn't work with keywords)
-    industry_keywords = keywords.get("industry", [])
-    LOG.info(f"Building industry feeds for {ticker} with keywords: {industry_keywords}")
-    for keyword in industry_keywords[:3]:
-        keyword_encoded = requests.utils.quote(keyword)
-        feeds.append({
-            "url": f"https://news.google.com/rss/search?q=\"{keyword_encoded}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
-            "name": f"Industry: {keyword}",
-            "category": "industry",
-            "search_keyword": keyword
-        })
-    
-    # FIXED: Competitor feeds with better validation to prevent cross-contamination
-    competitors = keywords.get("competitors", [])
-    LOG.info(f"Building competitor feeds for {ticker} with competitors: {competitors}")
-    
-    for comp in competitors[:3]:
-        if isinstance(comp, dict):
-            # New structured format
-            comp_name = comp.get('name', '')
-            comp_ticker = comp.get('ticker')
-            
-            # FIXED: Validate competitor ticker is different from main ticker
-            if comp_ticker and comp_ticker.upper() == ticker.upper():
-                LOG.warning(f"Skipping competitor {comp_name} ({comp_ticker}) - same as main ticker {ticker}")
-                continue
-            
-            if comp_name:
-                # Use company name for Google search
-                comp_name_encoded = requests.utils.quote(comp_name)
-                feeds.append({
-                    "url": f"https://news.google.com/rss/search?q=\"{comp_name_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    "name": f"Competitor: {comp_name}",
-                    "category": "competitor",
-                    "search_keyword": comp_name,
-                    "competitor_ticker": comp_ticker
-                })
-                
-                # Use ticker for Yahoo search if available and different from main ticker
-                if comp_ticker and comp_ticker.upper() != ticker.upper():
-                    feeds.append({
-                        "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                        "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                        "category": "competitor",
-                        "search_keyword": comp_ticker,  # FIXED: Use competitor ticker
-                        "competitor_ticker": comp_ticker
-                    })
-        else:
-            # Old format - just company name string
-            comp_clean = str(comp).replace("(", "").replace(")", "").strip()
-            
-            # Try to extract ticker if present in format "Name (TICKER)"
-            ticker_match = re.search(r'\(([A-Z]{1,5})\)', str(comp))
-            extracted_ticker = ticker_match.group(1) if ticker_match else None
-            comp_name_only = re.sub(r'\s*\([^)]*\)', '', comp_clean).strip()
-            
-            # FIXED: Validate extracted ticker is different from main ticker
-            if extracted_ticker and extracted_ticker.upper() == ticker.upper():
-                LOG.warning(f"Skipping competitor {comp_name_only} ({extracted_ticker}) - same as main ticker {ticker}")
-                continue
-            
-            comp_name_encoded = requests.utils.quote(comp_name_only)
-            feeds.append({
-                "url": f"https://news.google.com/rss/search?q=\"{comp_name_encoded}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                "name": f"Competitor: {comp_name_only}",
-                "category": "competitor",
-                "search_keyword": comp_name_only,
-                "competitor_ticker": extracted_ticker
-            })
-            
-            if extracted_ticker and extracted_ticker.upper() != ticker.upper():
-                feeds.append({
-                    "url": f"https://finance.yahoo.com/rss/headline?s={extracted_ticker}",
-                    "name": f"Yahoo Competitor: {comp_name_only} ({extracted_ticker})",
-                    "category": "competitor", 
-                    "search_keyword": extracted_ticker,  # FIXED: Use competitor ticker
-                    "competitor_ticker": extracted_ticker
-                })
-    
-    LOG.info(f"Built {len(feeds)} total feeds for {ticker}: {len([f for f in feeds if f['category'] == 'company'])} company, {len([f for f in feeds if f['category'] == 'industry'])} industry, {len([f for f in feeds if f['category'] == 'competitor'])} competitor")
-    return feeds
-    
-def upsert_feed(url: str, name: str, ticker: str, category: str = "company", retain_days: int = 90, search_keyword: str = None, competitor_ticker: str = None) -> int:
-    """Insert or update a feed source with category and search metadata - ENHANCED"""
-    with db() as conn, conn.cursor() as cur:
-        # First, check if we need to add the new columns
-        cur.execute("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                             WHERE table_name='source_feed' AND column_name='search_keyword') 
-                THEN 
-                    ALTER TABLE source_feed ADD COLUMN search_keyword VARCHAR(255);
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                             WHERE table_name='source_feed' AND column_name='competitor_ticker') 
-                THEN 
-                    ALTER TABLE source_feed ADD COLUMN competitor_ticker VARCHAR(10);
-                END IF;
-            END $$;
-        """)
-        
         cur.execute("""
             INSERT INTO source_feed (url, name, ticker, retain_days, active, search_keyword, competitor_ticker)
             VALUES (%s, %s, %s, %s, TRUE, %s, %s)
-            ON CONFLICT (url) DO UPDATE
-            SET name = EXCLUDED.name,
-                ticker = EXCLUDED.ticker,
-                retain_days = EXCLUDED.retain_days,
-                active = TRUE,
-                search_keyword = EXCLUDED.search_keyword,
-                competitor_ticker = EXCLUDED.competitor_ticker
+            ON CONFLICT (url) DO UPDATE SET name = EXCLUDED.name, active = TRUE
             RETURNING id;
         """, (url, name, ticker, retain_days, search_keyword, competitor_ticker))
         return cur.fetchone()["id"]
@@ -946,282 +541,28 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
         LOG.error(f"Yahoo Finance source extraction failed for {url}: {e}")
         return None
 
-@APP.post("/admin/test-yahoo-extraction-detailed")
-def test_yahoo_extraction_detailed(request: Request):
-    """Enhanced test for Yahoo Finance source extraction with detailed debugging"""
-    require_admin(request)
-    
-    # Use your specific example URL
-    test_url = request.headers.get("test-url", "https://finance.yahoo.com/news/why-bloom-energy-shares-soaring-155542226.html")
-    
-    LOG.info(f"Testing detailed Yahoo extraction on: {test_url}")
-    
-    result = {
-        "test_url": test_url,
-        "extraction_attempted": True
-    }
-    
-    try:
-        # Fetch the page content
-        response = requests.get(test_url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        
-        if response.status_code != 200:
-            result["error"] = f"HTTP {response.status_code}"
-            return result
-        
-        html_content = response.text
-        result["page_length"] = len(html_content)
-        
-        # Check for your specific pattern
-        if "providerContentUrl" in html_content:
-            result["providerContentUrl_found"] = True
-            
-            # Find all occurrences
-            pattern = r'"providerContentUrl"\s*:\s*"([^"]*)"'
-            matches = re.findall(pattern, html_content)
-            result["providerContentUrl_matches"] = matches
-            
-            if matches:
-                raw_url = matches[0]
-                result["raw_extracted"] = raw_url
-                
-                # Try different unescaping methods
-                try:
-                    json_unescaped = json.loads(f'"{raw_url}"')
-                    result["json_unescaped"] = json_unescaped
-                except:
-                    pass
-                
-                simple_unescaped = raw_url.replace('\\/', '/')
-                result["simple_unescaped"] = simple_unescaped
-                
-                # Check the specific stockstory.org pattern
-                if "stockstory.org" in raw_url:
-                    result["stockstory_detected"] = True
-        else:
-            result["providerContentUrl_found"] = False
-            
-            # Search for any stockstory.org URLs
-            stockstory_pattern = r'https://stockstory\.org/[^"\s]*'
-            stockstory_matches = re.findall(stockstory_pattern, html_content)
-            result["stockstory_urls_found"] = stockstory_matches
-        
-        # Test the actual function
-        extracted_url = extract_yahoo_finance_source(test_url)
-        result["function_result"] = extracted_url
-        result["extraction_successful"] = extracted_url is not None
-        
-        if extracted_url:
-            result["final_domain"] = urlparse(extracted_url).netloc
-        
-    except Exception as e:
-        result["error"] = str(e)
-    
-    return result
-
-def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    Fixed Google News URL resolution with proper title processing workflow
-    """
-    try:
-        if "news.google.com" in url:
-            # Try direct resolution first
-            try:
-                response = requests.get(url, timeout=10, allow_redirects=True, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                })
-                final_url = response.url
-                
-                # Check if we got redirected to the actual source
-                if final_url != url and "news.google.com" not in final_url:
-                    domain = urlparse(final_url).netloc.lower()
-                    normalized_domain = normalize_domain(domain)
-                    
-                    # Spam check
-                    for spam_domain in SPAM_DOMAINS:
-                        spam_clean = normalize_domain(spam_domain)
-                        if spam_clean and spam_clean in normalized_domain:
-                            LOG.info(f"BLOCKED spam domain from Google redirect: {normalized_domain}")
-                            return None, None, None
-                    
-                    LOG.info(f"Google News direct resolution successful: {url} -> {final_url}")
-                    return final_url, normalized_domain, None
-                    
-            except Exception as e:
-                LOG.debug(f"Direct Google News resolution failed for {url}: {e}")
-            
-            # Return special marker for title-based processing
-            LOG.debug(f"Google News URL needs title processing: {url}")
-            return url, "google-news-needs-title-processing", None
-        
-        # Handle direct Google redirect URLs
-        if "google.com/url" in url:
-            parsed = urlparse(url)
-            params = parse_qs(parsed.query)
-            if 'url' in params:
-                actual_url = params['url'][0]
-                domain = urlparse(actual_url).netloc.lower()
-                normalized_domain = normalize_domain(domain)
-                
-                # Spam check
-                for spam_domain in SPAM_DOMAINS:
-                    spam_clean = normalize_domain(spam_domain)
-                    if spam_clean and spam_clean in normalized_domain:
-                        LOG.info(f"BLOCKED spam domain in redirect: {normalized_domain}")
-                        return None, None, None
-                
-                # Yahoo Finance source extraction
-                if "finance.yahoo.com" in actual_url:
-                    original_source_url = extract_yahoo_finance_source_optimized(actual_url)
-                    if original_source_url:
-                        original_domain = urlparse(original_source_url).netloc.lower()
-                        original_normalized_domain = normalize_domain(original_domain)
-                        
-                        # Spam check on original source
-                        for spam_domain in SPAM_DOMAINS:
-                            spam_clean = normalize_domain(spam_domain)
-                            if spam_clean and spam_clean in original_normalized_domain:
-                                LOG.info(f"BLOCKED spam domain in Yahoo source: {original_normalized_domain}")
-                                return None, None, None
-                        
-                        LOG.info(f"Yahoo redirect resolved: {actual_url} -> {original_source_url}")
-                        return original_source_url, original_normalized_domain, actual_url
-                        
-                return actual_url, normalized_domain, None
-        
-        # Direct URL handling
-        domain = urlparse(url).netloc.lower()
-        normalized_domain = normalize_domain(domain)
-        
-        # Spam check
-        for spam_domain in SPAM_DOMAINS:
-            spam_clean = normalize_domain(spam_domain)
-            if spam_clean and spam_clean in normalized_domain:
-                LOG.info(f"BLOCKED spam domain: {normalized_domain}")
-                return None, None, None
-        
-        # Yahoo Finance handling for direct URLs
-        if "finance.yahoo.com" in url:
-            original_source_url = extract_yahoo_finance_source_optimized(url)
-            if original_source_url:
-                original_domain = urlparse(original_source_url).netloc.lower()
-                original_normalized_domain = normalize_domain(original_domain)
-                
-                # Spam check on original source
-                for spam_domain in SPAM_DOMAINS:
-                    spam_clean = normalize_domain(spam_domain)
-                    if spam_clean and spam_clean in original_normalized_domain:
-                        LOG.info(f"BLOCKED spam domain in direct Yahoo source: {original_normalized_domain}")
-                        return None, None, None
-                
-                LOG.info(f"Direct Yahoo Finance resolved: {url} -> {original_source_url}")
-                return original_source_url, original_normalized_domain, url
-                
-        return url, normalized_domain, None
-        
-    except Exception as e:
-        LOG.warning(f"URL resolution failed for {url}: {e}")
-        if url and "news.google.com" in url:
-            return url, "google-news-unresolved", None
-        else:
-            fallback_domain = urlparse(url).netloc.lower() if url else None
-            normalized_fallback = normalize_domain(fallback_domain) if fallback_domain else None
-            return url, normalized_fallback, None
-
-def process_google_news_with_title(url: str, title: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Process Google News URL using title to extract proper source domain
-    """
-    if not title:
-        LOG.warning(f"No title provided for Google News URL: {url}")
-        return url, "google-news-no-title"
-    
-    # Check for spam/non-Latin content first
-    if contains_non_latin_script(title):
-        LOG.info(f"BLOCKED non-Latin script in Google News title: {title[:50]}")
-        return None, None
-    
-    # Extract source from title using smart extraction
-    clean_title, extracted_source = extract_source_from_title_smart(title)
-    
-    if extracted_source:
-        # Try to get cached domain from database first
-        domain = get_cached_domain_for_source(extracted_source)
-        if domain:
-            LOG.info(f"Using cached domain for '{extracted_source}': {domain}")
-            return url, domain
-        
-        # Try to resolve domain from source name
-        domain = resolve_source_name_to_domain(extracted_source)
-        if domain:
-            # Cache this mapping for future use
-            cache_source_domain_mapping(extracted_source, domain)
-            LOG.info(f"Resolved Google News source: '{extracted_source}' -> '{domain}'")
-            return url, domain
-    
-    # Fallback for unresolvable Google News
-    LOG.warning(f"Could not extract source from Google News title: {title[:60]}")
-    return url, "google-news-unresolved"
-
 def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
-    """
-    Smart source extraction from title with regex-first approach
-    """
+    """Extract source from title with simple regex"""
     if not title:
         return title, None
     
-    # Try simple regex patterns first (faster than AI)
-    source_patterns = [
-        r'\s*-\s*([^-]+)$',  # " - Source" at the end
-        r'\s*\|\s*([^|]+)$',  # " | Source" at the end  
-        r'\s+([a-zA-Z0-9.-]*\.(?:com|org|net|co\.uk))$'  # domain at the end
+    # Simple patterns for common formats
+    patterns = [
+        r'\s*-\s*([^-]+)$',  # " - Source"
+        r'\s*\|\s*([^|]+)$'   # " | Source"
     ]
     
-    for pattern in source_patterns:
+    for pattern in patterns:
         match = re.search(pattern, title)
         if match:
-            potential_source = match.group(1).strip()
+            source = match.group(1).strip()
             clean_title = re.sub(pattern, '', title).strip()
             
-            # Validate this looks like a real source
-            if 2 < len(potential_source) < 50:
-                # Check for spam
-                source_lower = potential_source.lower()
-                spam_sources = ["marketbeat", "newser", "khodrobank"]
-                if any(spam in source_lower for spam in spam_sources):
-                    LOG.info(f"BLOCKED spam source in title: {potential_source}")
-                    return None, None
-                
-                LOG.info(f"Regex extracted source: '{potential_source}' from title: '{title[:60]}'")
-                return clean_title, potential_source
-    
-    # Fallback to AI if regex fails
-    if OPENAI_API_KEY:
-        return extract_source_with_ai_optimized(title)
+            # Basic validation
+            if 3 < len(source) < 50 and not any(spam in source.lower() for spam in ["marketbeat", "newser"]):
+                return clean_title, source
     
     return title, None
-    
-def extract_domain_hints_from_title(title: str) -> List[str]:
-    """Extract potential domain hints from article titles"""
-    hints = []
-    
-    # Look for common domain patterns in titles
-    domain_patterns = [
-        r'([a-zA-Z0-9-]+\.(?:com|org|net|co\.uk|co|io|ai))',  # Explicit domains
-        r'([A-Z][a-zA-Z]+(?:News|Times|Post|Daily|Journal|Tribune|Herald))',  # News outlets
-        r'((?:The\s+)?[A-Z][a-zA-Z\s]+(?:Magazine|Report|Review|Wire|Brief))',  # Publications
-    ]
-    
-    for pattern in domain_patterns:
-        matches = re.findall(pattern, title, re.IGNORECASE)
-        for match in matches:
-            clean_match = match.strip().lower()
-            if len(clean_match) > 3 and clean_match not in ['the', 'and', 'for', 'with']:
-                hints.append(normalize_domain(clean_match))
-    
-    return hints[:3]  # Return top 3 hints
 
 def calculate_quality_score(
     title: str, 
@@ -1241,398 +582,411 @@ def get_url_hash(url: str) -> str:
     url_clean = re.sub(r'[?&](utm_|ref=|source=).*', '', url_lower)
     return hashlib.md5(url_clean.encode()).hexdigest()
 
-def get_formal_domain_name_from_ai(domain: str) -> Optional[str]:
-    """Use OpenAI to get the formal name of a domain"""
-    if not OPENAI_API_KEY:
-        LOG.warning("OpenAI API key not configured for domain name resolution")
-        return None
-    
-    clean_domain = domain.replace("www.", "").lower()
-    
-    prompt = f"""What is the formal, proper name of the website/company "{clean_domain}"?
-
-Please provide ONLY the official name as it would appear in a citation or news article.
-Examples:
-- "investors.com" → "Investor's Business Daily"
-- "barrons.com" → "Barron's" 
-- "zacks.com" → "Zacks Investment Research"
-
-For "{clean_domain}", the formal name is:"""
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
+class DomainResolver:
+    def __init__(self):
+        self._cache = {}
+        self._common_mappings = {
+            'reuters.com': 'Reuters',
+            'bloomberg.com': 'Bloomberg News',
+            'wsj.com': 'The Wall Street Journal',
+            'cnbc.com': 'CNBC',
+            'marketwatch.com': 'MarketWatch',
+            'finance.yahoo.com': 'Yahoo Finance',
+            'ca.finance.yahoo.com': 'Yahoo Finance',
+            'uk.finance.yahoo.com': 'Yahoo Finance',
+            'seekingalpha.com': 'Seeking Alpha',
+            'fool.com': 'The Motley Fool',
+            'tipranks.com': 'TipRanks',
+            'benzinga.com': 'Benzinga',
+            'investors.com': "Investor's Business Daily",
+            'barrons.com': "Barron's",
+            'ft.com': 'Financial Times'
         }
+    
+    def resolve_url_and_domain(self, url, title=None):
+        """Single method to resolve any URL to (final_url, domain, source_url)"""
+        try:
+            if "news.google.com" in url:
+                return self._handle_google_news(url, title)
+            elif "finance.yahoo.com" in url:
+                return self._handle_yahoo_finance(url)
+            else:
+                return self._handle_direct_url(url)
+        except Exception as e:
+            LOG.warning(f"URL resolution failed for {url}: {e}")
+            fallback_domain = urlparse(url).netloc.lower() if url else None
+            return url, normalize_domain(fallback_domain), None
+    
+    def get_formal_name(self, domain):
+        """Get formal name for domain with caching"""
+        if not domain:
+            return "Unknown"
         
-        data = {
-            "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a media expert. Provide only the official, formal name of websites/publications. Be concise."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_completion_tokens": 50
-        }
+        clean_domain = normalize_domain(domain)
+        if not clean_domain:
+            return "Unknown"
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+        # Check cache
+        if clean_domain in self._cache:
+            return self._cache[clean_domain]
         
-        if response.status_code != 200:
-            return None
+        # Check database
+        formal_name = self._get_from_database(clean_domain)
+        if formal_name:
+            self._cache[clean_domain] = formal_name
+            return formal_name
         
-        result = response.json()
-        if 'choices' not in result or not result['choices']:
-            return None
+        # Check common mappings
+        if clean_domain in self._common_mappings:
+            formal_name = self._common_mappings[clean_domain]
+            self._store_in_database(clean_domain, formal_name, False)
+            self._cache[clean_domain] = formal_name
+            return formal_name
+        
+        # Use AI as last resort
+        if OPENAI_API_KEY:
+            formal_name = self._get_from_ai(clean_domain)
+            if formal_name:
+                self._store_in_database(clean_domain, formal_name, True)
+                self._cache[clean_domain] = formal_name
+                return formal_name
+        
+        # Fallback
+        fallback = clean_domain.replace('.com', '').replace('.org', '').title()
+        self._store_in_database(clean_domain, fallback, False)
+        self._cache[clean_domain] = fallback
+        return fallback
+    
+    def _handle_google_news(self, url, title):
+        """Handle Google News URL resolution"""
+        # Try direct resolution first
+        try:
+            response = requests.get(url, timeout=10, allow_redirects=True, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            final_url = response.url
             
-        formal_name = result['choices'][0]['message']['content'].strip()
-        formal_name = re.sub(r'^["\']|["\']$', '', formal_name)
-        formal_name = formal_name.strip()
+            if final_url != url and "news.google.com" not in final_url:
+                domain = normalize_domain(urlparse(final_url).netloc.lower())
+                if not self._is_spam_domain(domain):
+                    return final_url, domain, None
+        except:
+            pass
         
-        if len(formal_name) > 100 or len(formal_name) < 2:
+        # Fall back to title extraction
+        if title and not contains_non_latin_script(title):
+            clean_title, source = extract_source_from_title_smart(title)
+            if source and not self._is_spam_source(source):
+                return url, normalize_domain(source), None
+        
+        return url, "google-news-unresolved", None
+    
+    def _handle_yahoo_finance(self, url):
+        """Handle Yahoo Finance URL resolution"""
+        original_source = extract_yahoo_finance_source_optimized(url)
+        if original_source:
+            domain = normalize_domain(urlparse(original_source).netloc.lower())
+            if not self._is_spam_domain(domain):
+                return original_source, domain, url
+        
+        return url, normalize_domain(urlparse(url).netloc.lower()), None
+    
+    def _handle_direct_url(self, url):
+        """Handle direct URL"""
+        domain = normalize_domain(urlparse(url).netloc.lower())
+        if self._is_spam_domain(domain):
+            return None, None, None
+        return url, domain, None
+    
+    def _is_spam_domain(self, domain):
+        """Check if domain is spam"""
+        if not domain:
+            return True
+        return any(spam in domain for spam in SPAM_DOMAINS)
+    
+    def _is_spam_source(self, source):
+        """Check if source name is spam"""
+        if not source:
+            return True
+        source_lower = source.lower()
+        return any(spam in source_lower for spam in ["marketbeat", "newser", "khodrobank"])
+    
+    def _get_from_database(self, domain):
+        """Get formal name from database"""
+        try:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("SELECT formal_name FROM domain_names WHERE domain = %s", (domain,))
+                result = cur.fetchone()
+                return result["formal_name"] if result else None
+        except:
             return None
+    
+    def _store_in_database(self, domain, formal_name, ai_generated):
+        """Store formal name in database"""
+        try:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO domain_names (domain, formal_name, ai_generated)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (domain) DO UPDATE
+                    SET formal_name = EXCLUDED.formal_name, updated_at = NOW()
+                """, (domain, formal_name, ai_generated))
+        except Exception as e:
+            LOG.warning(f"Failed to store domain mapping {domain}: {e}")
+    
+    def _get_from_ai(self, domain):
+        """Get formal name from AI"""
+        try:
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
             
-        LOG.info(f"AI resolved domain {domain} to: {formal_name}")
-        return formal_name
-        
-    except Exception as e:
-        LOG.error(f"Error getting formal name for domain {domain}: {e}")
+            prompt = f'What is the formal publication name for "{domain}"? Respond with just the name.'
+            
+            data = {
+                "model": OPENAI_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 30
+            }
+            
+            response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+            if response.status_code == 200:
+                result = response.json()
+                name = result["choices"][0]["message"]["content"].strip()
+                return name if 2 < len(name) < 100 else None
+        except:
+            pass
         return None
 
-def get_or_create_formal_domain_name(domain: str) -> str:
-    """Get formal domain name from cache or generate with AI - OPTIMIZED to avoid redundant API calls"""
-    if not domain:
-        return "Unknown"
-    
-    clean_domain = normalize_domain(domain)
-    if not clean_domain:
-        return "Unknown"
-    
-    # Check database cache first
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT formal_name FROM domain_names WHERE domain = %s", (clean_domain,))
-        result = cur.fetchone()
-        if result:
-            LOG.debug(f"Using cached formal name for {clean_domain}: {result['formal_name']}")
-            return result["formal_name"]
-    
-    LOG.info(f"No cached formal name found for {clean_domain}, generating with AI...")
-    
-    # Generate with AI
-    formal_name = get_formal_domain_name_from_ai(clean_domain)
-    
-    # Fallback if AI fails
-    if not formal_name:
-        formal_name = clean_domain.replace(".com", "").replace(".org", "").replace(".net", "").title()
-        LOG.info(f"AI failed for {clean_domain}, using fallback: {formal_name}")
-    
-    # Store in database for future use
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO domain_names (domain, formal_name, ai_generated)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (domain) DO UPDATE
-            SET formal_name = EXCLUDED.formal_name, 
-                updated_at = NOW(),
-                ai_generated = EXCLUDED.ai_generated
-        """, (clean_domain, formal_name, formal_name != clean_domain.title()))
-    
-    LOG.info(f"Cached new formal name: {clean_domain} -> {formal_name}")
-    return formal_name
+# Create global instance
+domain_resolver = DomainResolver()
 
-# Replace the title extraction functions with this AI-powered approach
+class FeedManager:
+    @staticmethod
+    def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
+        """Create all feeds for a ticker with proper validation"""
+        feeds = []
+        company_name = metadata.get("company_name", ticker)
+        
+        # Company feeds
+        feeds.extend([
+            {
+                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Google News: {company_name}",
+                "category": "company",
+                "search_keyword": company_name
+            },
+            {
+                "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+                "name": f"Yahoo Finance: {ticker}",
+                "category": "company",
+                "search_keyword": ticker
+            }
+        ])
+        
+        # Industry feeds
+        for keyword in metadata.get("industry_keywords", [])[:3]:
+            feeds.append({
+                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Industry: {keyword}",
+                "category": "industry",
+                "search_keyword": keyword
+            })
+        
+        # Competitor feeds
+        for comp in metadata.get("competitors", [])[:3]:
+            if isinstance(comp, dict):
+                comp_name = comp.get('name', '')
+                comp_ticker = comp.get('ticker')
+                
+                # Validate different from main ticker
+                if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
+                    feeds.extend([
+                        {
+                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                            "name": f"Competitor: {comp_name}",
+                            "category": "competitor",
+                            "search_keyword": comp_name,
+                            "competitor_ticker": comp_ticker
+                        },
+                        {
+                            "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                            "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                            "category": "competitor",
+                            "search_keyword": comp_ticker,
+                            "competitor_ticker": comp_ticker
+                        }
+                    ])
+        
+        return feeds
+    
+    @staticmethod
+    def store_feeds(ticker: str, feeds: List[Dict], retain_days: int = 90) -> List[int]:
+        """Store feeds in database"""
+        feed_ids = []
+        
+        with db() as conn, conn.cursor() as cur:
+            for feed in feeds:
+                cur.execute("""
+                    INSERT INTO source_feed (url, name, ticker, retain_days, active, search_keyword, competitor_ticker)
+                    VALUES (%s, %s, %s, %s, TRUE, %s, %s)
+                    ON CONFLICT (url) DO UPDATE
+                    SET name = EXCLUDED.name, ticker = EXCLUDED.ticker, active = TRUE
+                    RETURNING id;
+                """, (
+                    feed["url"], feed["name"], ticker, retain_days,
+                    feed.get("search_keyword"), feed.get("competitor_ticker")
+                ))
+                result = cur.fetchone()
+                if result:
+                    feed_ids.append(result["id"])
+        
+        return feed_ids
 
-# Add this new function to convert formal names to domains
-def get_or_create_formal_domain_name(domain: str) -> str:
-    """
-    Optimized version that checks cache first, uses common mappings, then AI
-    """
-    if not domain:
-        return "Unknown"
+# Global instance
+feed_manager = FeedManager()
+
+class TickerManager:
+    @staticmethod
+    def get_or_create_metadata(ticker: str, force_refresh: bool = False) -> Dict:
+        """Unified ticker metadata management"""
+        # Check database first
+        if not force_refresh:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ticker, name, industry_keywords, competitors, ai_generated
+                    FROM ticker_config WHERE ticker = %s AND active = TRUE
+                """, (ticker,))
+                config = cur.fetchone()
+                
+                if config:
+                    # Process competitors back to structured format
+                    competitors = []
+                    for comp_str in config.get("competitors", []):
+                        match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                        if match:
+                            competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+                        else:
+                            competitors.append({"name": comp_str, "ticker": None})
+                    
+                    return {
+                        "company_name": config.get("name", ticker),
+                        "industry_keywords": config.get("industry_keywords", []),
+                        "competitors": competitors
+                    }
+        
+        # Generate with AI
+        ai_metadata = generate_ticker_metadata_with_ai(ticker)
+        TickerManager.store_metadata(ticker, ai_metadata)
+        return ai_metadata
     
-    clean_domain = normalize_domain(domain)
-    if not clean_domain:
-        return "Unknown"
-    
-    # Check database cache first
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT formal_name FROM domain_names WHERE domain = %s", (clean_domain,))
-        result = cur.fetchone()
-        if result:
-            return result["formal_name"]
-    
-    # Check common mappings
-    common_formal_names = {
-        'reuters.com': 'Reuters',
-        'bloomberg.com': 'Bloomberg',
-        'wsj.com': 'Wall Street Journal',
-        'ft.com': 'Financial Times',
-        'barrons.com': "Barron's",
-        'cnbc.com': 'CNBC',
-        'marketwatch.com': 'MarketWatch',
-        'finance.yahoo.com': 'Yahoo Finance',
-        'businesswire.com': 'Business Wire',
-        'zacks.com': 'Zacks Investment Research',
-        'seekingalpha.com': 'Seeking Alpha',
-        'tipranks.com': 'TipRanks',
-        'theglobeandmail.com': 'The Globe and Mail',
-        'msn.com': 'MSN',
-        'defensenews.com': 'Defense News',
-        'stocktitan.com': 'Stock Titan'
-    }
-    
-    if clean_domain in common_formal_names:
-        formal_name = common_formal_names[clean_domain]
-        # Cache it
+    @staticmethod
+    def store_metadata(ticker: str, metadata: Dict):
+        """Store ticker metadata in database"""
+        # Convert competitors to storage format
+        competitors_for_db = []
+        for comp in metadata.get("competitors", []):
+            if isinstance(comp, dict):
+                if comp.get('ticker'):
+                    competitors_for_db.append(f"{comp['name']} ({comp['ticker']})")
+                else:
+                    competitors_for_db.append(comp['name'])
+            else:
+                competitors_for_db.append(str(comp))
+        
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO domain_names (domain, formal_name, ai_generated)
-                VALUES (%s, %s, FALSE)
-                ON CONFLICT (domain) DO NOTHING
-            """, (clean_domain, formal_name))
-        LOG.info(f"Used common formal name: {clean_domain} -> {formal_name}")
-        return formal_name
-    
-    # Use AI as last resort
-    if OPENAI_API_KEY:
-        formal_name = get_formal_domain_name_from_ai(clean_domain)
-        if formal_name:
-            return formal_name
-    
-    # Fallback
-    fallback_name = clean_domain.replace(".com", "").replace(".org", "").replace(".net", "").title()
-    
-    # Cache the fallback
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO domain_names (domain, formal_name, ai_generated)
-            VALUES (%s, %s, FALSE)
-            ON CONFLICT (domain) DO NOTHING
-        """, (clean_domain, fallback_name))
-    
-    return fallback_name
+                INSERT INTO ticker_config (ticker, name, industry_keywords, competitors, ai_generated)
+                VALUES (%s, %s, %s, %s, TRUE)
+                ON CONFLICT (ticker) DO UPDATE
+                SET name = EXCLUDED.name, industry_keywords = EXCLUDED.industry_keywords,
+                    competitors = EXCLUDED.competitors, updated_at = NOW()
+            """, (
+                ticker, metadata.get("company_name", ticker),
+                metadata.get("industry_keywords", []), competitors_for_db
+            ))
 
-def extract_source_with_ai_optimized(title: str) -> Tuple[str, Optional[str]]:
-    """
-    Optimized AI source extraction with spam filtering
-    """
-    if not title or not OPENAI_API_KEY:
-        return title, None
-    
-    # Check for non-Latin script first
-    if contains_non_latin_script(title):
-        LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}")
-        return None, None
-    
-    prompt = f"""Extract the source publication from this news title:
+# Global instance  
+ticker_manager = TickerManager()
 
-Title: "{title}"
+def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, Any]:
+    """Streamlined AI metadata generation with single API call"""
+    if not OPENAI_API_KEY:
+        LOG.error("OpenAI API key not configured")
+        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
 
-Rules:
-- Look for source at the end after dash or space
-- Return just the publication name (like "Reuters", "Bloomberg", "Barron's")
-- If no clear source found, return null
+    prompt = f"""For stock ticker "{ticker}", provide:
+1. Full company name (without Inc/Corp unless critical)
+2. Five specific industry keywords (2-3 words each, avoid generic terms)
+3. Three direct public competitors with tickers
 
 JSON format:
-{{"source": "publication name or null", "clean_title": "title without source"}}"""
-    
+{{
+    "company_name": "Company Name",
+    "industry_keywords": ["Keyword1", "Keyword2", "Keyword3", "Keyword4", "Keyword5"],
+    "competitors": [
+        {{"name": "Competitor 1", "ticker": "TICK1"}},
+        {{"name": "Competitor 2", "ticker": "TICK2"}},
+        {{"name": "Competitor 3", "ticker": "TICK3"}}
+    ]
+}}"""
+
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         
         data = {
             "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "Extract news publication sources from titles. Respond with valid JSON only."},
+                {"role": "system", "content": "You are a financial analyst. Provide accurate stock information in valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
-            "max_completion_tokens": 100,
+            "max_tokens": 200,
             "response_format": {"type": "json_object"}
         }
+
+        LOG.info(f"Generating metadata for {ticker} with single AI call")
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+        if response.status_code != 200:
+            LOG.error(f"OpenAI API error: {response.status_code}")
+            return {"industry_keywords": [], "competitors": [], "company_name": ticker}
+
+        result = response.json()
+        content = result["choices"][0]["message"]["content"]
+        metadata = json.loads(content)
         
-        if response.status_code == 200:
-            result = response.json()
-            if 'choices' in result and result['choices']:
-                content = result['choices'][0]['message']['content']
-                
-                try:
-                    parsed = json.loads(content)
-                    source = parsed.get("source")
-                    clean_title = parsed.get("clean_title", title)
-                    
-                    if source == "null" or source == "None":
-                        source = None
-                    
-                    # Spam filtering for extracted source
-                    if source:
-                        source_lower = source.lower()
-                        spam_sources = ["marketbeat", "newser", "khodrobank"]
-                        for spam in spam_sources:
-                            if spam in source_lower:
-                                LOG.info(f"BLOCKED spam source from AI: {source}")
-                                return None, None
-                    
-                    LOG.info(f"AI extracted source: '{source}' from title: '{title[:60]}'")
-                    return clean_title, source
-                    
-                except json.JSONDecodeError as e:
-                    LOG.warning(f"AI response JSON error: {e}")
-                    
-    except Exception as e:
-        LOG.warning(f"AI source extraction failed: {e}")
-    
-    return title, None
-
-def get_cached_domain_for_source(source_name: str) -> Optional[str]:
-    """
-    Check database for existing domain mapping for a source name
-    """
-    with db() as conn, conn.cursor() as cur:
-        # Check if we have this source name mapped to a domain
-        cur.execute("""
-            SELECT domain FROM domain_names 
-            WHERE LOWER(formal_name) = LOWER(%s)
-            LIMIT 1
-        """, (source_name,))
+        # Validate and clean data
+        company_name = metadata.get("company_name", ticker)
+        industry_keywords = [kw.title() for kw in metadata.get("industry_keywords", [])[:5]]
+        competitors = []
         
-        result = cur.fetchone()
-        if result:
-            return result['domain']
+        for comp in metadata.get("competitors", [])[:3]:
+            if isinstance(comp, dict) and comp.get("name") and comp.get("ticker"):
+                if comp["ticker"].upper() != ticker.upper():  # Prevent self-reference
+                    competitors.append(comp)
         
-        # Also check if the source name itself is a domain we know
-        normalized_source = normalize_domain(source_name)
-        if normalized_source:
-            cur.execute("""
-                SELECT formal_name FROM domain_names 
-                WHERE domain = %s
-                LIMIT 1
-            """, (normalized_source,))
-            
-            result = cur.fetchone()
-            if result:
-                return normalized_source
-    
-    return None
-
-def resolve_source_name_to_domain(source_name: str) -> Optional[str]:
-    """
-    Convert source name to domain with minimal AI usage
-    """
-    # First check if it already looks like a domain
-    if '.' in source_name and any(tld in source_name.lower() for tld in ['.com', '.org', '.net', '.co.uk']):
-        return normalize_domain(source_name)
-    
-    # Check common mappings without AI
-    common_mappings = {
-        'reuters': 'reuters.com',
-        'bloomberg': 'bloomberg.com', 
-        'wall street journal': 'wsj.com',
-        'wsj': 'wsj.com',
-        'financial times': 'ft.com',
-        'barrons': 'barrons.com',
-        "barron's": 'barrons.com',
-        'cnbc': 'cnbc.com',
-        'marketwatch': 'marketwatch.com',
-        'yahoo finance': 'finance.yahoo.com',
-        'business wire': 'businesswire.com',
-        'zacks': 'zacks.com',
-        'zacks investment research': 'zacks.com',
-        'seeking alpha': 'seekingalpha.com',
-        'tipranks': 'tipranks.com',
-        'the globe and mail': 'theglobeandmail.com',
-        'globe and mail': 'theglobeandmail.com',
-        'msn': 'msn.com',
-        'microsoft news': 'msn.com',
-        'msn news': 'msn.com',
-        'defense news': 'defensenews.com',
-        'stock titan': 'stocktitan.com'
-    }
-    
-    source_lower = source_name.lower().strip()
-    if source_lower in common_mappings:
-        domain = common_mappings[source_lower]
-        LOG.info(f"Used common mapping: '{source_name}' -> '{domain}'")
-        return domain
-    
-    # Use AI as last resort
-    if OPENAI_API_KEY:
-        return get_domain_from_formal_name_ai_optimized(source_name)
-    
-    # Final fallback - create a reasonable domain-like string
-    clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', source_name).lower().replace(' ', '')
-    if len(clean_name) > 3:
-        return f"{clean_name[:20]}.com"
-    
-    return None
-
-def get_domain_from_formal_name_ai_optimized(formal_name: str) -> Optional[str]:
-    """
-    Use AI to convert formal publication name to domain (optimized)
-    """
-    if not formal_name or not OPENAI_API_KEY:
-        return None
-    
-    prompt = f"""Convert this publication name to its website domain:
-
-Publication: "{formal_name}"
-
-Provide ONLY the domain (like "example.com") without http/https or www.
-
-Examples:
-- "Wall Street Journal" → "wsj.com"
-- "Barron's" → "barrons.com"
-- "TipRanks" → "tipranks.com"
-
-Domain for "{formal_name}":|"""
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
+        LOG.info(f"Generated metadata for {ticker}: {len(industry_keywords)} keywords, {len(competitors)} competitors")
+        return {
+            "company_name": company_name,
+            "industry_keywords": industry_keywords,
+            "competitors": competitors
         }
-        
-        data = {
-            "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "Convert publication names to domains. Provide only the domain name."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_completion_tokens": 30
-        }
-        
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if 'choices' in result and result['choices']:
-                domain = result['choices'][0]['message']['content'].strip()
-                domain = re.sub(r'^["\']|["\']$', '', domain)
-                domain = domain.lower().strip()
-                
-                # Basic validation
-                if '.' in domain and 4 < len(domain) < 50:
-                    LOG.info(f"AI converted publication to domain: '{formal_name}' -> '{domain}'")
-                    return domain
-                    
-    except Exception as e:
-        LOG.error(f"Failed to convert formal name '{formal_name}' to domain: {e}")
-    
-    return None
 
-def cache_source_domain_mapping(source_name: str, domain: str):
-    """
-    Cache the source name to domain mapping in database
-    """
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO domain_names (domain, formal_name, ai_generated)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (domain) DO UPDATE
-            SET formal_name = EXCLUDED.formal_name,
-                updated_at = NOW()
-        """, (normalize_domain(domain), source_name, False))
+    except Exception as e:
+        LOG.error(f"AI metadata generation failed for {ticker}: {e}")
+        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
+
+def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Wrapper for backward compatibility"""
+    return domain_resolver.resolve_url_and_domain(url)
+
+def get_or_create_formal_domain_name(domain: str) -> str:
+    """Wrapper for backward compatibility"""
+    return domain_resolver.get_formal_name(domain)
 
 # ------------------------------------------------------------------------------
 # Feed Processing
@@ -1677,170 +1031,75 @@ def format_timestamp_est(dt: datetime) -> str:
     return f"{date_part}, {time_part} EST"
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """
-    Fixed feed processing with proper Yahoo Finance and Google News handling
-    """
-    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, 
-             "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0, 
-             "google_domains_resolved": 0, "google_unresolved": 0}
+    """Simplified feed processing"""
+    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0}
     
     try:
-        LOG.info(f"Processing feed [{category}]: {feed['name']}")
         parsed = feedparser.parse(feed["url"])
-        LOG.info(f"Feed parsing result: {len(parsed.entries)} entries found")
-        
-        if len(parsed.entries) == 0:
-            LOG.warning(f"No entries found in feed: {feed['url']}")
-            return stats
+        LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries")
         
         for entry in parsed.entries:
             stats["processed"] += 1
             
-            original_url = getattr(entry, "link", None)
-            if not original_url:
-                LOG.debug("Skipping entry with no link")
-                continue
-            
+            url = getattr(entry, "link", None)
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # Check for non-Latin script in title
-            if contains_non_latin_script(title):
+            # Quick spam checks
+            if not url or contains_non_latin_script(title):
                 stats["blocked_non_latin"] += 1
-                LOG.info(f"BLOCKED non-Latin script in title: {title[:50]}")
                 continue
-            
-            # Spam keyword filtering
-            spam_keywords = ["marketbeat", "newser", "khodrobank"]
-            if any(spam in title.lower() for spam in spam_keywords):
-                stats["blocked_spam"] += 1
-                LOG.info(f"BLOCKED spam in title: {title[:50]}")
-                continue
-            
-            # URL resolution with proper error handling
-            try:
-                resolved_result = resolve_google_news_url(original_url)
-                if resolved_result[0] is None:  # Spam detected at URL level
-                    stats["blocked_spam"] += 1
-                    continue
-                    
-                resolved_url, domain, yahoo_source_url = resolved_result
-                if not resolved_url or not domain:
-                    LOG.debug(f"Skipping article with no resolved URL or domain: {title[:50]}")
-                    continue
                 
-            except Exception as e:
-                LOG.error(f"URL resolution failed for {original_url}: {e}")
+            if any(spam in title.lower() for spam in ["marketbeat", "newser", "khodrobank"]):
+                stats["blocked_spam"] += 1
                 continue
             
-            # Handle Google News special processing
-            if domain == "google-news-needs-title-processing":
-                try:
-                    title_result = process_google_news_with_title(resolved_url, title)
-                    if title_result[0] is None:  # Spam detected in title processing
-                        stats["blocked_spam"] += 1
-                        continue
-                    
-                    resolved_url, domain = title_result
-                    
-                    # Track resolution success
-                    if domain and "google-news" not in domain:
-                        stats["google_domains_resolved"] += 1
-                        # Extract and clean the title
-                        clean_title, _ = extract_source_from_title_smart(title)
-                        if clean_title:
-                            title = clean_title
-                    else:
-                        stats["google_unresolved"] += 1
-                        if domain == "google-news-unresolved":
-                            LOG.warning(f"Skipping unresolved Google News: {title[:60]}")
-                            continue
-                            
-                except Exception as e:
-                    LOG.error(f"Google News title processing failed for {title[:50]}: {e}")
-                    stats["google_unresolved"] += 1
-                    continue
+            # URL resolution
+            resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+            if not resolved_url or not domain:
+                stats["blocked_spam"] += 1
+                continue
             
-            # Track Yahoo source extractions
-            if yahoo_source_url:
-                stats["yahoo_sources_found"] += 1
-                LOG.info(f"Yahoo Finance article resolved to original: {resolved_url}")
-            
+            # Check for duplicates
             url_hash = get_url_hash(resolved_url)
-            
-            # Calculate quality score (currently disabled, returns 50.0)
-            quality_score = calculate_quality_score(
-                title, domain, feed["ticker"], description, category, keywords
-            )
-            
-            if quality_score < 1:
-                stats["low_quality"] += 1
-                continue
-            
-            published_at = None
-            if hasattr(entry, "published_parsed"):
-                published_at = parse_datetime(entry.published_parsed)
-            elif hasattr(entry, "updated_parsed"):
-                published_at = parse_datetime(entry.updated_parsed)
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Check for duplicates
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
                         continue
                     
-                    # Use the resolved domain
-                    normalized_domain = normalize_domain(domain)
+                    # Parse publish date
+                    published_at = None
+                    if hasattr(entry, "published_parsed"):
+                        published_at = parse_datetime(entry.published_parsed)
                     
-                    # Determine related ticker and search keyword for better tracking
-                    related_ticker = None
-                    search_keyword = feed.get("search_keyword", "")
-                    
-                    if category == "competitor":
-                        related_ticker = feed.get("competitor_ticker")
-                    
-                    # Insert article with all metadata
+                    # Insert article
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
-                            category, related_ticker, original_source_url, search_keyword
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            category, search_keyword, original_source_url
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 50.0, %s, %s, %s, %s)
                         RETURNING id
                     """, (
-                        original_url, resolved_url, url_hash, title, description,
-                        feed["id"], feed["ticker"], normalized_domain, quality_score, published_at,
-                        category, related_ticker, yahoo_source_url, search_keyword
+                        url, resolved_url, url_hash, title, description,
+                        feed["id"], feed["ticker"], domain, published_at,
+                        category, feed.get("search_keyword"), source_url
                     ))
                     
-                    result = cur.fetchone()
-                    if result:
+                    if cur.fetchone():
                         stats["inserted"] += 1
-                        
-                        # Update domain statistics
-                        upsert_domain_stats(normalized_domain, quality_score, category)
-                        
-                        # Also track original source domain if from Yahoo
-                        if yahoo_source_url:
-                            original_domain = normalize_domain(urlparse(yahoo_source_url).netloc.lower())
-                            if original_domain:
-                                upsert_domain_stats(original_domain, quality_score, f"{category}_original")
-                        
-                        # Get display name for logging
-                        display_name = get_or_create_formal_domain_name(normalized_domain)
-                        
-                        LOG.info(f"Inserted [{category}] from {display_name}: {title[:60]}...")
+                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(domain)}: {title[:60]}...")
                         
             except Exception as e:
-                LOG.error(f"Database insert error for '{title[:50]}': {e}")
+                LOG.error(f"Database error for '{title[:50]}': {e}")
                 continue
                 
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
-    LOG.info(f"Feed {feed['name']} [{category}] completed: {stats}")
     return stats
     
 # ------------------------------------------------------------------------------
@@ -2661,107 +1920,6 @@ def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
         "deleted": deleted_stats
     }
 
-@APP.post("/admin/extract-yahoo-sources")
-def extract_yahoo_sources(request: Request, body: ForceDigestRequest):
-    """Retroactively extract original sources from Yahoo Finance articles in database"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        # Find Yahoo Finance articles without original_source_url
-        if body.tickers:
-            cur.execute("""
-                SELECT id, resolved_url
-                FROM found_url
-                WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
-                    AND original_source_url IS NULL
-                    AND ticker = ANY(%s)
-                ORDER BY found_at DESC
-                LIMIT 100
-            """, (body.tickers,))
-        else:
-            cur.execute("""
-                SELECT id, resolved_url
-                FROM found_url
-                WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
-                    AND original_source_url IS NULL
-                ORDER BY found_at DESC
-                LIMIT 100
-            """)
-        
-        articles = cur.fetchall()
-        
-        updated_count = 0
-        failed_count = 0
-        
-        for article in articles:
-            if article['resolved_url'] and 'finance.yahoo.com' in article['resolved_url']:
-                LOG.info(f"Processing article ID {article['id']}: {article['resolved_url'][:80]}...")
-                
-                original_source = extract_yahoo_finance_source(article['resolved_url'])
-                
-                if original_source:
-                    cur.execute("""
-                        UPDATE found_url
-                        SET original_source_url = %s
-                        WHERE id = %s
-                    """, (original_source, article['id']))
-                    updated_count += 1
-                    LOG.info(f"Updated article {article['id']} with source: {original_source}")
-                else:
-                    failed_count += 1
-                    LOG.warning(f"Could not extract source for article {article['id']}")
-                
-                # Add a small delay to avoid rate limiting
-                time.sleep(0.5)
-    
-    return {
-        "status": "completed",
-        "articles_processed": len(articles),
-        "sources_extracted": updated_count,
-        "extraction_failed": failed_count,
-        "tickers": body.tickers or "all"
-    }
-
-@APP.get("/admin/yahoo-stats")
-def get_yahoo_stats(request: Request):
-    """Get statistics about Yahoo Finance articles and source extraction"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_yahoo_articles,
-                COUNT(original_source_url) as sources_extracted,
-                COUNT(*) - COUNT(original_source_url) as sources_missing
-            FROM found_url
-            WHERE domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%'
-        """)
-        stats = dict(cur.fetchone())
-        
-        # Get recent examples with sources
-        cur.execute("""
-            SELECT ticker, title, resolved_url, original_source_url, found_at
-            FROM found_url
-            WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
-                AND original_source_url IS NOT NULL
-            ORDER BY found_at DESC
-            LIMIT 5
-        """)
-        stats["recent_extractions"] = list(cur.fetchall())
-        
-        # Get articles missing sources
-        cur.execute("""
-            SELECT ticker, title, resolved_url, found_at
-            FROM found_url
-            WHERE (domain LIKE '%yahoo%' OR resolved_url LIKE '%finance.yahoo.com%')
-                AND original_source_url IS NULL
-            ORDER BY found_at DESC
-            LIMIT 5
-        """)
-        stats["missing_sources"] = list(cur.fetchall())
-    
-    return stats
-
 @APP.post("/admin/test-email")
 def test_email(request: Request):
     """Send test email"""
@@ -2901,22 +2059,6 @@ def get_stats(
     
     return stats
 
-@APP.get("/admin/domain-names")
-def list_domain_names(request: Request):
-    """List all cached domain names"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT domain, formal_name, ai_generated, created_at
-            FROM domain_names
-            ORDER BY created_at DESC
-        """)
-        domains = list(cur.fetchall())
-    
-    return {"domains": domains, "total": len(domains)}
-
-# FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/reset-digest-flags")
 def reset_digest_flags(request: Request, body: ResetDigestRequest):
     """Reset sent_in_digest flags for testing"""
@@ -2930,202 +2072,6 @@ def reset_digest_flags(request: Request, body: ResetDigestRequest):
         count = cur.rowcount
     
     return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
-
-@APP.get("/admin/feed-metadata")
-def get_feed_metadata(request: Request, ticker: str = Query(None)):
-    """Get feed metadata including search keywords and competitor tickers"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        if ticker:
-            cur.execute("""
-                SELECT id, url, name, ticker, search_keyword, competitor_ticker,
-                       active, created_at
-                FROM source_feed
-                WHERE ticker = %s
-                ORDER BY name
-            """, (ticker,))
-        else:
-            cur.execute("""
-                SELECT id, url, name, ticker, search_keyword, competitor_ticker,
-                       active, created_at
-                FROM source_feed
-                ORDER BY ticker, name
-            """)
-        feeds = list(cur.fetchall())
-    
-    return {
-        "feeds": feeds,
-        "total": len(feeds),
-        "ticker_filter": ticker
-    }
-
-@APP.get("/admin/search-analytics")
-def get_search_analytics(request: Request, days: int = Query(default=7)):
-    """Get analytics on search keywords and their performance"""
-    require_admin(request)
-    
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    
-    with db() as conn, conn.cursor() as cur:
-        # Analytics by search keyword
-        cur.execute("""
-            SELECT 
-                search_keyword,
-                category,
-                COUNT(*) as article_count,
-                AVG(quality_score) as avg_quality,
-                COUNT(DISTINCT domain) as unique_sources
-            FROM found_url
-            WHERE found_at >= %s 
-                AND search_keyword IS NOT NULL
-            GROUP BY search_keyword, category
-            ORDER BY article_count DESC
-        """, (cutoff,))
-        keyword_stats = list(cur.fetchall())
-        
-        # Analytics by related ticker (competitors)
-        cur.execute("""
-            SELECT 
-                related_ticker,
-                ticker as main_ticker,
-                COUNT(*) as article_count,
-                AVG(quality_score) as avg_quality
-            FROM found_url
-            WHERE found_at >= %s 
-                AND related_ticker IS NOT NULL
-            GROUP BY related_ticker, ticker
-            ORDER BY article_count DESC
-        """, (cutoff,))
-        competitor_stats = list(cur.fetchall())
-        
-        # Source distribution
-        cur.execute("""
-            SELECT 
-                CASE 
-                    WHEN domain LIKE '%yahoo%' THEN 'Yahoo Finance'
-                    WHEN domain LIKE '%google%' THEN 'Google News'
-                    ELSE 'Other'
-                END as source_type,
-                category,
-                COUNT(*) as article_count
-            FROM found_url
-            WHERE found_at >= %s
-            GROUP BY source_type, category
-            ORDER BY article_count DESC
-        """, (cutoff,))
-        source_distribution = list(cur.fetchall())
-    
-    return {
-        "period_days": days,
-        "keyword_performance": keyword_stats,
-        "competitor_tracking": competitor_stats,
-        "source_distribution": source_distribution
-    }  # Make sure this ends cleanly
-            
-@APP.get("/admin/domain-stats")
-def get_domain_statistics(request: Request, limit: int = Query(default=50)):
-    """Get domain statistics for quality scoring improvements"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT domain, total_articles, avg_quality_score,
-                   first_seen, last_seen, category_counts,
-                   CASE WHEN domain = ANY(%s) THEN 'quality'
-                        WHEN domain = ANY(%s) THEN 'spam'
-                        ELSE 'neutral' END as classification
-            FROM domain_stats 
-            ORDER BY total_articles DESC
-            LIMIT %s
-        """, (list(QUALITY_DOMAINS), list(SPAM_DOMAINS), limit))
-        
-        stats = list(cur.fetchall())
-        
-        # Add some aggregate statistics
-        cur.execute("""
-            SELECT COUNT(*) as total_domains,
-                   AVG(total_articles) as avg_articles_per_domain,
-                   AVG(avg_quality_score) as overall_avg_quality
-            FROM domain_stats
-        """)
-        
-        summary = dict(cur.fetchone())
-    
-    return {
-        "summary": summary,
-        "domains": stats,
-        "quality_domains_tracked": len([d for d in stats if d['classification'] == 'quality']),
-        "spam_domains_tracked": len([d for d in stats if d['classification'] == 'spam'])
-    }
-
-@APP.get("/admin/resolved-domains")
-def get_resolved_domains(request: Request, ticker: str = Query(None)):
-    """Get resolved domains with formal names for scoring"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        base_query = """
-            SELECT 
-                f.domain as raw_domain,
-                dn.formal_name,
-                f.category,
-                COUNT(*) as article_count,
-                AVG(f.quality_score) as avg_quality,
-                MAX(f.found_at) as last_seen
-            FROM found_url f
-            LEFT JOIN domain_names dn ON dn.domain = f.domain
-            WHERE f.domain IS NOT NULL 
-              AND f.domain != 'google-news-unresolved'
-        """
-        
-        params = []
-        if ticker:
-            base_query += " AND f.ticker = %s"
-            params.append(ticker)
-        
-        base_query += """
-            GROUP BY f.domain, dn.formal_name, f.category
-            ORDER BY article_count DESC
-        """
-        
-        cur.execute(base_query, params)
-        results = list(cur.fetchall())
-        
-        # Process results to ensure all domains have formal names
-        enhanced_results = []
-        for row in results:
-            if not row['formal_name']:
-                # Generate formal name if missing
-                formal_name = get_or_create_formal_domain_name(row['raw_domain'])
-                row = dict(row)
-                row['formal_name'] = formal_name
-            
-            enhanced_results.append(row)
-    
-    return {
-        "domains": enhanced_results,
-        "ticker_filter": ticker,
-        "total_domains": len(set(r['raw_domain'] for r in enhanced_results))
-    }
-
-@APP.post("/admin/cache-domain-names")
-def cache_domain_names_endpoint(request: Request, limit: int = Query(default=50)):
-    """Bulk cache formal names for domains that don't have them yet"""
-    require_admin(request)
-    
-    if not OPENAI_API_KEY:
-        return {"status": "error", "message": "OpenAI API key not configured"}
-    
-    stats = cache_missing_domain_names(limit)
-    
-    return {
-        "status": "completed",
-        "domains_processed": stats["processed"],
-        "domains_cached": stats["cached"],
-        "domains_failed": stats["failed"],
-        "message": f"Cached formal names for {stats['cached']} out of {stats['processed']} domains"
-    }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

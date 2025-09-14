@@ -303,6 +303,19 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
             """)
+
+            # ADD THIS: Create domain statistics table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS domain_stats (
+                    domain VARCHAR(255) PRIMARY KEY,
+                    total_articles INT DEFAULT 0,
+                    avg_quality_score FLOAT DEFAULT 50.0,
+                    first_seen TIMESTAMP DEFAULT NOW(),
+                    last_seen TIMESTAMP DEFAULT NOW(),
+                    category_counts JSONB DEFAULT '{}',
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
             
             # ENHANCED: Add search metadata columns to found_url if not exists
             cur.execute("""
@@ -387,6 +400,9 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_search_keyword ON found_url(search_keyword);
                 CREATE INDEX IF NOT EXISTS idx_source_feed_search_keyword ON source_feed(search_keyword);
                 CREATE INDEX IF NOT EXISTS idx_source_feed_competitor_ticker ON source_feed(competitor_ticker);
+                CREATE INDEX IF NOT EXISTS idx_domain_stats_total_articles ON domain_stats(total_articles DESC);
+                CREATE INDEX IF NOT EXISTS idx_domain_stats_avg_quality ON domain_stats(avg_quality_score DESC);
+                CREATE INDEX IF NOT EXISTS idx_domain_stats_last_seen ON domain_stats(last_seen DESC);
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
@@ -487,6 +503,86 @@ def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> D
         "industry": metadata["industry_keywords"],
         "competitors": metadata["competitors"]
     }
+
+# ADD THE NEW DOMAIN TRACKING FUNCTIONS HERE:
+
+def normalize_domain(domain: str) -> str:
+    """Normalize domain for consistent storage"""
+    if not domain:
+        return None
+    
+    # Convert to lowercase and remove common prefixes
+    normalized = domain.lower().strip()
+    
+    # Remove www. prefix for consistency (except for specific cases)
+    if normalized.startswith('www.') and normalized != 'www.':
+        normalized = normalized[4:]
+    
+    # Remove trailing slashes
+    normalized = normalized.rstrip('/')
+    
+    return normalized
+
+def upsert_domain_stats(domain: str, quality_score: float, category: str = "company"):
+    """Update domain statistics when a new article is added"""
+    if not domain:
+        return
+        
+    normalized_domain = normalize_domain(domain)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Check if domain exists
+        cur.execute("SELECT total_articles, category_counts FROM domain_stats WHERE domain = %s", (normalized_domain,))
+        existing = cur.fetchone()
+        
+        if existing:
+            # Update existing domain stats
+            new_total = existing['total_articles'] + 1
+            category_counts = existing.get('category_counts') or {}
+            category_counts[category] = category_counts.get(category, 0) + 1
+            
+            cur.execute("""
+                UPDATE domain_stats 
+                SET total_articles = %s,
+                    avg_quality_score = (
+                        (avg_quality_score * %s + %s) / %s
+                    ),
+                    last_seen = NOW(),
+                    category_counts = %s,
+                    updated_at = NOW()
+                WHERE domain = %s
+            """, (new_total, existing['total_articles'], quality_score, new_total, 
+                  json.dumps(category_counts), normalized_domain))
+        else:
+            # Insert new domain
+            category_counts = {category: 1}
+            cur.execute("""
+                INSERT INTO domain_stats (domain, total_articles, avg_quality_score, 
+                                        first_seen, last_seen, category_counts)
+                VALUES (%s, 1, %s, NOW(), NOW(), %s)
+            """, (normalized_domain, quality_score, json.dumps(category_counts)))
+
+def get_domain_stats(domain: str = None) -> List[Dict]:
+    """Get domain statistics for scoring improvements"""
+    with db() as conn, conn.cursor() as cur:
+        if domain:
+            cur.execute("""
+                SELECT domain, total_articles, avg_quality_score, 
+                       first_seen, last_seen, category_counts
+                FROM domain_stats 
+                WHERE domain = %s
+            """, (normalize_domain(domain),))
+            result = cur.fetchone()
+            return dict(result) if result else None
+        else:
+            cur.execute("""
+                SELECT domain, total_articles, avg_quality_score,
+                       first_seen, last_seen, category_counts
+                FROM domain_stats 
+                ORDER BY total_articles DESC
+                LIMIT 100
+            """)
+            return list(cur.fetchall())
 
 def build_feed_urls(ticker: str, keywords: Dict[str, List[str]]) -> List[Dict]:
     """Build feed URLs for different categories - FIXED Yahoo Finance ticker feeds"""
@@ -865,13 +961,14 @@ def test_yahoo_extraction_detailed(request: Request):
     return result
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Resolve URLs - simplified version"""
+    """Resolve URLs - simplified version with normalized domain output"""
     original_source_url = None
     
     try:
         # For Google News URLs, return as-is
         if "news.google.com" in url:
-            return url, "news.google.com", None
+            normalized_domain = normalize_domain("news.google.com")
+            return url, normalized_domain, None
         
         # For direct Google redirect URLs
         if "google.com/url" in url:
@@ -880,10 +977,13 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
             if 'url' in params:
                 actual_url = params['url'][0]
                 domain = urlparse(actual_url).netloc.lower()
+                normalized_domain = normalize_domain(domain)
                 
-                # Spam check
+                # Spam check with normalized domain
                 for spam_domain in SPAM_DOMAINS:
-                    if spam_domain.replace("www.", "").lower() in domain:
+                    spam_clean = normalize_domain(spam_domain)
+                    if spam_clean and spam_clean in normalized_domain:
+                        LOG.info(f"BLOCKED spam domain in redirect: {normalized_domain} (matched: {spam_clean})")
                         return None, None, None
                 
                 # Yahoo Finance source extraction
@@ -891,23 +991,28 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
                     original_source_url = extract_yahoo_finance_source(actual_url)
                     if original_source_url:
                         original_domain = urlparse(original_source_url).netloc.lower()
+                        original_normalized_domain = normalize_domain(original_domain)
+                        
                         # Spam check on original source
                         for spam_domain in SPAM_DOMAINS:
-                            if spam_domain.replace("www.", "").lower() in domain:
-                                LOG.info(f"BLOCKED spam domain in redirect: {domain} (matched: {spam_clean})")
+                            spam_clean = normalize_domain(spam_domain)
+                            if spam_clean and spam_clean in original_normalized_domain:
+                                LOG.info(f"BLOCKED spam domain in original source: {original_normalized_domain} (matched: {spam_clean})")
                                 return None, None, None
-                        return original_source_url, original_domain, actual_url
                         
-                return actual_url, domain, None
+                        return original_source_url, original_normalized_domain, actual_url
+                        
+                return actual_url, normalized_domain, None
         
         # Direct URL handling
         domain = urlparse(url).netloc.lower()
+        normalized_domain = normalize_domain(domain)
         
-        # Spam check
+        # Spam check with normalized domain
         for spam_domain in SPAM_DOMAINS:
-            spam_clean = spam_domain.replace("www.", "").lower()
-            if spam_clean in domain:
-                LOG.info(f"BLOCKED spam domain: {domain} (matched: {spam_clean})")
+            spam_clean = normalize_domain(spam_domain)
+            if spam_clean and spam_clean in normalized_domain:
+                LOG.info(f"BLOCKED spam domain: {normalized_domain} (matched: {spam_clean})")
                 return None, None, None
         
         # Yahoo Finance handling
@@ -915,13 +1020,26 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
             original_source_url = extract_yahoo_finance_source(url)
             if original_source_url:
                 original_domain = urlparse(original_source_url).netloc.lower()
+                original_normalized_domain = normalize_domain(original_domain)
+                
                 # Spam check on original source
                 for spam_domain in SPAM_DOMAINS:
-                    if spam_domain.replace("www.", "").lower() in original_domain:
+                    spam_clean = normalize_domain(spam_domain)
+                    if spam_clean and spam_clean in original_normalized_domain:
+                        LOG.info(f"BLOCKED spam domain in Yahoo original source: {original_normalized_domain} (matched: {spam_clean})")
                         return None, None, None
-                return original_source_url, original_domain, url
                 
-        return url, domain, None
+                return original_source_url, original_normalized_domain, url
+                
+        return url, normalized_domain, None
+        
+    except Exception as e:
+        LOG.warning(f"Failed to resolve URL {url}: {e}")
+        if url:
+            fallback_domain = urlparse(url).netloc.lower() if url else None
+            normalized_fallback = normalize_domain(fallback_domain) if fallback_domain else None
+            return url, normalized_fallback, None
+        return None, None, None
         
     except Exception as e:
         LOG.warning(f"Failed to resolve URL {url}: {e}")
@@ -1258,7 +1376,7 @@ def format_timestamp_est(dt: datetime) -> str:
     return f"{date_part}, {time_part} EST"
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Process a single feed and store articles with enhanced metadata and non-Latin script filtering"""
+    """Process a single feed and store articles with enhanced metadata, non-Latin script filtering, and domain tracking"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "low_quality": 0, "blocked_spam": 0, "blocked_non_latin": 0, "yahoo_sources_found": 0}
     
     try:
@@ -1293,7 +1411,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             title = getattr(entry, "title", "") or "No Title"
             description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
             
-            # FIX #6: Check for non-Latin script in title during ingestion
+            # Check for non-Latin script in title during ingestion
             if contains_non_latin_script(title):
                 stats["blocked_non_latin"] += 1
                 LOG.info(f"BLOCKED non-Latin script in title during ingestion: {title[:50]}")
@@ -1330,6 +1448,9 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         stats["duplicates"] += 1
                         continue
                     
+                    # Normalize domain before storing
+                    normalized_domain = normalize_domain(domain)
+                    
                     # Determine related ticker and search keyword for better tracking
                     related_ticker = None
                     search_keyword = feed.get("search_keyword", "")
@@ -1365,16 +1486,27 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         RETURNING id
                     """, (
                         original_url, resolved_url, url_hash, title, description,
-                        feed["id"], feed["ticker"], domain, quality_score, published_at,
+                        feed["id"], feed["ticker"], normalized_domain, quality_score, published_at,
                         category, related_ticker, yahoo_source_url, search_keyword
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
+                        
+                        # Update domain statistics
+                        upsert_domain_stats(normalized_domain, quality_score, category)
+                        
+                        # Also track original source domain if from Yahoo
+                        if yahoo_source_url:
+                            original_domain = normalize_domain(urlparse(yahoo_source_url).netloc.lower())
+                            if original_domain:
+                                upsert_domain_stats(original_domain, quality_score, f"{category}_original")
+                        
                         source_note = f" (source: {urlparse(yahoo_source_url).netloc})" if yahoo_source_url else ""
                         keyword_note = f" [keyword: {search_keyword}]" if search_keyword else ""
                         ticker_note = f" [related: {related_ticker}]" if related_ticker else ""
-                        LOG.info(f"Inserted [{category}]{source_note}{keyword_note}{ticker_note}: {title[:60]}...")
+                        domain_note = f" [domain: {normalized_domain}]"
+                        LOG.info(f"Inserted [{category}]{source_note}{keyword_note}{ticker_note}{domain_note}: {title[:60]}...")
                         
             except Exception as e:
                 LOG.error(f"Database insert error for '{title[:50]}': {e}")
@@ -2563,6 +2695,41 @@ def get_search_analytics(request: Request, days: int = Query(default=7)):
         "source_distribution": source_distribution
     }  # Make sure this ends cleanly
             
+@APP.get("/admin/domain-stats")
+def get_domain_statistics(request: Request, limit: int = Query(default=50)):
+    """Get domain statistics for quality scoring improvements"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT domain, total_articles, avg_quality_score,
+                   first_seen, last_seen, category_counts,
+                   CASE WHEN domain = ANY(%s) THEN 'quality'
+                        WHEN domain = ANY(%s) THEN 'spam'
+                        ELSE 'neutral' END as classification
+            FROM domain_stats 
+            ORDER BY total_articles DESC
+            LIMIT %s
+        """, (list(QUALITY_DOMAINS), list(SPAM_DOMAINS), limit))
+        
+        stats = list(cur.fetchall())
+        
+        # Add some aggregate statistics
+        cur.execute("""
+            SELECT COUNT(*) as total_domains,
+                   AVG(total_articles) as avg_articles_per_domain,
+                   AVG(avg_quality_score) as overall_avg_quality
+            FROM domain_stats
+        """)
+        
+        summary = dict(cur.fetchone())
+    
+    return {
+        "summary": summary,
+        "domains": stats,
+        "quality_domains_tracked": len([d for d in stats if d['classification'] == 'quality']),
+        "spam_domains_tracked": len([d for d in stats if d['classification'] == 'spam'])
+    }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

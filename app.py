@@ -413,14 +413,47 @@ def get_url_hash(url: str) -> str:
     return hashlib.md5(url_clean.encode()).hexdigest()
 
 def normalize_domain(domain: str) -> str:
-    """Normalize domain for consistent storage"""
+    """Enhanced domain normalization for consistent storage"""
     if not domain:
         return None
     
-    normalized = domain.lower().strip()
+    # Handle special consolidation cases first
+    domain_mappings = {
+        'ca.finance.yahoo.com': 'finance.yahoo.com',
+        'uk.finance.yahoo.com': 'finance.yahoo.com', 
+        'sg.finance.yahoo.com': 'finance.yahoo.com',
+        'www.finance.yahoo.com': 'finance.yahoo.com',
+        'yahoo.com/finance': 'finance.yahoo.com',
+        'www.bloomberg.com': 'bloomberg.com',
+        'www.reuters.com': 'reuters.com',
+        'www.wsj.com': 'wsj.com',
+        'www.cnbc.com': 'cnbc.com',
+        'www.marketwatch.com': 'marketwatch.com',
+        'www.seekingalpha.com': 'seekingalpha.com',
+        'www.fool.com': 'fool.com',
+        'www.tipranks.com': 'tipranks.com',
+        'www.benzinga.com': 'benzinga.com',
+        'www.barrons.com': 'barrons.com'
+    }
+    
+    # Check for direct mapping first
+    domain_lower = domain.lower().strip()
+    if domain_lower in domain_mappings:
+        return domain_mappings[domain_lower]
+    
+    # Standard normalization
+    normalized = domain_lower
     if normalized.startswith('www.') and normalized != 'www.':
         normalized = normalized[4:]
-    return normalized.rstrip('/')
+    
+    # Remove trailing slash
+    normalized = normalized.rstrip('/')
+    
+    # Final check for any remaining mappings after normalization
+    if normalized in domain_mappings:
+        return domain_mappings[normalized]
+    
+    return normalized
 
 class DomainResolver:
     def __init__(self):
@@ -442,6 +475,37 @@ class DomainResolver:
             'barrons.com': "Barron's",
             'ft.com': 'Financial Times'
         }
+
+    def _map_publication_to_domain(self, publication_name):
+        """Map publication names to actual domains"""
+        publication_to_domain = {
+            'reuters': 'reuters.com',
+            'bloomberg': 'bloomberg.com', 
+            'wall street journal': 'wsj.com',
+            'wsj': 'wsj.com',
+            'financial times': 'ft.com',
+            'cnbc': 'cnbc.com',
+            'forbes': 'forbes.com',
+            'business insider': 'businessinsider.com',
+            'the motley fool': 'fool.com',
+            'seeking alpha': 'seekingalpha.com',
+            'marketwatch': 'marketwatch.com',
+            'barrons': 'barrons.com',
+            'yahoo finance': 'finance.yahoo.com',
+            'tipranks': 'tipranks.com',
+            'benzinga': 'benzinga.com',
+            'nasdaq': 'nasdaq.com',
+            'thestreet': 'thestreet.com',
+            'morningstar': 'morningstar.com',
+            'zacks investment research': 'zacks.com',
+            'stocktwits': 'stocktwits.com',
+            'globenewswire': 'globenewswire.com',
+            'business wire': 'businesswire.com',
+            'pr newswire': 'prnewswire.com'
+        }
+        
+        pub_lower = publication_name.lower().strip()
+        return publication_to_domain.get(pub_lower, f"unknown-{pub_lower.replace(' ', '-')}")
     
     def resolve_url_and_domain(self, url, title=None):
         """Single method to resolve any URL to (final_url, domain, source_url)"""
@@ -498,7 +562,7 @@ class DomainResolver:
         return fallback
     
     def _handle_google_news(self, url, title):
-        """Handle Google News URL resolution"""
+        """Handle Google News URL resolution - FIXED to return actual domains"""
         # Try direct resolution first
         try:
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
@@ -507,9 +571,11 @@ class DomainResolver:
             final_url = response.url
             
             if final_url != url and "news.google.com" not in final_url:
-                domain = normalize_domain(urlparse(final_url).netloc.lower())
-                if not self._is_spam_domain(domain):
-                    return final_url, domain, None
+                # Extract actual domain from resolved URL
+                parsed_domain = urlparse(final_url).netloc.lower()
+                normalized_domain = normalize_domain(parsed_domain)
+                if not self._is_spam_domain(normalized_domain):
+                    return final_url, normalized_domain, None  # Return actual domain
         except:
             pass
         
@@ -517,7 +583,10 @@ class DomainResolver:
         if title and not contains_non_latin_script(title):
             clean_title, source = extract_source_from_title_smart(title)
             if source and not self._is_spam_source(source):
-                return url, normalize_domain(source), None
+                # FIXED: Don't return the publication name as domain
+                # Instead, try to map publication name to actual domain
+                source_domain = self._map_publication_to_domain(source)
+                return url, source_domain, None
         
         return url, "google-news-unresolved", None
     
@@ -827,6 +896,93 @@ def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Opt
 def get_or_create_formal_domain_name(domain: str) -> str:
     """Wrapper for backward compatibility"""
     return domain_resolver.get_formal_name(domain)
+
+def cleanup_domain_data():
+    """One-time script to clean up existing domain data"""
+    
+    # Mapping of publication names to actual domains
+    cleanup_mappings = {
+        'yahoo finance': 'finance.yahoo.com',
+        'reuters': 'reuters.com',
+        'bloomberg': 'bloomberg.com',
+        'cnbc': 'cnbc.com',
+        'forbes': 'forbes.com',
+        'business insider': 'businessinsider.com',
+        'the motley fool': 'fool.com',
+        'seeking alpha': 'seekingalpha.com',
+        'marketwatch': 'marketwatch.com',
+        'nasdaq': 'nasdaq.com',
+        'thestreet': 'thestreet.com',
+        'benzinga': 'benzinga.com',
+        'tipranks': 'tipranks.com',
+        'morningstar': 'morningstar.com',
+        'investor\'s business daily': 'investors.com',
+        'zacks investment research': 'zacks.com',
+        'stocktwits': 'stocktwits.com',
+        'globenewswire': 'globenewswire.com',
+        'business wire': 'businesswire.com',
+        'pr newswire': 'prnewswire.com',
+        'financialcontent': 'financialcontent.com',
+        'insider monkey': 'insidermonkey.com',
+        'gurufocus': 'gurufocus.com',
+        'american banker': 'americanbanker.com',
+        'thinkadvisor': 'thinkadvisor.com',
+        'investmentnews': 'investmentnews.com',
+        'the globe and mail': 'theglobeandmail.com',
+        'financial news london': 'fnlondon.com',
+        'steel market update': 'steelmarketupdate.com',
+        'times of india': 'timesofindia.indiatimes.com',
+        'business standard': 'business-standard.com',
+        'fortune india': 'fortuneindia.com',
+        'the new indian express': 'newindianexpress.com',
+        'quiver quantitative': 'quiverquant.com',
+        'stock titan': 'stocktitan.net',
+        'modern healthcare': 'modernhealthcare.com'
+    }
+    
+    with db() as conn, conn.cursor() as cur:
+        total_updated = 0
+        
+        for old_domain, new_domain in cleanup_mappings.items():
+            cur.execute("""
+                UPDATE found_url 
+                SET domain = %s 
+                WHERE domain = %s
+            """, (new_domain, old_domain))
+            
+            updated_count = cur.rowcount
+            total_updated += updated_count
+            
+            if updated_count > 0:
+                LOG.info(f"Updated {updated_count} records: '{old_domain}' -> '{new_domain}'")
+        
+        # Handle Yahoo regional consolidation
+        cur.execute("""
+            UPDATE found_url 
+            SET domain = 'finance.yahoo.com' 
+            WHERE domain IN ('ca.finance.yahoo.com', 'uk.finance.yahoo.com', 'sg.finance.yahoo.com')
+        """)
+        yahoo_updated = cur.rowcount
+        total_updated += yahoo_updated
+        
+        if yahoo_updated > 0:
+            LOG.info(f"Consolidated {yahoo_updated} Yahoo regional domains to finance.yahoo.com")
+        
+        # Handle duplicate benzinga entries
+        cur.execute("""
+            UPDATE found_url 
+            SET domain = 'benzinga.com' 
+            WHERE domain = 'benzinga'
+        """)
+        benzinga_updated = cur.rowcount
+        total_updated += benzinga_updated
+        
+        if benzinga_updated > 0:
+            LOG.info(f"Consolidated {benzinga_updated} benzinga entries to benzinga.com")
+        
+        LOG.info(f"Total domain cleanup: {total_updated} records updated")
+        
+        return total_updated
 
 # ------------------------------------------------------------------------------
 # Feed Processing
@@ -1993,6 +2149,19 @@ def reset_digest_flags(request: Request, body: ResetDigestRequest):
         count = cur.rowcount
     
     return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
+
+@APP.post("/admin/cleanup-domains")
+def admin_cleanup_domains(request: Request):
+    """One-time cleanup of domain data"""
+    require_admin(request)
+    
+    updated_count = cleanup_domain_data()
+    
+    return {
+        "status": "completed",
+        "records_updated": updated_count,
+        "message": "Domain data has been cleaned up. Publication names converted to actual domains."
+    }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

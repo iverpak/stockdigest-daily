@@ -1187,8 +1187,8 @@ def _format_article_html(article: Dict, category: str) -> str:
         description = re.sub(r'\s+', ' ', description).strip()  # Normalize whitespace
         
         # Truncate if too long
-        if len(description) > 150:
-            description = description[:150] + "..."
+        if len(description) > 500:
+            description = description[:500] + "..."
         
         # Escape for HTML output
         description = html.escape(description)

@@ -2003,6 +2003,223 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     
     return "".join(html)
 
+# Missing function 1: Enhanced digest fetching
+def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
+    """Fetch categorized articles for digest with content scraping data"""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    
+    days = int(hours / 24) if hours >= 24 else 0
+    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
+    
+    with db() as conn, conn.cursor() as cur:
+        # Enhanced query to include content scraping fields
+        if tickers:
+            cur.execute("""
+                SELECT 
+                    f.url, f.resolved_url, f.title, f.description,
+                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword, f.ai_impact, f.ai_reasoning,
+                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
+                FROM found_url f
+                WHERE f.found_at >= %s
+                    AND f.quality_score >= 15
+                    AND NOT f.sent_in_digest
+                    AND f.ticker = ANY(%s)
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+            """, (cutoff, tickers))
+        else:
+            cur.execute("""
+                SELECT 
+                    f.url, f.resolved_url, f.title, f.description,
+                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword, f.ai_impact, f.ai_reasoning,
+                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
+                FROM found_url f
+                WHERE f.found_at >= %s
+                    AND f.quality_score >= 15
+                    AND NOT f.sent_in_digest
+                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+            """, (cutoff,))
+        
+        articles_by_ticker = {}
+        for row in cur.fetchall():
+            ticker = row["ticker"] or "UNKNOWN"
+            category = row["category"] or "company"
+            
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = {}
+            if category not in articles_by_ticker[ticker]:
+                articles_by_ticker[ticker][category] = []
+            
+            articles_by_ticker[ticker][category].append(dict(row))
+        
+        # Mark articles as sent
+        if tickers:
+            cur.execute("""
+                UPDATE found_url
+                SET sent_in_digest = TRUE
+                WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s)
+            """, (cutoff, tickers))
+        else:
+            cur.execute("""
+                UPDATE found_url
+                SET sent_in_digest = TRUE
+                WHERE found_at >= %s AND quality_score >= 15
+            """, (cutoff,))
+    
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles_by_ticker.values()
+    )
+    
+    if total_articles == 0:
+        return {
+            "status": "no_articles",
+            "message": f"No new quality articles found in the last {period_label}",
+            "tickers": tickers or "all"
+        }
+    
+    html = build_digest_html_with_content(articles_by_ticker, days if days > 0 else 1)
+    
+    tickers_str = ', '.join(articles_by_ticker.keys())
+    subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
+    success = send_email(subject, html)
+    
+    # Count by category and content scraping
+    category_counts = {"company": 0, "industry": 0, "competitor": 0}
+    content_stats = {"scraped": 0, "failed": 0, "skipped": 0}
+    
+    for ticker_cats in articles_by_ticker.values():
+        for cat, arts in ticker_cats.items():
+            category_counts[cat] = category_counts.get(cat, 0) + len(arts)
+            for art in arts:
+                if art.get('scraped_content'):
+                    content_stats['scraped'] += 1
+                elif art.get('scraping_failed'):
+                    content_stats['failed'] += 1
+                else:
+                    content_stats['skipped'] += 1
+    
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "by_category": category_counts,
+        "content_scraping_stats": content_stats,
+        "recipient": DIGEST_TO
+    }
+
+# Missing function 2: Enhanced digest HTML builder
+def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
+    """Build HTML email digest using the enhanced article formatting with content indicators"""
+    # Get ticker metadata for display
+    ticker_metadata = {}
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        if config:
+            ticker_metadata[ticker] = {
+                "industry_keywords": config.get("industry_keywords", []),
+                "competitors": config.get("competitors", [])
+            }
+    
+    # Use the new timestamp formatting
+    current_time_est = format_timestamp_est(datetime.now(timezone.utc))
+    
+    html = [
+        "<html><head><style>",
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+        ".article-header { margin-bottom: 5px; }",
+        ".article-content { }",
+        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+        ".company { border-left-color: #27ae60; }",
+        ".industry { border-left-color: #f39c12; }",
+        ".competitor { border-left-color: #e74c3c; }",
+        ".meta { color: #95a5a6; font-size: 11px; }",
+        ".score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+        ".high-score { background-color: #d4edda; color: #155724; }",
+        ".med-score { background-color: #fff3cd; color: #856404; }",
+        ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
+        ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
+        ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
+        "a { color: #2980b9; text-decoration: none; }",
+        "a:hover { text-decoration: underline; }",
+        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+        "</style></head><body>",
+        f"<h1>Stock Intelligence Report - Content Scraping Test</h1>",
+        f"<div class='summary'>",
+        f"<strong>Report Period:</strong> Last {period_days} days<br>",
+        f"<strong>Generated:</strong> {current_time_est}<br>",
+        f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
+        f"<strong>Mode:</strong> Content Scraping Test (10 articles max, AI scoring disabled)",
+        "</div>"
+    ]
+    
+    for ticker, categories in articles_by_ticker.items():
+        total_articles = sum(len(articles) for articles in categories.values())
+        
+        html.append(f"<div class='ticker-section'>")
+        html.append(f"<h2>{ticker} - {total_articles} Total Articles</h2>")
+        
+        # Add keyword information with improved styling
+        if ticker in ticker_metadata:
+            metadata = ticker_metadata[ticker]
+            html.append("<div class='keywords'>")
+            html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
+            if metadata.get("industry_keywords"):
+                industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
+                html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
+            if metadata.get("competitors"):
+                competitor_badges = [f'<span class="competitor-badge">🏢 {comp}</span>' for comp in metadata['competitors']]
+                html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}")
+            html.append("</div>")
+        
+        # Company News Section
+        if "company" in categories and categories["company"]:
+            html.append(f"<h3>Company News ({len(categories['company'])} articles)</h3>")
+            for article in categories["company"][:50]:
+                html.append(_format_article_html_with_content(article, "company"))
+        
+        # Industry News Section
+        if "industry" in categories and categories["industry"]:
+            html.append(f"<h3>Industry & Market News ({len(categories['industry'])} articles)</h3>")
+            for article in categories["industry"][:50]:
+                html.append(_format_article_html_with_content(article, "industry"))
+        
+        # Competitor News Section
+        if "competitor" in categories and categories["competitor"]:
+            html.append(f"<h3>Competitor Intelligence ({len(categories['competitor'])} articles)</h3>")
+            for article in categories["competitor"][:50]:
+                html.append(_format_article_html_with_content(article, "competitor"))
+        
+        html.append("</div>")
+    
+    html.append("""
+        <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
+            <strong>About This Test Report:</strong><br>
+            • Content Scraping Test: Yahoo Finance resolved URLs are scraped for full article content<br>
+            • [SCRAPED] indicator shows articles where full content was extracted<br>
+            • [DESC] indicator shows fallback to original description<br>
+            • AI Quality Scoring temporarily disabled to focus on content extraction<br>
+            • Limited to first 10 articles per feed run for safety testing<br>
+            • Domain deduplication: each domain scraped max once per run<br>
+            • 3-7 second delays between scraping requests for politeness<br>
+            • Only company-category Yahoo Finance articles are scraped for now
+        </div>
+        </body></html>
+    """)
+    
+    return "".join(html)
+
 def _format_article_html(article: Dict, category: str) -> str:
     """Format article HTML with AI analysis display"""
     import html
@@ -2474,102 +2691,12 @@ def cron_digest(
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers for digest")
 ):
-    """Generate and send email digest - ENHANCED with AI analysis"""
+    """Generate and send email digest with content scraping data"""
     require_admin(request)
     ensure_schema()
     
-    hours = minutes / 60
-    days = int(hours / 24) if hours >= 24 else 0
-    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
-    
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
-    with db() as conn, conn.cursor() as cur:
-        if tickers:
-            cur.execute("""
-                SELECT 
-                    f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning
-                FROM found_url f
-                WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
-                    AND NOT f.sent_in_digest
-                    AND f.ticker = ANY(%s)
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
-            """, (cutoff, tickers))
-        else:
-            cur.execute("""
-                SELECT 
-                    f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning
-                FROM found_url f
-                WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
-                    AND NOT f.sent_in_digest
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
-            """, (cutoff,))
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            category = row["category"] or "company"
-            
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = {}
-            if category not in articles_by_ticker[ticker]:
-                articles_by_ticker[ticker][category] = []
-            
-            articles_by_ticker[ticker][category].append(dict(row))
-        
-        # Mark articles as sent
-        if tickers:
-            cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s)
-            """, (cutoff, tickers))
-        else:
-            cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15
-            """, (cutoff,))
-
-    total_articles = sum(
-        sum(len(arts) for arts in categories.values())
-        for categories in articles_by_ticker.values()
-    )
-    
-    if total_articles == 0:
-        return {
-            "status": "no_articles",
-            "message": f"No new quality articles found in the last {period_label}",
-            "tickers": tickers or "all"
-        }
-    
-    html = build_digest_html(articles_by_ticker, days if days > 0 else 1)
-    
-    tickers_str = ', '.join(articles_by_ticker.keys())
-    subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    # Count by category
-    category_counts = {"company": 0, "industry": 0, "competitor": 0}
-    for ticker_cats in articles_by_ticker.values():
-        for cat, arts in ticker_cats.items():
-            category_counts[cat] = category_counts.get(cat, 0) + len(arts)
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "by_category": category_counts,
-        "recipient": DIGEST_TO
-    }
+    result = fetch_digest_articles_with_content(minutes / 60, tickers)
+    return result
     
 # FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/clean-feeds")

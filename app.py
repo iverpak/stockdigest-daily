@@ -1795,6 +1795,10 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
     """Fetch categorized articles for digest with enhanced search metadata"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
+    # ADD THESE LINES:
+    days = int(hours / 24) if hours >= 24 else 0
+    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
+    
     with db() as conn, conn.cursor() as cur:
         # Build query based on tickers - ENHANCED to include AI analysis
         if tickers:

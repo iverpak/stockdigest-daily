@@ -476,7 +476,7 @@ class DomainResolver:
             'ft.com': 'Financial Times'
         }
 
-    def _resolve_publication_to_domain(self, publication_name: str) -> Optional[str]:
+        def _resolve_publication_to_domain(self, publication_name: str) -> Optional[str]:
         """Resolve publication name to domain using database first, then AI fallback"""
         if not publication_name:
             return None
@@ -527,10 +527,14 @@ class DomainResolver:
             try:
                 self._store_in_database(ai_domain, publication_name, True)
                 LOG.info(f"Stored new mapping: '{publication_name}' -> '{ai_domain}'")
+                return ai_domain
             except Exception as e:
                 LOG.warning(f"Failed to store domain mapping: {e}")
+                return ai_domain
         
-        return ai_domain
+        # FIXED: If AI fails, create fallback domain instead of returning None
+        LOG.warning(f"AI failed to resolve '{publication_name}', creating fallback domain")
+        return self._create_fallback_domain(publication_name)
 
     def _resolve_publication_to_domain_with_ai(self, publication_name: str) -> Optional[str]:
         """Use AI to convert publication name to domain"""
@@ -570,6 +574,40 @@ class DomainResolver:
             LOG.warning(f"AI domain resolution failed for '{publication_name}': {e}")
         
         return None
+
+    def _create_fallback_domain(self, publication_name: str) -> str:
+        """Create a fallback domain when AI resolution fails"""
+        if not publication_name:
+            return "unknown-publication.com"
+        
+        # Clean the publication name
+        clean_name = publication_name.lower().strip()
+        
+        # Remove common words
+        words_to_remove = ['the', 'news', 'magazine', 'journal', 'times', 'post', 'daily', 'weekly']
+        words = clean_name.split()
+        filtered_words = [word for word in words if word not in words_to_remove]
+        
+        if not filtered_words:
+            # If all words were removed, use the original
+            filtered_words = words
+        
+        # Join words and clean up
+        domain_base = ''.join(filtered_words[:3])  # Limit to first 3 words
+        domain_base = ''.join(c for c in domain_base if c.isalnum())  # Remove special chars
+        
+        if len(domain_base) < 3:
+            domain_base = "unknown"
+        
+        fallback_domain = f"{domain_base}.com"
+        
+        # Store in database as a fallback (not AI generated)
+        try:
+            self._store_in_database(fallback_domain, publication_name, False)
+        except Exception as e:
+            LOG.warning(f"Failed to store fallback domain {fallback_domain}: {e}")
+        
+        return fallback_domain
     
     def resolve_url_and_domain(self, url, title=None):
         """Single method to resolve any URL to (final_url, domain, source_url)"""

@@ -969,7 +969,9 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
         ".article { margin: 5px 0; padding: 5px; border-left: 3px solid transparent; transition: all 0.3s; }",
         ".article:hover { background-color: #f8f9fa; border-left-color: #3498db; }",
-        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 3px; }",
+        ".article-header { margin-bottom: 3px; }",
+        ".article-content { }",
+        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
         ".company { border-left-color: #27ae60; }",
         ".industry { border-left-color: #f39c12; }",
         ".competitor { border-left-color: #e74c3c; }",
@@ -1123,18 +1125,32 @@ def _format_article_html(article: Dict, category: str) -> str:
     description = article.get("description", "").strip()
     description_html = ""
     if description:
-        # Truncate if too long and add styling
-        if len(description) > 200:
-            description = description[:200] + "..."
-        description_html = f"<br><span class='description'>{description}</span>"
+        # Clean the description - remove HTML tags and fix encoding issues
+        import html
+        description = html.unescape(description)
+        description = re.sub(r'<[^>]+>', '', description)  # Remove HTML tags
+        description = re.sub(r'\s+', ' ', description).strip()  # Normalize whitespace
+        
+        # Truncate if too long
+        if len(description) > 300:
+            description = description[:300] + "..."
+        
+        # Escape for HTML output
+        description = html.escape(description)
+        description_html = f"<br><div class='description'>{description}</div>"
     
     return f"""
     <div class='article {category}'>
-        <span class='source-badge'>{display_source}</span>
-        {enhanced_metadata}
-        <span class='score {score_class}'>Score: {score:.0f}</span>
-        <a href='{link_url}' target='_blank'>{title}</a>
-        <span class='meta'> | {pub_date}</span>{description_html}
+        <div class='article-header'>
+            <span class='source-badge'>{display_source}</span>
+            {enhanced_metadata}
+            <span class='score {score_class}'>Score: {score:.0f}</span>
+        </div>
+        <div class='article-content'>
+            <a href='{link_url}' target='_blank'>{title}</a>
+            <span class='meta'> | {pub_date}</span>
+            {description_html}
+        </div>
     </div>
     """
 

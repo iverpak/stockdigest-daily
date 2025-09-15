@@ -1729,13 +1729,13 @@ def _format_article_html(article: Dict, category: str) -> str:
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
-    # Impact styling
-    ai_impact = article.get("ai_impact", "").lower()
+    # Impact styling - FIXED: Handle None values
+    ai_impact = (article.get("ai_impact") or "").lower()
     impact_class = f"impact-{ai_impact}" if ai_impact in ["positive", "negative", "mixed", "unclear"] else "impact-unclear"
     impact_display = ai_impact.title() if ai_impact else "N/A"
     
-    # AI reasoning
-    ai_reasoning = article.get("ai_reasoning", "").strip()
+    # AI reasoning - FIXED: Handle None values
+    ai_reasoning = (article.get("ai_reasoning") or "").strip()
     
     # Build metadata badges for category-specific information
     metadata_badges = []

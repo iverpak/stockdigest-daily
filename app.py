@@ -569,6 +569,45 @@ class DomainResolver:
             LOG.warning(f"Failed to store fallback domain {fallback_domain}: {e}")
         
         return fallback_domain
+
+    def _resolve_publication_to_domain_with_ai(self, publication_name: str) -> Optional[str]:
+        """Use AI to convert publication name to domain"""
+        if not OPENAI_API_KEY or not publication_name:
+            return None
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            prompt = f'What is the primary domain name for the publication "{publication_name}"? Respond with just the domain (e.g., "reuters.com").'
+            
+            data = {
+                "model": OPENAI_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 20
+            }
+            
+            response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+            if response.status_code == 200:
+                result = response.json()
+                domain = result["choices"][0]["message"]["content"].strip().lower()
+                
+                # Clean up common AI response patterns
+                domain = domain.replace('"', '').replace("'", "").replace("www.", "")
+                
+                # Validate it looks like a domain
+                if '.' in domain and len(domain) > 4 and len(domain) < 50 and not ' ' in domain:
+                    normalized = normalize_domain(domain)
+                    if normalized:
+                        LOG.info(f"AI resolved '{publication_name}' -> '{normalized}'")
+                        return normalized
+            
+        except Exception as e:
+            LOG.warning(f"AI domain resolution failed for '{publication_name}': {e}")
+        
+        return None
     
     def resolve_url_and_domain(self, url, title=None):
         """Single method to resolve any URL to (final_url, domain, source_url)"""

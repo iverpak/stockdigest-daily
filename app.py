@@ -88,6 +88,63 @@ QUALITY_DOMAINS = {
     "insidermoneky.com", "seekingalpha.com/pro", "fool.com"
 }
 
+# Domain authority tiers for AI scoring
+DOMAIN_TIERS = {
+    # Tier A (1.0) - Premier financial news
+    "reuters.com": 1.0, 
+    "wsj.com": 1.0, 
+    "ft.com": 1.0,
+    "bloomberg.com": 1.0,
+    
+    # Tier A- (0.9) - Major wire services
+    "apnews.com": 0.9,
+    
+    # Tier B (0.7) - Strong trade/tech press
+    "techcrunch.com": 0.7, 
+    "cnbc.com": 0.7, 
+    "marketwatch.com": 0.7,
+    "barrons.com": 0.7,
+    
+    # Tier C (0.4) - Aggregators and opinion sites
+    "finance.yahoo.com": 0.4, 
+    "yahoo.com": 0.4, 
+    "news.yahoo.com": 0.4,
+    "msn.com": 0.4,
+    "seekingalpha.com": 0.4, 
+    "fool.com": 0.4, 
+    "zacks.com": 0.4,
+    "benzinga.com": 0.4,
+    "tipranks.com": 0.4, 
+    "simplywall.st": 0.4, 
+    "investing.com": 0.4,
+    "insidermonkey.com": 0.4,
+    "investors.com": 0.4,
+    
+    # Tier D (0.2) - PR wires
+    "globenewswire.com": 0.2, 
+    "prnewswire.com": 0.2, 
+    "businesswire.com": 0.2,
+    "openpr.com": 0.2, 
+    "financialcontent.com": 0.2,
+}
+
+# Source hints for upgrading aggregator content
+SOURCE_TIER_HINTS = [
+    (r"\b(reuters)\b", 1.0),
+    (r"\b(bloomberg)\b", 1.0),
+    (r"\b(wall street journal|wsj)\b", 1.0),
+    (r"\b(financial times|ft)\b", 1.0),
+    (r"\b(associated press|ap)\b", 0.9),
+    (r"\b(cnbc)\b", 0.7),
+    (r"\b(marketwatch)\b", 0.7),
+    (r"\b(barron's|barrons)\b", 0.7),
+    (r"\b(motley fool|the motley fool)\b", 0.4),
+    (r"\b(seeking alpha)\b", 0.4),
+    (r"\b(zacks)\b", 0.4),
+    (r"\b(benzinga)\b", 0.4),
+    (r"\b(globenewswire|pr newswire|business wire)\b", 0.2),
+]
+
 # ------------------------------------------------------------------------------
 # Database helpers
 # ------------------------------------------------------------------------------
@@ -395,6 +452,46 @@ def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
     
     return title, None
 
+def _get_domain_tier(domain: str, title: str = "", description: str = "") -> float:
+    """Get domain authority tier with potential upgrades from content"""
+    if not domain:
+        return 0.5
+    
+    normalized_domain = normalize_domain(domain)
+    base_tier = DOMAIN_TIERS.get(normalized_domain, 0.5)
+    
+    # Upgrade tier if aggregator content reveals higher-quality source
+    if any(agg in normalized_domain for agg in ["yahoo", "msn", "google"]):
+        combined_text = f"{title} || {description}".lower()
+        
+        for pattern, tier in SOURCE_TIER_HINTS:
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                return max(base_tier, tier)
+    
+    return base_tier
+
+def _is_spam_content(title: str, domain: str, description: str = "") -> bool:
+    """Check if content appears to be spam - reuse existing spam logic"""
+    if not title:
+        return True
+    
+    # Use existing spam domain check
+    if any(spam in domain.lower() for spam in SPAM_DOMAINS):
+        return True
+    
+    # Use existing non-Latin script check
+    if contains_non_latin_script(title):
+        return True
+    
+    # Additional spam indicators
+    spam_phrases = [
+        "marketbeat", "newser", "khodrobank", "should you buy", "top stocks to",
+        "best stocks", "stock picks", "hot stocks", "penny stocks"
+    ]
+    
+    combined_text = f"{title} {description}".lower()
+    return any(phrase in combined_text for phrase in spam_phrases)
+
 def calculate_quality_score(
     title: str, 
     domain: str, 
@@ -403,9 +500,170 @@ def calculate_quality_score(
     category: str = "company",
     keywords: List[str] = None
 ) -> float:
-    """DISABLED: Always return neutral score - quality scoring needs refinement"""
-    # Quality scoring temporarily disabled - need proper content analysis
-    return 50.0
+    """
+    Calculate quality score using AI for COMPANY articles, fallback for others
+    Returns score 0-100
+    """
+    
+    # For non-company articles, return neutral score (Phase 1 limitation)
+    if category.lower() not in ["company", "company_news", "comp"]:
+        return 50.0
+    
+    # Pre-filter spam
+    if _is_spam_content(title, domain, description):
+        return 0.0
+    
+    # If no OpenAI key, use fallback scoring
+    if not OPENAI_API_KEY or not title.strip():
+        return _fallback_quality_score(title, domain, ticker, description, keywords)
+    
+    # Use AI scoring for company articles
+    try:
+        score = _ai_quality_score_company(title, domain, ticker, description, keywords)
+        LOG.info(f"AI scored [{ticker}] '{title[:50]}...' from {domain}: {score:.1f}")
+        return max(0.0, min(100.0, score))
+    except Exception as e:
+        LOG.warning(f"AI scoring failed for '{title[:50]}...': {e}")
+        return _fallback_quality_score(title, domain, ticker, description, keywords)
+
+def _fallback_quality_score(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
+    """Fallback scoring when AI is unavailable"""
+    base_score = 50.0
+    
+    # Domain tier bonus
+    domain_tier = _get_domain_tier(domain, title, description)
+    base_score += (domain_tier - 0.5) * 20  # Scale tier to score impact
+    
+    # Ticker mention bonus
+    if ticker.upper() in title.upper():
+        base_score += 10
+    
+    # Keyword relevance bonus
+    if keywords:
+        title_lower = title.lower()
+        keyword_matches = sum(1 for kw in keywords if kw.lower() in title_lower)
+        base_score += min(keyword_matches * 5, 15)
+    
+    return max(10.0, min(90.0, base_score))
+
+def _ai_quality_score_company(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
+    """AI-powered scoring for company articles"""
+    
+    # Get domain tier
+    source_tier = _get_domain_tier(domain, title, description)
+    
+    # Clean description - only use if valuable
+    desc_clean = description.strip() if description else ""
+    if desc_clean and (desc_clean.lower() == title.lower().strip() or len(desc_clean) < 10):
+        desc_clean = ""
+    
+    # Limit description length for token management
+    desc_snippet = desc_clean[:500] if desc_clean else ""
+    
+    # Build the JSON schema for structured response
+    schema = {
+        "name": "company_news_score",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "impact_on_company": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
+                "reason_short": {"type": "string"},
+                "components": {
+                    "type": "object",
+                    "properties": {
+                        "source_tier": {"type": "number"},
+                        "event_multiplier": {"type": "number"},
+                        "relevance_boost": {"type": "number"},
+                        "numeric_bonus": {"type": "number"},
+                        "penalty": {"type": "number"},
+                        "raw_score": {"type": "number"}
+                    },
+                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty", "raw_score"],
+                    "additionalProperties": False
+                },
+                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+            },
+            "required": ["score", "impact_on_company", "reason_short", "components", "flags"],
+            "additionalProperties": False
+        }
+    }
+    
+    system_prompt = """You are a hedge fund news analyst. Score company news articles from 0-100 based on financial relevance.
+
+SCORING FORMULA:
+Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
+
+COMPONENT RULES:
+
+event_multiplier (analyze title + description):
+2.0 = Major corporate actions: halt/shutdown/delist/recall/investigation/lawsuit/acquisition/divestiture/spin-off
+1.6 = Regulatory/policy actions directly affecting the company
+1.5 = Major contracts/commitments/partnerships/backlog announcements  
+1.4 = Earnings releases/guidance updates/financial results
+1.1 = Analyst ratings/price target changes
+0.6 = Opinion pieces/educational content/general commentary
+0.5 = Standard PR announcements/routine updates
+
+relevance_boost:
+1.3 if title/description clearly mentions the company ticker, company name, or directly owned assets
+1.0 otherwise
+
+numeric_bonus:
++0.1 for each concrete number mentioned (percentages, dollar amounts, units), max +0.3 total
+
+penalty (check both title and description):
+×0.6 if question/listicle/prediction format ("Should you...", "Best...", "Top 5...", "Will X happen?")
+×0.5 if obvious PR/marketing ("announces expansion to reach", "market size expected to grow")  
+×1.0 otherwise
+
+Set impact_on_company based on whether news is likely positive, negative, mixed, or unclear for shareholders.
+Keep reason_short under 140 characters.
+Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "PR", "Opinion"]."""
+
+    user_payload = {
+        "company_ticker": ticker,
+        "title": title,
+        "description_snippet": desc_snippet,
+        "source_domain": domain,
+        "source_tier": source_tier,
+        "industry_keywords": keywords or []
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": OPENAI_MODEL,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload)}
+        ],
+        "response_format": {"type": "json_schema", "json_schema": schema},
+        "max_completion_tokens": 250
+    }
+    
+    response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
+    
+    if response.status_code != 200:
+        LOG.warning(f"OpenAI API error {response.status_code}: {response.text[:200]}")
+        raise Exception(f"API error: {response.status_code}")
+    
+    result = response.json()
+    content = result["choices"][0]["message"]["content"]
+    parsed = json.loads(content)
+    
+    score = float(parsed.get("score", 50))
+    impact = parsed.get("impact_on_company", "Unclear")
+    reason = parsed.get("reason_short", "")
+    
+    LOG.info(f"AI analysis: {score:.0f} | {impact} | {reason}")
+    
+    return score
 
 def get_url_hash(url: str) -> str:
     """Generate hash for URL deduplication"""

@@ -500,15 +500,16 @@ def calculate_quality_score(
     category: str = "company",
     keywords: List[str] = None
 ) -> float:
-    """
-    Calculate quality score using AI for COMPANY articles, fallback for others
-    Returns score 0-100
-    """
+    """Calculate quality score using AI for COMPANY articles, fallback for others"""
+    
+    # Debug logging
+    LOG.info(f"SCORING: {category} article for {ticker}: '{title[:30]}...'")
     
     # For non-company articles, return neutral score (Phase 1 limitation)
     if category.lower() not in ["company", "company_news", "comp"]:
+        LOG.info(f"SKIPPING: Non-company category: {category}")
         return 50.0
-    
+     
     # Pre-filter spam
     if _is_spam_content(title, domain, description):
         return 0.0

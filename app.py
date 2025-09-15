@@ -665,33 +665,42 @@ class DomainResolver:
     
     def _handle_google_news(self, url, title):
         """Handle Google News URL resolution with database-first domain mapping"""
+        LOG.info(f"DEBUG: Processing Google News URL: {url}")
+        LOG.info(f"DEBUG: Title: {title}")
+        
         # Try direct resolution first
         try:
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
             final_url = response.url
+            LOG.info(f"DEBUG: Direct resolution final URL: {final_url}")
             
             if final_url != url and "news.google.com" not in final_url:
                 domain = normalize_domain(urlparse(final_url).netloc.lower())
+                LOG.info(f"DEBUG: Direct resolution domain: {domain}")
                 if not self._is_spam_domain(domain):
                     return final_url, domain, None
-        except:
-            pass
+        except Exception as e:
+            LOG.info(f"DEBUG: Direct resolution failed: {e}")
         
         # Fall back to title extraction
         if title and not contains_non_latin_script(title):
+            LOG.info(f"DEBUG: Attempting title extraction from: {title}")
             clean_title, source = extract_source_from_title_smart(title)
+            LOG.info(f"DEBUG: Title extraction result - clean_title: '{clean_title}', source: '{source}'")
+            
             if source and not self._is_spam_source(source):
                 # Try to resolve publication name to actual domain using database + AI
                 resolved_domain = self._resolve_publication_to_domain(source)
+                LOG.info(f"DEBUG: Resolved domain for '{source}': {resolved_domain}")
                 if resolved_domain:
                     return url, resolved_domain, None
                 else:
-                    # If AI can't resolve it, mark as unresolved rather than creating "unknown-"
                     LOG.warning(f"Could not resolve publication '{source}' to domain")
                     return url, "google-news-unresolved", None
         
+        LOG.info("DEBUG: Falling back to google-news-unresolved")
         return url, "google-news-unresolved", None
     
     def _handle_yahoo_finance(self, url):
@@ -2266,6 +2275,35 @@ def admin_cleanup_domains(request: Request):
         "records_updated": updated_count,
         "message": "Domain data has been cleaned up. Publication names converted to actual domains."
     }
+
+@APP.post("/admin/test-url")
+def test_url_resolution(request: Request, url: str = Body(..., embed=True), title: str = Body(None, embed=True)):
+    """Test URL resolution for debugging"""
+    require_admin(request)
+    
+    LOG.info(f"Testing URL resolution for: {url}")
+    if title:
+        LOG.info(f"With title: {title}")
+    
+    try:
+        resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+        formal_name = domain_resolver.get_formal_name(domain) if domain else None
+        
+        return {
+            "original_url": url,
+            "original_title": title,
+            "resolved_url": resolved_url,
+            "domain": domain,
+            "source_url": source_url,
+            "formal_name": formal_name,
+            "status": "success"
+        }
+    except Exception as e:
+        return {
+            "original_url": url,
+            "error": str(e),
+            "status": "error"
+        }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

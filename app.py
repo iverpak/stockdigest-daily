@@ -1441,7 +1441,7 @@ def is_description_valuable(title: str, description: str) -> bool:
     return True
 
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Simplified feed processing with smart description filtering"""
+    """Simplified feed processing with smart description filtering and AI scoring"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0}
     
     try:
@@ -1490,23 +1490,33 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Insert article with filtered description
+                    # Calculate quality score using AI for company articles
+                    quality_score = calculate_quality_score(
+                        title=title,
+                        domain=domain, 
+                        ticker=feed["ticker"],
+                        description=description,
+                        category=category,
+                        keywords=keywords
+                    )
+                    
+                    # Insert article with AI-calculated score
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 50.0, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         url, resolved_url, url_hash, title, description,
-                        feed["id"], feed["ticker"], domain, published_at,
+                        feed["id"], feed["ticker"], domain, quality_score, published_at,
                         category, feed.get("search_keyword"), source_url
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(domain)}: {title[:60]}...")
+                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(domain)}: {title[:60]}... (Score: {quality_score:.1f})")
                         
             except Exception as e:
                 LOG.error(f"Database error for '{title[:50]}': {e}")

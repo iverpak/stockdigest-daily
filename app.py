@@ -476,36 +476,83 @@ class DomainResolver:
             'ft.com': 'Financial Times'
         }
 
-    def _map_publication_to_domain(self, publication_name):
-        """Map publication names to actual domains"""
-        publication_to_domain = {
-            'reuters': 'reuters.com',
-            'bloomberg': 'bloomberg.com', 
-            'wall street journal': 'wsj.com',
-            'wsj': 'wsj.com',
-            'financial times': 'ft.com',
-            'cnbc': 'cnbc.com',
-            'forbes': 'forbes.com',
-            'business insider': 'businessinsider.com',
-            'the motley fool': 'fool.com',
-            'seeking alpha': 'seekingalpha.com',
-            'marketwatch': 'marketwatch.com',
-            'barrons': 'barrons.com',
-            'yahoo finance': 'finance.yahoo.com',
-            'tipranks': 'tipranks.com',
-            'benzinga': 'benzinga.com',
-            'nasdaq': 'nasdaq.com',
-            'thestreet': 'thestreet.com',
-            'morningstar': 'morningstar.com',
-            'zacks investment research': 'zacks.com',
-            'stocktwits': 'stocktwits.com',
-            'globenewswire': 'globenewswire.com',
-            'business wire': 'businesswire.com',
-            'pr newswire': 'prnewswire.com'
+def _resolve_publication_to_domain_with_ai(self, publication_name: str) -> Optional[str]:
+    """Use AI to convert publication name to domain"""
+    if not OPENAI_API_KEY or not publication_name:
+        return None
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
         }
         
-        pub_lower = publication_name.lower().strip()
-        return publication_to_domain.get(pub_lower, f"unknown-{pub_lower.replace(' ', '-')}")
+        prompt = f'What is the primary domain name for the publication "{publication_name}"? Respond with just the domain (e.g., "reuters.com").'
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 20
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+        if response.status_code == 200:
+            result = response.json()
+            domain = result["choices"][0]["message"]["content"].strip().lower()
+            
+            # Clean up common AI response patterns
+            domain = domain.replace('"', '').replace("'", "").replace("www.", "")
+            
+            # Validate it looks like a domain
+            if '.' in domain and len(domain) > 4 and len(domain) < 50 and not ' ' in domain:
+                normalized = normalize_domain(domain)
+                if normalized:
+                    LOG.info(f"AI resolved '{publication_name}' -> '{normalized}'")
+                    return normalized
+        
+    except Exception as e:
+        LOG.warning(f"AI domain resolution failed for '{publication_name}': {e}")
+    
+    return None
+
+    def _resolve_publication_to_domain_with_ai(self, publication_name: str) -> Optional[str]:
+        """Use AI to convert publication name to domain"""
+        if not OPENAI_API_KEY or not publication_name:
+            return None
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            prompt = f'What is the primary domain name for the publication "{publication_name}"? Respond with just the domain (e.g., "reuters.com").'
+            
+            data = {
+                "model": OPENAI_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 20
+            }
+            
+            response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+            if response.status_code == 200:
+                result = response.json()
+                domain = result["choices"][0]["message"]["content"].strip().lower()
+                
+                # Clean up common AI response patterns
+                domain = domain.replace('"', '').replace("'", "").replace("www.", "")
+                
+                # Validate it looks like a domain
+                if '.' in domain and len(domain) > 4 and len(domain) < 50 and not ' ' in domain:
+                    normalized = normalize_domain(domain)
+                    if normalized:
+                        LOG.info(f"AI resolved '{publication_name}' -> '{normalized}'")
+                        return normalized
+            
+        except Exception as e:
+            LOG.warning(f"AI domain resolution failed for '{publication_name}': {e}")
+        
+        return None
     
     def resolve_url_and_domain(self, url, title=None):
         """Single method to resolve any URL to (final_url, domain, source_url)"""
@@ -562,7 +609,7 @@ class DomainResolver:
         return fallback
     
     def _handle_google_news(self, url, title):
-        """Handle Google News URL resolution - FIXED to return actual domains"""
+        """Handle Google News URL resolution with database-first domain mapping"""
         # Try direct resolution first
         try:
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
@@ -571,11 +618,9 @@ class DomainResolver:
             final_url = response.url
             
             if final_url != url and "news.google.com" not in final_url:
-                # Extract actual domain from resolved URL
-                parsed_domain = urlparse(final_url).netloc.lower()
-                normalized_domain = normalize_domain(parsed_domain)
-                if not self._is_spam_domain(normalized_domain):
-                    return final_url, normalized_domain, None  # Return actual domain
+                domain = normalize_domain(urlparse(final_url).netloc.lower())
+                if not self._is_spam_domain(domain):
+                    return final_url, domain, None
         except:
             pass
         
@@ -583,10 +628,14 @@ class DomainResolver:
         if title and not contains_non_latin_script(title):
             clean_title, source = extract_source_from_title_smart(title)
             if source and not self._is_spam_source(source):
-                # FIXED: Don't return the publication name as domain
-                # Instead, try to map publication name to actual domain
-                source_domain = self._map_publication_to_domain(source)
-                return url, source_domain, None
+                # Try to resolve publication name to actual domain using database + AI
+                resolved_domain = self._resolve_publication_to_domain(source)
+                if resolved_domain:
+                    return url, resolved_domain, None
+                else:
+                    # If AI can't resolve it, mark as unresolved rather than creating "unknown-"
+                    LOG.warning(f"Could not resolve publication '{source}' to domain")
+                    return url, "google-news-unresolved", None
         
         return url, "google-news-unresolved", None
     

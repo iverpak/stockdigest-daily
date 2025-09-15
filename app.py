@@ -665,42 +665,53 @@ class DomainResolver:
     
     def _handle_google_news(self, url, title):
         """Handle Google News URL resolution with database-first domain mapping"""
-        LOG.info(f"DEBUG: Processing Google News URL: {url}")
-        LOG.info(f"DEBUG: Title: {title}")
+        LOG.info(f"=== GOOGLE NEWS DEBUG START ===")
+        LOG.info(f"URL: {url}")
+        LOG.info(f"Title: '{title}'")
         
         # Try direct resolution first
         try:
+            LOG.info("Attempting direct URL resolution...")
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
             final_url = response.url
-            LOG.info(f"DEBUG: Direct resolution final URL: {final_url}")
+            LOG.info(f"Direct resolution result: {final_url}")
             
             if final_url != url and "news.google.com" not in final_url:
                 domain = normalize_domain(urlparse(final_url).netloc.lower())
-                LOG.info(f"DEBUG: Direct resolution domain: {domain}")
+                LOG.info(f"Direct resolution domain: {domain}")
                 if not self._is_spam_domain(domain):
+                    LOG.info(f"SUCCESS: Direct resolution to {domain}")
                     return final_url, domain, None
+            else:
+                LOG.info("Direct resolution failed - still on Google News")
         except Exception as e:
-            LOG.info(f"DEBUG: Direct resolution failed: {e}")
+            LOG.info(f"Direct resolution exception: {e}")
         
         # Fall back to title extraction
+        LOG.info("Attempting title extraction...")
         if title and not contains_non_latin_script(title):
-            LOG.info(f"DEBUG: Attempting title extraction from: {title}")
+            LOG.info(f"Title is valid for extraction: '{title}'")
             clean_title, source = extract_source_from_title_smart(title)
-            LOG.info(f"DEBUG: Title extraction result - clean_title: '{clean_title}', source: '{source}'")
+            LOG.info(f"Title extraction result: clean_title='{clean_title}', source='{source}'")
             
             if source and not self._is_spam_source(source):
-                # Try to resolve publication name to actual domain using database + AI
+                LOG.info(f"Valid source found: '{source}'. Attempting AI resolution...")
                 resolved_domain = self._resolve_publication_to_domain(source)
-                LOG.info(f"DEBUG: Resolved domain for '{source}': {resolved_domain}")
+                LOG.info(f"AI resolution result: '{source}' -> '{resolved_domain}'")
                 if resolved_domain:
+                    LOG.info(f"SUCCESS: Title extraction + AI resolution to {resolved_domain}")
                     return url, resolved_domain, None
                 else:
-                    LOG.warning(f"Could not resolve publication '{source}' to domain")
-                    return url, "google-news-unresolved", None
+                    LOG.warning(f"AI resolution failed for '{source}'")
+            else:
+                LOG.info(f"Source extraction failed or spam: source='{source}'")
+        else:
+            LOG.info("Title invalid for extraction (empty or non-Latin)")
         
-        LOG.info("DEBUG: Falling back to google-news-unresolved")
+        LOG.info("FALLBACK: Using google-news-unresolved")
+        LOG.info(f"=== GOOGLE NEWS DEBUG END ===")
         return url, "google-news-unresolved", None
     
     def _handle_yahoo_finance(self, url):
@@ -2304,6 +2315,23 @@ def test_url_resolution(request: Request, url: str = Body(..., embed=True), titl
             "error": str(e),
             "status": "error"
         }
+
+@APP.post("/admin/test-title-extraction")
+def test_title_extraction(request: Request, title: str = Body(..., embed=True)):
+    """Test title extraction for debugging"""
+    require_admin(request)
+    
+    LOG.info(f"Testing title extraction for: '{title}'")
+    
+    clean_title, source = extract_source_from_title_smart(title)
+    
+    return {
+        "original_title": title,
+        "clean_title": clean_title,
+        "extracted_source": source,
+        "contains_non_latin": contains_non_latin_script(title),
+        "would_be_spam": source and any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"])
+    }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

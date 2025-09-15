@@ -187,11 +187,30 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
                 
+                -- Add category column to source_feed if it doesn't exist
+                CREATE TABLE IF NOT EXISTS source_feed (
+                    id SERIAL PRIMARY KEY,
+                    url TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    ticker VARCHAR(10) NOT NULL,
+                    category VARCHAR(20) DEFAULT 'company',
+                    retain_days INTEGER DEFAULT 90,
+                    active BOOLEAN DEFAULT TRUE,
+                    search_keyword TEXT,
+                    competitor_ticker VARCHAR(10),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+                
+                -- Add category column if it doesn't exist (for existing installations)
+                ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
+                
                 -- Essential indexes only
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
+                CREATE INDEX IF NOT EXISTS idx_source_feed_ticker_category ON source_feed(ticker, category, active);
             """)
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
@@ -250,14 +269,17 @@ def build_feed_urls(ticker: str, keywords: Dict) -> List[Dict]:
 def upsert_feed(url: str, name: str, ticker: str, category: str = "company", 
                 retain_days: int = 90, search_keyword: str = None, 
                 competitor_ticker: str = None) -> int:
-    """Simplified feed upsert"""
+    """Simplified feed upsert with category storage"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO source_feed (url, name, ticker, retain_days, active, search_keyword, competitor_ticker)
-            VALUES (%s, %s, %s, %s, TRUE, %s, %s)
-            ON CONFLICT (url) DO UPDATE SET name = EXCLUDED.name, active = TRUE
+            INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+            VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+            ON CONFLICT (url) DO UPDATE SET 
+                name = EXCLUDED.name, 
+                category = EXCLUDED.category,
+                active = TRUE
             RETURNING id;
-        """, (url, name, ticker, retain_days, search_keyword, competitor_ticker))
+        """, (url, name, ticker, category, retain_days, search_keyword, competitor_ticker))
         return cur.fetchone()["id"]
 
 def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
@@ -1957,25 +1979,37 @@ def cron_ingest(
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
-    """Ingest articles from feeds for specified tickers - ENHANCED with metadata"""
+    """Ingest articles from feeds for specified tickers - FIXED: Proper feed ordering"""
     require_admin(request)
     ensure_schema()
     
-    # Get feeds for specified tickers with search metadata
+    # Get feeds for specified tickers with search metadata - FIXED: Order by category priority
     with db() as conn, conn.cursor() as cur:
         if tickers:
             cur.execute("""
-                SELECT id, url, name, ticker, retain_days, search_keyword, competitor_ticker
+                SELECT id, url, name, ticker, category, retain_days, search_keyword, competitor_ticker
                 FROM source_feed
                 WHERE active = TRUE AND ticker = ANY(%s)
-                ORDER BY ticker, id
+                ORDER BY ticker, 
+                         CASE category 
+                           WHEN 'company' THEN 1 
+                           WHEN 'industry' THEN 2 
+                           WHEN 'competitor' THEN 3 
+                           ELSE 4 END,
+                         id
             """, (tickers,))
         else:
             cur.execute("""
-                SELECT id, url, name, ticker, retain_days, search_keyword, competitor_ticker
+                SELECT id, url, name, ticker, category, retain_days, search_keyword, competitor_ticker
                 FROM source_feed
                 WHERE active = TRUE
-                ORDER BY ticker, id
+                ORDER BY ticker,
+                         CASE category 
+                           WHEN 'company' THEN 1 
+                           WHEN 'industry' THEN 2 
+                           WHEN 'competitor' THEN 3 
+                           ELSE 4 END,
+                         id
             """)
         feeds = list(cur.fetchall())
     
@@ -2007,15 +2041,18 @@ def cron_ingest(
         ticker_stats = {"inserted": 0, "duplicates": 0, "blocked_spam": 0, "yahoo_sources": 0}
         
         for feed in ticker_feeds:
-            # Determine category from feed name
-            category = "company"
-            if "Industry:" in feed["name"] or "Yahoo Industry:" in feed["name"]:
-                category = "industry"
-            elif "Competitor:" in feed["name"] or "Yahoo Competitor:" in feed["name"]:
-                category = "competitor"
+            # Use the category from database instead of guessing from name
+            category = feed.get("category", "company")
             
             # Get relevant keywords for this category
-            category_keywords = metadata.get(category, [])
+            if category == "company":
+                category_keywords = []  # Company articles don't need category keywords
+            elif category == "industry":
+                category_keywords = metadata.get("industry_keywords", [])
+            elif category == "competitor":
+                category_keywords = []  # Competitor articles use search_keyword
+            else:
+                category_keywords = []
             
             stats = ingest_feed(feed, category, category_keywords)
             total_stats["feeds_processed"] += 1

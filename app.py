@@ -1132,8 +1132,8 @@ def _format_article_html(article: Dict, category: str) -> str:
         description = re.sub(r'\s+', ' ', description).strip()  # Normalize whitespace
         
         # Truncate if too long
-        if len(description) > 300:
-            description = description[:300] + "..."
+        if len(description) > 150:
+            description = description[:150] + "..."
         
         # Escape for HTML output
         description = html.escape(description)
@@ -1153,7 +1153,7 @@ def _format_article_html(article: Dict, category: str) -> str:
         </div>
     </div>
     """
-
+    
 def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
     """Fetch categorized articles for digest with enhanced search metadata"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)

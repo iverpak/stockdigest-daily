@@ -205,6 +205,10 @@ def ensure_schema():
                 -- Add category column if it doesn't exist (for existing installations)
                 ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
                 
+                -- Add AI analysis columns to found_url if they don't exist
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_impact VARCHAR(20);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_reasoning TEXT;
+                
                 -- Essential indexes only
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
@@ -521,8 +525,10 @@ def calculate_quality_score(
     description: str = "",
     category: str = "company",
     keywords: List[str] = None
-) -> float:
-    """Calculate quality score using AI for COMPANY articles, fallback for others"""
+) -> Tuple[float, Optional[str], Optional[str]]:
+    """Calculate quality score using AI for COMPANY articles, fallback for others
+    Returns: (score, impact, reasoning)
+    """
     
     # Debug logging
     LOG.info(f"SCORING: {category} article for {ticker}: '{title[:30]}...'")
@@ -530,24 +536,26 @@ def calculate_quality_score(
     # For non-company articles, return neutral score (Phase 1 limitation)
     if category.lower() not in ["company", "company_news", "comp"]:
         LOG.info(f"SKIPPING: Non-company category: {category}")
-        return 50.0
+        return 50.0, None, None
      
     # Pre-filter spam
     if _is_spam_content(title, domain, description):
-        return 0.0
+        return 0.0, None, None
     
     # If no OpenAI key, use fallback scoring
     if not OPENAI_API_KEY or not title.strip():
-        return _fallback_quality_score(title, domain, ticker, description, keywords)
+        score = _fallback_quality_score(title, domain, ticker, description, keywords)
+        return score, None, None
     
     # Use AI scoring for company articles
     try:
-        score = _ai_quality_score_company(title, domain, ticker, description, keywords)
+        score, impact, reasoning = _ai_quality_score_company(title, domain, ticker, description, keywords)
         LOG.info(f"AI scored [{ticker}] '{title[:50]}...' from {domain}: {score:.1f}")
-        return max(0.0, min(100.0, score))
+        return max(0.0, min(100.0, score)), impact, reasoning
     except Exception as e:
         LOG.warning(f"AI scoring failed for '{title[:50]}...': {e}")
-        return _fallback_quality_score(title, domain, ticker, description, keywords)
+        score = _fallback_quality_score(title, domain, ticker, description, keywords)
+        return score, None, None
 
 def _fallback_quality_score(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
     """Fallback scoring when AI is unavailable"""
@@ -569,8 +577,10 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     
     return max(10.0, min(90.0, base_score))
 
-def _ai_quality_score_company(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
-    """AI-powered scoring for company articles"""
+def _ai_quality_score_company(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
+    """AI-powered scoring for company articles
+    Returns: (score, impact, reasoning)
+    """
     
     # Get domain tier
     source_tier = _get_domain_tier(domain, title, description)
@@ -686,7 +696,7 @@ Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "P
     
     LOG.info(f"AI analysis: {score:.0f} | {impact} | {reason}")
     
-    return score
+    return score, impact, reason
 
 def get_url_hash(url: str) -> str:
     """Generate hash for URL deduplication"""
@@ -1514,7 +1524,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         published_at = parse_datetime(entry.published_parsed)
                     
                     # Calculate quality score using AI for company articles
-                    quality_score = calculate_quality_score(
+                    quality_score, ai_impact, ai_reasoning = calculate_quality_score(
                         title=title,
                         domain=domain, 
                         ticker=feed["ticker"],
@@ -1523,18 +1533,20 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                         keywords=keywords
                     )
                     
-                    # Insert article with AI-calculated score
+                    # Insert article with AI-calculated score and analysis
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
-                            category, search_keyword, original_source_url
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            category, search_keyword, original_source_url,
+                            ai_impact, ai_reasoning
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         url, resolved_url, url_hash, title, description,
                         feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, feed.get("search_keyword"), source_url
+                        category, feed.get("search_keyword"), source_url,
+                        ai_impact, ai_reasoning
                     ))
                     
                     if cur.fetchone():
@@ -1555,7 +1567,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
 # ------------------------------------------------------------------------------
 # Enhanced CSS styles to be added to the build_digest_html function
 def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
-    """Build HTML email digest with enhanced styling and improved timestamp formatting"""
+    """Build HTML email digest with enhanced styling and AI analysis display"""
     # Get ticker metadata for display
     ticker_metadata = {}
     for ticker in articles_by_ticker.keys():
@@ -1566,7 +1578,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
                 "competitors": config.get("competitors", [])
             }
     
-    # FIX #5: Use the new timestamp formatting
+    # Use the new timestamp formatting
     current_time_est = format_timestamp_est(datetime.now(timezone.utc))
     
     html = [
@@ -1575,11 +1587,13 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
         "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
         "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
-        ".article { margin: 5px 0; padding: 5px; border-left: 3px solid transparent; transition: all 0.3s; }",
-        ".article:hover { background-color: #f8f9fa; border-left-color: #3498db; }",
-        ".article-header { margin-bottom: 3px; }",
+        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+        ".article-header { margin-bottom: 5px; }",
         ".article-content { }",
+        ".article-analysis { margin-top: 8px; padding: 6px; background-color: #f8f9fa; border-radius: 3px; border-left: 2px solid #dee2e6; }",
         ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+        ".ai-reasoning { color: #495057; font-size: 11px; line-height: 1.3; margin-top: 3px; }",
         ".company { border-left-color: #27ae60; }",
         ".industry { border-left-color: #f39c12; }",
         ".competitor { border-left-color: #e74c3c; }",
@@ -1588,6 +1602,11 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".high-score { background-color: #d4edda; color: #155724; }",
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; text-transform: uppercase; }",
+        ".impact-positive { background-color: #d1f2eb; color: #0e6b4a; border: 1px solid #7bdcb5; }",
+        ".impact-negative { background-color: #f8d7da; color: #721c24; border: 1px solid #f1aeb5; }",
+        ".impact-mixed { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+        ".impact-unclear { background-color: #e2e3e5; color: #495057; border: 1px solid #ced4da; }",
         ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
@@ -1600,7 +1619,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         f"<h1>Stock Intelligence Report</h1>",
         f"<div class='summary'>",
         f"<strong>Report Period:</strong> Last {period_days} days<br>",
-        f"<strong>Generated:</strong> {current_time_est}<br>",  # FIX #5: Better timestamp
+        f"<strong>Generated:</strong> {current_time_est}<br>",
         f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}",
         "</div>"
     ]
@@ -1617,11 +1636,9 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
             html.append("<div class='keywords'>")
             html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
             if metadata.get("industry_keywords"):
-                # Display industry keywords as styled badges
                 industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
                 html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
             if metadata.get("competitors"):
-                # Display competitors as styled badges
                 competitor_badges = [f'<span class="competitor-badge">🏢 {comp}</span>' for comp in metadata['competitors']]
                 html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}")
             html.append("</div>")
@@ -1649,10 +1666,11 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     html.append("""
         <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
             <strong>About This Report:</strong><br>
-            • Company News: Direct mentions and updates about the ticker<br>
+            • Company News: Direct mentions and updates about the ticker with AI impact analysis<br>
             • Industry News: Sector trends and market dynamics (🏭 industry keywords)<br>
             • Competitor Intelligence: Updates on key competitors (🏢 competitor names)<br>
             • Quality scores: Higher scores indicate more reputable sources and relevant content (15-100 scale)<br>
+            • AI Impact: Positive, Negative, Mixed, or Unclear impact assessment for company news<br>
             • Keywords generated by AI analysis for comprehensive coverage<br>
             • Spam domains automatically filtered out for quality<br>
             • Source badges show the original publisher of each article
@@ -1663,10 +1681,11 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     return "".join(html)
 
 def _format_article_html(article: Dict, category: str) -> str:
-    """Format article HTML with better timestamp formatting and Google News title trimming"""
+    """Format article HTML with AI analysis display"""
+    import html
+    
     # Format timestamp for individual articles
     if article["published_at"]:
-        # For individual articles, use a shorter format like "Sep 13, 2:23pm EST"
         eastern = pytz.timezone('US/Eastern')
         pub_dt = article["published_at"]
         if pub_dt.tzinfo is None:
@@ -1684,40 +1703,43 @@ def _format_article_html(article: Dict, category: str) -> str:
     
     # Determine source and clean title based on domain type
     if "news.google.com" in resolved_domain or resolved_domain == "google-news-unresolved":
-        # Use AI to analyze Google News titles and extract source from title
         title_result = extract_source_from_title_smart(original_title)
         
-        # Check if spam was detected during title analysis
-        if title_result[0] is None:  # Spam detected
-            return ""  # Return empty string to skip this article
+        if title_result[0] is None:
+            return ""
         
         title, extracted_source = title_result
         
         if extracted_source:
-            # Get formal name for the extracted source
             display_source = get_or_create_formal_domain_name(extracted_source)
         else:
-            display_source = "Google News"  # Fallback if no source extracted
+            display_source = "Google News"
     else:
-        # Non-Google articles use the title as-is and resolve domain normally
         title = original_title
         display_source = get_or_create_formal_domain_name(resolved_domain)
     
-    # Additional title cleanup - remove any remaining ticker artifacts
+    # Additional title cleanup
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
-    # Determine the actual link URL (prefer resolved/original over raw feed URL)
+    # Determine the actual link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
     # Quality score styling
     score = article["quality_score"]
     score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
     
+    # Impact styling
+    ai_impact = article.get("ai_impact", "").lower()
+    impact_class = f"impact-{ai_impact}" if ai_impact in ["positive", "negative", "mixed", "unclear"] else "impact-unclear"
+    impact_display = ai_impact.title() if ai_impact else "N/A"
+    
+    # AI reasoning
+    ai_reasoning = article.get("ai_reasoning", "").strip()
+    
     # Build metadata badges for category-specific information
     metadata_badges = []
     
-    # Add category-specific badges with full text display
     if category == "competitor" and article.get('search_keyword'):
         competitor_name = article['search_keyword']
         metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
@@ -1725,26 +1747,32 @@ def _format_article_html(article: Dict, category: str) -> str:
         industry_keyword = article['search_keyword']
         metadata_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
     
-    # Join all metadata badges
     enhanced_metadata = "".join(metadata_badges)
     
-    # Get description and format it (only valuable descriptions will be in database)
+    # Get description and format it
     description = article.get("description", "").strip()
     description_html = ""
     if description:
-        # Clean the description - remove HTML tags and fix encoding issues
-        import html
         description = html.unescape(description)
-        description = re.sub(r'<[^>]+>', '', description)  # Remove HTML tags
-        description = re.sub(r'\s+', ' ', description).strip()  # Normalize whitespace
+        description = re.sub(r'<[^>]+>', '', description)
+        description = re.sub(r'\s+', ' ', description).strip()
         
-        # Truncate if too long
         if len(description) > 500:
             description = description[:500] + "..."
         
-        # Escape for HTML output
         description = html.escape(description)
         description_html = f"<br><div class='description'>{description}</div>"
+    
+    # Build analysis section for company articles with AI data
+    analysis_html = ""
+    if category == "company" and (ai_impact or ai_reasoning):
+        analysis_html = f"""
+        <div class='article-analysis'>
+            <strong>🤖 AI Analysis:</strong>
+            {f'<span class="impact {impact_class}">{impact_display}</span>' if ai_impact else ''}
+            {f'<div class="ai-reasoning">{html.escape(ai_reasoning)}</div>' if ai_reasoning else ''}
+        </div>
+        """
     
     return f"""
     <div class='article {category}'>
@@ -1752,11 +1780,13 @@ def _format_article_html(article: Dict, category: str) -> str:
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
             <span class='score {score_class}'>Score: {score:.0f}</span>
+            {f'<span class="impact {impact_class}">{impact_display}</span>' if ai_impact and category == "company" else ''}
         </div>
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
             <span class='meta'> | {pub_date}</span>
             {description_html}
+            {analysis_html}
         </div>
     </div>
     """
@@ -1766,14 +1796,14 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
     with db() as conn, conn.cursor() as cur:
-        # Build query based on tickers - ENHANCED to include search metadata
+        # Build query based on tickers - ENHANCED to include AI analysis
         if tickers:
             cur.execute("""
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
                     f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword
+                    f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -1787,7 +1817,7 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
                     f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword
+                    f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -2083,12 +2113,14 @@ def cron_ingest(
     return total_stats
 
 @APP.post("/cron/digest")
+
+@APP.post("/cron/digest")
 def cron_digest(
     request: Request,
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers for digest")
 ):
-    """Generate and send email digest - ENHANCED with search metadata"""
+    """Generate and send email digest - ENHANCED with AI analysis"""
     require_admin(request)
     ensure_schema()
     
@@ -2096,7 +2128,6 @@ def cron_digest(
     days = int(hours / 24) if hours >= 24 else 0
     period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
     
-    # Lower the quality threshold to get more articles
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
     with db() as conn, conn.cursor() as cur:
@@ -2106,7 +2137,7 @@ def cron_digest(
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
                     f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword
+                    f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -2120,7 +2151,7 @@ def cron_digest(
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
                     f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword
+                    f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -2153,7 +2184,7 @@ def cron_digest(
                 SET sent_in_digest = TRUE
                 WHERE found_at >= %s AND quality_score >= 15
             """, (cutoff,))
-    
+
     total_articles = sum(
         sum(len(arts) for arts in categories.values())
         for categories in articles_by_ticker.values()
@@ -2282,17 +2313,17 @@ def list_ticker_configs(request: Request):
 
 @APP.post("/admin/force-digest")
 def force_digest(request: Request, body: ForceDigestRequest):
-    """Force digest with existing articles (for testing)"""
+    """Force digest with existing articles (for testing) - Enhanced with AI analysis"""
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
-        # Build query based on whether tickers are specified
         if body.tickers:
             cur.execute("""
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -2304,7 +2335,8 @@ def force_digest(request: Request, body: ForceDigestRequest):
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url
+                    f.found_at, f.category, f.related_ticker, f.original_source_url,
+                    f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15

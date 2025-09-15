@@ -388,8 +388,8 @@ def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
             source = match.group(1).strip()
             clean_title = re.sub(pattern, '', title).strip()
             
-            # Basic validation
-            if 3 < len(source) < 50 and not any(spam in source.lower() for spam in ["marketbeat", "newser"]):
+            # FIXED: Allow 3 characters (for MSN, CNN, etc.) and basic validation
+            if 2 < len(source) < 50 and not any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"]):
                 return clean_title, source
     
     return title, None
@@ -665,54 +665,33 @@ class DomainResolver:
     
     def _handle_google_news(self, url, title):
         """Handle Google News URL resolution with database-first domain mapping"""
-        LOG.info(f"=== GOOGLE NEWS DEBUG START ===")
-        LOG.info(f"URL: {url}")
-        LOG.info(f"Title: '{title}'")
-        
         # Try direct resolution first
         try:
-            LOG.info("Attempting direct URL resolution...")
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
             final_url = response.url
-            LOG.info(f"Direct resolution result: {final_url}")
             
             if final_url != url and "news.google.com" not in final_url:
                 domain = normalize_domain(urlparse(final_url).netloc.lower())
-                LOG.info(f"Direct resolution domain: {domain}")
                 if not self._is_spam_domain(domain):
-                    LOG.info(f"SUCCESS: Direct resolution to {domain}")
                     return final_url, domain, None
-            else:
-                LOG.info("Direct resolution failed - still on Google News")
-        except Exception as e:
-            LOG.info(f"Direct resolution exception: {e}")
+        except:
+            pass
         
         # Fall back to title extraction
-        LOG.info("Attempting title extraction...")
         if title and not contains_non_latin_script(title):
-            LOG.info(f"Title is valid for extraction: '{title}'")
             clean_title, source = extract_source_from_title_smart(title)
-            LOG.info(f"Title extraction result: clean_title='{clean_title}', source='{source}'")
-            
             if source and not self._is_spam_source(source):
-                LOG.info(f"Valid source found: '{source}'. Attempting AI resolution...")
+                # Try to resolve publication name to actual domain using database + AI
                 resolved_domain = self._resolve_publication_to_domain(source)
-                LOG.info(f"AI resolution result: '{source}' -> '{resolved_domain}'")
                 if resolved_domain:
-                    LOG.info(f"SUCCESS: Title extraction + AI resolution to {resolved_domain}")
                     return url, resolved_domain, None
                 else:
-                    LOG.warning(f"AI resolution failed for '{source}'")
+                    # If AI can't resolve it, mark as unresolved rather than creating "unknown-"
+                    LOG.warning(f"Could not resolve publication '{source}' to domain")
                     return url, "google-news-unresolved", None
-            else:
-                LOG.info(f"Source extraction failed or spam: source='{source}', is_spam_source={self._is_spam_source(source) if source else 'N/A'}")
-        else:
-            LOG.info("Title invalid for extraction (empty or non-Latin)")
         
-        LOG.info("FALLBACK: Using google-news-unresolved")
-        LOG.info(f"=== GOOGLE NEWS DEBUG END ===")
         return url, "google-news-unresolved", None
     
     def _handle_yahoo_finance(self, url):
@@ -2286,125 +2265,6 @@ def admin_cleanup_domains(request: Request):
         "status": "completed",
         "records_updated": updated_count,
         "message": "Domain data has been cleaned up. Publication names converted to actual domains."
-    }
-
-@APP.post("/admin/test-url")
-def test_url_resolution(request: Request, url: str = Body(..., embed=True), title: str = Body(None, embed=True)):
-    """Test URL resolution for debugging"""
-    require_admin(request)
-    
-    LOG.info(f"Testing URL resolution for: {url}")
-    if title:
-        LOG.info(f"With title: {title}")
-    
-    try:
-        resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
-        formal_name = domain_resolver.get_formal_name(domain) if domain else None
-        
-        return {
-            "original_url": url,
-            "original_title": title,
-            "resolved_url": resolved_url,
-            "domain": domain,
-            "source_url": source_url,
-            "formal_name": formal_name,
-            "status": "success"
-        }
-    except Exception as e:
-        return {
-            "original_url": url,
-            "error": str(e),
-            "status": "error"
-        }
-
-@APP.post("/admin/test-title-extraction")
-def test_title_extraction(request: Request, title: str = Body(..., embed=True)):
-    """Test title extraction for debugging"""
-    require_admin(request)
-    
-    LOG.info(f"Testing title extraction for: '{title}'")
-    
-    clean_title, source = extract_source_from_title_smart(title)
-    
-    return {
-        "original_title": title,
-        "clean_title": clean_title,
-        "extracted_source": source,
-        "contains_non_latin": contains_non_latin_script(title),
-        "would_be_spam": source and any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"]) if source else False
-    }
-
-@APP.post("/admin/test-url")
-def test_url_resolution(request: Request, url: str = Body(..., embed=True), title: str = Body(None, embed=True)):
-    """Test URL resolution for debugging"""
-    require_admin(request)
-    
-    LOG.info(f"Testing URL resolution for: {url}")
-    if title:
-        LOG.info(f"With title: {title}")
-    
-    try:
-        resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
-        formal_name = domain_resolver.get_formal_name(domain) if domain else None
-        
-        return {
-            "original_url": url,
-            "original_title": title,
-            "resolved_url": resolved_url,
-            "domain": domain,
-            "source_url": source_url,
-            "formal_name": formal_name,
-            "status": "success"
-        }
-    except Exception as e:
-        return {
-            "original_url": url,
-            "error": str(e),
-            "status": "error"
-        }
-
-# Add this simple test function to your code
-@APP.post("/admin/debug-title")
-def debug_title_extraction(request: Request, title: str = Body(..., embed=True)):
-    """Debug title extraction step by step"""
-    require_admin(request)
-    
-    import re
-    
-    # Test the regex patterns manually
-    patterns = [
-        r'\s*-\s*([^-]+)$',  # " - Source"
-        r'\s*\|\s*([^|]+)$'   # " | Source"
-    ]
-    
-    results = {}
-    
-    for i, pattern in enumerate(patterns):
-        match = re.search(pattern, title)
-        if match:
-            source = match.group(1).strip()
-            clean_title = re.sub(pattern, '', title).strip()
-            results[f"pattern_{i+1}"] = {
-                "matched": True,
-                "source": source,
-                "clean_title": clean_title,
-                "source_length": len(source),
-                "is_spam": any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"])
-            }
-        else:
-            results[f"pattern_{i+1}"] = {"matched": False}
-    
-    # Call the actual function
-    from your_app import extract_source_from_title_smart  # Adjust import as needed
-    actual_clean, actual_source = extract_source_from_title_smart(title)
-    
-    return {
-        "original_title": title,
-        "pattern_results": results,
-        "actual_function_result": {
-            "clean_title": actual_clean,
-            "source": actual_source
-        }
     }
 
 # ------------------------------------------------------------------------------

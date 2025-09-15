@@ -705,8 +705,9 @@ class DomainResolver:
                     return url, resolved_domain, None
                 else:
                     LOG.warning(f"AI resolution failed for '{source}'")
+                    return url, "google-news-unresolved", None
             else:
-                LOG.info(f"Source extraction failed or spam: source='{source}'")
+                LOG.info(f"Source extraction failed or spam: source='{source}', is_spam_source={self._is_spam_source(source) if source else 'N/A'}")
         else:
             LOG.info("Title invalid for extraction (empty or non-Latin)")
         
@@ -2330,7 +2331,80 @@ def test_title_extraction(request: Request, title: str = Body(..., embed=True)):
         "clean_title": clean_title,
         "extracted_source": source,
         "contains_non_latin": contains_non_latin_script(title),
-        "would_be_spam": source and any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"])
+        "would_be_spam": source and any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"]) if source else False
+    }
+
+@APP.post("/admin/test-url")
+def test_url_resolution(request: Request, url: str = Body(..., embed=True), title: str = Body(None, embed=True)):
+    """Test URL resolution for debugging"""
+    require_admin(request)
+    
+    LOG.info(f"Testing URL resolution for: {url}")
+    if title:
+        LOG.info(f"With title: {title}")
+    
+    try:
+        resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+        formal_name = domain_resolver.get_formal_name(domain) if domain else None
+        
+        return {
+            "original_url": url,
+            "original_title": title,
+            "resolved_url": resolved_url,
+            "domain": domain,
+            "source_url": source_url,
+            "formal_name": formal_name,
+            "status": "success"
+        }
+    except Exception as e:
+        return {
+            "original_url": url,
+            "error": str(e),
+            "status": "error"
+        }
+
+# Add this simple test function to your code
+@APP.post("/admin/debug-title")
+def debug_title_extraction(request: Request, title: str = Body(..., embed=True)):
+    """Debug title extraction step by step"""
+    require_admin(request)
+    
+    import re
+    
+    # Test the regex patterns manually
+    patterns = [
+        r'\s*-\s*([^-]+)$',  # " - Source"
+        r'\s*\|\s*([^|]+)$'   # " | Source"
+    ]
+    
+    results = {}
+    
+    for i, pattern in enumerate(patterns):
+        match = re.search(pattern, title)
+        if match:
+            source = match.group(1).strip()
+            clean_title = re.sub(pattern, '', title).strip()
+            results[f"pattern_{i+1}"] = {
+                "matched": True,
+                "source": source,
+                "clean_title": clean_title,
+                "source_length": len(source),
+                "is_spam": any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"])
+            }
+        else:
+            results[f"pattern_{i+1}"] = {"matched": False}
+    
+    # Call the actual function
+    from your_app import extract_source_from_title_smart  # Adjust import as needed
+    actual_clean, actual_source = extract_source_from_title_smart(title)
+    
+    return {
+        "original_title": title,
+        "pattern_results": results,
+        "actual_function_result": {
+            "clean_title": actual_clean,
+            "source": actual_source
+        }
     }
 
 # ------------------------------------------------------------------------------

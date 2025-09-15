@@ -870,8 +870,59 @@ def format_timestamp_est(dt: datetime) -> str:
     # Always use "EST" instead of dynamic timezone abbreviation
     return f"{date_part}, {time_part} EST"
 
+def is_description_valuable(title: str, description: str) -> bool:
+    """Check if description adds value beyond the title"""
+    if not description or len(description.strip()) < 10:
+        return False
+    
+    # Clean both title and description for comparison
+    clean_title = re.sub(r'[^\w\s]', ' ', title.lower()).strip()
+    clean_desc = re.sub(r'[^\w\s]', ' ', description.lower()).strip()
+    
+    # Remove HTML tags from description
+    clean_desc = re.sub(r'<[^>]+>', '', clean_desc)
+    
+    # Check for URL patterns (common in bad descriptions)
+    url_patterns = [
+        r'https?://',
+        r'www\.',
+        r'\.com',
+        r'news\.google\.com',
+        r'href=',
+        r'CBM[A-Za-z0-9]{20,}',  # Google News encoded URLs
+    ]
+    
+    for pattern in url_patterns:
+        if re.search(pattern, description, re.IGNORECASE):
+            return False
+    
+    # Check if description is just a truncated version of title
+    title_words = set(clean_title.split())
+    desc_words = set(clean_desc.split())
+    
+    # If description is mostly just title words, skip it
+    if len(title_words) > 0:
+        overlap = len(title_words.intersection(desc_words)) / len(title_words)
+        if overlap > 0.8:  # 80% overlap suggests redundancy
+            return False
+    
+    # Check if description starts with title (common redundancy)
+    if clean_desc.startswith(clean_title[:min(len(clean_title), 50)]):
+        return False
+    
+    # Check for single character descriptions
+    if len(clean_desc.strip()) == 1:
+        return False
+    
+    # Check for descriptions that are just fragments
+    if len(clean_desc) < 30 and not clean_desc.endswith('.'):
+        # Short fragments without proper ending are likely truncated/useless
+        return False
+    
+    return True
+
 def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
-    """Simplified feed processing"""
+    """Simplified feed processing with smart description filtering"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0}
     
     try:
@@ -883,7 +934,12 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
             
             url = getattr(entry, "link", None)
             title = getattr(entry, "title", "") or "No Title"
-            description = getattr(entry, "summary", "")[:500] if hasattr(entry, "summary") else ""
+            raw_description = getattr(entry, "summary", "") if hasattr(entry, "summary") else ""
+            
+            # Filter description - only keep if it adds value
+            description = ""
+            if raw_description and is_description_valuable(title, raw_description):
+                description = raw_description[:500]  # Keep original length limit
             
             # Quick spam checks
             if not url or contains_non_latin_script(title):
@@ -915,7 +971,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Insert article
+                    # Insert article with filtered description
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1054,7 +1110,6 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     
     return "".join(html)
 
-# FIX #2: Updated _format_article_html function with better badge handling
 def _format_article_html(article: Dict, category: str) -> str:
     """Format article HTML with better timestamp formatting and Google News title trimming"""
     # Format timestamp for individual articles
@@ -1121,7 +1176,7 @@ def _format_article_html(article: Dict, category: str) -> str:
     # Join all metadata badges
     enhanced_metadata = "".join(metadata_badges)
     
-    # Get description and format it
+    # Get description and format it (only valuable descriptions will be in database)
     description = article.get("description", "").strip()
     description_html = ""
     if description:

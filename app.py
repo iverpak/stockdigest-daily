@@ -378,6 +378,7 @@ def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
     
     # Simple patterns for common formats
     patterns = [
+        r'\s*-\s*([^-]+?)(?:\s*\([^)]*\.gov[^)]*\))?$',  # " - Source" (ignore .gov suffix)
         r'\s*-\s*([^-]+)$',  # " - Source"
         r'\s*\|\s*([^|]+)$'   # " | Source"
     ]

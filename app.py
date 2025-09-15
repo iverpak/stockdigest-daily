@@ -239,13 +239,14 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
     Returns: (content, error_message)
     """
     try:
-        # Create article object
-        article = Article(url)
+        # Create article object with proper configuration
+        config = newspaper.Config()
+        config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        config.request_timeout = 15
+        config.fetch_images = False  # Skip images for faster processing
+        config.memoize_articles = False  # Don't cache articles
         
-        # Set config for better extraction
-        article.set_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        })
+        article = newspaper.Article(url, config=config)
         
         # Download and parse
         article.download()
@@ -261,12 +262,22 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         paywall_indicators = [
             "subscribe to continue", "unlock this story", "premium content",
             "sign up to read", "become a member", "subscription required",
-            "create free account", "log in to continue"
+            "create free account", "log in to continue", "paywall",
+            "this article is for subscribers", "register to read"
         ]
         
         content_lower = content.lower()
         if any(indicator in content_lower for indicator in paywall_indicators):
             return None, "Paywall detected"
+        
+        # Check for error pages or redirects
+        error_indicators = [
+            "404", "page not found", "access denied", "forbidden",
+            "this page doesn't exist", "error occurred"
+        ]
+        
+        if any(error in content_lower for error in error_indicators):
+            return None, "Error page detected"
         
         # Limit content length (2000 chars for testing)
         if len(content) > 2000:
@@ -279,6 +290,10 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         LOG.info(f"Successfully extracted {len(content)} chars from {domain}")
         return content, None
         
+    except newspaper.article.ArticleException as e:
+        error_msg = f"Newspaper article error: {str(e)}"
+        LOG.warning(f"Failed to extract content from {url}: {error_msg}")
+        return None, error_msg
     except Exception as e:
         error_msg = f"Content extraction failed: {str(e)}"
         LOG.warning(f"Failed to extract content from {url}: {error_msg}")

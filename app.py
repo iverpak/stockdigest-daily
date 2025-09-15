@@ -11,6 +11,11 @@ from typing import List, Optional, Dict, Any, Tuple, Set
 from contextlib import contextmanager
 from urllib.parse import urlparse, parse_qs, unquote
 
+import newspaper
+from newspaper import Article
+import random
+from urllib.robotparser import RobotFileParser
+
 import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, Request, HTTPException, Query, Body
@@ -216,6 +221,330 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
                 CREATE INDEX IF NOT EXISTS idx_source_feed_ticker_category ON source_feed(ticker, category, active);
             """)
+
+# Add these fields to your database schema
+def update_schema_for_content():
+    """Add content scraping fields to found_url table"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraped_content TEXT;
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS content_scraped_at TIMESTAMP;
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
+        """)
+
+def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract article content from URL using newspaper3k
+    Returns: (content, error_message)
+    """
+    try:
+        # Create article object
+        article = Article(url)
+        
+        # Set config for better extraction
+        article.set_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        
+        # Download and parse
+        article.download()
+        article.parse()
+        
+        # Get the main text content
+        content = article.text.strip()
+        
+        if not content:
+            return None, "No content extracted"
+        
+        # Check for paywall indicators
+        paywall_indicators = [
+            "subscribe to continue", "unlock this story", "premium content",
+            "sign up to read", "become a member", "subscription required",
+            "create free account", "log in to continue"
+        ]
+        
+        content_lower = content.lower()
+        if any(indicator in content_lower for indicator in paywall_indicators):
+            return None, "Paywall detected"
+        
+        # Limit content length (2000 chars for testing)
+        if len(content) > 2000:
+            content = content[:2000] + "..."
+        
+        # Basic quality check - avoid very short articles
+        if len(content) < 100:
+            return None, "Content too short"
+        
+        LOG.info(f"Successfully extracted {len(content)} chars from {domain}")
+        return content, None
+        
+    except Exception as e:
+        error_msg = f"Content extraction failed: {str(e)}"
+        LOG.warning(f"Failed to extract content from {url}: {error_msg}")
+        return None, error_msg
+
+def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+    """
+    Safely scrape content with domain deduplication and rate limiting
+    Returns: (content, status_message)
+    """
+    
+    # Check if we've already scraped this domain in this run
+    if domain in scraped_domains:
+        return None, f"Skipping {domain} - already scraped in this run"
+    
+    # Add domain to scraped set
+    scraped_domains.add(domain)
+    
+    # Random delay between 3-7 seconds
+    delay = random.uniform(3.0, 7.0)
+    LOG.info(f"Waiting {delay:.1f}s before scraping {domain}...")
+    time.sleep(delay)
+    
+    # Extract content
+    content, error = extract_article_content(url, domain)
+    
+    if content:
+        return content, f"Successfully scraped {len(content)} chars"
+    else:
+        return None, error or "Unknown error"
+
+def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
+    """
+    Enhanced feed processing with content scraping for Yahoo resolved URLs
+    """
+    stats = {
+        "processed": 0, 
+        "inserted": 0, 
+        "duplicates": 0, 
+        "blocked_spam": 0, 
+        "blocked_non_latin": 0,
+        "content_scraped": 0,
+        "content_failed": 0,
+        "scraping_skipped": 0
+    }
+    
+    # Track domains we've scraped in this run
+    scraped_domains = set()
+    articles_processed = 0
+    
+    try:
+        parsed = feedparser.parse(feed["url"])
+        LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries")
+        
+        for entry in parsed.entries:
+            # Limit to first 10 articles for testing
+            if articles_processed >= 10:
+                LOG.info("Reached 10 article limit for testing")
+                break
+                
+            stats["processed"] += 1
+            articles_processed += 1
+            
+            url = getattr(entry, "link", None)
+            title = getattr(entry, "title", "") or "No Title"
+            raw_description = getattr(entry, "summary", "") if hasattr(entry, "summary") else ""
+            
+            # Filter description - only keep if it adds value
+            description = ""
+            if raw_description and is_description_valuable(title, raw_description):
+                description = raw_description[:500]
+            
+            # Quick spam checks
+            if not url or contains_non_latin_script(title):
+                stats["blocked_non_latin"] += 1
+                continue
+                
+            if any(spam in title.lower() for spam in ["marketbeat", "newser", "khodrobank"]):
+                stats["blocked_spam"] += 1
+                continue
+            
+            # URL resolution
+            resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+            if not resolved_url or not domain:
+                stats["blocked_spam"] += 1
+                continue
+            
+            # Check for duplicates
+            url_hash = get_url_hash(resolved_url)
+            
+            try:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
+                    if cur.fetchone():
+                        stats["duplicates"] += 1
+                        continue
+                    
+                    # Parse publish date
+                    published_at = None
+                    if hasattr(entry, "published_parsed"):
+                        published_at = parse_datetime(entry.published_parsed)
+                    
+                    # Content scraping logic
+                    scraped_content = None
+                    scraping_error = None
+                    content_scraped_at = None
+                    scraping_failed = False
+                    
+                    # Only attempt scraping for Yahoo resolved URLs (company articles)
+                    if (category == "company" and 
+                        source_url and 
+                        "finance.yahoo.com" in url and 
+                        resolved_url != url):  # We have a resolved original URL
+                        
+                        content, status = safe_content_scraper(resolved_url, domain, scraped_domains)
+                        
+                        if content:
+                            scraped_content = content
+                            content_scraped_at = datetime.now(timezone.utc)
+                            stats["content_scraped"] += 1
+                            LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
+                        else:
+                            scraping_failed = True
+                            scraping_error = status
+                            stats["content_failed"] += 1
+                            LOG.warning(f"Content scraping failed: {status}")
+                    else:
+                        stats["scraping_skipped"] += 1
+                    
+                    # For now, skip AI scoring to save processing time
+                    quality_score = 50.0  # Default neutral score
+                    
+                    # Use scraped content for display, fallback to description
+                    display_content = scraped_content if scraped_content else description
+                    
+                    # Insert article with content
+                    cur.execute("""
+                        INSERT INTO found_url (
+                            url, resolved_url, url_hash, title, description,
+                            feed_id, ticker, domain, quality_score, published_at,
+                            category, search_keyword, original_source_url,
+                            scraped_content, content_scraped_at, scraping_failed, scraping_error
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (
+                        url, resolved_url, url_hash, title, display_content,
+                        feed["id"], feed["ticker"], domain, quality_score, published_at,
+                        category, feed.get("search_keyword"), source_url,
+                        scraped_content, content_scraped_at, scraping_failed, scraping_error
+                    ))
+                    
+                    if cur.fetchone():
+                        stats["inserted"] += 1
+                        content_info = f"with scraped content" if scraped_content else "no content scraping"
+                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(domain)}: {title[:60]}... ({content_info})")
+                        
+            except Exception as e:
+                LOG.error(f"Database error for '{title[:50]}': {e}")
+                continue
+                
+    except Exception as e:
+        LOG.error(f"Feed processing error for {feed['name']}: {e}")
+    
+    return stats
+
+def _format_article_html_with_content(article: Dict, category: str) -> str:
+    """
+    Enhanced article HTML formatting that displays scraped content
+    """
+    import html
+    
+    # Format timestamp for individual articles
+    if article["published_at"]:
+        eastern = pytz.timezone('US/Eastern')
+        pub_dt = article["published_at"]
+        if pub_dt.tzinfo is None:
+            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+        
+        est_time = pub_dt.astimezone(eastern)
+        pub_date = est_time.strftime("%b %d, %I:%M%p").lower().replace(' 0', ' ').replace('0:', ':')
+        tz_abbrev = est_time.strftime("%Z")
+        pub_date = f"{pub_date} {tz_abbrev}"
+    else:
+        pub_date = "N/A"
+    
+    original_title = article["title"] or "No Title"
+    resolved_domain = article["domain"] or "unknown"
+    
+    # Determine source and clean title based on domain type
+    if "news.google.com" in resolved_domain or resolved_domain == "google-news-unresolved":
+        title_result = extract_source_from_title_smart(original_title)
+        
+        if title_result[0] is None:
+            return ""
+        
+        title, extracted_source = title_result
+        
+        if extracted_source:
+            display_source = get_or_create_formal_domain_name(extracted_source)
+        else:
+            display_source = "Google News"
+    else:
+        title = original_title
+        display_source = get_or_create_formal_domain_name(resolved_domain)
+    
+    # Additional title cleanup
+    title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
+    title = re.sub(r'\s+', ' ', title).strip()
+    
+    # Determine the actual link URL
+    link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
+    
+    # Quality score styling (disabled for now, but keeping structure)
+    score = article["quality_score"]
+    score_class = "med-score"  # Neutral since we're not scoring
+    
+    # Build metadata badges for category-specific information
+    metadata_badges = []
+    
+    if category == "competitor" and article.get('search_keyword'):
+        competitor_name = article['search_keyword']
+        metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
+    elif category == "industry" and article.get('search_keyword'):
+        industry_keyword = article['search_keyword']
+        metadata_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
+    
+    enhanced_metadata = "".join(metadata_badges)
+    
+    # Get content - prioritize scraped content, fall back to description
+    content_to_display = ""
+    if article.get("scraped_content"):
+        content_to_display = article["scraped_content"]
+        content_source = "scraped"
+    elif article.get("description"):
+        content_to_display = article["description"]
+        content_source = "description"
+    
+    description_html = ""
+    if content_to_display:
+        content_clean = html.unescape(content_to_display.strip())
+        content_clean = re.sub(r'<[^>]+>', '', content_clean)
+        content_clean = re.sub(r'\s+', ' ', content_clean).strip()
+        
+        if len(content_clean) > 800:
+            content_clean = content_clean[:800] + "..."
+        
+        content_clean = html.escape(content_clean)
+        
+        # Add indicator of content source
+        source_indicator = " [SCRAPED]" if content_source == "scraped" else " [DESC]"
+        description_html = f"<br><div class='description'>{content_clean}<em>{source_indicator}</em></div>"
+    
+    return f"""
+    <div class='article {category}'>
+        <div class='article-header'>
+            <span class='source-badge'>{display_source}</span>
+            {enhanced_metadata}
+            <span class='score {score_class}'>Score: {score:.0f}</span>
+        </div>
+        <div class='article-content'>
+            <a href='{link_url}' target='_blank'>{title}</a>
+            <span class='meta'> | {pub_date}</span>
+            {description_html}
+        </div>
+    </div>
+    """
 
 def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
     """Insert or update ticker configuration with enhanced competitor structure"""
@@ -1567,7 +1896,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
 # ------------------------------------------------------------------------------
 # Enhanced CSS styles to be added to the build_digest_html function
 def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
-    """Build HTML email digest with enhanced styling and AI analysis display"""
+    """Build HTML email digest using the enhanced article formatting with content indicators"""
     # Get ticker metadata for display
     ticker_metadata = {}
     for ticker in articles_by_ticker.keys():
@@ -1591,9 +1920,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
         ".article-header { margin-bottom: 5px; }",
         ".article-content { }",
-        ".article-analysis { margin-top: 8px; padding: 6px; background-color: #f8f9fa; border-radius: 3px; border-left: 2px solid #dee2e6; }",
         ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
-        ".ai-reasoning { color: #495057; font-size: 11px; line-height: 1.3; margin-top: 3px; }",
         ".company { border-left-color: #27ae60; }",
         ".industry { border-left-color: #f39c12; }",
         ".competitor { border-left-color: #e74c3c; }",
@@ -1602,11 +1929,6 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".high-score { background-color: #d4edda; color: #155724; }",
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
-        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; text-transform: uppercase; }",
-        ".impact-positive { background-color: #d1f2eb; color: #0e6b4a; border: 1px solid #7bdcb5; }",
-        ".impact-negative { background-color: #f8d7da; color: #721c24; border: 1px solid #f1aeb5; }",
-        ".impact-mixed { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
-        ".impact-unclear { background-color: #e2e3e5; color: #495057; border: 1px solid #ced4da; }",
         ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
@@ -1616,11 +1938,12 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
         ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
         "</style></head><body>",
-        f"<h1>Stock Intelligence Report</h1>",
+        f"<h1>Stock Intelligence Report - Content Scraping Test</h1>",
         f"<div class='summary'>",
         f"<strong>Report Period:</strong> Last {period_days} days<br>",
         f"<strong>Generated:</strong> {current_time_est}<br>",
-        f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}",
+        f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
+        f"<strong>Mode:</strong> Content Scraping Test (10 articles max, AI scoring disabled)",
         "</div>"
     ]
     
@@ -1647,33 +1970,33 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         if "company" in categories and categories["company"]:
             html.append(f"<h3>Company News ({len(categories['company'])} articles)</h3>")
             for article in categories["company"][:50]:
-                html.append(_format_article_html(article, "company"))
+                html.append(_format_article_html_with_content(article, "company"))
         
         # Industry News Section
         if "industry" in categories and categories["industry"]:
             html.append(f"<h3>Industry & Market News ({len(categories['industry'])} articles)</h3>")
             for article in categories["industry"][:50]:
-                html.append(_format_article_html(article, "industry"))
+                html.append(_format_article_html_with_content(article, "industry"))
         
         # Competitor News Section
         if "competitor" in categories and categories["competitor"]:
             html.append(f"<h3>Competitor Intelligence ({len(categories['competitor'])} articles)</h3>")
             for article in categories["competitor"][:50]:
-                html.append(_format_article_html(article, "competitor"))
+                html.append(_format_article_html_with_content(article, "competitor"))
         
         html.append("</div>")
     
     html.append("""
         <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
-            <strong>About This Report:</strong><br>
-            • Company News: Direct mentions and updates about the ticker with AI impact analysis<br>
-            • Industry News: Sector trends and market dynamics (🏭 industry keywords)<br>
-            • Competitor Intelligence: Updates on key competitors (🏢 competitor names)<br>
-            • Quality scores: Higher scores indicate more reputable sources and relevant content (15-100 scale)<br>
-            • AI Impact: Positive, Negative, Mixed, or Unclear impact assessment for company news<br>
-            • Keywords generated by AI analysis for comprehensive coverage<br>
-            • Spam domains automatically filtered out for quality<br>
-            • Source badges show the original publisher of each article
+            <strong>About This Test Report:</strong><br>
+            • Content Scraping Test: Yahoo Finance resolved URLs are scraped for full article content<br>
+            • [SCRAPED] indicator shows articles where full content was extracted<br>
+            • [DESC] indicator shows fallback to original description<br>
+            • AI Quality Scoring temporarily disabled to focus on content extraction<br>
+            • Limited to first 10 articles per feed run for safety testing<br>
+            • Domain deduplication: each domain scraped max once per run<br>
+            • 3-7 second delays between scraping requests for politeness<br>
+            • Only company-category Yahoo Finance articles are scraped for now
         </div>
         </body></html>
     """)
@@ -1792,22 +2115,22 @@ def _format_article_html(article: Dict, category: str) -> str:
     """
     
 def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
-    """Fetch categorized articles for digest with enhanced search metadata"""
+    """Fetch categorized articles for digest with content scraping data"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
-    # ADD THESE LINES:
     days = int(hours / 24) if hours >= 24 else 0
     period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
     
     with db() as conn, conn.cursor() as cur:
-        # Build query based on tickers - ENHANCED to include AI analysis
+        # Enhanced query to include content scraping fields
         if tickers:
             cur.execute("""
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
                     f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning
+                    f.search_keyword, f.ai_impact, f.ai_reasoning,
+                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -1821,7 +2144,8 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
                     f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning
+                    f.search_keyword, f.ai_impact, f.ai_reasoning,
+                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -1867,23 +2191,33 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
             "tickers": tickers or "all"
         }
     
-    html = build_digest_html(articles_by_ticker, days if days > 0 else 1)
+    html = build_digest_html_with_content(articles_by_ticker, days if days > 0 else 1)
     
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
     success = send_email(subject, html)
     
-    # Count by category
+    # Count by category and content scraping
     category_counts = {"company": 0, "industry": 0, "competitor": 0}
+    content_stats = {"scraped": 0, "failed": 0, "skipped": 0}
+    
     for ticker_cats in articles_by_ticker.values():
         for cat, arts in ticker_cats.items():
             category_counts[cat] = category_counts.get(cat, 0) + len(arts)
+            for art in arts:
+                if art.get('scraped_content'):
+                    content_stats['scraped'] += 1
+                elif art.get('scraping_failed'):
+                    content_stats['failed'] += 1
+                else:
+                    content_stats['skipped'] += 1
     
     return {
         "status": "sent" if success else "failed",
         "articles": total_articles,
         "tickers": list(articles_by_ticker.keys()),
         "by_category": category_counts,
+        "content_scraping_stats": content_stats,
         "recipient": DIGEST_TO
     }
 
@@ -2013,11 +2347,16 @@ def cron_ingest(
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
-    """Ingest articles from feeds for specified tickers - FIXED: Proper feed ordering"""
+    """
+    Enhanced ingest with content scraping for Yahoo feeds
+    """
     require_admin(request)
     ensure_schema()
     
-    # Get feeds for specified tickers with search metadata - FIXED: Order by category priority
+    # Ensure content scraping schema is in place
+    update_schema_for_content()
+    
+    # Get feeds for specified tickers
     with db() as conn, conn.cursor() as cur:
         if tickers:
             cur.execute("""
@@ -2055,7 +2394,9 @@ def cron_ingest(
         "total_inserted": 0,
         "total_duplicates": 0,
         "total_blocked_spam": 0,
-        "total_yahoo_sources": 0,
+        "total_content_scraped": 0,
+        "total_content_failed": 0,
+        "total_scraping_skipped": 0,
         "by_ticker": {},
         "by_category": {"company": 0, "industry": 0, "competitor": 0}
     }
@@ -2070,35 +2411,46 @@ def cron_ingest(
     
     # Process each ticker's feeds
     for ticker, ticker_feeds in feeds_by_ticker.items():
-        # Get metadata for this ticker
         metadata = ticker_manager.get_or_create_metadata(ticker)
-        ticker_stats = {"inserted": 0, "duplicates": 0, "blocked_spam": 0, "yahoo_sources": 0}
+        ticker_stats = {
+            "inserted": 0, 
+            "duplicates": 0, 
+            "blocked_spam": 0, 
+            "content_scraped": 0,
+            "content_failed": 0,
+            "scraping_skipped": 0
+        }
         
         for feed in ticker_feeds:
-            # Use the category from database instead of guessing from name
             category = feed.get("category", "company")
             
-            # Get relevant keywords for this category
             if category == "company":
-                category_keywords = []  # Company articles don't need category keywords
+                category_keywords = []
             elif category == "industry":
                 category_keywords = metadata.get("industry_keywords", [])
             elif category == "competitor":
-                category_keywords = []  # Competitor articles use search_keyword
+                category_keywords = []
             else:
                 category_keywords = []
             
-            stats = ingest_feed(feed, category, category_keywords)
+            # Use the enhanced scraping function
+            stats = ingest_feed_with_content_scraping(feed, category, category_keywords)
+            
             total_stats["feeds_processed"] += 1
             total_stats["total_inserted"] += stats["inserted"]
             total_stats["total_duplicates"] += stats["duplicates"]
             total_stats["total_blocked_spam"] += stats.get("blocked_spam", 0)
-            total_stats["total_yahoo_sources"] += stats.get("yahoo_sources_found", 0)
+            total_stats["total_content_scraped"] += stats.get("content_scraped", 0)
+            total_stats["total_content_failed"] += stats.get("content_failed", 0)
+            total_stats["total_scraping_skipped"] += stats.get("scraping_skipped", 0)
             total_stats["by_category"][category] += stats["inserted"]
+            
             ticker_stats["inserted"] += stats["inserted"]
             ticker_stats["duplicates"] += stats["duplicates"]
             ticker_stats["blocked_spam"] += stats.get("blocked_spam", 0)
-            ticker_stats["yahoo_sources"] += stats.get("yahoo_sources_found", 0)
+            ticker_stats["content_scraped"] += stats.get("content_scraped", 0)
+            ticker_stats["content_failed"] += stats.get("content_failed", 0)
+            ticker_stats["scraping_skipped"] += stats.get("scraping_skipped", 0)
             
             LOG.info(f"Feed {feed['name']} [{category}]: {stats}")
         
@@ -2115,8 +2467,6 @@ def cron_ingest(
     
     total_stats["old_articles_deleted"] = deleted
     return total_stats
-
-@APP.post("/cron/digest")
 
 @APP.post("/cron/digest")
 def cron_digest(

@@ -97,6 +97,7 @@ QUALITY_DOMAINS = {
 
 # Known paywall domains to skip during content scraping
 PAYWALL_DOMAINS = {
+    # Traditional paywalls
     "wsj.com", "www.wsj.com",
     "barrons.com", "www.barrons.com", 
     "ft.com", "www.ft.com",
@@ -104,12 +105,29 @@ PAYWALL_DOMAINS = {
     "economist.com", "www.economist.com",
     "nytimes.com", "www.nytimes.com",
     "washingtonpost.com", "www.washingtonpost.com",
+    
+    # Financial news paywalls
     "reuters.com", "www.reuters.com",  # Sometimes paywall
-    "moneywise.com", "www.moneywise.com",
-    "accessnewswire.com", "www.accessnewswire.com",
+    "theglobeandmail.com", "www.theglobeandmail.com",
+    "telegraph.co.uk", "www.telegraph.co.uk",
+    "insidermonkey.com", "www.insidermonkey.com",
     "gurufocus.com", "www.gurufocus.com",
-    "thefly.com", "www.thefly.com",  # Often requires subscription
-    "mtnewswires.com", "www.mtnewswires.com"  # Subscription service
+    "thefly.com", "www.thefly.com",
+    "tipranks.com", "www.tipranks.com",  # Premium content
+    
+    # Wire services with subscription requirements
+    "mtnewswires.com", "www.mtnewswires.com",
+    "accessnewswire.com", "www.accessnewswire.com",
+    "moneywise.com", "www.moneywise.com",
+    
+    # Academic/research paywalls
+    "sciencedirect.com", "www.sciencedirect.com",
+    "researchgate.net", "www.researchgate.net",
+    
+    # Other subscription-based financial sites
+    "marketwatch.com", "www.marketwatch.com",  # Some premium content
+    "benzinga.com", "www.benzinga.com",  # Pro content
+    "investing.com", "www.investing.com",  # Some restricted content
 }
 
 # Domain authority tiers for AI scoring
@@ -329,15 +347,11 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
     Returns: (content, status_message)
     """
     
-    # Check if we've already scraped this domain in this run
-    if domain in scraped_domains:
-        return None, f"Skipping {domain} - already scraped in this run"
-    
-    # Add domain to scraped set
-    scraped_domains.add(domain)
+    # Log domain for tracking but don't skip
+    LOG.debug(f"Scraping {domain} (may have scraped before in this run)")
     
     # Random delay between 3-7 seconds
-    delay = random.uniform(3.0, 7.0)
+    delay = random.uniform(4.0, 8.0)
     LOG.info(f"Waiting {delay:.1f}s before scraping {domain}...")
     time.sleep(delay)
     

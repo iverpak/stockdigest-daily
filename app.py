@@ -30,6 +30,10 @@ from email.mime.text import MIMEText
 
 from bs4 import BeautifulSoup
 
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -97,37 +101,19 @@ QUALITY_DOMAINS = {
 
 # Known paywall domains to skip during content scraping
 PAYWALL_DOMAINS = {
-    # Traditional paywalls
+    # Hard paywalls only
     "wsj.com", "www.wsj.com",
-    "barrons.com", "www.barrons.com", 
     "ft.com", "www.ft.com",
-    "bloomberg.com", "www.bloomberg.com",
     "economist.com", "www.economist.com",
     "nytimes.com", "www.nytimes.com",
     "washingtonpost.com", "www.washingtonpost.com",
     
-    # Financial news paywalls
-    "reuters.com", "www.reuters.com",  # Sometimes paywall
-    "theglobeandmail.com", "www.theglobeandmail.com",
-    "telegraph.co.uk", "www.telegraph.co.uk",
-    "insidermonkey.com", "www.insidermonkey.com",
-    "gurufocus.com", "www.gurufocus.com",
-    "thefly.com", "www.thefly.com",
-    "tipranks.com", "www.tipranks.com",  # Premium content
-    
-    # Wire services with subscription requirements
-    "mtnewswires.com", "www.mtnewswires.com",
-    "accessnewswire.com", "www.accessnewswire.com",
-    "moneywise.com", "www.moneywise.com",
-    
     # Academic/research paywalls
     "sciencedirect.com", "www.sciencedirect.com",
-    "researchgate.net", "www.researchgate.net",
     
-    # Other subscription-based financial sites
-    "marketwatch.com", "www.marketwatch.com",  # Some premium content
-    "benzinga.com", "www.benzinga.com",  # Pro content
-    "investing.com", "www.investing.com",  # Some restricted content
+    # Specific financial paywalls that consistently block
+    "thefly.com", "www.thefly.com",
+    "accessnewswire.com", "www.accessnewswire.com",
 }
 
 # Domain authority tiers for AI scoring
@@ -186,6 +172,38 @@ SOURCE_TIER_HINTS = [
     (r"\b(benzinga)\b", 0.4),
     (r"\b(globenewswire|pr newswire|business wire)\b", 0.2),
 ]
+
+# Enhanced scraping configuration
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+]
+
+DOMAIN_STRATEGIES = {
+    'simplywall.st': {
+        'delay_range': (5, 8),
+        'headers': {'Accept': 'text/html,application/xhtml+xml'},
+    },
+    'seekingalpha.com': {
+        'delay_range': (3, 6),
+        'referrer': 'https://www.google.com/search?q=stock+analysis',
+    },
+    'zacks.com': {
+        'delay_range': (4, 7),
+        'headers': {'Cache-Control': 'no-cache'},
+    },
+    'benzinga.com': {
+        'delay_range': (4, 7),
+        'headers': {'Accept': 'text/html,application/xhtml+xml'},
+    },
+    'tipranks.com': {
+        'delay_range': (5, 8),
+        'referrer': 'https://www.google.com/',
+    }
+}
 
 # ------------------------------------------------------------------------------
 # Database helpers
@@ -272,24 +290,52 @@ def update_schema_for_content():
 
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Extract article content from URL using newspaper3k with enhanced detection
+    Enhanced article extraction with multiple fallback strategies
     """
     try:
-        # Check for known paywall domains first
+        # Check for known paywall domains first (reduced list)
         if normalize_domain(domain) in PAYWALL_DOMAINS:
             return None, f"Paywall domain: {domain}"
         
-        # Create article object with proper configuration
+        # Get domain-specific strategy
+        strategy = get_domain_strategy(domain)
+        
+        # Add domain-specific headers
+        headers = strategy.get('headers', {})
+        headers['Referer'] = get_referrer_for_domain(url, domain)
+        headers['User-Agent'] = get_random_user_agent()
+        
+        # Apply headers to session
+        scraping_session.headers.update(headers)
+        
+        # Random delay based on domain strategy
+        delay_min, delay_max = strategy.get('delay_range', (4, 8))
+        delay = random.uniform(delay_min, delay_max)
+        LOG.info(f"Waiting {delay:.1f}s before scraping {domain}...")
+        time.sleep(delay)
+        
+        # Try enhanced scraping with backoff
+        response = scrape_with_backoff(url)
+        if not response:
+            return None, "Failed to fetch URL after retries"
+        
+        # Handle cookies and JavaScript redirects
+        if 'Set-Cookie' in response.headers:
+            scraping_session.cookies.update(response.cookies)
+        
+        # Check for JavaScript redirects
+        if 'window.location' in response.text or 'document.location' in response.text:
+            return None, "JavaScript redirect detected"
+        
+        # Use newspaper3k to parse the HTML
         config = newspaper.Config()
-        config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        config.browser_user_agent = headers.get('User-Agent')
         config.request_timeout = 15
         config.fetch_images = False
         config.memoize_articles = False
         
         article = newspaper.Article(url, config=config)
-        
-        # Download and parse
-        article.download()
+        article.set_html(response.text)
         article.parse()
         
         # Get the main text content
@@ -298,7 +344,7 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         if not content:
             return None, "No content extracted"
         
-        # Check for cookie banners and consent pages
+        # Enhanced cookie banner detection
         cookie_indicators = [
             "we use cookies", "accept all cookies", "cookie policy",
             "privacy policy and terms of service", "consent to the use",
@@ -323,14 +369,13 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         if any(content_lower.startswith(indicator) for indicator in cookie_start_indicators):
             return None, "Cookie banner content detected"
         
-        # Enhanced paywall indicators
+        # Enhanced paywall indicators (try scraping first, then check)
         paywall_indicators = [
             "subscribe to continue", "unlock this story", "premium content",
             "sign up to read", "become a member", "subscription required",
             "create free account", "log in to continue", "paywall",
             "this article is for subscribers", "register to read",
             "403 forbidden", "401 unauthorized", "access denied",
-            "subscription", "premium", "behind paywall", "member only",
             "upgrade to premium", "become a subscriber"
         ]
         
@@ -347,11 +392,12 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         if any(error in content_lower for error in error_indicators):
             return None, "Error page detected"
         
-        # Basic quality check - avoid very short articles
-        if len(content) < 100:
-            return None, "Content too short"
+        # Validate content quality
+        is_valid, validation_msg = validate_scraped_content(content, url, domain)
+        if not is_valid:
+            return None, validation_msg
         
-        # Store full content (removed 2000 char limit)
+        # Store full content (no length limit)
         LOG.info(f"Successfully extracted {len(content)} chars from {domain}")
         return content, None
         
@@ -364,21 +410,115 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         LOG.warning(f"Failed to extract content from {url}: {error_msg}")
         return None, error_msg
 
+def create_scraping_session():
+    session = requests.Session()
+    
+    # Retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    # Comprehensive headers
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0',
+    })
+    
+    return session
+
+def get_random_user_agent():
+    return random.choice(USER_AGENTS)
+
+def get_referrer_for_domain(url, domain):
+    """Add realistic referrer headers"""
+    referrers = {
+        'default': [
+            'https://www.google.com/',
+            'https://duckduckgo.com/',
+            'https://www.bing.com/',
+        ],
+        'news_sites': [
+            'https://news.google.com/',
+            'https://finance.yahoo.com/',
+            'https://www.reddit.com/r/investing/',
+        ]
+    }
+    
+    if any(news in domain for news in ['news', 'finance', 'investing']):
+        return random.choice(referrers['news_sites'])
+    return random.choice(referrers['default'])
+
+def get_domain_strategy(domain):
+    return DOMAIN_STRATEGIES.get(domain, {
+        'delay_range': (4, 8),
+        'headers': {},
+    })
+
+def scrape_with_backoff(url, max_retries=3):
+    """Enhanced scraping with exponential backoff"""
+    for attempt in range(max_retries):
+        try:
+            response = scraping_session.get(url, timeout=15)
+            if response.status_code == 200:
+                return response
+            elif response.status_code in [429, 503]:
+                # Rate limited - wait longer
+                delay = (2 ** attempt) + random.uniform(0, 1)
+                LOG.info(f"Rate limited, waiting {delay:.1f}s")
+                time.sleep(delay)
+            else:
+                return None
+        except requests.RequestException as e:
+            delay = (2 ** attempt) + random.uniform(0, 1)
+            LOG.warning(f"Request failed, retrying in {delay:.1f}s: {e}")
+            time.sleep(delay)
+    
+    return None
+
+def validate_scraped_content(content, url, domain):
+    """Multi-step content validation"""
+    if not content or len(content.strip()) < 100:
+        return False, "Content too short"
+    
+    # Check content-to-boilerplate ratio
+    sentences = content.split('.')
+    if len(sentences) < 3:
+        return False, "Insufficient sentences"
+    
+    # Check for repetitive content (often indicates scraping issues)
+    words = content.lower().split()
+    if len(words) > 0 and len(set(words)) / len(words) < 0.3:  # Less than 30% unique words
+        return False, "Repetitive content detected"
+    
+    return True, "Valid content"
+
+# Create global session
+scraping_session = create_scraping_session()
+
 def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
-    Safely scrape content with domain deduplication and rate limiting
+    Safely scrape content with enhanced strategies (removed domain deduplication)
     Returns: (content, status_message)
     """
     
-    # Log domain for tracking but don't skip
-    LOG.debug(f"Scraping {domain} (may have scraped before in this run)")
+    # Log domain for tracking but don't skip based on previous scraping
+    LOG.debug(f"Scraping {domain} (enhanced mode)")
     
-    # Random delay between 3-7 seconds
-    delay = random.uniform(4.0, 8.0)
-    LOG.info(f"Waiting {delay:.1f}s before scraping {domain}...")
-    time.sleep(delay)
-    
-    # Extract content
+    # Extract content using enhanced method
     content, error = extract_article_content(url, domain)
     
     if content:

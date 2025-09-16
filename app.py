@@ -1576,10 +1576,25 @@ Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "P
     
     return score, impact, reason
 
-def get_url_hash(url: str) -> str:
-    """Generate hash for URL deduplication"""
-    url_lower = url.lower()
-    url_clean = re.sub(r'[?&](utm_|ref=|source=).*', '', url_lower)
+def get_url_hash(url: str, resolved_url: str = None) -> str:
+    """
+    Generate hash for URL deduplication, accounting for Yahoo Finance resolved URLs
+    """
+    # Use resolved URL if available (for Yahoo Finance extractions)
+    primary_url = resolved_url or url
+    
+    # Clean the URL for consistent hashing
+    url_lower = primary_url.lower()
+    
+    # Remove common URL parameters that don't affect content
+    url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url_lower)
+    
+    # For Yahoo Finance URLs, also remove the .tsrc parameter specifically
+    url_clean = re.sub(r'\?\.tsrc=.*$', '', url_clean)
+    
+    # Remove trailing slashes and normalize
+    url_clean = url_clean.rstrip('/')
+    
     return hashlib.md5(url_clean.encode()).hexdigest()
 
 def normalize_domain(domain: str) -> str:

@@ -936,6 +936,12 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
+    # ADD THIS BLOCK RIGHT HERE - before the return statement
+    # At the end of your feed processing, log final Playwright stats
+    if playwright_stats["attempted"] > 0:
+        log_playwright_stats()
+        LOG.info(f"PLAYWRIGHT FINAL REPORT: Attempted to recover {playwright_stats['attempted']} failed URLs")
+    
     return stats
 
 def _format_article_html_with_content(article: Dict, category: str) -> str:

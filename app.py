@@ -608,8 +608,8 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
         content_clean = re.sub(r'<[^>]+>', '', content_clean)
         content_clean = re.sub(r'\s+', ' ', content_clean).strip()
         
-        if len(content_clean) > 2000:
-            content_clean = content_clean[:2000] + "..."
+        if len(content_clean) > 800:
+            content_clean = content_clean[:800] + "..."
         
         content_clean = html.escape(content_clean)
         

@@ -859,7 +859,9 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "blocked_non_latin": 0,
         "content_scraped": 0,
         "content_failed": 0,
-        "scraping_skipped": 0
+        "scraping_skipped": 0,
+        "ai_backfilled": 0,        # NEW
+        "ai_backfill_errors": 0    # NEW
     }
     
     scraped_domains = set()
@@ -924,11 +926,52 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Simple duplicate check
-                    cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
-                    if cur.fetchone():
-                        stats["duplicates"] += 1
-                        continue
+                    # Enhanced duplicate check - also look for missing AI analysis
+                    cur.execute("""
+                        SELECT id, scraped_content, ai_impact, ai_reasoning, quality_score 
+                        FROM found_url WHERE url_hash = %s
+                    """, (url_hash,))
+                    existing_article = cur.fetchone()
+                    
+                    if existing_article:
+                        # Article exists - check if we need to backfill AI analysis
+                        needs_ai_backfill = (
+                            existing_article.get("scraped_content") and  # Has scraped content
+                            not existing_article.get("ai_impact") and    # Missing AI impact
+                            category.lower() in ["company", "company_news", "comp"]  # Company article
+                        )
+                        
+                        if needs_ai_backfill:
+                            LOG.info(f"Backfilling AI analysis for existing article: {title[:50]}...")
+                            
+                            try:
+                                # Run AI analysis on existing scraped content
+                                quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                                    title=title,
+                                    domain=final_domain,
+                                    ticker=feed["ticker"],
+                                    description=existing_article["scraped_content"],
+                                    category=category,
+                                    keywords=keywords
+                                )
+                                
+                                # Update the existing article with AI analysis
+                                cur.execute("""
+                                    UPDATE found_url 
+                                    SET quality_score = %s, ai_impact = %s, ai_reasoning = %s
+                                    WHERE id = %s
+                                """, (quality_score, ai_impact, ai_reasoning, existing_article["id"]))
+                                
+                                stats["ai_backfilled"] += 1
+                                LOG.info(f"AI backfill complete: {quality_score:.0f}/{ai_impact} - {ai_reasoning[:50]}...")
+                                
+                            except Exception as e:
+                                LOG.error(f"AI backfill failed for '{title[:50]}': {e}")
+                                stats["ai_backfill_errors"] += 1
+                        else:
+                            stats["duplicates"] += 1
+                        
+                        continue  # Move to next article
                     
                     # Parse publish date
                     published_at = None
@@ -1028,6 +1071,10 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     if playwright_stats["attempted"] > 0:
         log_playwright_stats()
         LOG.info(f"PLAYWRIGHT FINAL REPORT: Attempted to recover {playwright_stats['attempted']} failed URLs")
+    
+    # Log AI backfill stats if any occurred
+    if stats.get("ai_backfilled", 0) > 0 or stats.get("ai_backfill_errors", 0) > 0:
+        LOG.info(f"AI Backfill Summary - Completed: {stats.get('ai_backfilled', 0)}, Errors: {stats.get('ai_backfill_errors', 0)}")
     
     return stats
 
@@ -3296,6 +3343,8 @@ def cron_ingest(
         "total_content_scraped": 0,
         "total_content_failed": 0,
         "total_scraping_skipped": 0,
+        "total_ai_backfilled": 0,      # NEW
+        "total_ai_backfill_errors": 0, # NEW
         "by_ticker": {},
         "by_category": {"company": 0, "industry": 0, "competitor": 0}
     }
@@ -3342,6 +3391,8 @@ def cron_ingest(
             total_stats["total_content_scraped"] += stats.get("content_scraped", 0)
             total_stats["total_content_failed"] += stats.get("content_failed", 0)
             total_stats["total_scraping_skipped"] += stats.get("scraping_skipped", 0)
+            total_stats["total_ai_backfilled"] += stats.get("ai_backfilled", 0)          # NEW
+            total_stats["total_ai_backfill_errors"] += stats.get("ai_backfill_errors", 0)  # NEW
             total_stats["by_category"][category] += stats["inserted"]
             
             ticker_stats["inserted"] += stats["inserted"]
@@ -3350,6 +3401,8 @@ def cron_ingest(
             ticker_stats["content_scraped"] += stats.get("content_scraped", 0)
             ticker_stats["content_failed"] += stats.get("content_failed", 0)
             ticker_stats["scraping_skipped"] += stats.get("scraping_skipped", 0)
+            ticker_stats["ai_backfilled"] = ticker_stats.get("ai_backfilled", 0) + stats.get("ai_backfilled", 0)      # NEW
+            ticker_stats["ai_backfill_errors"] = ticker_stats.get("ai_backfill_errors", 0) + stats.get("ai_backfill_errors", 0)  # NEW
             
             LOG.info(f"Feed {feed['name']} [{category}]: {stats}")
         

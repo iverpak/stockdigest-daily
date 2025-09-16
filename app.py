@@ -897,7 +897,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             stats["scraping_skipped"] += 1
                             LOG.info(f"Skipping paywall domain: {scrape_domain}")
                         else:
-                            content, status = safe_content_scraper(scrape_url, scrape_domain, scraped_domains)
+                            content, status = safe_content_scraper_with_playwright(scrape_url, scrape_domain, scraped_domains)  # <- FIXED
                             
                             if content:
                                 scraped_content = content

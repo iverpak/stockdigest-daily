@@ -1500,7 +1500,7 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     return max(10.0, min(90.0, base_score))
 
 def _ai_quality_score_company(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for company articles with detailed formula breakdown"""
+    """AI-powered scoring for company articles with detailed formula breakdown - FIXED calculation"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
@@ -1543,6 +1543,8 @@ def _ai_quality_score_company(title: str, domain: str, ticker: str, description:
 You MUST compute the score using EXACTLY this formula and show all steps:
 Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
 
+CRITICAL: The "score" field and "final_score" field MUST be identical. Do not override your calculation.
+
 INPUTS PROVIDED:
 - source_tier = {source_tier} (already calculated)
 - title = "{title}"
@@ -1569,11 +1571,17 @@ penalty (check title+description):
 ×0.5 = if PR-ish announcements
 ×1.0 = otherwise
 
+STEP BY STEP CALCULATION:
+1. Calculate: 100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus]
+2. Apply penalty: [step1_result] × [penalty]
+3. Round to nearest integer
+4. Set BOTH "score" and "final_score" to this SAME number
+
 In formula_breakdown, show:
-- event_multiplier_reason: "Why I chose X.X: [specific reason based on what event this represents]"
-- relevance_boost_reason: "Why I chose X.X: [whether {ticker}/Vistra is specifically mentioned]"
-- penalty_reason: "Why I chose ×X.X: [specific reason]"
 - raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
+- final_score: [the exact calculated result]
+
+The "score" field at the top level MUST equal "final_score" in breakdown.
 
 Set bucket_used="company_news", impact_on_main based on shareholder impact, reason_short ≤140 chars."""
 
@@ -1589,7 +1597,7 @@ Set bucket_used="company_news", impact_on_main based on shareholder impact, reas
     return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
 
 def _ai_quality_score_industry(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for industry/market articles with detailed formula breakdown"""
+    """AI-powered scoring for industry/market articles with detailed formula breakdown - FIXED calculation"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
@@ -1632,6 +1640,8 @@ def _ai_quality_score_industry(title: str, domain: str, ticker: str, description
 You MUST compute the score using EXACTLY this formula and show all steps:
 Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
 
+CRITICAL: The "score" field and "final_score" field MUST be identical. Do not override your calculation.
+
 INPUTS PROVIDED:
 - source_tier = {source_tier} (already calculated)
 - title = "{title}"
@@ -1657,11 +1667,17 @@ penalty (check title+description):
 ×0.5 = if PR-ish ("announces expansion", "market size expected to grow", "unveils breakthrough")
 ×1.0 = otherwise
 
+STEP BY STEP CALCULATION:
+1. Calculate: 100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus]
+2. Apply penalty: [step1_result] × [penalty]
+3. Round to nearest integer
+4. Set BOTH "score" and "final_score" to this SAME number
+
 In formula_breakdown, show:
-- event_multiplier_reason: "Why I chose X.X: [specific reason based on title/description]"
-- relevance_boost_reason: "Why I chose X.X: [how this relates to {ticker}'s energy business]"
-- penalty_reason: "Why I chose ×X.X: [specific reason]"
 - raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
+- final_score: [the exact calculated result]
+
+The "score" field at the top level MUST equal "final_score" in breakdown.
 
 Set bucket_used="industry_market", impact_on_main based on implications for {ticker}, reason_short ≤140 chars."""
 
@@ -1677,7 +1693,7 @@ Set bucket_used="industry_market", impact_on_main based on implications for {tic
     return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
 
 def _ai_quality_score_competitor(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for competitor articles with detailed formula breakdown"""
+    """AI-powered scoring for competitor articles with detailed formula breakdown - FIXED calculation"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
@@ -1720,6 +1736,8 @@ def _ai_quality_score_competitor(title: str, domain: str, ticker: str, descripti
 You MUST compute the score using EXACTLY this formula and show all steps:
 Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
 
+CRITICAL: The "score" field and "final_score" field MUST be identical. Do not override your calculation.
+
 INPUTS PROVIDED:
 - source_tier = {source_tier} (already calculated)
 - title = "{title}"
@@ -1745,11 +1763,17 @@ penalty (check title+description):
 ×0.5 = if PR-ish announcements
 ×1.0 = otherwise
 
+STEP BY STEP CALCULATION:
+1. Calculate: 100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus]
+2. Apply penalty: [step1_result] × [penalty]
+3. Round to nearest integer
+4. Set BOTH "score" and "final_score" to this SAME number
+
 In formula_breakdown, show:
-- event_multiplier_reason: "Why I chose X.X: [what type of competitor event this represents]"
-- relevance_boost_reason: "Why I chose X.X: [which competitor mentioned and competitive relevance to {ticker}]"
-- penalty_reason: "Why I chose ×X.X: [specific reason]"
 - raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
+- final_score: [the exact calculated result]
+
+The "score" field at the top level MUST equal "final_score" in breakdown.
 
 Set bucket_used="competitor_intel", impact_on_main based on competitive implications for {ticker}, reason_short ≤140 chars."""
 
@@ -1765,7 +1789,7 @@ Set bucket_used="competitor_intel", impact_on_main based on competitive implicat
     return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
 
 def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, schema: Dict) -> Tuple[float, str, str]:
-    """Shared function to make AI requests with detailed breakdown logging"""
+    """Shared function to make AI requests with detailed breakdown logging - FIXED score calculation"""
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
@@ -1779,7 +1803,7 @@ def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, sche
             {"role": "user", "content": json.dumps(user_payload)}
         ],
         "response_format": {"type": "json_schema", "json_schema": schema},
-        "max_completion_tokens": 400  # Increased for breakdown
+        "max_completion_tokens": 400
     }
     
     response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -1792,12 +1816,24 @@ def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, sche
     content = result["choices"][0]["message"]["content"]
     parsed = json.loads(content)
     
-    score = float(parsed.get("score", 50))
+    # FIXED: Use the calculated score from breakdown, not the separate score field
+    breakdown = parsed.get("formula_breakdown", {})
+    calculated_score = breakdown.get("final_score")
+    declared_score = parsed.get("score", 50)
+    
+    # Use the calculated score if available, otherwise fall back to declared
+    if calculated_score is not None:
+        score = float(calculated_score)
+        if abs(score - declared_score) > 1:  # Log discrepancies
+            LOG.warning(f"SCORE MISMATCH: Calculated={calculated_score}, Declared={declared_score}, Using calculated")
+    else:
+        score = float(declared_score)
+        LOG.warning(f"No calculated score found, using declared score: {declared_score}")
+    
     impact = parsed.get("impact_on_main", "Unclear")
     reason = parsed.get("reason_short", "")
     
     # Log the detailed breakdown
-    breakdown = parsed.get("formula_breakdown", {})
     if breakdown:
         LOG.info(f"FORMULA BREAKDOWN:")
         LOG.info(f"  Source tier: {breakdown.get('source_tier_input', 'N/A')}")
@@ -1806,7 +1842,7 @@ def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, sche
         LOG.info(f"  Numeric bonus: {breakdown.get('numeric_bonus', 'N/A')}")
         LOG.info(f"  Penalty: {breakdown.get('penalty_multiplier', 'N/A')} - {breakdown.get('penalty_reason', 'N/A')}")
         LOG.info(f"  Calculation: {breakdown.get('raw_calculation', 'N/A')}")
-        LOG.info(f"  Final score: {breakdown.get('final_score', 'N/A')}")
+        LOG.info(f"  USING CALCULATED SCORE: {score}")
     
     LOG.info(f"AI analysis: {score:.0f} | {impact} | {reason}")
     
@@ -4001,9 +4037,9 @@ def reset_ai_analysis(request: Request, tickers: List[str] = Query(default=None,
 def rerun_ai_analysis(
     request: Request, 
     tickers: List[str] = Query(default=None, description="Specific tickers to re-analyze"),
-    limit: int = Query(default=100, description="Max articles to process per run")
+    limit: int = Query(default=500, description="Max articles to process per run (no upper limit)")  # REMOVED upper limit
 ):
-    """Re-run AI analysis on existing articles that have NULL ai_impact"""
+    """Re-run AI analysis on existing articles that have NULL ai_impact - UNLIMITED PROCESSING"""
     require_admin(request)
     
     if not OPENAI_API_KEY:
@@ -4021,7 +4057,7 @@ def rerun_ai_analysis(
                 }
     
     with db() as conn, conn.cursor() as cur:
-        # Get articles that need AI analysis
+        # Get articles that need AI analysis - NO LIMIT restriction
         if tickers:
             cur.execute("""
                 SELECT id, title, description, domain, ticker, category, search_keyword
@@ -4053,6 +4089,8 @@ def rerun_ai_analysis(
     processed = 0
     updated = 0
     errors = 0
+    
+    LOG.info(f"Starting AI re-analysis of {len(articles)} articles (limit={limit})")
     
     for article in articles:
         try:
@@ -4096,9 +4134,11 @@ def rerun_ai_analysis(
                 if cur.rowcount > 0:
                     updated += 1
             
-            LOG.info(f"Re-analyzed [{category}] {ticker}: '{article['title'][:50]}...' -> Score: {quality_score:.1f}, Impact: {ai_impact}")
+            # Progress logging every 25 articles
+            if processed % 25 == 0:
+                LOG.info(f"Progress: {processed}/{len(articles)} articles processed, {updated} updated")
             
-            # Small delay to avoid rate limiting
+            # Small delay to avoid overwhelming OpenAI API
             time.sleep(0.1)
             
         except Exception as e:
@@ -4111,6 +4151,7 @@ def rerun_ai_analysis(
         "processed": processed,
         "updated": updated,
         "errors": errors,
+        "limit_used": limit,
         "tickers": tickers or "all",
         "message": f"Re-analyzed {updated} articles with fresh AI scoring"
     }

@@ -3885,6 +3885,158 @@ def admin_cleanup_domains(request: Request):
         "message": "Domain data has been cleaned up. Publication names converted to actual domains."
     }
 
+@APP.post("/admin/reset-ai-analysis")
+def reset_ai_analysis(request: Request, tickers: List[str] = Query(default=None, description="Specific tickers to reset")):
+    """Reset AI analysis data and force re-scoring of existing articles"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Clear existing AI analysis data
+        if tickers:
+            cur.execute("""
+                UPDATE found_url 
+                SET ai_impact = NULL, 
+                    ai_reasoning = NULL,
+                    quality_score = 50.0
+                WHERE ticker = ANY(%s)
+            """, (tickers,))
+        else:
+            cur.execute("""
+                UPDATE found_url 
+                SET ai_impact = NULL, 
+                    ai_reasoning = NULL,
+                    quality_score = 50.0
+            """)
+        
+        reset_count = cur.rowcount
+        
+        LOG.info(f"Reset AI analysis for {reset_count} articles")
+    
+    return {
+        "status": "ai_analysis_reset",
+        "articles_reset": reset_count,
+        "tickers": tickers or "all",
+        "message": f"Cleared AI analysis data for {reset_count} articles. Run re-analysis to generate fresh scores."
+    }
+
+@APP.post("/admin/rerun-ai-analysis")
+def rerun_ai_analysis(
+    request: Request, 
+    tickers: List[str] = Query(default=None, description="Specific tickers to re-analyze"),
+    limit: int = Query(default=100, description="Max articles to process per run")
+):
+    """Re-run AI analysis on existing articles that have NULL ai_impact"""
+    require_admin(request)
+    
+    if not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    # Get ticker metadata for keywords
+    ticker_metadata_cache = {}
+    if tickers:
+        for ticker in tickers:
+            config = get_ticker_config(ticker)
+            if config:
+                ticker_metadata_cache[ticker] = {
+                    "industry_keywords": config.get("industry_keywords", []),
+                    "competitors": config.get("competitors", [])
+                }
+    
+    with db() as conn, conn.cursor() as cur:
+        # Get articles that need AI analysis
+        if tickers:
+            cur.execute("""
+                SELECT id, title, description, domain, ticker, category, search_keyword
+                FROM found_url 
+                WHERE ai_impact IS NULL 
+                    AND ticker = ANY(%s)
+                    AND quality_score >= 15
+                ORDER BY found_at DESC
+                LIMIT %s
+            """, (tickers, limit))
+        else:
+            cur.execute("""
+                SELECT id, title, description, domain, ticker, category, search_keyword
+                FROM found_url 
+                WHERE ai_impact IS NULL 
+                    AND quality_score >= 15
+                ORDER BY found_at DESC
+                LIMIT %s
+            """, (limit,))
+        
+        articles = list(cur.fetchall())
+    
+    if not articles:
+        return {
+            "status": "no_articles",
+            "message": "No articles found that need AI re-analysis"
+        }
+    
+    processed = 0
+    updated = 0
+    errors = 0
+    
+    for article in articles:
+        try:
+            processed += 1
+            
+            # Get appropriate keywords based on category
+            ticker = article["ticker"]
+            category = article["category"] or "company"
+            
+            if ticker in ticker_metadata_cache:
+                metadata = ticker_metadata_cache[ticker]
+                if category == "industry":
+                    keywords = metadata.get("industry_keywords", [])
+                elif category == "competitor":
+                    keywords = metadata.get("competitors", [])
+                else:
+                    keywords = []
+            else:
+                keywords = []
+            
+            # Run AI analysis
+            quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                title=article["title"],
+                domain=article["domain"],
+                ticker=ticker,
+                description=article["description"] or "",
+                category=category,
+                keywords=keywords
+            )
+            
+            # Update the article
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE found_url 
+                    SET quality_score = %s,
+                        ai_impact = %s,
+                        ai_reasoning = %s
+                    WHERE id = %s
+                """, (quality_score, ai_impact, ai_reasoning, article["id"]))
+                
+                if cur.rowcount > 0:
+                    updated += 1
+            
+            LOG.info(f"Re-analyzed [{category}] {ticker}: '{article['title'][:50]}...' -> Score: {quality_score:.1f}, Impact: {ai_impact}")
+            
+            # Small delay to avoid rate limiting
+            time.sleep(0.1)
+            
+        except Exception as e:
+            errors += 1
+            LOG.error(f"Failed to re-analyze article {article['id']}: {e}")
+            continue
+    
+    return {
+        "status": "completed",
+        "processed": processed,
+        "updated": updated,
+        "errors": errors,
+        "tickers": tickers or "all",
+        "message": f"Re-analyzed {updated} articles with fresh AI scoring"
+    }
+
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands
 # ------------------------------------------------------------------------------

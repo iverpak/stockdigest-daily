@@ -756,11 +756,21 @@ def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains:
     if content:
         return content, f"Successfully scraped {len(content)} chars with requests"
     
-    # High-value domains that justify Playwright overhead
+    # Expanded high-value domains that justify Playwright overhead
     high_value_domains = {
-        'zacks.com', 'finance.yahoo.com', 'marketwatch.com', 'tradingview.com',
-        'barrons.com', 'nasdaq.com', 'msn.com', 'fool.com', 'benzinga.com',
-        'businesswire.com', 'tipranks.com', 'insidermonkey.com'
+        # Top JavaScript redirect failures
+        'finance.yahoo.com', 'fool.com', 'barrons.com', 'tipranks.com', 
+        'msn.com', 'zacks.com', 'nasdaq.com', 'theglobeandmail.com',
+        'cnbc.com', 'benzinga.com', 'businessinsider.com', 'marketwatch.com',
+        'investopedia.com', 'forbes.com', 'reuters.com', 'insidermonkey.com',
+        'tradingview.com', 'barchart.com', 'apnews.com', 'bloomberg.com',
+        
+        # Top fetch failure domains (server issues)
+        'investors.com', 'investing.com', 'seekingalpha.com', 'businesswire.com',
+        '247wallst.com', 'theinformation.com', 'thestreet.com', 'gurufocus.com',
+        
+        # Other valuable financial/tech domains
+        'aol.com', 'cbsnews.com', 'entrepreneur.com', 'foxbusiness.com'
     }
     
     normalized_domain = normalize_domain(domain)

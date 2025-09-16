@@ -851,6 +851,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     """
     Enhanced feed processing with intelligent Yahoo redirect handling and duplicate prevention
     FIXED: Use provided keywords instead of regenerating them
+    FIXED: Allow re-processing of articles that need AI analysis
     """
     stats = {
         "processed": 0, 
@@ -860,7 +861,8 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "blocked_non_latin": 0,
         "content_scraped": 0,
         "content_failed": 0,
-        "scraping_skipped": 0
+        "scraping_skipped": 0,
+        "ai_reanalyzed": 0  # New stat for tracking re-analysis
     }
     
     scraped_domains = set()
@@ -925,12 +927,50 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Simple duplicate check
-                    cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
-                    if cur.fetchone():
-                        stats["duplicates"] += 1
-                        continue
+                    # FIXED: Enhanced duplicate check - allow re-processing if AI analysis is missing
+                    cur.execute("""
+                        SELECT id, ai_impact, ai_reasoning, quality_score 
+                        FROM found_url 
+                        WHERE url_hash = %s
+                    """, (url_hash,))
+                    existing_article = cur.fetchone()
                     
+                    if existing_article:
+                        # Article exists - check if it needs AI re-analysis
+                        if existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None:
+                            LOG.info(f"Re-analyzing existing article: {title[:60]}... (missing AI data)")
+                            
+                            # Calculate quality score using AI for existing article
+                            quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                                title=title,
+                                domain=final_domain, 
+                                ticker=feed["ticker"],
+                                description=description,
+                                category=category,
+                                keywords=keywords
+                            )
+                            
+                            # Update the existing article with AI analysis
+                            cur.execute("""
+                                UPDATE found_url 
+                                SET quality_score = %s, ai_impact = %s, ai_reasoning = %s
+                                WHERE id = %s
+                            """, (quality_score, ai_impact, ai_reasoning, existing_article["id"]))
+                            
+                            if cur.rowcount > 0:
+                                stats["ai_reanalyzed"] += 1
+                                stats["duplicates"] += 1  # Still count as duplicate for stats
+                                LOG.info(f"Updated existing article [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... (AI Score: {quality_score:.1f}, Impact: {ai_impact})")
+                            else:
+                                LOG.warning(f"Failed to update existing article: {title[:60]}...")
+                        else:
+                            # Article exists and already has AI analysis - true duplicate
+                            stats["duplicates"] += 1
+                            LOG.debug(f"Skipping true duplicate: {title[:60]}...")
+                        
+                        continue  # Move to next article regardless
+                    
+                    # Article doesn't exist - proceed with normal insertion
                     # Parse publish date
                     published_at = None
                     if hasattr(entry, "published_parsed"):

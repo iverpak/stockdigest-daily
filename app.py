@@ -304,6 +304,14 @@ def ensure_schema():
                 -- Add AI analysis columns to found_url if they don't exist
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_impact VARCHAR(20);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_reasoning TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS source_tier DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier_reason TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS relevance_boost DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS relevance_boost_reason TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS numeric_bonus DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_multiplier DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_reason TEXT;
                 
                 -- Essential indexes only
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
@@ -311,6 +319,9 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_ticker_config_active ON ticker_config(active);
                 CREATE INDEX IF NOT EXISTS idx_source_feed_ticker_category ON source_feed(ticker, category, active);
+                CREATE INDEX IF NOT EXISTS idx_found_url_source_tier ON found_url(source_tier);
+                CREATE INDEX IF NOT EXISTS idx_found_url_event_multiplier ON found_url(event_multiplier);
+                CREATE INDEX IF NOT EXISTS idx_found_url_quality_score ON found_url(quality_score);
             """)
 
 # Add these fields to your database schema
@@ -1475,6 +1486,7 @@ def _is_spam_content(title: str, domain: str, description: str = "") -> bool:
     combined_text = f"{title} {description}".lower()
     return any(phrase in combined_text for phrase in spam_phrases)
 
+# Update the calculate_quality_score function to return components
 def calculate_quality_score(
     title: str, 
     domain: str, 
@@ -1482,9 +1494,9 @@ def calculate_quality_score(
     description: str = "",
     category: str = "company",
     keywords: List[str] = None
-) -> Tuple[float, Optional[str], Optional[str]]:
-    """Calculate quality score using category-specific AI scoring
-    Returns: (score, impact, reasoning)
+) -> Tuple[float, Optional[str], Optional[str], Optional[Dict]]:
+    """Calculate quality score using component-based AI scoring - UPDATED to return components
+    Returns: (score, impact, reasoning, components)
     """
     
     # Debug logging
@@ -1492,32 +1504,164 @@ def calculate_quality_score(
     
     # Pre-filter spam
     if _is_spam_content(title, domain, description):
-        return 0.0, "Negative", "Spam content detected"
+        return 0.0, "Negative", "Spam content detected", None
      
     # If no OpenAI key, use fallback scoring
     if not OPENAI_API_KEY or not title.strip():
         score = _fallback_quality_score(title, domain, ticker, description, keywords)
-        return score, None, None
+        return score, None, None, None
     
-    # Use category-specific AI scoring
+    # Use category-specific AI component extraction
     try:
         if category.lower() in ["company", "company_news", "comp"]:
-            score, impact, reasoning = _ai_quality_score_company(title, domain, ticker, description, keywords)
+            score, impact, reasoning, components = _ai_quality_score_company_components(title, domain, ticker, description, keywords)
         elif category.lower() in ["industry", "industry_market", "market"]:
-            score, impact, reasoning = _ai_quality_score_industry(title, domain, ticker, description, keywords)
+            score, impact, reasoning, components = _ai_quality_score_industry_components(title, domain, ticker, description, keywords)
         elif category.lower() in ["competitor", "competitor_intel", "competition"]:
-            score, impact, reasoning = _ai_quality_score_competitor(title, domain, ticker, description, keywords)
+            score, impact, reasoning, components = _ai_quality_score_competitor_components(title, domain, ticker, description, keywords)
         else:
             # Fallback for unknown categories
             score = _fallback_quality_score(title, domain, ticker, description, keywords)
-            return score, None, None
+            return score, None, None, None
             
-        LOG.info(f"AI scored [{ticker}] '{title[:50]}...' from {domain}: {score:.1f} ({category})")
-        return max(0.0, min(100.0, score)), impact, reasoning
+        LOG.info(f"Component-based score [{ticker}] '{title[:50]}...' from {domain}: {score:.1f} ({category})")
+        return max(0.0, min(100.0, score)), impact, reasoning, components
     except Exception as e:
-        LOG.warning(f"AI scoring failed for '{title[:50]}...': {e}")
+        LOG.warning(f"AI component scoring failed for '{title[:50]}...': {e}")
         score = _fallback_quality_score(title, domain, ticker, description, keywords)
-        return score, None, None
+        return score, None, None, None
+
+# Update the database insertion in ingest_feed_with_content_scraping()
+# Replace the AI scoring section with this:
+
+# Calculate quality score using AI - FIXED: Use provided keywords and get components
+quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
+    title=title,
+    domain=final_domain, 
+    ticker=feed["ticker"],
+    description=description,
+    category=category,
+    keywords=keywords
+)
+
+# Extract individual components for database storage
+source_tier = components.get('source_tier') if components else None
+event_multiplier = components.get('event_multiplier') if components else None
+event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+relevance_boost = components.get('relevance_boost') if components else None
+relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+numeric_bonus = components.get('numeric_bonus') if components else None
+penalty_multiplier = components.get('penalty_multiplier') if components else None
+penalty_reason = components.get('penalty_reason') if components else None
+
+# Use scraped content for display, fallback to description
+display_content = scraped_content if scraped_content else description
+
+# Insert article with final resolved information AND scoring components
+cur.execute("""
+    INSERT INTO found_url (
+        url, resolved_url, url_hash, title, description,
+        feed_id, ticker, domain, quality_score, published_at,
+        category, search_keyword, original_source_url,
+        scraped_content, content_scraped_at, scraping_failed, scraping_error,
+        ai_impact, ai_reasoning,
+        source_tier, event_multiplier, event_multiplier_reason,
+        relevance_boost, relevance_boost_reason, numeric_bonus,
+        penalty_multiplier, penalty_reason
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id
+""", (
+    url, final_resolved_url, url_hash, title, display_content,
+    feed["id"], feed["ticker"], final_domain, quality_score, published_at,
+    category, feed.get("search_keyword"), final_source_url,
+    scraped_content, content_scraped_at, scraping_failed, scraping_error,
+    ai_impact, ai_reasoning,
+    source_tier, event_multiplier, event_multiplier_reason,
+    relevance_boost, relevance_boost_reason, numeric_bonus,
+    penalty_multiplier, penalty_reason
+))
+
+# Also update the existing article re-analysis section:
+# Replace the existing UPDATE query with this expanded version:
+
+if existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None:
+    LOG.info(f"Re-analyzing existing article: {title[:60]}... (missing AI data)")
+    
+    # Calculate quality score using AI for existing article
+    quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
+        title=title,
+        domain=final_domain, 
+        ticker=feed["ticker"],
+        description=description,
+        category=category,
+        keywords=keywords
+    )
+    
+    # Extract components for database storage
+    source_tier = components.get('source_tier') if components else None
+    event_multiplier = components.get('event_multiplier') if components else None
+    event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+    relevance_boost = components.get('relevance_boost') if components else None
+    relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+    numeric_bonus = components.get('numeric_bonus') if components else None
+    penalty_multiplier = components.get('penalty_multiplier') if components else None
+    penalty_reason = components.get('penalty_reason') if components else None
+    
+    # Update the existing article with AI analysis AND components
+    cur.execute("""
+        UPDATE found_url 
+        SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
+            source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
+            relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
+            penalty_multiplier = %s, penalty_reason = %s
+        WHERE id = %s
+    """, (
+        quality_score, ai_impact, ai_reasoning,
+        source_tier, event_multiplier, event_multiplier_reason,
+        relevance_boost, relevance_boost_reason, numeric_bonus,
+        penalty_multiplier, penalty_reason,
+        existing_article["id"]
+    ))
+
+# Update the rerun-ai-analysis endpoint similarly:
+# In the rerun_ai_analysis function, replace the update section:
+
+# Run AI analysis
+quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
+    title=article["title"],
+    domain=article["domain"],
+    ticker=ticker,
+    description=article["description"] or "",
+    category=category,
+    keywords=keywords
+)
+
+# Extract components
+source_tier = components.get('source_tier') if components else None
+event_multiplier = components.get('event_multiplier') if components else None
+event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+relevance_boost = components.get('relevance_boost') if components else None
+relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+numeric_bonus = components.get('numeric_bonus') if components else None
+penalty_multiplier = components.get('penalty_multiplier') if components else None
+penalty_reason = components.get('penalty_reason') if components else None
+
+# Update the article with ALL scoring data
+with db() as conn, conn.cursor() as cur:
+    cur.execute("""
+        UPDATE found_url 
+        SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
+            source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
+            relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
+            penalty_multiplier = %s, penalty_reason = %s
+        WHERE id = %s
+    """, (
+        quality_score, ai_impact, ai_reasoning,
+        source_tier, event_multiplier, event_multiplier_reason,
+        relevance_boost, relevance_boost_reason, numeric_bonus,
+        penalty_multiplier, penalty_reason,
+        article["id"]
+    ))
 
 def _fallback_quality_score(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
     """Fallback scoring when AI is unavailable"""
@@ -1539,59 +1683,48 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     
     return max(10.0, min(90.0, base_score))
 
-def _ai_quality_score_company(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for company articles with detailed formula breakdown - FIXED calculation"""
+def _ai_quality_score_company_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
+    """AI-powered component extraction for company articles - returns components for our calculation"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
     
     schema = {
-        "name": "company_news_score",
+        "name": "company_news_components",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "score": {"type": "integer", "minimum": 0, "maximum": 100},
-                "bucket_used": {"type": "string"},
+                "source_tier_input": {"type": "number"},
+                "event_multiplier": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+                "event_multiplier_reason": {"type": "string"},
+                "relevance_boost": {"type": "number", "minimum": 0.5, "maximum": 1.5},
+                "relevance_boost_reason": {"type": "string"},
+                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "penalty_multiplier": {"type": "number", "minimum": 0.1, "maximum": 1.0},
+                "penalty_reason": {"type": "string"},
                 "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
-                "reason_short": {"type": "string"},
-                "formula_breakdown": {
-                    "type": "object",
-                    "properties": {
-                        "source_tier_input": {"type": "number"},
-                        "event_multiplier_chosen": {"type": "number"},
-                        "event_multiplier_reason": {"type": "string"},
-                        "relevance_boost_chosen": {"type": "number"},
-                        "relevance_boost_reason": {"type": "string"},
-                        "numeric_bonus": {"type": "number"},
-                        "penalty_multiplier": {"type": "number"},
-                        "penalty_reason": {"type": "string"},
-                        "raw_calculation": {"type": "string"},
-                        "final_score": {"type": "number"}
-                    },
-                    "required": ["source_tier_input", "event_multiplier_chosen", "event_multiplier_reason", "relevance_boost_chosen", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "raw_calculation", "final_score"],
-                    "additionalProperties": False
-                },
-                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
+                "reason_short": {"type": "string"}
             },
-            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "formula_breakdown", "flags"],
+            "required": ["source_tier_input", "event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short"],
             "additionalProperties": False
         }
     }
     
     system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-You MUST compute the score using EXACTLY this formula and show all steps:
-Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
-
-CRITICAL: The "score" field and "final_score" field MUST be identical. Do not override your calculation.
+Analyze the article and provide ONLY the scoring components. Do NOT calculate the final score.
 
 INPUTS PROVIDED:
-- source_tier = {source_tier} (already calculated)
+- source_tier = {source_tier} (already calculated - use this exact value)
 - title = "{title}"
 - description = "{desc_snippet}"
 - company = {ticker}
 
-COMPANY_NEWS event_multiplier (choose ONE that best fits title+description):
+PROVIDE THESE COMPONENTS:
+
+source_tier_input: Use exactly {source_tier} (provided)
+
+event_multiplier (choose ONE that best fits title+description):
 2.0 = halt/shut/delist/recall/probed/sues/settles/guides/cuts/raises/acquires/divests/spin-off
 1.6 = regulatory/policy directly affecting {ticker}
 1.5 = contracts/commitments/backlog announcements for {ticker}
@@ -1606,24 +1739,13 @@ relevance_boost:
 
 numeric_bonus: +0.1 for each concrete number in title+description (%, $, MW figures), max +0.3
 
-penalty (check title+description):
-×0.6 = if question/listicle/prediction format
-×0.5 = if PR-ish announcements
-×1.0 = otherwise
+penalty_multiplier (check title+description):
+0.6 = if question/listicle/prediction format
+0.5 = if PR-ish announcements
+1.0 = otherwise
 
-STEP BY STEP CALCULATION:
-1. Calculate: 100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus]
-2. Apply penalty: [step1_result] × [penalty]
-3. Round to nearest integer
-4. Set BOTH "score" and "final_score" to this SAME number
-
-In formula_breakdown, show:
-- raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
-- final_score: [the exact calculated result]
-
-The "score" field at the top level MUST equal "final_score" in breakdown.
-
-Set bucket_used="company_news", impact_on_main based on shareholder impact, reason_short ≤140 chars."""
+Provide impact_on_main based on shareholder impact, reason_short ≤140 chars.
+DO NOT calculate any scores - just provide the components."""
 
     user_payload = {
         "bucket": "company_news",
@@ -1634,62 +1756,51 @@ Set bucket_used="company_news", impact_on_main based on shareholder impact, reas
         "keywords": keywords or []
     }
     
-    return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
+    return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
 
-def _ai_quality_score_industry(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for industry/market articles with detailed formula breakdown - FIXED calculation"""
+def _ai_quality_score_industry_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
+    """AI-powered component extraction for industry articles"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
     
     schema = {
-        "name": "industry_market_score",
+        "name": "industry_market_components",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "score": {"type": "integer", "minimum": 0, "maximum": 100},
-                "bucket_used": {"type": "string"},
+                "source_tier_input": {"type": "number"},
+                "event_multiplier": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+                "event_multiplier_reason": {"type": "string"},
+                "relevance_boost": {"type": "number", "minimum": 0.5, "maximum": 1.5},
+                "relevance_boost_reason": {"type": "string"},
+                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "penalty_multiplier": {"type": "number", "minimum": 0.1, "maximum": 1.0},
+                "penalty_reason": {"type": "string"},
                 "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
-                "reason_short": {"type": "string"},
-                "formula_breakdown": {
-                    "type": "object",
-                    "properties": {
-                        "source_tier_input": {"type": "number"},
-                        "event_multiplier_chosen": {"type": "number"},
-                        "event_multiplier_reason": {"type": "string"},
-                        "relevance_boost_chosen": {"type": "number"},
-                        "relevance_boost_reason": {"type": "string"},
-                        "numeric_bonus": {"type": "number"},
-                        "penalty_multiplier": {"type": "number"},
-                        "penalty_reason": {"type": "string"},
-                        "raw_calculation": {"type": "string"},
-                        "final_score": {"type": "number"}
-                    },
-                    "required": ["source_tier_input", "event_multiplier_chosen", "event_multiplier_reason", "relevance_boost_chosen", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "raw_calculation", "final_score"],
-                    "additionalProperties": False
-                },
-                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
+                "reason_short": {"type": "string"}
             },
-            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "formula_breakdown", "flags"],
+            "required": ["source_tier_input", "event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short"],
             "additionalProperties": False
         }
     }
     
     system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-You MUST compute the score using EXACTLY this formula and show all steps:
-Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
-
-CRITICAL: The "score" field and "final_score" field MUST be identical. Do not override your calculation.
+Analyze the article and provide ONLY the scoring components. Do NOT calculate the final score.
 
 INPUTS PROVIDED:
-- source_tier = {source_tier} (already calculated)
+- source_tier = {source_tier} (already calculated - use this exact value)
 - title = "{title}"
 - description = "{desc_snippet}"
 - target_company = {ticker} (energy utility)
 - industry_keywords = {keywords or []}
 
-INDUSTRY_MARKET event_multiplier (choose ONE that best fits title+description):
+PROVIDE THESE COMPONENTS:
+
+source_tier_input: Use exactly {source_tier} (provided)
+
+event_multiplier (choose ONE that best fits title+description):
 1.6 = policy/regulation shaping sector economics (energy policy, utility regulations, grid standards)
 1.5 = commodity/input supply-demand changes (natural gas prices, coal supply, renewable capacity)
 1.4 = large ecosystem deals/capex/standards (major power plant construction, grid infrastructure, energy storage)
@@ -1702,24 +1813,13 @@ relevance_boost (examine title+description+keywords):
 
 numeric_bonus: +0.1 for each concrete number in title+description (%, $, MW, capacity figures), max +0.3
 
-penalty (check title+description):
-×0.6 = if question/listicle/prediction format ("Should you...", "Best...", "Top...", "Will X happen?")
-×0.5 = if PR-ish ("announces expansion", "market size expected to grow", "unveils breakthrough")
-×1.0 = otherwise
+penalty_multiplier (check title+description):
+0.6 = if question/listicle/prediction format ("Should you...", "Best...", "Top...", "Will X happen?")
+0.5 = if PR-ish ("announces expansion", "market size expected to grow", "unveils breakthrough")
+1.0 = otherwise
 
-STEP BY STEP CALCULATION:
-1. Calculate: 100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus]
-2. Apply penalty: [step1_result] × [penalty]
-3. Round to nearest integer
-4. Set BOTH "score" and "final_score" to this SAME number
-
-In formula_breakdown, show:
-- raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
-- final_score: [the exact calculated result]
-
-The "score" field at the top level MUST equal "final_score" in breakdown.
-
-Set bucket_used="industry_market", impact_on_main based on implications for {ticker}, reason_short ≤140 chars."""
+Provide impact_on_main based on implications for {ticker}, reason_short ≤140 chars.
+DO NOT calculate any scores - just provide the components."""
 
     user_payload = {
         "bucket": "industry_market",
@@ -1730,62 +1830,51 @@ Set bucket_used="industry_market", impact_on_main based on implications for {tic
         "industry_keywords": keywords or []
     }
     
-    return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
+    return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
 
-def _ai_quality_score_competitor(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for competitor articles with detailed formula breakdown - FIXED calculation"""
+def _ai_quality_score_competitor_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
+    """AI-powered component extraction for competitor articles"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
     
     schema = {
-        "name": "competitor_intel_score",
+        "name": "competitor_intel_components",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "score": {"type": "integer", "minimum": 0, "maximum": 100},
-                "bucket_used": {"type": "string"},
+                "source_tier_input": {"type": "number"},
+                "event_multiplier": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+                "event_multiplier_reason": {"type": "string"},
+                "relevance_boost": {"type": "number", "minimum": 0.5, "maximum": 1.5},
+                "relevance_boost_reason": {"type": "string"},
+                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "penalty_multiplier": {"type": "number", "minimum": 0.1, "maximum": 1.0},
+                "penalty_reason": {"type": "string"},
                 "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
-                "reason_short": {"type": "string"},
-                "formula_breakdown": {
-                    "type": "object",
-                    "properties": {
-                        "source_tier_input": {"type": "number"},
-                        "event_multiplier_chosen": {"type": "number"},
-                        "event_multiplier_reason": {"type": "string"},
-                        "relevance_boost_chosen": {"type": "number"},
-                        "relevance_boost_reason": {"type": "string"},
-                        "numeric_bonus": {"type": "number"},
-                        "penalty_multiplier": {"type": "number"},
-                        "penalty_reason": {"type": "string"},
-                        "raw_calculation": {"type": "string"},
-                        "final_score": {"type": "number"}
-                    },
-                    "required": ["source_tier_input", "event_multiplier_chosen", "event_multiplier_reason", "relevance_boost_chosen", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "raw_calculation", "final_score"],
-                    "additionalProperties": False
-                },
-                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
+                "reason_short": {"type": "string"}
             },
-            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "formula_breakdown", "flags"],
+            "required": ["source_tier_input", "event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short"],
             "additionalProperties": False
         }
     }
     
     system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-You MUST compute the score using EXACTLY this formula and show all steps:
-Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
-
-CRITICAL: The "score" field and "final_score" field MUST be identical. Do not override your calculation.
+Analyze the article and provide ONLY the scoring components. Do NOT calculate the final score.
 
 INPUTS PROVIDED:
-- source_tier = {source_tier} (already calculated)
+- source_tier = {source_tier} (already calculated - use this exact value)
 - title = "{title}"
 - description = "{desc_snippet}"
 - target_company = {ticker}
 - competitors = {keywords or []}
 
-COMPETITOR_INTEL event_multiplier (choose ONE that best fits title+description):
+PROVIDE THESE COMPONENTS:
+
+source_tier_input: Use exactly {source_tier} (provided)
+
+event_multiplier (choose ONE that best fits title+description):
 1.7 = rival hard events (M&A, delist, shutdown, major pricing moves by competitors)
 1.6 = rival capital structure/asset sales that affect competitive positioning
 1.4 = rival product launches/pricing changes/strategic moves
@@ -1798,24 +1887,13 @@ relevance_boost:
 
 numeric_bonus: +0.1 for each concrete number in title+description (%, $, capacity figures), max +0.3
 
-penalty (check title+description):
-×0.6 = if question/listicle/prediction format
-×0.5 = if PR-ish announcements
-×1.0 = otherwise
+penalty_multiplier (check title+description):
+0.6 = if question/listicle/prediction format
+0.5 = if PR-ish announcements
+1.0 = otherwise
 
-STEP BY STEP CALCULATION:
-1. Calculate: 100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus]
-2. Apply penalty: [step1_result] × [penalty]
-3. Round to nearest integer
-4. Set BOTH "score" and "final_score" to this SAME number
-
-In formula_breakdown, show:
-- raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
-- final_score: [the exact calculated result]
-
-The "score" field at the top level MUST equal "final_score" in breakdown.
-
-Set bucket_used="competitor_intel", impact_on_main based on competitive implications for {ticker}, reason_short ≤140 chars."""
+Provide impact_on_main based on competitive implications for {ticker}, reason_short ≤140 chars.
+DO NOT calculate any scores - just provide the components."""
 
     user_payload = {
         "bucket": "competitor_intel",
@@ -1826,10 +1904,10 @@ Set bucket_used="competitor_intel", impact_on_main based on competitive implicat
         "competitor_context": keywords or []
     }
     
-    return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
+    return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
 
-def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, schema: Dict) -> Tuple[float, str, str]:
-    """Shared function to make AI requests with detailed breakdown logging - FIXED score calculation"""
+def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: Dict, source_tier: float) -> Tuple[float, str, str, Dict]:
+    """Make AI request for components only, calculate score ourselves"""
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
@@ -1843,7 +1921,7 @@ def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, sche
             {"role": "user", "content": json.dumps(user_payload)}
         ],
         "response_format": {"type": "json_schema", "json_schema": schema},
-        "max_completion_tokens": 400
+        "max_completion_tokens": 300
     }
     
     response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -1856,37 +1934,70 @@ def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, sche
     content = result["choices"][0]["message"]["content"]
     parsed = json.loads(content)
     
-    # FIXED: Use the calculated score from breakdown, not the separate score field
-    breakdown = parsed.get("formula_breakdown", {})
-    calculated_score = breakdown.get("final_score")
-    declared_score = parsed.get("score", 50)
+    # Extract components with reasons
+    components = {
+        'source_tier': source_tier,  # Use our calculated source tier
+        'event_multiplier': parsed.get('event_multiplier', 1.0),
+        'event_multiplier_reason': parsed.get('event_multiplier_reason', ''),
+        'relevance_boost': parsed.get('relevance_boost', 1.0),
+        'relevance_boost_reason': parsed.get('relevance_boost_reason', ''),
+        'numeric_bonus': parsed.get('numeric_bonus', 0.0),
+        'penalty_multiplier': parsed.get('penalty_multiplier', 1.0),
+        'penalty_reason': parsed.get('penalty_reason', '')
+    }
     
-    # Use the calculated score if available, otherwise fall back to declared
-    if calculated_score is not None:
-        score = float(calculated_score)
-        if abs(score - declared_score) > 1:  # Log discrepancies
-            LOG.warning(f"SCORE MISMATCH: Calculated={calculated_score}, Declared={declared_score}, Using calculated")
-    else:
-        score = float(declared_score)
-        LOG.warning(f"No calculated score found, using declared score: {declared_score}")
+    # Calculate score using our own formula
+    calculated_score = calculate_score_from_components(components)
     
     impact = parsed.get("impact_on_main", "Unclear")
     reason = parsed.get("reason_short", "")
     
-    # Log the detailed breakdown
-    if breakdown:
-        LOG.info(f"FORMULA BREAKDOWN:")
-        LOG.info(f"  Source tier: {breakdown.get('source_tier_input', 'N/A')}")
-        LOG.info(f"  Event multiplier: {breakdown.get('event_multiplier_chosen', 'N/A')} - {breakdown.get('event_multiplier_reason', 'N/A')}")
-        LOG.info(f"  Relevance boost: {breakdown.get('relevance_boost_chosen', 'N/A')} - {breakdown.get('relevance_boost_reason', 'N/A')}")
-        LOG.info(f"  Numeric bonus: {breakdown.get('numeric_bonus', 'N/A')}")
-        LOG.info(f"  Penalty: {breakdown.get('penalty_multiplier', 'N/A')} - {breakdown.get('penalty_reason', 'N/A')}")
-        LOG.info(f"  Calculation: {breakdown.get('raw_calculation', 'N/A')}")
-        LOG.info(f"  USING CALCULATED SCORE: {score}")
+    # Log the components for transparency
+    LOG.info(f"AI COMPONENTS:")
+    LOG.info(f"  Source tier: {source_tier} (calculated)")
+    LOG.info(f"  Event multiplier: {components['event_multiplier']} - {components['event_multiplier_reason']}")
+    LOG.info(f"  Relevance boost: {components['relevance_boost']} - {components['relevance_boost_reason']}")
+    LOG.info(f"  Numeric bonus: {components['numeric_bonus']}")
+    LOG.info(f"  Penalty: {components['penalty_multiplier']} - {components['penalty_reason']}")
+    LOG.info(f"  OUR CALCULATED SCORE: {calculated_score:.1f}")
+    LOG.info(f"  Impact: {impact} | Reason: {reason}")
     
-    LOG.info(f"AI analysis: {score:.0f} | {impact} | {reason}")
-    
-    return score, impact, reason
+    return calculated_score, impact, reason, components
+
+def calculate_score_from_components(components: Dict) -> float:
+    """
+    Calculate quality score from AI-provided components using our own formula
+    Formula: (100 × source_tier × event_multiplier × relevance_boost) × penalty_multiplier + numeric_bonus
+    """
+    try:
+        source_tier = float(components.get('source_tier', 0.5))
+        event_multiplier = float(components.get('event_multiplier', 1.0))
+        relevance_boost = float(components.get('relevance_boost', 1.0))
+        numeric_bonus = float(components.get('numeric_bonus', 0.0))
+        penalty_multiplier = float(components.get('penalty_multiplier', 1.0))
+        
+        # Validate ranges
+        source_tier = max(0.1, min(1.0, source_tier))
+        event_multiplier = max(0.1, min(2.0, event_multiplier))
+        relevance_boost = max(0.5, min(1.5, relevance_boost))
+        numeric_bonus = max(0.0, min(1.0, numeric_bonus))
+        penalty_multiplier = max(0.1, min(1.0, penalty_multiplier))
+        
+        # Calculate score using exact formula - penalty applies to base score, then add numeric bonus
+        base_score = 100 * source_tier * event_multiplier * relevance_boost
+        penalized_score = base_score * penalty_multiplier
+        final_score_raw = penalized_score + numeric_bonus
+        
+        # Clamp to valid range
+        final_score = max(0.0, min(100.0, final_score_raw))
+        
+        LOG.info(f"COMPONENT CALCULATION: (100 × {source_tier} × {event_multiplier} × {relevance_boost}) × {penalty_multiplier} + {numeric_bonus} = {final_score:.1f}")
+        
+        return final_score
+        
+    except (ValueError, TypeError) as e:
+        LOG.error(f"Invalid components for score calculation: {e}, using fallback score 50.0")
+        return 50.0
 
 def get_url_hash(url: str, resolved_url: str = None) -> str:
     """Generate hash for URL deduplication, using resolved URL if available"""

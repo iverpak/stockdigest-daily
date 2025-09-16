@@ -850,6 +850,7 @@ def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains:
 def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
     """
     Enhanced feed processing with intelligent Yahoo redirect handling and duplicate prevention
+    FIXED: Use provided keywords instead of regenerating them
     """
     stats = {
         "processed": 0, 
@@ -859,21 +860,14 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "blocked_non_latin": 0,
         "content_scraped": 0,
         "content_failed": 0,
-        "scraping_skipped": 0,
-        "ai_backfilled": 0,        
-        "ai_backfill_errors": 0    
+        "scraping_skipped": 0
     }
     
     scraped_domains = set()
     
     try:
         parsed = feedparser.parse(feed["url"])
-        
-        # Enhanced logging with ticker and category info
-        ticker = feed.get("ticker", "UNKNOWN")
-        feed_name = feed.get("name", "Unknown Feed")
-        keyword_info = f" (Keywords: {keywords})" if keywords else ""
-        LOG.info(f"Processing feed [{category}] for {ticker}: {feed_name} - {len(parsed.entries)} entries{keyword_info}")
+        LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries")
         
         for entry in parsed.entries:
             stats["processed"] += 1
@@ -931,73 +925,11 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Enhanced duplicate check - also look for missing AI analysis
-                    cur.execute("""
-                        SELECT id, scraped_content, ai_impact, ai_reasoning, quality_score 
-                        FROM found_url WHERE url_hash = %s
-                    """, (url_hash,))
-                    existing_article = cur.fetchone()
-                    
-                    if existing_article:
-                        # Add robust null checks for safety
-                        try:
-                            scraped_content = existing_article.get("scraped_content") if existing_article else None
-                            ai_impact = existing_article.get("ai_impact") if existing_article else None
-                            article_id = existing_article.get("id") if existing_article else None
-                            
-                            # Validate we have the required data
-                            if not article_id:
-                                LOG.warning(f"No article ID found for duplicate check: {title[:50]}...")
-                                stats["duplicates"] += 1
-                                continue
-                            
-                            # Article exists - check if we need to backfill AI analysis
-                            needs_ai_backfill = (
-                                scraped_content and                              # Has scraped content
-                                scraped_content.strip() and                      # Content is not empty
-                                not ai_impact and                                # Missing AI impact
-                                category.lower() in ["company", "company_news", "comp"]  # Company article
-                            )
-                            
-                            if needs_ai_backfill:
-                                LOG.info(f"Backfilling AI analysis for existing article [{ticker}]: {title[:50]}...")
-                                
-                                try:
-                                    # Run AI analysis on existing scraped content with validation
-                                    if not final_domain or not ticker:
-                                        raise ValueError("Missing required fields for AI analysis")
-                                    
-                                    quality_score, ai_impact_result, ai_reasoning = calculate_quality_score(
-                                        title=title,
-                                        domain=final_domain,
-                                        ticker=ticker,
-                                        description=scraped_content,  # Use the validated scraped content
-                                        category=category,
-                                        keywords=keywords
-                                    )
-                                    
-                                    # Update the existing article with AI analysis
-                                    cur.execute("""
-                                        UPDATE found_url 
-                                        SET quality_score = %s, ai_impact = %s, ai_reasoning = %s
-                                        WHERE id = %s
-                                    """, (quality_score, ai_impact_result, ai_reasoning, article_id))
-                                    
-                                    stats["ai_backfilled"] += 1
-                                    reasoning_preview = ai_reasoning[:50] + "..." if ai_reasoning and len(ai_reasoning) > 50 else ai_reasoning or "No reasoning"
-                                    LOG.info(f"AI backfill complete [{ticker}]: {quality_score:.0f}/{ai_impact_result} - {reasoning_preview}")
-                                    
-                                except Exception as e:
-                                    LOG.error(f"AI backfill failed for [{ticker}] '{title[:50]}': {str(e)}")
-                                    stats["ai_backfill_errors"] += 1
-                            else:
-                                stats["duplicates"] += 1
-                            
-                        except Exception as e:
-                            LOG.error(f"Error processing existing article [{ticker}] '{title[:50]}': {str(e)}")
-                            stats["duplicates"] += 1
-                        
-                        continue  # Move to next article
+                    # Simple duplicate check
+                    cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
+                    if cur.fetchone():
+                        stats["duplicates"] += 1
+                        continue
                     
                     # Parse publish date
                     published_at = None
@@ -1038,36 +970,29 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                 scraped_content = content
                                 content_scraped_at = datetime.now(timezone.utc)
                                 stats["content_scraped"] += 1
-                                LOG.info(f"Content scraped [{ticker}]: {title[:60]}... ({len(content)} chars)")
+                                LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
                             else:
                                 scraping_failed = True
                                 scraping_error = status
                                 stats["content_failed"] += 1
-                                LOG.warning(f"Content scraping failed [{ticker}]: {status}")
+                                LOG.warning(f"Content scraping failed: {status}")
                     else:
                         stats["scraping_skipped"] += 1
                     
-                    # ENABLE AI SCORING: Use scraped content for AI analysis, fallback to description
-                    ai_content = scraped_content if scraped_content else description
+                    # Calculate quality score using AI - FIXED: Use provided keywords
+                    quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                        title=title,
+                        domain=final_domain, 
+                        ticker=feed["ticker"],
+                        description=description,
+                        category=category,
+                        keywords=keywords  # Use the keywords passed to this function
+                    )
                     
-                    # Validate inputs before AI scoring
-                    if not ticker or not final_domain or not title:
-                        LOG.warning(f"Missing required fields for AI scoring: ticker={ticker}, domain={final_domain}, title={bool(title)}")
-                        quality_score, ai_impact, ai_reasoning = 50.0, None, None
-                    else:
-                        quality_score, ai_impact, ai_reasoning = calculate_quality_score(
-                            title=title,
-                            domain=final_domain, 
-                            ticker=ticker,
-                            description=ai_content,  # Use scraped content or description for AI
-                            category=category,
-                            keywords=keywords
-                        )
+                    # Use scraped content for display, fallback to description
+                    display_content = scraped_content if scraped_content else description
                     
-                    # Store original description (not scraped content) for potential fallback display
-                    display_content = description  # Keep original description for now
-                    
-                    # Insert article with final resolved information and AI analysis
+                    # Insert article with final resolved information
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1079,7 +1004,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
-                        feed["id"], ticker, final_domain, quality_score, published_at,
+                        feed["id"], feed["ticker"], final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error,
                         ai_impact, ai_reasoning
@@ -1087,35 +1012,27 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        content_info = f"with scraped content" if scraped_content else "no content scraping"
+                        content_info = f"with analyzed content" if scraped_content else "no content analysis"
                         source_info = "via Google→Yahoo" if is_google_to_yahoo else "direct"
-                        ai_info = f"AI: {quality_score:.0f}/{ai_impact}" if ai_impact else f"AI: {quality_score:.0f}"
-                        LOG.info(f"Inserted [{category}] for {ticker} from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info}) ({ai_info})")
+                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info})")
                         
             except Exception as e:
-                LOG.error(f"Database error for [{ticker}] '{title[:50]}': {e}")
+                LOG.error(f"Database error for '{title[:50]}': {e}")
                 continue
                 
     except Exception as e:
-        LOG.error(f"Feed processing error for {ticker} {feed_name}: {e}")
+        LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
     # Log final Playwright stats
     if playwright_stats["attempted"] > 0:
         log_playwright_stats()
         LOG.info(f"PLAYWRIGHT FINAL REPORT: Attempted to recover {playwright_stats['attempted']} failed URLs")
     
-    # Enhanced final logging with ticker info
-    if stats.get("ai_backfilled", 0) > 0 or stats.get("ai_backfill_errors", 0) > 0:
-        LOG.info(f"AI Backfill Summary for {ticker} - Completed: {stats.get('ai_backfilled', 0)}, Errors: {stats.get('ai_backfill_errors', 0)}")
-    
-    # Log category completion summary
-    LOG.info(f"Feed complete for {ticker} [{category}]: {stats.get('inserted', 0)} inserted, {stats.get('content_scraped', 0)} scraped, {stats.get('ai_backfilled', 0)} backfilled")
-    
     return stats
     
 def _format_article_html_with_content(article: Dict, category: str) -> str:
     """
-    Enhanced article HTML formatting that displays AI analysis instead of scraped content
+    Enhanced article HTML formatting that displays analyzed content
     """
     import html
     
@@ -1160,22 +1077,9 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     # Determine the actual link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # Quality score styling
+    # Quality score styling (disabled for now, but keeping structure)
     score = article["quality_score"]
-    score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
-    
-    # Impact styling
-    ai_impact = (article.get("ai_impact") or "").lower()
-    impact_class = f"impact-{ai_impact}" if ai_impact in ["positive", "negative", "mixed", "unclear"] else "impact-unclear"
-    impact_display = ai_impact.title() if ai_impact else "Unclear"
-    
-    # Scraped content indicator
-    scraped_indicator = ""
-    if article.get("scraped_content") and article.get("scraped_content").strip():
-        scraped_indicator = '<span class="scraped-badge">Scraped</span>'
-    
-    # AI reasoning
-    ai_reasoning = (article.get("ai_reasoning") or "").strip()
+    score_class = "med-score"  # Neutral since we're not scoring
     
     # Build metadata badges for category-specific information
     metadata_badges = []
@@ -1189,38 +1093,29 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     
     enhanced_metadata = "".join(metadata_badges)
     
-    # COMMENTED OUT: Content display
-    # content_to_display = ""
-    # if article.get("scraped_content"):
-    #     content_to_display = article["scraped_content"]
-    #     content_source = "scraped"
-    # elif article.get("description"):
-    #     content_to_display = article["description"]
-    #     content_source = "description"
+    # Get content - prioritize scraped content, fall back to description
+    content_to_display = ""
+    if article.get("scraped_content"):
+        content_to_display = article["scraped_content"]
+        content_source = "analyzed"  # CHANGED from "scraped"
+    elif article.get("description"):
+        content_to_display = article["description"]
+        content_source = "description"
     
-    # description_html = ""
-    # if content_to_display:
-    #     content_clean = html.unescape(content_to_display.strip())
-    #     content_clean = re.sub(r'<[^>]+>', '', content_clean)
-    #     content_clean = re.sub(r'\s+', ' ', content_clean).strip()
-    #     
-    #     if len(content_clean) > 800:
-    #         content_clean = content_clean[:800] + "..."
-    #     
-    #     content_clean = html.escape(content_clean)
-    #     
-    #     # Add indicator of content source
-    #     source_indicator = " [SCRAPED]" if content_source == "scraped" else " [DESC]"
-    #     description_html = f"<br><div class='description'>{content_clean}<em>{source_indicator}</em></div>"
-    
-    # Build AI analysis section
-    ai_analysis_html = ""
-    if ai_impact or ai_reasoning:
-        ai_analysis_html = f"""<br><div class='ai-analysis'>
-            <strong>🤖 AI Analysis:</strong> 
-            <span class='impact {impact_class}'>{impact_display}</span>
-            {f" - {html.escape(ai_reasoning)}" if ai_reasoning else ""}
-        </div>"""
+    description_html = ""
+    if content_to_display:
+        content_clean = html.unescape(content_to_display.strip())
+        content_clean = re.sub(r'<[^>]+>', '', content_clean)
+        content_clean = re.sub(r'\s+', ' ', content_clean).strip()
+        
+        if len(content_clean) > 800:
+            content_clean = content_clean[:800] + "..."
+        
+        content_clean = html.escape(content_clean)
+        
+        # Add indicator of content source - CHANGED to use "ANALYZED"
+        source_indicator = " [ANALYZED]" if content_source == "analyzed" else " [DESC]"
+        description_html = f"<br><div class='description'>{content_clean}<em>{source_indicator}</em></div>"
     
     return f"""
     <div class='article {category}'>
@@ -1228,13 +1123,11 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
             <span class='score {score_class}'>Score: {score:.0f}</span>
-            {scraped_indicator}
-            <span class='impact {impact_class}'>{impact_display}</span>
         </div>
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
             <span class='meta'> | {pub_date}</span>
-            {ai_analysis_html}
+            {description_html}
         </div>
     </div>
     """
@@ -1499,14 +1392,14 @@ def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
                 return clean_title, source
     
     return title, None
-
+    
 def _get_domain_tier(domain: str, title: str = "", description: str = "") -> float:
-    """Get domain authority tier with potential upgrades from content"""
+    """Get domain authority tier with potential upgrades from content - FIXED minimum tier"""
     if not domain:
         return 0.5
     
     normalized_domain = normalize_domain(domain)
-    base_tier = DOMAIN_TIERS.get(normalized_domain, 0.5)
+    base_tier = DOMAIN_TIERS.get(normalized_domain, 0.5)  # This is correct
     
     # Upgrade tier if aggregator content reveals higher-quality source
     if any(agg in normalized_domain for agg in ["yahoo", "msn", "google"]):
@@ -1516,7 +1409,9 @@ def _get_domain_tier(domain: str, title: str = "", description: str = "") -> flo
             if re.search(pattern, combined_text, re.IGNORECASE):
                 return max(base_tier, tier)
     
-    return base_tier
+    # FIXED: Ensure Tier C and below get 0.5 minimum for scoring
+    # Tier C (0.4) and below should be treated as 0.5 for scoring purposes
+    return max(base_tier, 0.5) if base_tier < 0.5 else base_tier
 
 def _is_spam_content(title: str, domain: str, description: str = "") -> bool:
     """Check if content appears to be spam - reuse existing spam logic"""
@@ -1548,44 +1443,36 @@ def calculate_quality_score(
     category: str = "company",
     keywords: List[str] = None
 ) -> Tuple[float, Optional[str], Optional[str]]:
-    """Calculate quality score using AI for COMPANY articles, fallback for others
+    """Calculate quality score using category-specific AI scoring
     Returns: (score, impact, reasoning)
     """
     
-    # Add validation at the start
-    if not title or not title.strip():
-        LOG.warning("Empty title provided to calculate_quality_score")
-        return 50.0, None, None
-    
-    if not domain or not domain.strip():
-        LOG.warning("Empty domain provided to calculate_quality_score")
-        return 50.0, None, None
-    
-    if not ticker or not ticker.strip():
-        LOG.warning("Empty ticker provided to calculate_quality_score")
-        return 50.0, None, None
-    
-    # Debug logging with ticker info
+    # Debug logging
     LOG.info(f"SCORING: {category} article for {ticker}: '{title[:30]}...'")
     
-    # For non-company articles, return neutral score (Phase 1 limitation)
-    if category.lower() not in ["company", "company_news", "comp", "industry", "competitor"]:
-        LOG.info(f"SKIPPING: Unsupported category: {category}")
-        return 50.0, None, None
-     
     # Pre-filter spam
     if _is_spam_content(title, domain, description):
-        return 0.0, None, None
-    
+        return 0.0, "Negative", "Spam content detected"
+     
     # If no OpenAI key, use fallback scoring
     if not OPENAI_API_KEY or not title.strip():
         score = _fallback_quality_score(title, domain, ticker, description, keywords)
         return score, None, None
     
-    # Use AI scoring for company articles
+    # Use category-specific AI scoring
     try:
-        score, impact, reasoning = _ai_quality_score_company(title, domain, ticker, description, keywords)
-        LOG.info(f"AI scored [{ticker}] '{title[:50]}...' from {domain}: {score:.1f}")
+        if category.lower() in ["company", "company_news", "comp"]:
+            score, impact, reasoning = _ai_quality_score_company(title, domain, ticker, description, keywords)
+        elif category.lower() in ["industry", "industry_market", "market"]:
+            score, impact, reasoning = _ai_quality_score_industry(title, domain, ticker, description, keywords)
+        elif category.lower() in ["competitor", "competitor_intel", "competition"]:
+            score, impact, reasoning = _ai_quality_score_competitor(title, domain, ticker, description, keywords)
+        else:
+            # Fallback for unknown categories
+            score = _fallback_quality_score(title, domain, ticker, description, keywords)
+            return score, None, None
+            
+        LOG.info(f"AI scored [{ticker}] '{title[:50]}...' from {domain}: {score:.1f} ({category})")
         return max(0.0, min(100.0, score)), impact, reasoning
     except Exception as e:
         LOG.warning(f"AI scoring failed for '{title[:50]}...': {e}")
@@ -1613,22 +1500,11 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     return max(10.0, min(90.0, base_score))
 
 def _ai_quality_score_company(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for company articles
-    Returns: (score, impact, reasoning)
-    """
+    """AI-powered scoring for company articles"""
     
-    # Get domain tier
     source_tier = _get_domain_tier(domain, title, description)
+    desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
     
-    # Clean description - only use if valuable
-    desc_clean = description.strip() if description else ""
-    if desc_clean and (desc_clean.lower() == title.lower().strip() or len(desc_clean) < 10):
-        desc_clean = ""
-    
-    # NO TRUNCATION - use full scraped content
-    desc_snippet = desc_clean[:15000] if desc_clean else ""
-    
-    # Build the JSON schema for structured response
     schema = {
         "name": "company_news_score",
         "strict": True,
@@ -1636,7 +1512,8 @@ def _ai_quality_score_company(title: str, domain: str, ticker: str, description:
             "type": "object",
             "properties": {
                 "score": {"type": "integer", "minimum": 0, "maximum": 100},
-                "impact_on_company": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
+                "bucket_used": {"type": "string"},
+                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
                 "reason_short": {"type": "string"},
                 "components": {
                     "type": "object",
@@ -1645,60 +1522,184 @@ def _ai_quality_score_company(title: str, domain: str, ticker: str, description:
                         "event_multiplier": {"type": "number"},
                         "relevance_boost": {"type": "number"},
                         "numeric_bonus": {"type": "number"},
-                        "penalty": {"type": "number"},
-                        "raw_score": {"type": "number"}
+                        "penalty": {"type": "number"}
                     },
-                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty", "raw_score"],
+                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty"],
                     "additionalProperties": False
                 },
-                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
             },
-            "required": ["score", "impact_on_company", "reason_short", "components", "flags"],
+            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "components", "flags"],
             "additionalProperties": False
         }
     }
     
-    system_prompt = """You are a hedge fund news analyst. Score company news articles from 0-100 based on financial relevance.
-
-SCORING FORMULA:
+    system_prompt = """You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
+Compute ONE score using the EXACT formula for company_news bucket:
 Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
 
-COMPONENT RULES:
+COMPANY_NEWS event_multiplier (analyze title + description):
+2.0 = halt/shut/delist/recall/probed/sues/settles/guides/cuts/raises/acquires/divests/spin-off
+1.6 = regulatory/policy directly on the company
+1.5 = contracts/commitments/backlog
+1.4 = earnings/guidance
+1.1 = rating/price-target chatter
+0.6 = opinion/education
+0.5 = PR
 
-event_multiplier (analyze title + description):
-2.0 = Major corporate actions: halt/shutdown/delist/recall/investigation/lawsuit/acquisition/divestiture/spin-off
-1.6 = Regulatory/policy actions directly affecting the company
-1.5 = Major contracts/commitments/partnerships/backlog announcements  
-1.4 = Earnings releases/guidance updates/financial results
-1.1 = Analyst ratings/price target changes
-0.6 = Opinion pieces/educational content/general commentary
-0.5 = Standard PR announcements/routine updates
+relevance_boost: 1.3 if title/description mentions ticker/company/owned asset or matches keywords; else 1.0
 
-relevance_boost:
-1.3 if title/description clearly mentions the company ticker, company name, or directly owned assets
-1.0 otherwise
+numeric_bonus: +0.1 each for concrete numbers (%, $, units) in title+description, max +0.3 total
 
-numeric_bonus:
-+0.1 for each concrete number mentioned (percentages, dollar amounts, units), max +0.3 total
+penalty: ×0.6 if question/listicle/prediction; ×0.5 if PR-ish announcements; otherwise ×1.0
 
-penalty (check both title and description):
-×0.6 if question/listicle/prediction format ("Should you...", "Best...", "Top 5...", "Will X happen?")
-×0.5 if obvious PR/marketing ("announces expansion to reach", "market size expected to grow")  
-×1.0 otherwise
-
-Set impact_on_company based on whether news is likely positive, negative, mixed, or unclear for shareholders.
-Keep reason_short under 140 characters.
-Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "PR", "Opinion"]."""
+Set bucket_used to "company_news", impact_on_main based on shareholder impact, reason_short ≤140 chars, flags from both title+description."""
 
     user_payload = {
+        "bucket": "company_news",
         "company_ticker": ticker,
         "title": title,
-        "description_snippet": desc_snippet,  # Full content now, no truncation
-        "source_domain": domain,
+        "description_snippet": desc_snippet,
+        "source_tier": source_tier,
+        "keywords": keywords or []
+    }
+    
+    return _make_ai_request(system_prompt, user_payload, schema)
+
+def _ai_quality_score_industry(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
+    """AI-powered scoring for industry/market articles"""
+    
+    source_tier = _get_domain_tier(domain, title, description)
+    desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
+    
+    schema = {
+        "name": "industry_market_score",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "bucket_used": {"type": "string"},
+                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
+                "reason_short": {"type": "string"},
+                "components": {
+                    "type": "object",
+                    "properties": {
+                        "source_tier": {"type": "number"},
+                        "event_multiplier": {"type": "number"},
+                        "relevance_boost": {"type": "number"},
+                        "numeric_bonus": {"type": "number"},
+                        "penalty": {"type": "number"}
+                    },
+                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty"],
+                    "additionalProperties": False
+                },
+                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
+            },
+            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "components", "flags"],
+            "additionalProperties": False
+        }
+    }
+    
+    system_prompt = """You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
+Compute ONE score using the EXACT formula for industry_market bucket:
+Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
+
+INDUSTRY_MARKET event_multiplier (analyze title + description):
+1.6 = policy/regulation shaping sector economics
+1.5 = commodity/input supply-demand changes
+1.4 = large ecosystem deals/capex/standards
+1.1 = research/indices
+0.6 = PR/market-size adverts
+
+relevance_boost: 1.1 if sector topic clearly ties to main business via title/description/keywords; else 1.0
+
+numeric_bonus: +0.1 each for concrete numbers (%, $, units) in title+description, max +0.3 total
+
+penalty: ×0.6 if question/listicle/prediction; ×0.5 if PR-ish announcements; otherwise ×1.0
+
+Higher industry score means higher relevance of that news to the target company (directly/indirectly).
+Set bucket_used to "industry_market", impact_on_main based on implications for target company, reason_short ≤140 chars, flags from both title+description."""
+
+    user_payload = {
+        "bucket": "industry_market",
+        "target_company_ticker": ticker,
+        "title": title,
+        "description_snippet": desc_snippet,
         "source_tier": source_tier,
         "industry_keywords": keywords or []
     }
     
+    return _make_ai_request(system_prompt, user_payload, schema)
+
+def _ai_quality_score_competitor(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
+    """AI-powered scoring for competitor articles"""
+    
+    source_tier = _get_domain_tier(domain, title, description)
+    desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
+    
+    schema = {
+        "name": "competitor_intel_score",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "bucket_used": {"type": "string"},
+                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
+                "reason_short": {"type": "string"},
+                "components": {
+                    "type": "object",
+                    "properties": {
+                        "source_tier": {"type": "number"},
+                        "event_multiplier": {"type": "number"},
+                        "relevance_boost": {"type": "number"},
+                        "numeric_bonus": {"type": "number"},
+                        "penalty": {"type": "number"}
+                    },
+                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty"],
+                    "additionalProperties": False
+                },
+                "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
+            },
+            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "components", "flags"],
+            "additionalProperties": False
+        }
+    }
+    
+    system_prompt = """You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
+Compute ONE score using the EXACT formula for competitor_intel bucket:
+Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
+
+COMPETITOR_INTEL event_multiplier (analyze title + description):
+1.7 = rival hard event (M&A, delist, shutdown, pricing move)
+1.6 = rival cap-structure/asset sales
+1.4 = rival launches/pricing/strategy
+0.9 = 13F/holdings churn
+0.6 = opinion
+
+relevance_boost: 1.2 if a clear rival is subject and implications for main are obvious; else 1.0
+
+numeric_bonus: +0.1 each for concrete numbers (%, $, units) in title+description, max +0.3 total
+
+penalty: ×0.6 if question/listicle/prediction; ×0.5 if PR-ish announcements; otherwise ×1.0
+
+Higher competitor score means higher relevance of that competitor news to the target company (directly/indirectly).
+Set bucket_used to "competitor_intel", impact_on_main based on competitive implications for target company, reason_short ≤140 chars, flags from both title+description."""
+
+    user_payload = {
+        "bucket": "competitor_intel",
+        "target_company_ticker": ticker,
+        "title": title,
+        "description_snippet": desc_snippet,
+        "source_tier": source_tier,
+        "competitor_context": keywords or []
+    }
+    
+    return _make_ai_request(system_prompt, user_payload, schema)
+
+def _make_ai_request(system_prompt: str, user_payload: Dict, schema: Dict) -> Tuple[float, str, str]:
+    """Shared function to make AI requests"""
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
@@ -1712,7 +1713,7 @@ Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "P
             {"role": "user", "content": json.dumps(user_payload)}
         ],
         "response_format": {"type": "json_schema", "json_schema": schema},
-        "max_completion_tokens": 250
+        "max_completion_tokens": 300
     }
     
     response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -1726,7 +1727,7 @@ Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "P
     parsed = json.loads(content)
     
     score = float(parsed.get("score", 50))
-    impact = parsed.get("impact_on_company", "Unclear")
+    impact = parsed.get("impact_on_main", "Unclear")
     reason = parsed.get("reason_short", "")
     
     LOG.info(f"AI analysis: {score:.0f} | {impact} | {reason}")
@@ -2893,7 +2894,7 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
 
 # Missing function 2: Enhanced digest HTML builder
 def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
-    """Build HTML email digest using the enhanced article formatting with AI analysis"""
+    """Build HTML email digest using the enhanced article formatting with content indicators"""
     # Get ticker metadata for display
     ticker_metadata = {}
     for ticker in articles_by_ticker.keys():
@@ -2926,13 +2927,6 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
         ".high-score { background-color: #d4edda; color: #155724; }",
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
-        ".scraped-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; background-color: #e8f5e8; color: #2d5a2d; border: 1px solid #90c695; }",
-        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-        ".impact-positive { background-color: #d4edda; color: #155724; }",
-        ".impact-negative { background-color: #f8d7da; color: #721c24; }",
-        ".impact-mixed { background-color: #fff3cd; color: #856404; }",
-        ".impact-unclear { background-color: #e2e3e5; color: #383d41; }",
-        ".ai-analysis { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; }",
         ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
@@ -2942,12 +2936,12 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
         ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
         ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
         "</style></head><body>",
-        f"<h1>Stock Intelligence Report</h1>",
+        f"<h1>Stock Intelligence Report - Content Analysis System</h1>",  # CHANGED
         f"<div class='summary'>",
         f"<strong>Report Period:</strong> Last {period_days} days<br>",
         f"<strong>Generated:</strong> {current_time_est}<br>",
         f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
-        f"<strong>Mode:</strong> AI-Powered Analysis with Content Scraping",
+        f"<strong>Mode:</strong> Enhanced AI Analysis with Category-Specific Scoring",  # CHANGED
         "</div>"
     ]
     
@@ -2961,7 +2955,7 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
         if ticker in ticker_metadata:
             metadata = ticker_metadata[ticker]
             html.append("<div class='keywords'>")
-            html.append(f"<strong>AI-Powered Monitoring Keywords:</strong><br>")
+            html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
             if metadata.get("industry_keywords"):
                 industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
                 html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
@@ -2992,12 +2986,14 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
     
     html.append("""
         <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
-            <strong>About This Report:</strong><br>
-            • AI-Powered Quality Scoring: Articles scored 0-100 based on title + scraped content analysis<br>
-            • Impact Analysis: AI determines if news is Positive, Negative, Mixed, or Unclear for the company<br>
-            • Content Scraping: Full article content extracted when possible to enhance AI analysis<br>
-            • Multi-Source Intelligence: Company news, industry trends, and competitor monitoring<br>
-            • Smart Deduplication: Advanced URL resolution prevents duplicate articles
+            <strong>About This Enhanced Analysis System:</strong><br>
+            • Content Analysis: Yahoo Finance resolved URLs are analyzed for full article content<br>
+            • [ANALYZED] indicator shows articles where full content was extracted and processed<br>
+            • [DESC] indicator shows fallback to original description<br>
+            • Category-Specific AI Scoring: Different AI models for Company, Industry, and Competitor news<br>
+            • Enhanced relevance scoring based on context and business impact<br>
+            • Intelligent domain deduplication and rate limiting for responsible scraping<br>
+            • Multi-tiered content quality validation and spam filtering
         </div>
         </body></html>
     """)
@@ -3350,6 +3346,7 @@ def cron_ingest(
 ):
     """
     Enhanced ingest with content scraping for Yahoo feeds
+    FIXED: Use stored keywords instead of regenerating
     """
     require_admin(request)
     ensure_schema()
@@ -3398,8 +3395,6 @@ def cron_ingest(
         "total_content_scraped": 0,
         "total_content_failed": 0,
         "total_scraping_skipped": 0,
-        "total_ai_backfilled": 0,      # NEW
-        "total_ai_backfill_errors": 0, # NEW
         "by_ticker": {},
         "by_category": {"company": 0, "industry": 0, "competitor": 0}
     }
@@ -3412,9 +3407,25 @@ def cron_ingest(
             feeds_by_ticker[ticker] = []
         feeds_by_ticker[ticker].append(feed)
     
+    # FIXED: Load all ticker metadata once at the start to avoid regeneration
+    ticker_metadata_cache = {}
+    for ticker in feeds_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        if config:
+            ticker_metadata_cache[ticker] = {
+                "industry_keywords": config.get("industry_keywords", []),
+                "competitors": config.get("competitors", [])
+            }
+        else:
+            LOG.warning(f"No stored metadata found for {ticker} - using empty keywords")
+            ticker_metadata_cache[ticker] = {
+                "industry_keywords": [],
+                "competitors": []
+            }
+    
     # Process each ticker's feeds
     for ticker, ticker_feeds in feeds_by_ticker.items():
-        metadata = ticker_manager.get_or_create_metadata(ticker)
+        metadata = ticker_metadata_cache[ticker]  # Use cached metadata
         ticker_stats = {
             "inserted": 0, 
             "duplicates": 0, 
@@ -3427,16 +3438,17 @@ def cron_ingest(
         for feed in ticker_feeds:
             category = feed.get("category", "company")
             
+            # Use appropriate keywords based on category
             if category == "company":
-                category_keywords = []
+                category_keywords = []  # Company news doesn't need additional keywords
             elif category == "industry":
                 category_keywords = metadata.get("industry_keywords", [])
             elif category == "competitor":
-                category_keywords = []
+                category_keywords = metadata.get("competitors", [])
             else:
                 category_keywords = []
             
-            # Use the enhanced scraping function
+            # Use the enhanced scraping function with the cached keywords
             stats = ingest_feed_with_content_scraping(feed, category, category_keywords)
             
             total_stats["feeds_processed"] += 1
@@ -3446,8 +3458,6 @@ def cron_ingest(
             total_stats["total_content_scraped"] += stats.get("content_scraped", 0)
             total_stats["total_content_failed"] += stats.get("content_failed", 0)
             total_stats["total_scraping_skipped"] += stats.get("scraping_skipped", 0)
-            total_stats["total_ai_backfilled"] += stats.get("ai_backfilled", 0)          # NEW
-            total_stats["total_ai_backfill_errors"] += stats.get("ai_backfill_errors", 0)  # NEW
             total_stats["by_category"][category] += stats["inserted"]
             
             ticker_stats["inserted"] += stats["inserted"]
@@ -3456,8 +3466,6 @@ def cron_ingest(
             ticker_stats["content_scraped"] += stats.get("content_scraped", 0)
             ticker_stats["content_failed"] += stats.get("content_failed", 0)
             ticker_stats["scraping_skipped"] += stats.get("scraping_skipped", 0)
-            ticker_stats["ai_backfilled"] = ticker_stats.get("ai_backfilled", 0) + stats.get("ai_backfilled", 0)      # NEW
-            ticker_stats["ai_backfill_errors"] = ticker_stats.get("ai_backfill_errors", 0) + stats.get("ai_backfill_errors", 0)  # NEW
             
             LOG.info(f"Feed {feed['name']} [{category}]: {stats}")
         

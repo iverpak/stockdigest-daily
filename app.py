@@ -896,7 +896,6 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 continue
             
             # SPECIAL CASE: Google Feed → Yahoo Finance redirect handling
-            # If this is Google News leading to Yahoo Finance, treat it like Yahoo Feed processing
             is_google_to_yahoo = (
                 "news.google.com" in url and 
                 "finance.yahoo.com" in url and 
@@ -905,21 +904,17 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             
             if is_google_to_yahoo:
                 LOG.info(f"Google→Yahoo redirect detected: {url} → {resolved_url}")
-                # Apply Yahoo Finance source extraction process
                 original_source = extract_yahoo_finance_source_optimized(resolved_url)
                 if original_source:
-                    # Update resolved URL and domain to the original source
                     final_resolved_url = original_source
                     final_domain = normalize_domain(urlparse(original_source).netloc.lower())
-                    final_source_url = resolved_url  # Yahoo URL becomes the source
+                    final_source_url = resolved_url
                     LOG.info(f"Yahoo source extracted: {original_source}")
                 else:
-                    # Fallback to Yahoo URL if extraction fails
                     final_resolved_url = resolved_url
                     final_domain = domain
                     final_source_url = source_url
             else:
-                # Normal processing
                 final_resolved_url = resolved_url
                 final_domain = domain
                 final_source_url = source_url
@@ -983,33 +978,44 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     else:
                         stats["scraping_skipped"] += 1
                     
-                    # Default quality score
-                    quality_score = 50.0
+                    # ENABLE AI SCORING: Use scraped content for AI analysis, fallback to description
+                    ai_content = scraped_content if scraped_content else description
+                    quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                        title=title,
+                        domain=final_domain, 
+                        ticker=feed["ticker"],
+                        description=ai_content,  # Use scraped content or description for AI
+                        category=category,
+                        keywords=keywords
+                    )
                     
-                    # Use scraped content for display, fallback to description
-                    display_content = scraped_content if scraped_content else description
+                    # Store original description (not scraped content) for potential fallback display
+                    display_content = description  # Keep original description for now
                     
-                    # Insert article with final resolved information
+                    # Insert article with final resolved information and AI analysis
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url,
-                            scraped_content, content_scraped_at, scraping_failed, scraping_error
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            scraped_content, content_scraped_at, scraping_failed, scraping_error,
+                            ai_impact, ai_reasoning
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
                         feed["id"], feed["ticker"], final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
-                        scraped_content, content_scraped_at, scraping_failed, scraping_error
+                        scraped_content, content_scraped_at, scraping_failed, scraping_error,
+                        ai_impact, ai_reasoning
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
                         content_info = f"with scraped content" if scraped_content else "no content scraping"
                         source_info = "via Google→Yahoo" if is_google_to_yahoo else "direct"
-                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info})")
+                        ai_info = f"AI: {quality_score:.0f}/{ai_impact}" if ai_impact else f"AI: {quality_score:.0f}"
+                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info}) ({ai_info})")
                         
             except Exception as e:
                 LOG.error(f"Database error for '{title[:50]}': {e}")
@@ -1027,7 +1033,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
 
 def _format_article_html_with_content(article: Dict, category: str) -> str:
     """
-    Enhanced article HTML formatting that displays scraped content
+    Enhanced article HTML formatting that displays AI analysis instead of scraped content
     """
     import html
     
@@ -1072,9 +1078,17 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     # Determine the actual link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # Quality score styling (disabled for now, but keeping structure)
+    # Quality score styling
     score = article["quality_score"]
-    score_class = "med-score"  # Neutral since we're not scoring
+    score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
+    
+    # Impact styling
+    ai_impact = (article.get("ai_impact") or "").lower()
+    impact_class = f"impact-{ai_impact}" if ai_impact in ["positive", "negative", "mixed", "unclear"] else "impact-unclear"
+    impact_display = ai_impact.title() if ai_impact else "Unclear"
+    
+    # AI reasoning
+    ai_reasoning = (article.get("ai_reasoning") or "").strip()
     
     # Build metadata badges for category-specific information
     metadata_badges = []
@@ -1088,29 +1102,38 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     
     enhanced_metadata = "".join(metadata_badges)
     
-    # Get content - prioritize scraped content, fall back to description
-    content_to_display = ""
-    if article.get("scraped_content"):
-        content_to_display = article["scraped_content"]
-        content_source = "scraped"
-    elif article.get("description"):
-        content_to_display = article["description"]
-        content_source = "description"
+    # COMMENTED OUT: Content display
+    # content_to_display = ""
+    # if article.get("scraped_content"):
+    #     content_to_display = article["scraped_content"]
+    #     content_source = "scraped"
+    # elif article.get("description"):
+    #     content_to_display = article["description"]
+    #     content_source = "description"
     
-    description_html = ""
-    if content_to_display:
-        content_clean = html.unescape(content_to_display.strip())
-        content_clean = re.sub(r'<[^>]+>', '', content_clean)
-        content_clean = re.sub(r'\s+', ' ', content_clean).strip()
-        
-        if len(content_clean) > 800:
-            content_clean = content_clean[:800] + "..."
-        
-        content_clean = html.escape(content_clean)
-        
-        # Add indicator of content source
-        source_indicator = " [SCRAPED]" if content_source == "scraped" else " [DESC]"
-        description_html = f"<br><div class='description'>{content_clean}<em>{source_indicator}</em></div>"
+    # description_html = ""
+    # if content_to_display:
+    #     content_clean = html.unescape(content_to_display.strip())
+    #     content_clean = re.sub(r'<[^>]+>', '', content_clean)
+    #     content_clean = re.sub(r'\s+', ' ', content_clean).strip()
+    #     
+    #     if len(content_clean) > 800:
+    #         content_clean = content_clean[:800] + "..."
+    #     
+    #     content_clean = html.escape(content_clean)
+    #     
+    #     # Add indicator of content source
+    #     source_indicator = " [SCRAPED]" if content_source == "scraped" else " [DESC]"
+    #     description_html = f"<br><div class='description'>{content_clean}<em>{source_indicator}</em></div>"
+    
+    # Build AI analysis section
+    ai_analysis_html = ""
+    if ai_impact or ai_reasoning:
+        ai_analysis_html = f"""<br><div class='ai-analysis'>
+            <strong>🤖 AI Analysis:</strong> 
+            <span class='impact {impact_class}'>{impact_display}</span>
+            {f" - {html.escape(ai_reasoning)}" if ai_reasoning else ""}
+        </div>"""
     
     return f"""
     <div class='article {category}'>
@@ -1118,11 +1141,12 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
             <span class='score {score_class}'>Score: {score:.0f}</span>
+            <span class='impact {impact_class}'>{impact_display}</span>
         </div>
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
             <span class='meta'> | {pub_date}</span>
-            {description_html}
+            {ai_analysis_html}
         </div>
     </div>
     """
@@ -1500,8 +1524,8 @@ def _ai_quality_score_company(title: str, domain: str, ticker: str, description:
     if desc_clean and (desc_clean.lower() == title.lower().strip() or len(desc_clean) < 10):
         desc_clean = ""
     
-    # Limit description length for token management
-    desc_snippet = desc_clean[:500] if desc_clean else ""
+    # NO TRUNCATION - use full scraped content
+    desc_snippet = desc_clean  # Removed [:500] limit
     
     # Build the JSON schema for structured response
     schema = {
@@ -1568,7 +1592,7 @@ Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "P
     user_payload = {
         "company_ticker": ticker,
         "title": title,
-        "description_snippet": desc_snippet,
+        "description_snippet": desc_snippet,  # Full content now, no truncation
         "source_domain": domain,
         "source_tier": source_tier,
         "industry_keywords": keywords or []
@@ -2768,7 +2792,7 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
 
 # Missing function 2: Enhanced digest HTML builder
 def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
-    """Build HTML email digest using the enhanced article formatting with content indicators"""
+    """Build HTML email digest using the enhanced article formatting with AI analysis"""
     # Get ticker metadata for display
     ticker_metadata = {}
     for ticker in articles_by_ticker.keys():
@@ -2801,6 +2825,12 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
         ".high-score { background-color: #d4edda; color: #155724; }",
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+        ".impact-positive { background-color: #d4edda; color: #155724; }",
+        ".impact-negative { background-color: #f8d7da; color: #721c24; }",
+        ".impact-mixed { background-color: #fff3cd; color: #856404; }",
+        ".impact-unclear { background-color: #e2e3e5; color: #383d41; }",
+        ".ai-analysis { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; }",
         ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
@@ -2810,12 +2840,12 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
         ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
         ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
         "</style></head><body>",
-        f"<h1>Stock Intelligence Report - Content Scraping Test</h1>",
+        f"<h1>Stock Intelligence Report</h1>",
         f"<div class='summary'>",
         f"<strong>Report Period:</strong> Last {period_days} days<br>",
         f"<strong>Generated:</strong> {current_time_est}<br>",
         f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
-        f"<strong>Mode:</strong> Content Scraping Test (10 articles max, AI scoring disabled)",
+        f"<strong>Mode:</strong> AI-Powered Analysis with Content Scraping",
         "</div>"
     ]
     
@@ -2829,7 +2859,7 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
         if ticker in ticker_metadata:
             metadata = ticker_metadata[ticker]
             html.append("<div class='keywords'>")
-            html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
+            html.append(f"<strong>AI-Powered Monitoring Keywords:</strong><br>")
             if metadata.get("industry_keywords"):
                 industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
                 html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
@@ -2860,15 +2890,12 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
     
     html.append("""
         <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
-            <strong>About This Test Report:</strong><br>
-            • Content Scraping Test: Yahoo Finance resolved URLs are scraped for full article content<br>
-            • [SCRAPED] indicator shows articles where full content was extracted<br>
-            • [DESC] indicator shows fallback to original description<br>
-            • AI Quality Scoring temporarily disabled to focus on content extraction<br>
-            • Limited to first 10 articles per feed run for safety testing<br>
-            • Domain deduplication: each domain scraped max once per run<br>
-            • 3-7 second delays between scraping requests for politeness<br>
-            • Only company-category Yahoo Finance articles are scraped for now
+            <strong>About This Report:</strong><br>
+            • AI-Powered Quality Scoring: Articles scored 0-100 based on title + scraped content analysis<br>
+            • Impact Analysis: AI determines if news is Positive, Negative, Mixed, or Unclear for the company<br>
+            • Content Scraping: Full article content extracted when possible to enhance AI analysis<br>
+            • Multi-Source Intelligence: Company news, industry trends, and competitor monitoring<br>
+            • Smart Deduplication: Advanced URL resolution prevents duplicate articles
         </div>
         </body></html>
     """)

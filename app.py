@@ -874,7 +874,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             # Filter description - only keep if it adds value
             description = ""
             if raw_description and is_description_valuable(title, raw_description):
-                description = raw_description[:500]
+                description = raw_description
             
             # Quick spam checks
             if not url or contains_non_latin_script(title):

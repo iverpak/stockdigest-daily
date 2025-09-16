@@ -748,11 +748,8 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
     Safe content scraper using requests only (no Playwright)
     """
     try:
-        # Skip if we've already scraped this domain in this run
-        if domain in scraped_domains:
-            return None, f"Domain {domain} already scraped in this run"
-        
-        scraped_domains.add(domain)
+        # Remove domain deduplication - scrape every URL
+        # scraped_domains.add(domain)  # Optional: still track but don't block
         
         # Use the existing extract_article_content function
         content, error = extract_article_content(url, domain)

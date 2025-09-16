@@ -1112,7 +1112,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     LOG.info(f"Feed complete for {ticker} [{category}]: {stats.get('inserted', 0)} inserted, {stats.get('content_scraped', 0)} scraped, {stats.get('ai_backfilled', 0)} backfilled")
     
     return stats
-
+    
 def _format_article_html_with_content(article: Dict, category: str) -> str:
     """
     Enhanced article HTML formatting that displays AI analysis instead of scraped content
@@ -1169,6 +1169,11 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     impact_class = f"impact-{ai_impact}" if ai_impact in ["positive", "negative", "mixed", "unclear"] else "impact-unclear"
     impact_display = ai_impact.title() if ai_impact else "Unclear"
     
+    # Scraped content indicator
+    scraped_indicator = ""
+    if article.get("scraped_content") and article.get("scraped_content").strip():
+        scraped_indicator = '<span class="scraped-badge">Scraped</span>'
+    
     # AI reasoning
     ai_reasoning = (article.get("ai_reasoning") or "").strip()
     
@@ -1223,6 +1228,7 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
             <span class='score {score_class}'>Score: {score:.0f}</span>
+            {scraped_indicator}
             <span class='impact {impact_class}'>{impact_display}</span>
         </div>
         <div class='article-content'>
@@ -1563,8 +1569,8 @@ def calculate_quality_score(
     LOG.info(f"SCORING: {category} article for {ticker}: '{title[:30]}...'")
     
     # For non-company articles, return neutral score (Phase 1 limitation)
-    if category.lower() not in ["company", "company_news", "comp"]:
-        LOG.info(f"SKIPPING: Non-company category: {category}")
+    if category.lower() not in ["company", "company_news", "comp", "industry", "competitor"]:
+        LOG.info(f"SKIPPING: Unsupported category: {category}")
         return 50.0, None, None
      
     # Pre-filter spam
@@ -2920,6 +2926,7 @@ def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[
         ".high-score { background-color: #d4edda; color: #155724; }",
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".scraped-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; background-color: #e8f5e8; color: #2d5a2d; border: 1px solid #90c695; }",
         ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
         ".impact-positive { background-color: #d4edda; color: #155724; }",
         ".impact-negative { background-color: #f8d7da; color: #721c24; }",

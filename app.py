@@ -259,11 +259,46 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """Simplified database schema initialization"""
+    """Complete database schema initialization with all required tables"""
     with db() as conn:
         with conn.cursor() as cur:
-            # Core tables only
+            # Create found_url table with all required columns
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS found_url (
+                    id SERIAL PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    resolved_url TEXT,
+                    url_hash VARCHAR(32) NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    feed_id INTEGER,
+                    ticker VARCHAR(10) NOT NULL,
+                    domain VARCHAR(255),
+                    quality_score DECIMAL(5,2) DEFAULT 50.0,
+                    published_at TIMESTAMP,
+                    found_at TIMESTAMP DEFAULT NOW(),
+                    sent_in_digest BOOLEAN DEFAULT FALSE,
+                    category VARCHAR(20) DEFAULT 'company',
+                    search_keyword TEXT,
+                    original_source_url TEXT,
+                    scraped_content TEXT,
+                    content_scraped_at TIMESTAMP,
+                    scraping_failed BOOLEAN DEFAULT FALSE,
+                    scraping_error TEXT,
+                    ai_impact VARCHAR(20),
+                    ai_reasoning TEXT,
+                    source_tier DECIMAL(3,2),
+                    event_multiplier DECIMAL(3,2),
+                    event_multiplier_reason TEXT,
+                    relevance_boost DECIMAL(3,2),
+                    relevance_boost_reason TEXT,
+                    numeric_bonus DECIMAL(3,2),
+                    penalty_multiplier DECIMAL(3,2),
+                    penalty_reason TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+                
                 CREATE TABLE IF NOT EXISTS ticker_config (
                     ticker VARCHAR(10) PRIMARY KEY,
                     name VARCHAR(255),
@@ -283,7 +318,6 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
                 
-                -- Add category column to source_feed if it doesn't exist
                 CREATE TABLE IF NOT EXISTS source_feed (
                     id SERIAL PRIMARY KEY,
                     url TEXT UNIQUE NOT NULL,
@@ -298,10 +332,7 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
                 
-                -- Add category column if it doesn't exist (for existing installations)
-                ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
-                
-                -- Add AI analysis columns to found_url if they don't exist
+                -- Add any missing columns to existing tables
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_impact VARCHAR(20);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_reasoning TEXT;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS source_tier DECIMAL(3,2);
@@ -312,8 +343,13 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS numeric_bonus DECIMAL(3,2);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_multiplier DECIMAL(3,2);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_reason TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraped_content TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS content_scraped_at TIMESTAMP;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
+                ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
                 
-                -- Essential indexes only
+                -- Essential indexes
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
@@ -951,8 +987,8 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         if existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None:
                             LOG.info(f"Re-analyzing existing article: {title[:60]}... (missing AI data)")
                             
-                            # Calculate quality score using AI for existing article
-                            quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                            # Calculate quality score using AI for existing article - UPDATED 4-parameter return
+                            quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
                                 title=title,
                                 domain=final_domain, 
                                 ticker=feed["ticker"],
@@ -961,12 +997,31 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                 keywords=keywords
                             )
                             
-                            # Update the existing article with AI analysis
+                            # Extract components for database storage
+                            source_tier = components.get('source_tier') if components else None
+                            event_multiplier = components.get('event_multiplier') if components else None
+                            event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+                            relevance_boost = components.get('relevance_boost') if components else None
+                            relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+                            numeric_bonus = components.get('numeric_bonus') if components else None
+                            penalty_multiplier = components.get('penalty_multiplier') if components else None
+                            penalty_reason = components.get('penalty_reason') if components else None
+                            
+                            # Update the existing article with AI analysis AND components
                             cur.execute("""
                                 UPDATE found_url 
-                                SET quality_score = %s, ai_impact = %s, ai_reasoning = %s
+                                SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
+                                    source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
+                                    relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
+                                    penalty_multiplier = %s, penalty_reason = %s
                                 WHERE id = %s
-                            """, (quality_score, ai_impact, ai_reasoning, existing_article["id"]))
+                            """, (
+                                quality_score, ai_impact, ai_reasoning,
+                                source_tier, event_multiplier, event_multiplier_reason,
+                                relevance_boost, relevance_boost_reason, numeric_bonus,
+                                penalty_multiplier, penalty_reason,
+                                existing_article["id"]
+                            ))
                             
                             if cur.rowcount > 0:
                                 stats["ai_reanalyzed"] += 1
@@ -1030,8 +1085,8 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     else:
                         stats["scraping_skipped"] += 1
                     
-                    # Calculate quality score using AI - FIXED: Use provided keywords
-                    quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                    # Calculate quality score using AI - FIXED: Use provided keywords and get components
+                    quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
                         title=title,
                         domain=final_domain, 
                         ticker=feed["ticker"],
@@ -1040,25 +1095,41 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         keywords=keywords  # Use the keywords passed to this function
                     )
                     
+                    # Extract individual components for database storage
+                    source_tier = components.get('source_tier') if components else None
+                    event_multiplier = components.get('event_multiplier') if components else None
+                    event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+                    relevance_boost = components.get('relevance_boost') if components else None
+                    relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+                    numeric_bonus = components.get('numeric_bonus') if components else None
+                    penalty_multiplier = components.get('penalty_multiplier') if components else None
+                    penalty_reason = components.get('penalty_reason') if components else None
+                    
                     # Use scraped content for display, fallback to description
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article with final resolved information
+                    # Insert article with final resolved information AND scoring components
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url,
                             scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_impact, ai_reasoning
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ai_impact, ai_reasoning,
+                            source_tier, event_multiplier, event_multiplier_reason,
+                            relevance_boost, relevance_boost_reason, numeric_bonus,
+                            penalty_multiplier, penalty_reason
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
                         feed["id"], feed["ticker"], final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                        ai_impact, ai_reasoning
+                        ai_impact, ai_reasoning,
+                        source_tier, event_multiplier, event_multiplier_reason,
+                        relevance_boost, relevance_boost_reason, numeric_bonus,
+                        penalty_multiplier, penalty_reason
                     ))
                     
                     if cur.fetchone():
@@ -4188,7 +4259,7 @@ def reset_ai_analysis(request: Request, tickers: List[str] = Query(default=None,
 def rerun_ai_analysis(
     request: Request, 
     tickers: List[str] = Query(default=None, description="Specific tickers to re-analyze"),
-    limit: int = Query(default=500, description="Max articles to process per run (no upper limit)")  # REMOVED upper limit
+    limit: int = Query(default=500, description="Max articles to process per run (no upper limit)")
 ):
     """Re-run AI analysis on existing articles that have NULL ai_impact - UNLIMITED PROCESSING"""
     require_admin(request)
@@ -4262,8 +4333,8 @@ def rerun_ai_analysis(
             else:
                 keywords = []
             
-            # Run AI analysis
-            quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+            # Run AI analysis - UPDATED to handle 4-parameter return
+            quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
                 title=article["title"],
                 domain=article["domain"],
                 ticker=ticker,
@@ -4272,15 +4343,32 @@ def rerun_ai_analysis(
                 keywords=keywords
             )
             
-            # Update the article
+            # Extract components for database storage
+            source_tier = components.get('source_tier') if components else None
+            event_multiplier = components.get('event_multiplier') if components else None
+            event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+            relevance_boost = components.get('relevance_boost') if components else None
+            relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+            numeric_bonus = components.get('numeric_bonus') if components else None
+            penalty_multiplier = components.get('penalty_multiplier') if components else None
+            penalty_reason = components.get('penalty_reason') if components else None
+            
+            # Update the article with ALL scoring data
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
                     UPDATE found_url 
-                    SET quality_score = %s,
-                        ai_impact = %s,
-                        ai_reasoning = %s
+                    SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
+                        source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
+                        relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
+                        penalty_multiplier = %s, penalty_reason = %s
                     WHERE id = %s
-                """, (quality_score, ai_impact, ai_reasoning, article["id"]))
+                """, (
+                    quality_score, ai_impact, ai_reasoning,
+                    source_tier, event_multiplier, event_multiplier_reason,
+                    relevance_boost, relevance_boost_reason, numeric_bonus,
+                    penalty_multiplier, penalty_reason,
+                    article["id"]
+                ))
                 
                 if cur.rowcount > 0:
                     updated += 1

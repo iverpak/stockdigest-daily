@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import logging
-import hashlib
+import hashlib 
 import re
 import pytz
 import json
@@ -1500,7 +1500,7 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     return max(10.0, min(90.0, base_score))
 
 def _ai_quality_score_company(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for company articles"""
+    """AI-powered scoring for company articles with detailed formula breakdown"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
@@ -1515,45 +1515,67 @@ def _ai_quality_score_company(title: str, domain: str, ticker: str, description:
                 "bucket_used": {"type": "string"},
                 "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
                 "reason_short": {"type": "string"},
-                "components": {
+                "formula_breakdown": {
                     "type": "object",
                     "properties": {
-                        "source_tier": {"type": "number"},
-                        "event_multiplier": {"type": "number"},
-                        "relevance_boost": {"type": "number"},
+                        "source_tier_input": {"type": "number"},
+                        "event_multiplier_chosen": {"type": "number"},
+                        "event_multiplier_reason": {"type": "string"},
+                        "relevance_boost_chosen": {"type": "number"},
+                        "relevance_boost_reason": {"type": "string"},
                         "numeric_bonus": {"type": "number"},
-                        "penalty": {"type": "number"}
+                        "penalty_multiplier": {"type": "number"},
+                        "penalty_reason": {"type": "string"},
+                        "raw_calculation": {"type": "string"},
+                        "final_score": {"type": "number"}
                     },
-                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty"],
+                    "required": ["source_tier_input", "event_multiplier_chosen", "event_multiplier_reason", "relevance_boost_chosen", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "raw_calculation", "final_score"],
                     "additionalProperties": False
                 },
                 "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
             },
-            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "components", "flags"],
+            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "formula_breakdown", "flags"],
             "additionalProperties": False
         }
     }
     
-    system_prompt = """You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-Compute ONE score using the EXACT formula for company_news bucket:
+    system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
+You MUST compute the score using EXACTLY this formula and show all steps:
 Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
 
-COMPANY_NEWS event_multiplier (analyze title + description):
+INPUTS PROVIDED:
+- source_tier = {source_tier} (already calculated)
+- title = "{title}"
+- description = "{desc_snippet}"
+- company = {ticker}
+
+COMPANY_NEWS event_multiplier (choose ONE that best fits title+description):
 2.0 = halt/shut/delist/recall/probed/sues/settles/guides/cuts/raises/acquires/divests/spin-off
-1.6 = regulatory/policy directly on the company
-1.5 = contracts/commitments/backlog
-1.4 = earnings/guidance
-1.1 = rating/price-target chatter
-0.6 = opinion/education
-0.5 = PR
+1.6 = regulatory/policy directly affecting {ticker}
+1.5 = contracts/commitments/backlog announcements for {ticker}
+1.4 = earnings/guidance releases for {ticker}
+1.1 = analyst rating/price-target changes for {ticker}
+0.6 = opinion/education pieces about {ticker}
+0.5 = routine PR announcements from {ticker}
 
-relevance_boost: 1.3 if title/description mentions ticker/company/owned asset or matches keywords; else 1.0
+relevance_boost:
+1.3 = if title/description clearly mentions {ticker}, "Vistra", or {ticker}'s specific assets/operations
+1.0 = if {ticker} not directly mentioned or unclear relevance
 
-numeric_bonus: +0.1 each for concrete numbers (%, $, units) in title+description, max +0.3 total
+numeric_bonus: +0.1 for each concrete number in title+description (%, $, MW figures), max +0.3
 
-penalty: ×0.6 if question/listicle/prediction; ×0.5 if PR-ish announcements; otherwise ×1.0
+penalty (check title+description):
+×0.6 = if question/listicle/prediction format
+×0.5 = if PR-ish announcements
+×1.0 = otherwise
 
-Set bucket_used to "company_news", impact_on_main based on shareholder impact, reason_short ≤140 chars, flags from both title+description."""
+In formula_breakdown, show:
+- event_multiplier_reason: "Why I chose X.X: [specific reason based on what event this represents]"
+- relevance_boost_reason: "Why I chose X.X: [whether {ticker}/Vistra is specifically mentioned]"
+- penalty_reason: "Why I chose ×X.X: [specific reason]"
+- raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
+
+Set bucket_used="company_news", impact_on_main based on shareholder impact, reason_short ≤140 chars."""
 
     user_payload = {
         "bucket": "company_news",
@@ -1564,10 +1586,10 @@ Set bucket_used to "company_news", impact_on_main based on shareholder impact, r
         "keywords": keywords or []
     }
     
-    return _make_ai_request(system_prompt, user_payload, schema)
+    return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
 
 def _ai_quality_score_industry(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for industry/market articles"""
+    """AI-powered scoring for industry/market articles with detailed formula breakdown"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
@@ -1582,44 +1604,66 @@ def _ai_quality_score_industry(title: str, domain: str, ticker: str, description
                 "bucket_used": {"type": "string"},
                 "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
                 "reason_short": {"type": "string"},
-                "components": {
+                "formula_breakdown": {
                     "type": "object",
                     "properties": {
-                        "source_tier": {"type": "number"},
-                        "event_multiplier": {"type": "number"},
-                        "relevance_boost": {"type": "number"},
+                        "source_tier_input": {"type": "number"},
+                        "event_multiplier_chosen": {"type": "number"},
+                        "event_multiplier_reason": {"type": "string"},
+                        "relevance_boost_chosen": {"type": "number"},
+                        "relevance_boost_reason": {"type": "string"},
                         "numeric_bonus": {"type": "number"},
-                        "penalty": {"type": "number"}
+                        "penalty_multiplier": {"type": "number"},
+                        "penalty_reason": {"type": "string"},
+                        "raw_calculation": {"type": "string"},
+                        "final_score": {"type": "number"}
                     },
-                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty"],
+                    "required": ["source_tier_input", "event_multiplier_chosen", "event_multiplier_reason", "relevance_boost_chosen", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "raw_calculation", "final_score"],
                     "additionalProperties": False
                 },
                 "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
             },
-            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "components", "flags"],
+            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "formula_breakdown", "flags"],
             "additionalProperties": False
         }
     }
     
-    system_prompt = """You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-Compute ONE score using the EXACT formula for industry_market bucket:
+    system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
+You MUST compute the score using EXACTLY this formula and show all steps:
 Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
 
-INDUSTRY_MARKET event_multiplier (analyze title + description):
-1.6 = policy/regulation shaping sector economics
-1.5 = commodity/input supply-demand changes
-1.4 = large ecosystem deals/capex/standards
-1.1 = research/indices
-0.6 = PR/market-size adverts
+INPUTS PROVIDED:
+- source_tier = {source_tier} (already calculated)
+- title = "{title}"
+- description = "{desc_snippet}"
+- target_company = {ticker} (energy utility)
+- industry_keywords = {keywords or []}
 
-relevance_boost: 1.1 if sector topic clearly ties to main business via title/description/keywords; else 1.0
+INDUSTRY_MARKET event_multiplier (choose ONE that best fits title+description):
+1.6 = policy/regulation shaping sector economics (energy policy, utility regulations, grid standards)
+1.5 = commodity/input supply-demand changes (natural gas prices, coal supply, renewable capacity)
+1.4 = large ecosystem deals/capex/standards (major power plant construction, grid infrastructure, energy storage)
+1.1 = research/indices (energy sector reports, utility performance studies)
+0.6 = PR/market-size advertisements (industry growth predictions, market reports)
 
-numeric_bonus: +0.1 each for concrete numbers (%, $, units) in title+description, max +0.3 total
+relevance_boost (examine title+description+keywords):
+1.1 = if energy/utility sector topic clearly relates to {ticker}'s business (power generation, energy markets, utility operations)
+1.0 = if topic seems unrelated to energy utilities or too general
 
-penalty: ×0.6 if question/listicle/prediction; ×0.5 if PR-ish announcements; otherwise ×1.0
+numeric_bonus: +0.1 for each concrete number in title+description (%, $, MW, capacity figures), max +0.3
 
-Higher industry score means higher relevance of that news to the target company (directly/indirectly).
-Set bucket_used to "industry_market", impact_on_main based on implications for target company, reason_short ≤140 chars, flags from both title+description."""
+penalty (check title+description):
+×0.6 = if question/listicle/prediction format ("Should you...", "Best...", "Top...", "Will X happen?")
+×0.5 = if PR-ish ("announces expansion", "market size expected to grow", "unveils breakthrough")
+×1.0 = otherwise
+
+In formula_breakdown, show:
+- event_multiplier_reason: "Why I chose X.X: [specific reason based on title/description]"
+- relevance_boost_reason: "Why I chose X.X: [how this relates to {ticker}'s energy business]"
+- penalty_reason: "Why I chose ×X.X: [specific reason]"
+- raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
+
+Set bucket_used="industry_market", impact_on_main based on implications for {ticker}, reason_short ≤140 chars."""
 
     user_payload = {
         "bucket": "industry_market",
@@ -1630,10 +1674,10 @@ Set bucket_used to "industry_market", impact_on_main based on implications for t
         "industry_keywords": keywords or []
     }
     
-    return _make_ai_request(system_prompt, user_payload, schema)
+    return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
 
 def _ai_quality_score_competitor(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str]:
-    """AI-powered scoring for competitor articles"""
+    """AI-powered scoring for competitor articles with detailed formula breakdown"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
@@ -1648,44 +1692,66 @@ def _ai_quality_score_competitor(title: str, domain: str, ticker: str, descripti
                 "bucket_used": {"type": "string"},
                 "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
                 "reason_short": {"type": "string"},
-                "components": {
+                "formula_breakdown": {
                     "type": "object",
                     "properties": {
-                        "source_tier": {"type": "number"},
-                        "event_multiplier": {"type": "number"},
-                        "relevance_boost": {"type": "number"},
+                        "source_tier_input": {"type": "number"},
+                        "event_multiplier_chosen": {"type": "number"},
+                        "event_multiplier_reason": {"type": "string"},
+                        "relevance_boost_chosen": {"type": "number"},
+                        "relevance_boost_reason": {"type": "string"},
                         "numeric_bonus": {"type": "number"},
-                        "penalty": {"type": "number"}
+                        "penalty_multiplier": {"type": "number"},
+                        "penalty_reason": {"type": "string"},
+                        "raw_calculation": {"type": "string"},
+                        "final_score": {"type": "number"}
                     },
-                    "required": ["source_tier", "event_multiplier", "relevance_boost", "numeric_bonus", "penalty"],
+                    "required": ["source_tier_input", "event_multiplier_chosen", "event_multiplier_reason", "relevance_boost_chosen", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "raw_calculation", "final_score"],
                     "additionalProperties": False
                 },
                 "flags": {"type": "array", "items": {"type": "string"}, "maxItems": 10}
             },
-            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "components", "flags"],
+            "required": ["score", "bucket_used", "impact_on_main", "reason_short", "formula_breakdown", "flags"],
             "additionalProperties": False
         }
     }
     
-    system_prompt = """You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-Compute ONE score using the EXACT formula for competitor_intel bucket:
+    system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
+You MUST compute the score using EXACTLY this formula and show all steps:
 Score = 100 × source_tier × event_multiplier × relevance_boost + numeric_bonus, then × penalty
 
-COMPETITOR_INTEL event_multiplier (analyze title + description):
-1.7 = rival hard event (M&A, delist, shutdown, pricing move)
-1.6 = rival cap-structure/asset sales
-1.4 = rival launches/pricing/strategy
-0.9 = 13F/holdings churn
-0.6 = opinion
+INPUTS PROVIDED:
+- source_tier = {source_tier} (already calculated)
+- title = "{title}"
+- description = "{desc_snippet}"
+- target_company = {ticker}
+- competitors = {keywords or []}
 
-relevance_boost: 1.2 if a clear rival is subject and implications for main are obvious; else 1.0
+COMPETITOR_INTEL event_multiplier (choose ONE that best fits title+description):
+1.7 = rival hard events (M&A, delist, shutdown, major pricing moves by competitors)
+1.6 = rival capital structure/asset sales that affect competitive positioning
+1.4 = rival product launches/pricing changes/strategic moves
+0.9 = institutional holdings changes (13F filings, fund movements)
+0.6 = opinion pieces about competitors
 
-numeric_bonus: +0.1 each for concrete numbers (%, $, units) in title+description, max +0.3 total
+relevance_boost:
+1.2 = if a clear {ticker} competitor is the subject and competitive implications are obvious
+1.0 = if competitor connection unclear or implications for {ticker} are vague
 
-penalty: ×0.6 if question/listicle/prediction; ×0.5 if PR-ish announcements; otherwise ×1.0
+numeric_bonus: +0.1 for each concrete number in title+description (%, $, capacity figures), max +0.3
 
-Higher competitor score means higher relevance of that competitor news to the target company (directly/indirectly).
-Set bucket_used to "competitor_intel", impact_on_main based on competitive implications for target company, reason_short ≤140 chars, flags from both title+description."""
+penalty (check title+description):
+×0.6 = if question/listicle/prediction format
+×0.5 = if PR-ish announcements
+×1.0 = otherwise
+
+In formula_breakdown, show:
+- event_multiplier_reason: "Why I chose X.X: [what type of competitor event this represents]"
+- relevance_boost_reason: "Why I chose X.X: [which competitor mentioned and competitive relevance to {ticker}]"
+- penalty_reason: "Why I chose ×X.X: [specific reason]"
+- raw_calculation: "100 × {source_tier} × [event_multiplier] × [relevance_boost] + [numeric_bonus] × [penalty] = [final_score]"
+
+Set bucket_used="competitor_intel", impact_on_main based on competitive implications for {ticker}, reason_short ≤140 chars."""
 
     user_payload = {
         "bucket": "competitor_intel",
@@ -1696,10 +1762,10 @@ Set bucket_used to "competitor_intel", impact_on_main based on competitive impli
         "competitor_context": keywords or []
     }
     
-    return _make_ai_request(system_prompt, user_payload, schema)
+    return _make_ai_request_with_breakdown(system_prompt, user_payload, schema)
 
-def _make_ai_request(system_prompt: str, user_payload: Dict, schema: Dict) -> Tuple[float, str, str]:
-    """Shared function to make AI requests"""
+def _make_ai_request_with_breakdown(system_prompt: str, user_payload: Dict, schema: Dict) -> Tuple[float, str, str]:
+    """Shared function to make AI requests with detailed breakdown logging"""
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
@@ -1713,7 +1779,7 @@ def _make_ai_request(system_prompt: str, user_payload: Dict, schema: Dict) -> Tu
             {"role": "user", "content": json.dumps(user_payload)}
         ],
         "response_format": {"type": "json_schema", "json_schema": schema},
-        "max_completion_tokens": 300
+        "max_completion_tokens": 400  # Increased for breakdown
     }
     
     response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -1729,6 +1795,18 @@ def _make_ai_request(system_prompt: str, user_payload: Dict, schema: Dict) -> Tu
     score = float(parsed.get("score", 50))
     impact = parsed.get("impact_on_main", "Unclear")
     reason = parsed.get("reason_short", "")
+    
+    # Log the detailed breakdown
+    breakdown = parsed.get("formula_breakdown", {})
+    if breakdown:
+        LOG.info(f"FORMULA BREAKDOWN:")
+        LOG.info(f"  Source tier: {breakdown.get('source_tier_input', 'N/A')}")
+        LOG.info(f"  Event multiplier: {breakdown.get('event_multiplier_chosen', 'N/A')} - {breakdown.get('event_multiplier_reason', 'N/A')}")
+        LOG.info(f"  Relevance boost: {breakdown.get('relevance_boost_chosen', 'N/A')} - {breakdown.get('relevance_boost_reason', 'N/A')}")
+        LOG.info(f"  Numeric bonus: {breakdown.get('numeric_bonus', 'N/A')}")
+        LOG.info(f"  Penalty: {breakdown.get('penalty_multiplier', 'N/A')} - {breakdown.get('penalty_reason', 'N/A')}")
+        LOG.info(f"  Calculation: {breakdown.get('raw_calculation', 'N/A')}")
+        LOG.info(f"  Final score: {breakdown.get('final_score', 'N/A')}")
     
     LOG.info(f"AI analysis: {score:.0f} | {impact} | {reason}")
     

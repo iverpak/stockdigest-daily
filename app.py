@@ -214,6 +214,33 @@ DOMAIN_STRATEGIES = {
 domain_last_accessed = {}
 last_scraped_domain = None
 
+# Global Playwright statistics tracking
+playwright_stats = {
+    "attempted": 0,
+    "successful": 0,
+    "failed": 0,
+    "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
+}
+
+def log_playwright_stats():
+    """Log current Playwright performance statistics"""
+    if playwright_stats["attempted"] == 0:
+        return
+    
+    success_rate = (playwright_stats["successful"] / playwright_stats["attempted"]) * 100
+    LOG.info(f"PLAYWRIGHT STATS: {success_rate:.1f}% success rate ({playwright_stats['successful']}/{playwright_stats['attempted']})")
+    
+    # Log top performing and failing domains
+    domain_stats = playwright_stats["by_domain"]
+    if domain_stats:
+        successful_domains = [(domain, stats) for domain, stats in domain_stats.items() if stats["successes"] > 0]
+        failed_domains = [(domain, stats) for domain, stats in domain_stats.items() if stats["successes"] == 0 and stats["attempts"] > 0]
+        
+        if successful_domains:
+            LOG.info(f"PLAYWRIGHT SUCCESS DOMAINS: {len(successful_domains)} domains working")
+        if failed_domains:
+            LOG.info(f"PLAYWRIGHT FAILED DOMAINS: {len(failed_domains)} domains still blocked")
+
 # ------------------------------------------------------------------------------
 # Database helpers
 # ------------------------------------------------------------------------------
@@ -461,17 +488,22 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
         if normalize_domain(domain) in PAYWALL_DOMAINS:
             return None, f"Paywall domain: {domain}"
         
+        LOG.info(f"PLAYWRIGHT: Starting browser for {domain}")
+        
         with sync_playwright() as p:
             # Launch browser with stealth settings
             browser = p.chromium.launch(
-                headless=True,  # Set to False for debugging
+                headless=True,
                 args=[
                     '--no-sandbox',
                     '--disable-blink-features=AutomationControlled',
                     '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
                     '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 ]
             )
+            
+            LOG.info(f"PLAYWRIGHT: Browser launched, navigating to {url}")
             
             # Create new page with realistic settings
             page = browser.new_page(
@@ -479,65 +511,126 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
             
+            # Set additional headers to look more human
+            page.set_extra_http_headers({
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            
             # Navigate to page with timeout
             page.goto(url, wait_until="networkidle", timeout=30000)
+            LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
             
-            # Wait a bit for dynamic content
+            # Wait for dynamic content to load
             page.wait_for_timeout(2000)
             
             # Try multiple content extraction methods
             content = None
+            extraction_method = None
             
-            # Method 1: Try article tag
-            article_content = page.query_selector('article')
-            if article_content:
-                content = article_content.inner_text()
+            # Method 1: Try article tag first
+            try:
+                article_element = page.query_selector('article')
+                if article_element:
+                    content = article_element.inner_text()
+                    extraction_method = "article tag"
+            except:
+                pass
             
             # Method 2: Try main content selectors
-            if not content:
+            if not content or len(content.strip()) < 200:
                 selectors = [
                     '[role="main"]',
+                    'main',
                     '.article-content',
                     '.story-content',
                     '.entry-content',
-                    '.post-content'
+                    '.post-content',
+                    '.content',
+                    '[data-module="ArticleBody"]'
                 ]
                 for selector in selectors:
-                    element = page.query_selector(selector)
-                    if element:
-                        content = element.inner_text()
-                        break
+                    try:
+                        element = page.query_selector(selector)
+                        if element:
+                            temp_content = element.inner_text()
+                            if temp_content and len(temp_content.strip()) > 200:
+                                content = temp_content
+                                extraction_method = f"selector: {selector}"
+                                break
+                    except:
+                        continue
             
-            # Method 3: Fallback to body text (filtered)
-            if not content:
-                content = page.evaluate("""
-                    () => {
-                        // Remove script and style elements
-                        const scripts = document.querySelectorAll('script, style, nav, header, footer, aside');
-                        scripts.forEach(el => el.remove());
-                        
-                        // Get main content areas
-                        const main = document.querySelector('main, [role="main"], .main-content');
-                        return main ? main.innerText : document.body.innerText;
-                    }
-                """)
+            # Method 3: Smart body text extraction (removes navigation/ads)
+            if not content or len(content.strip()) < 200:
+                try:
+                    content = page.evaluate("""
+                        () => {
+                            // Remove unwanted elements
+                            const unwanted = document.querySelectorAll(`
+                                script, style, nav, header, footer, aside,
+                                .advertisement, .ads, .ad, .sidebar,
+                                .navigation, .nav, .menu, .social,
+                                [class*="ad"], [class*="sidebar"], [class*="nav"]
+                            `);
+                            unwanted.forEach(el => el.remove());
+                            
+                            // Try to find main content area
+                            const candidates = [
+                                document.querySelector('main'),
+                                document.querySelector('[role="main"]'),
+                                document.querySelector('.main-content'),
+                                document.querySelector('.content'),
+                                document.body
+                            ];
+                            
+                            for (let candidate of candidates) {
+                                if (candidate && candidate.innerText.length > 200) {
+                                    return candidate.innerText;
+                                }
+                            }
+                            
+                            return document.body.innerText;
+                        }
+                    """)
+                    extraction_method = "smart body extraction"
+                except:
+                    content = page.evaluate("() => document.body.innerText")
+                    extraction_method = "fallback body text"
             
             browser.close()
             
             if not content or len(content.strip()) < 100:
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient content extracted")
                 return None, "Insufficient content extracted"
             
-            # Validate content quality
+            # Enhanced content validation
             is_valid, validation_msg = validate_scraped_content(content, url, domain)
             if not is_valid:
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> {validation_msg}")
                 return None, validation_msg
             
-            LOG.info(f"Playwright successfully extracted {len(content)} chars from {domain}")
+            # Check for common error pages or blocking messages
+            content_lower = content.lower()
+            error_indicators = [
+                "403 forbidden", "access denied", "captcha", "robot", "bot detection",
+                "please verify you are human", "cloudflare", "rate limit"
+            ]
+            
+            if any(indicator in content_lower for indicator in error_indicators):
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Error page detected")
+                return None, "Error page or blocking detected"
+            
+            LOG.info(f"PLAYWRIGHT SUCCESS: {domain} -> {len(content)} chars extracted via {extraction_method}")
             return content.strip(), None
             
     except Exception as e:
         error_msg = f"Playwright extraction failed: {str(e)}"
-        LOG.warning(f"Playwright failed for {url}: {error_msg}")
+        LOG.error(f"PLAYWRIGHT ERROR: {domain} -> {error_msg}")
         return None, error_msg
 
 def get_random_user_agent():
@@ -654,6 +747,7 @@ def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains:
     """
     Enhanced scraper with Playwright fallback for failed requests
     """
+    global playwright_stats
     
     # First try your existing method
     content, error = safe_content_scraper(url, domain, scraped_domains)
@@ -662,20 +756,39 @@ def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains:
     if content:
         return content, f"Successfully scraped {len(content)} chars with requests"
     
-    # If failed and it's a high-value domain, try Playwright
+    # High-value domains that justify Playwright overhead
     high_value_domains = {
         'zacks.com', 'finance.yahoo.com', 'marketwatch.com', 'tradingview.com',
-        'barrons.com', 'nasdaq.com', 'msn.com', 'fool.com', 'benzinga.com'
+        'barrons.com', 'nasdaq.com', 'msn.com', 'fool.com', 'benzinga.com',
+        'businesswire.com', 'tipranks.com', 'insidermonkey.com'
     }
     
     normalized_domain = normalize_domain(domain)
     if normalized_domain in high_value_domains:
         LOG.info(f"Trying Playwright fallback for high-value domain: {domain}")
+        
+        # Update stats
+        playwright_stats["attempted"] += 1
+        playwright_stats["by_domain"][normalized_domain]["attempts"] += 1
+        
         playwright_content, playwright_error = extract_article_content_with_playwright(url, domain)
         
         if playwright_content:
+            playwright_stats["successful"] += 1
+            playwright_stats["by_domain"][normalized_domain]["successes"] += 1
+            
+            # Log stats every 10 attempts
+            if playwright_stats["attempted"] % 10 == 0:
+                log_playwright_stats()
+                
             return playwright_content, f"Playwright success: {len(playwright_content)} chars"
         else:
+            playwright_stats["failed"] += 1
+            
+            # Log stats every 10 attempts
+            if playwright_stats["attempted"] % 10 == 0:
+                log_playwright_stats()
+                
             return None, f"Both methods failed - Requests: {error}, Playwright: {playwright_error}"
     
     # For low-value domains, don't waste time on Playwright

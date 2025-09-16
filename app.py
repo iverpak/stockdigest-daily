@@ -1525,7 +1525,7 @@ def _ai_quality_score_company(title: str, domain: str, ticker: str, description:
         desc_clean = ""
     
     # NO TRUNCATION - use full scraped content
-    desc_snippet = desc_clean  # Removed [:500] limit
+    desc_snippet = desc_clean[:15000] if desc_clean else ""
     
     # Build the JSON schema for structured response
     schema = {

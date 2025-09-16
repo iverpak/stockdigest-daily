@@ -481,7 +481,7 @@ def create_scraping_session():
 # Add this function after your existing extract_article_content function
 def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Enhanced article extraction using Playwright for JavaScript-heavy sites
+    Memory-optimized article extraction using Playwright for JavaScript-heavy sites
     """
     try:
         # Check for known paywall domains first
@@ -491,23 +491,30 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
         LOG.info(f"PLAYWRIGHT: Starting browser for {domain}")
         
         with sync_playwright() as p:
-            # Launch browser with stealth settings
+            # Launch browser with memory optimization
             browser = p.chromium.launch(
                 headless=True,
                 args=[
                     '--no-sandbox',
-                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',  # Use /tmp instead of /dev/shm for lower memory
+                    '--disable-gpu',
                     '--disable-web-security',
                     '--disable-features=VizDisplayCompositor',
+                    '--memory-pressure-off',
+                    '--disable-background-timer-throttling',
+                    '--disable-renderer-backgrounding',
+                    '--disable-extensions',
+                    '--disable-plugins',
+                    '--disable-images',  # Don't load images to save memory
                     '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 ]
             )
             
             LOG.info(f"PLAYWRIGHT: Browser launched, navigating to {url}")
             
-            # Create new page with realistic settings
+            # Create new page with smaller viewport to save memory
             page = browser.new_page(
-                viewport={'width': 1920, 'height': 1080},
+                viewport={'width': 1280, 'height': 720},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
             
@@ -521,88 +528,100 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 'Upgrade-Insecure-Requests': '1'
             })
             
-            # Navigate to page with timeout
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
-            
-            # Wait for dynamic content to load
-            page.wait_for_timeout(2000)
-            
-            # Try multiple content extraction methods
-            content = None
-            extraction_method = None
-            
-            # Method 1: Try article tag first
             try:
-                article_element = page.query_selector('article')
-                if article_element:
-                    content = article_element.inner_text()
-                    extraction_method = "article tag"
-            except:
-                pass
-            
-            # Method 2: Try main content selectors
-            if not content or len(content.strip()) < 200:
-                selectors = [
-                    '[role="main"]',
-                    'main',
-                    '.article-content',
-                    '.story-content',
-                    '.entry-content',
-                    '.post-content',
-                    '.content',
-                    '[data-module="ArticleBody"]'
-                ]
-                for selector in selectors:
-                    try:
-                        element = page.query_selector(selector)
-                        if element:
-                            temp_content = element.inner_text()
-                            if temp_content and len(temp_content.strip()) > 200:
-                                content = temp_content
-                                extraction_method = f"selector: {selector}"
-                                break
-                    except:
-                        continue
-            
-            # Method 3: Smart body text extraction (removes navigation/ads)
-            if not content or len(content.strip()) < 200:
+                # REDUCED TIMEOUT - 15 seconds instead of 30
+                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
+                
+                # Shorter wait for dynamic content
+                page.wait_for_timeout(1000)
+                
+                # Try multiple content extraction methods
+                content = None
+                extraction_method = None
+                
+                # Method 1: Try article tag first
                 try:
-                    content = page.evaluate("""
-                        () => {
-                            // Remove unwanted elements
-                            const unwanted = document.querySelectorAll(`
-                                script, style, nav, header, footer, aside,
-                                .advertisement, .ads, .ad, .sidebar,
-                                .navigation, .nav, .menu, .social,
-                                [class*="ad"], [class*="sidebar"], [class*="nav"]
-                            `);
-                            unwanted.forEach(el => el.remove());
-                            
-                            // Try to find main content area
-                            const candidates = [
-                                document.querySelector('main'),
-                                document.querySelector('[role="main"]'),
-                                document.querySelector('.main-content'),
-                                document.querySelector('.content'),
-                                document.body
-                            ];
-                            
-                            for (let candidate of candidates) {
-                                if (candidate && candidate.innerText.length > 200) {
-                                    return candidate.innerText;
+                    article_element = page.query_selector('article')
+                    if article_element:
+                        content = article_element.inner_text()
+                        extraction_method = "article tag"
+                except Exception:
+                    pass
+                
+                # Method 2: Try main content selectors
+                if not content or len(content.strip()) < 200:
+                    selectors = [
+                        '[role="main"]',
+                        'main',
+                        '.article-content',
+                        '.story-content',
+                        '.entry-content',
+                        '.post-content',
+                        '.content',
+                        '[data-module="ArticleBody"]'
+                    ]
+                    for selector in selectors:
+                        try:
+                            element = page.query_selector(selector)
+                            if element:
+                                temp_content = element.inner_text()
+                                if temp_content and len(temp_content.strip()) > 200:
+                                    content = temp_content
+                                    extraction_method = f"selector: {selector}"
+                                    break
+                        except Exception:
+                            continue
+                
+                # Method 3: Smart body text extraction (removes navigation/ads)
+                if not content or len(content.strip()) < 200:
+                    try:
+                        content = page.evaluate("""
+                            () => {
+                                // Remove unwanted elements
+                                const unwanted = document.querySelectorAll(`
+                                    script, style, nav, header, footer, aside,
+                                    .advertisement, .ads, .ad, .sidebar,
+                                    .navigation, .nav, .menu, .social,
+                                    [class*="ad"], [class*="sidebar"], [class*="nav"]
+                                `);
+                                unwanted.forEach(el => el.remove());
+                                
+                                // Try to find main content area
+                                const candidates = [
+                                    document.querySelector('main'),
+                                    document.querySelector('[role="main"]'),
+                                    document.querySelector('.main-content'),
+                                    document.querySelector('.content'),
+                                    document.body
+                                ];
+                                
+                                for (let candidate of candidates) {
+                                    if (candidate && candidate.innerText && candidate.innerText.length > 200) {
+                                        return candidate.innerText;
+                                    }
                                 }
+                                
+                                return document.body ? document.body.innerText : '';
                             }
-                            
-                            return document.body.innerText;
-                        }
-                    """)
-                    extraction_method = "smart body extraction"
-                except:
-                    content = page.evaluate("() => document.body.innerText")
-                    extraction_method = "fallback body text"
-            
-            browser.close()
+                        """)
+                        extraction_method = "smart body extraction"
+                    except Exception:
+                        try:
+                            content = page.evaluate("() => document.body ? document.body.innerText : ''")
+                            extraction_method = "fallback body text"
+                        except Exception:
+                            content = None
+                
+            except Exception as e:
+                LOG.warning(f"PLAYWRIGHT: Navigation/extraction failed for {domain}: {str(e)}")
+                content = None
+            finally:
+                # Always close browser to free memory
+                try:
+                    browser.close()
+                except Exception:
+                    pass
             
             if not content or len(content.strip()) < 100:
                 LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient content extracted")
@@ -618,7 +637,8 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
             content_lower = content.lower()
             error_indicators = [
                 "403 forbidden", "access denied", "captcha", "robot", "bot detection",
-                "please verify you are human", "cloudflare", "rate limit"
+                "please verify you are human", "cloudflare", "rate limit", "blocked",
+                "security check", "unusual traffic"
             ]
             
             if any(indicator in content_lower for indicator in error_indicators):

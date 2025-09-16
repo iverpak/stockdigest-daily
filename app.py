@@ -860,15 +860,20 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "content_scraped": 0,
         "content_failed": 0,
         "scraping_skipped": 0,
-        "ai_backfilled": 0,        # NEW
-        "ai_backfill_errors": 0    # NEW
+        "ai_backfilled": 0,        
+        "ai_backfill_errors": 0    
     }
     
     scraped_domains = set()
     
     try:
         parsed = feedparser.parse(feed["url"])
-        LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries")
+        
+        # Enhanced logging with ticker and category info
+        ticker = feed.get("ticker", "UNKNOWN")
+        feed_name = feed.get("name", "Unknown Feed")
+        keyword_info = f" (Keywords: {keywords})" if keywords else ""
+        LOG.info(f"Processing feed [{category}] for {ticker}: {feed_name} - {len(parsed.entries)} entries{keyword_info}")
         
         for entry in parsed.entries:
             stats["processed"] += 1
@@ -934,41 +939,62 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     existing_article = cur.fetchone()
                     
                     if existing_article:
-                        # Article exists - check if we need to backfill AI analysis
-                        needs_ai_backfill = (
-                            existing_article.get("scraped_content") and  # Has scraped content
-                            not existing_article.get("ai_impact") and    # Missing AI impact
-                            category.lower() in ["company", "company_news", "comp"]  # Company article
-                        )
-                        
-                        if needs_ai_backfill:
-                            LOG.info(f"Backfilling AI analysis for existing article: {title[:50]}...")
+                        # Add robust null checks for safety
+                        try:
+                            scraped_content = existing_article.get("scraped_content") if existing_article else None
+                            ai_impact = existing_article.get("ai_impact") if existing_article else None
+                            article_id = existing_article.get("id") if existing_article else None
                             
-                            try:
-                                # Run AI analysis on existing scraped content
-                                quality_score, ai_impact, ai_reasoning = calculate_quality_score(
-                                    title=title,
-                                    domain=final_domain,
-                                    ticker=feed["ticker"],
-                                    description=existing_article["scraped_content"],
-                                    category=category,
-                                    keywords=keywords
-                                )
+                            # Validate we have the required data
+                            if not article_id:
+                                LOG.warning(f"No article ID found for duplicate check: {title[:50]}...")
+                                stats["duplicates"] += 1
+                                continue
+                            
+                            # Article exists - check if we need to backfill AI analysis
+                            needs_ai_backfill = (
+                                scraped_content and                              # Has scraped content
+                                scraped_content.strip() and                      # Content is not empty
+                                not ai_impact and                                # Missing AI impact
+                                category.lower() in ["company", "company_news", "comp"]  # Company article
+                            )
+                            
+                            if needs_ai_backfill:
+                                LOG.info(f"Backfilling AI analysis for existing article [{ticker}]: {title[:50]}...")
                                 
-                                # Update the existing article with AI analysis
-                                cur.execute("""
-                                    UPDATE found_url 
-                                    SET quality_score = %s, ai_impact = %s, ai_reasoning = %s
-                                    WHERE id = %s
-                                """, (quality_score, ai_impact, ai_reasoning, existing_article["id"]))
-                                
-                                stats["ai_backfilled"] += 1
-                                LOG.info(f"AI backfill complete: {quality_score:.0f}/{ai_impact} - {ai_reasoning[:50]}...")
-                                
-                            except Exception as e:
-                                LOG.error(f"AI backfill failed for '{title[:50]}': {e}")
-                                stats["ai_backfill_errors"] += 1
-                        else:
+                                try:
+                                    # Run AI analysis on existing scraped content with validation
+                                    if not final_domain or not ticker:
+                                        raise ValueError("Missing required fields for AI analysis")
+                                    
+                                    quality_score, ai_impact_result, ai_reasoning = calculate_quality_score(
+                                        title=title,
+                                        domain=final_domain,
+                                        ticker=ticker,
+                                        description=scraped_content,  # Use the validated scraped content
+                                        category=category,
+                                        keywords=keywords
+                                    )
+                                    
+                                    # Update the existing article with AI analysis
+                                    cur.execute("""
+                                        UPDATE found_url 
+                                        SET quality_score = %s, ai_impact = %s, ai_reasoning = %s
+                                        WHERE id = %s
+                                    """, (quality_score, ai_impact_result, ai_reasoning, article_id))
+                                    
+                                    stats["ai_backfilled"] += 1
+                                    reasoning_preview = ai_reasoning[:50] + "..." if ai_reasoning and len(ai_reasoning) > 50 else ai_reasoning or "No reasoning"
+                                    LOG.info(f"AI backfill complete [{ticker}]: {quality_score:.0f}/{ai_impact_result} - {reasoning_preview}")
+                                    
+                                except Exception as e:
+                                    LOG.error(f"AI backfill failed for [{ticker}] '{title[:50]}': {str(e)}")
+                                    stats["ai_backfill_errors"] += 1
+                            else:
+                                stats["duplicates"] += 1
+                            
+                        except Exception as e:
+                            LOG.error(f"Error processing existing article [{ticker}] '{title[:50]}': {str(e)}")
                             stats["duplicates"] += 1
                         
                         continue  # Move to next article
@@ -1012,25 +1038,31 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                 scraped_content = content
                                 content_scraped_at = datetime.now(timezone.utc)
                                 stats["content_scraped"] += 1
-                                LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
+                                LOG.info(f"Content scraped [{ticker}]: {title[:60]}... ({len(content)} chars)")
                             else:
                                 scraping_failed = True
                                 scraping_error = status
                                 stats["content_failed"] += 1
-                                LOG.warning(f"Content scraping failed: {status}")
+                                LOG.warning(f"Content scraping failed [{ticker}]: {status}")
                     else:
                         stats["scraping_skipped"] += 1
                     
                     # ENABLE AI SCORING: Use scraped content for AI analysis, fallback to description
                     ai_content = scraped_content if scraped_content else description
-                    quality_score, ai_impact, ai_reasoning = calculate_quality_score(
-                        title=title,
-                        domain=final_domain, 
-                        ticker=feed["ticker"],
-                        description=ai_content,  # Use scraped content or description for AI
-                        category=category,
-                        keywords=keywords
-                    )
+                    
+                    # Validate inputs before AI scoring
+                    if not ticker or not final_domain or not title:
+                        LOG.warning(f"Missing required fields for AI scoring: ticker={ticker}, domain={final_domain}, title={bool(title)}")
+                        quality_score, ai_impact, ai_reasoning = 50.0, None, None
+                    else:
+                        quality_score, ai_impact, ai_reasoning = calculate_quality_score(
+                            title=title,
+                            domain=final_domain, 
+                            ticker=ticker,
+                            description=ai_content,  # Use scraped content or description for AI
+                            category=category,
+                            keywords=keywords
+                        )
                     
                     # Store original description (not scraped content) for potential fallback display
                     display_content = description  # Keep original description for now
@@ -1047,7 +1079,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
-                        feed["id"], feed["ticker"], final_domain, quality_score, published_at,
+                        feed["id"], ticker, final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error,
                         ai_impact, ai_reasoning
@@ -1058,23 +1090,26 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         content_info = f"with scraped content" if scraped_content else "no content scraping"
                         source_info = "via Google→Yahoo" if is_google_to_yahoo else "direct"
                         ai_info = f"AI: {quality_score:.0f}/{ai_impact}" if ai_impact else f"AI: {quality_score:.0f}"
-                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info}) ({ai_info})")
+                        LOG.info(f"Inserted [{category}] for {ticker} from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info}) ({ai_info})")
                         
             except Exception as e:
-                LOG.error(f"Database error for '{title[:50]}': {e}")
+                LOG.error(f"Database error for [{ticker}] '{title[:50]}': {e}")
                 continue
                 
     except Exception as e:
-        LOG.error(f"Feed processing error for {feed['name']}: {e}")
+        LOG.error(f"Feed processing error for {ticker} {feed_name}: {e}")
     
     # Log final Playwright stats
     if playwright_stats["attempted"] > 0:
         log_playwright_stats()
         LOG.info(f"PLAYWRIGHT FINAL REPORT: Attempted to recover {playwright_stats['attempted']} failed URLs")
     
-    # Log AI backfill stats if any occurred
+    # Enhanced final logging with ticker info
     if stats.get("ai_backfilled", 0) > 0 or stats.get("ai_backfill_errors", 0) > 0:
-        LOG.info(f"AI Backfill Summary - Completed: {stats.get('ai_backfilled', 0)}, Errors: {stats.get('ai_backfill_errors', 0)}")
+        LOG.info(f"AI Backfill Summary for {ticker} - Completed: {stats.get('ai_backfilled', 0)}, Errors: {stats.get('ai_backfill_errors', 0)}")
+    
+    # Log category completion summary
+    LOG.info(f"Feed complete for {ticker} [{category}]: {stats.get('inserted', 0)} inserted, {stats.get('content_scraped', 0)} scraped, {stats.get('ai_backfilled', 0)} backfilled")
     
     return stats
 
@@ -1511,7 +1546,20 @@ def calculate_quality_score(
     Returns: (score, impact, reasoning)
     """
     
-    # Debug logging
+    # Add validation at the start
+    if not title or not title.strip():
+        LOG.warning("Empty title provided to calculate_quality_score")
+        return 50.0, None, None
+    
+    if not domain or not domain.strip():
+        LOG.warning("Empty domain provided to calculate_quality_score")
+        return 50.0, None, None
+    
+    if not ticker or not ticker.strip():
+        LOG.warning("Empty ticker provided to calculate_quality_score")
+        return 50.0, None, None
+    
+    # Debug logging with ticker info
     LOG.info(f"SCORING: {category} article for {ticker}: '{title[:30]}...'")
     
     # For non-company articles, return neutral score (Phase 1 limitation)

@@ -652,6 +652,10 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
         error_msg = f"Playwright extraction failed: {str(e)}"
         LOG.error(f"PLAYWRIGHT ERROR: {domain} -> {error_msg}")
         return None, error_msg
+    finally:
+        # Add this cleanup
+        import gc
+        gc.collect()
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)

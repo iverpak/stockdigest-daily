@@ -845,7 +845,7 @@ def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains:
 
 def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
     """
-    Enhanced feed processing with content scraping for both Yahoo and Google News resolved URLs
+    Enhanced feed processing with intelligent Yahoo redirect handling and duplicate prevention
     """
     stats = {
         "processed": 0, 
@@ -858,7 +858,6 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "scraping_skipped": 0
     }
     
-    # Track domains we've scraped in this run
     scraped_domains = set()
     
     try:
@@ -892,11 +891,41 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 stats["blocked_spam"] += 1
                 continue
             
-            # Check for duplicates
-            url_hash = get_url_hash(resolved_url)
+            # SPECIAL CASE: Google Feed → Yahoo Finance redirect handling
+            # If this is Google News leading to Yahoo Finance, treat it like Yahoo Feed processing
+            is_google_to_yahoo = (
+                "news.google.com" in url and 
+                "finance.yahoo.com" in url and 
+                resolved_url != url
+            )
+            
+            if is_google_to_yahoo:
+                LOG.info(f"Google→Yahoo redirect detected: {url} → {resolved_url}")
+                # Apply Yahoo Finance source extraction process
+                original_source = extract_yahoo_finance_source_optimized(resolved_url)
+                if original_source:
+                    # Update resolved URL and domain to the original source
+                    final_resolved_url = original_source
+                    final_domain = normalize_domain(urlparse(original_source).netloc.lower())
+                    final_source_url = resolved_url  # Yahoo URL becomes the source
+                    LOG.info(f"Yahoo source extracted: {original_source}")
+                else:
+                    # Fallback to Yahoo URL if extraction fails
+                    final_resolved_url = resolved_url
+                    final_domain = domain
+                    final_source_url = source_url
+            else:
+                # Normal processing
+                final_resolved_url = resolved_url
+                final_domain = domain
+                final_source_url = source_url
+            
+            # Generate hash based on FINAL resolved URL
+            url_hash = get_url_hash(url, final_resolved_url)
             
             try:
                 with db() as conn, conn.cursor() as cur:
+                    # Simple duplicate check
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
@@ -907,36 +936,35 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Content scraping logic - ENHANCED
+                    # Content scraping logic
                     scraped_content = None
                     scraping_error = None
                     content_scraped_at = None
                     scraping_failed = False
                     
-                    # Check if we should attempt content scraping
+                    # Determine if we should scrape content
                     should_scrape = False
                     scrape_url = None
                     
-                    # For Yahoo Finance resolved URLs
-                    if (source_url and "finance.yahoo.com" in url and resolved_url != url):
+                    # For Yahoo Finance URLs (direct or via Google redirect)
+                    if (final_source_url and "finance.yahoo.com" in (url if not is_google_to_yahoo else final_source_url)):
                         should_scrape = True
-                        scrape_url = resolved_url
+                        scrape_url = final_resolved_url
                         
-                    # For Google News resolved URLs  
-                    elif ("news.google.com" in url and resolved_url != url and 
-                          resolved_url.startswith(('http://', 'https://'))):
+                    # For Google News resolved URLs (non-Yahoo)
+                    elif ("news.google.com" in url and final_resolved_url != url and 
+                          not is_google_to_yahoo and final_resolved_url.startswith(('http://', 'https://'))):
                         should_scrape = True
-                        scrape_url = resolved_url
+                        scrape_url = final_resolved_url
                     
                     if should_scrape and scrape_url:
-                        # Check if domain is on paywall list
                         scrape_domain = normalize_domain(urlparse(scrape_url).netloc.lower())
                         
                         if scrape_domain in PAYWALL_DOMAINS:
                             stats["scraping_skipped"] += 1
                             LOG.info(f"Skipping paywall domain: {scrape_domain}")
                         else:
-                            content, status = safe_content_scraper_with_playwright(scrape_url, scrape_domain, scraped_domains)  # <- FIXED
+                            content, status = safe_content_scraper_with_playwright(scrape_url, scrape_domain, scraped_domains)
                             
                             if content:
                                 scraped_content = content
@@ -951,13 +979,13 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     else:
                         stats["scraping_skipped"] += 1
                     
-                    # For now, skip AI scoring to save processing time
-                    quality_score = 50.0  # Default neutral score
+                    # Default quality score
+                    quality_score = 50.0
                     
                     # Use scraped content for display, fallback to description
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article with content
+                    # Insert article with final resolved information
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -967,16 +995,17 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
-                        url, resolved_url, url_hash, title, display_content,
-                        feed["id"], feed["ticker"], domain, quality_score, published_at,
-                        category, feed.get("search_keyword"), source_url,
+                        url, final_resolved_url, url_hash, title, display_content,
+                        feed["id"], feed["ticker"], final_domain, quality_score, published_at,
+                        category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error
                     ))
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
                         content_info = f"with scraped content" if scraped_content else "no content scraping"
-                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(domain)}: {title[:60]}... ({content_info})")
+                        source_info = "via Google→Yahoo" if is_google_to_yahoo else "direct"
+                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info})")
                         
             except Exception as e:
                 LOG.error(f"Database error for '{title[:50]}': {e}")
@@ -985,8 +1014,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
-    # ADD THIS BLOCK RIGHT HERE - before the return statement
-    # At the end of your feed processing, log final Playwright stats
+    # Log final Playwright stats
     if playwright_stats["attempted"] > 0:
         log_playwright_stats()
         LOG.info(f"PLAYWRIGHT FINAL REPORT: Attempted to recover {playwright_stats['attempted']} failed URLs")
@@ -1577,22 +1605,13 @@ Include relevant flags like ["HardEvent", "Earnings", "Rating", "HasNumbers", "P
     return score, impact, reason
 
 def get_url_hash(url: str, resolved_url: str = None) -> str:
-    """
-    Generate hash for URL deduplication, accounting for Yahoo Finance resolved URLs
-    """
-    # Use resolved URL if available (for Yahoo Finance extractions)
+    """Generate hash for URL deduplication, using resolved URL if available"""
+    # Use resolved URL if available (this is the key part)
     primary_url = resolved_url or url
-    
-    # Clean the URL for consistent hashing
     url_lower = primary_url.lower()
     
-    # Remove common URL parameters that don't affect content
+    # Remove common parameters
     url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url_lower)
-    
-    # For Yahoo Finance URLs, also remove the .tsrc parameter specifically
-    url_clean = re.sub(r'\?\.tsrc=.*$', '', url_clean)
-    
-    # Remove trailing slashes and normalize
     url_clean = url_clean.rstrip('/')
     
     return hashlib.md5(url_clean.encode()).hexdigest()

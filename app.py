@@ -34,6 +34,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from collections import defaultdict
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -205,6 +207,10 @@ DOMAIN_STRATEGIES = {
     }
 }
 
+# Global tracking for domain access timing
+domain_last_accessed = {}
+last_scraped_domain = None
+
 # ------------------------------------------------------------------------------
 # Database helpers
 # ------------------------------------------------------------------------------
@@ -290,7 +296,7 @@ def update_schema_for_content():
 
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Enhanced article extraction with multiple fallback strategies
+    Enhanced article extraction with intelligent delay management
     """
     try:
         # Check for known paywall domains first (reduced list)
@@ -308,11 +314,13 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         # Apply headers to session
         scraping_session.headers.update(headers)
         
-        # Random delay based on domain strategy
-        delay_min, delay_max = strategy.get('delay_range', (4, 8))
-        delay = random.uniform(delay_min, delay_max)
-        LOG.info(f"Waiting {delay:.1f}s before scraping {domain}...")
-        time.sleep(delay)
+        # INTELLIGENT DELAY - only delay when necessary
+        delay, reason = calculate_intelligent_delay(domain)
+        if delay > 0.5:  # Only log significant delays
+            LOG.info(f"Waiting {delay:.1f}s before scraping {domain} ({reason})")
+            time.sleep(delay)
+        else:
+            LOG.debug(f"Quick scrape of {domain} ({reason})")
         
         # Try enhanced scraping with backoff
         response = scrape_with_backoff(url)
@@ -467,6 +475,47 @@ def get_domain_strategy(domain):
         'delay_range': (4, 8),
         'headers': {},
     })
+
+def calculate_intelligent_delay(domain):
+    """
+    Calculate delay based on domain access patterns:
+    - No delay for first-time domains
+    - Short delay (1-2s) if different from last domain
+    - Full delay (4-8s) if same as last domain or recent access
+    """
+    global last_scraped_domain, domain_last_accessed
+    
+    current_time = time.time()
+    strategy = get_domain_strategy(domain)
+    
+    # Check if we've accessed this domain recently (within last 10 seconds)
+    last_access_time = domain_last_accessed.get(domain, 0)
+    time_since_last_access = current_time - last_access_time
+    
+    # Determine delay strategy
+    if domain == last_scraped_domain:
+        # Same domain as last scrape - use full delay
+        delay_min, delay_max = strategy.get('delay_range', (4, 8))
+        delay = random.uniform(delay_min, delay_max)
+        reason = "same domain as previous"
+    elif time_since_last_access < 10:
+        # Recently accessed this domain - use medium delay
+        delay = random.uniform(2, 4)
+        reason = f"accessed {time_since_last_access:.1f}s ago"
+    elif domain not in domain_last_accessed:
+        # First time accessing this domain - minimal delay
+        delay = random.uniform(0.5, 1.5)
+        reason = "first access"
+    else:
+        # Different domain, not recently accessed - short delay
+        delay = random.uniform(1, 2)
+        reason = "different domain"
+    
+    # Update tracking
+    domain_last_accessed[domain] = current_time
+    last_scraped_domain = domain
+    
+    return delay, reason
 
 def scrape_with_backoff(url, max_retries=3):
     """Enhanced scraping with exponential backoff"""

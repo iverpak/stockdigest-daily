@@ -743,6 +743,28 @@ def validate_scraped_content(content, url, domain):
 # Create global session
 scraping_session = create_scraping_session()
 
+def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+    """
+    Safe content scraper using requests only (no Playwright)
+    """
+    try:
+        # Skip if we've already scraped this domain in this run
+        if domain in scraped_domains:
+            return None, f"Domain {domain} already scraped in this run"
+        
+        scraped_domains.add(domain)
+        
+        # Use the existing extract_article_content function
+        content, error = extract_article_content(url, domain)
+        
+        if content:
+            return content, f"Successfully scraped {len(content)} chars"
+        else:
+            return None, error or "Failed to extract content"
+            
+    except Exception as e:
+        return None, f"Scraping error: {str(e)}"
+
 def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
     Enhanced scraper with Playwright fallback for failed requests

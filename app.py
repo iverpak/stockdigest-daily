@@ -95,6 +95,23 @@ QUALITY_DOMAINS = {
     "insidermoneky.com", "seekingalpha.com/pro", "fool.com"
 }
 
+# Known paywall domains to skip during content scraping
+PAYWALL_DOMAINS = {
+    "wsj.com", "www.wsj.com",
+    "barrons.com", "www.barrons.com", 
+    "ft.com", "www.ft.com",
+    "bloomberg.com", "www.bloomberg.com",
+    "economist.com", "www.economist.com",
+    "nytimes.com", "www.nytimes.com",
+    "washingtonpost.com", "www.washingtonpost.com",
+    "reuters.com", "www.reuters.com",  # Sometimes paywall
+    "moneywise.com", "www.moneywise.com",
+    "accessnewswire.com", "www.accessnewswire.com",
+    "gurufocus.com", "www.gurufocus.com",
+    "thefly.com", "www.thefly.com",  # Often requires subscription
+    "mtnewswires.com", "www.mtnewswires.com"  # Subscription service
+}
+
 # Domain authority tiers for AI scoring
 DOMAIN_TIERS = {
     # Tier A (1.0) - Premier financial news
@@ -237,16 +254,19 @@ def update_schema_for_content():
 
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Extract article content from URL using newspaper3k
-    Returns: (content, error_message)
+    Extract article content from URL using newspaper3k with enhanced paywall detection
     """
     try:
+        # Check for known paywall domains first
+        if normalize_domain(domain) in PAYWALL_DOMAINS:
+            return None, f"Paywall domain: {domain}"
+        
         # Create article object with proper configuration
         config = newspaper.Config()
         config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         config.request_timeout = 15
-        config.fetch_images = False  # Skip images for faster processing
-        config.memoize_articles = False  # Don't cache articles
+        config.fetch_images = False
+        config.memoize_articles = False
         
         article = newspaper.Article(url, config=config)
         
@@ -260,34 +280,36 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         if not content:
             return None, "No content extracted"
         
-        # Check for paywall indicators
+        # Enhanced paywall indicators
         paywall_indicators = [
             "subscribe to continue", "unlock this story", "premium content",
             "sign up to read", "become a member", "subscription required",
             "create free account", "log in to continue", "paywall",
-            "this article is for subscribers", "register to read"
+            "this article is for subscribers", "register to read",
+            "403 forbidden", "401 unauthorized", "access denied",
+            "subscription", "premium", "behind paywall", "member only"
         ]
         
         content_lower = content.lower()
         if any(indicator in content_lower for indicator in paywall_indicators):
-            return None, "Paywall detected"
+            return None, "Paywall content detected"
         
-        # Check for error pages or redirects
+        # Check for error pages
         error_indicators = [
-            "404", "page not found", "access denied", "forbidden",
+            "404", "page not found", "forbidden",
             "this page doesn't exist", "error occurred"
         ]
         
         if any(error in content_lower for error in error_indicators):
             return None, "Error page detected"
         
-        # Limit content length (2000 chars for testing)
-        if len(content) > 2000:
-            content = content[:2000] + "..."
-        
         # Basic quality check - avoid very short articles
         if len(content) < 100:
             return None, "Content too short"
+        
+        # Limit content length for storage
+        if len(content) > 2000:
+            content = content[:2000] + "..."
         
         LOG.info(f"Successfully extracted {len(content)} chars from {domain}")
         return content, None
@@ -329,7 +351,7 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
 
 def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
     """
-    Enhanced feed processing with content scraping for Yahoo resolved URLs
+    Enhanced feed processing with content scraping for both Yahoo and Google News resolved URLs
     """
     stats = {
         "processed": 0, 
@@ -344,20 +366,13 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     
     # Track domains we've scraped in this run
     scraped_domains = set()
-    articles_processed = 0
     
     try:
         parsed = feedparser.parse(feed["url"])
         LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries")
         
         for entry in parsed.entries:
-            # Limit to first 10 articles for testing
-            if articles_processed >= 10:
-                LOG.info("Reached 10 article limit for testing")
-                break
-                
             stats["processed"] += 1
-            articles_processed += 1
             
             url = getattr(entry, "link", None)
             title = getattr(entry, "title", "") or "No Title"
@@ -398,30 +413,47 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Content scraping logic
+                    # Content scraping logic - ENHANCED
                     scraped_content = None
                     scraping_error = None
                     content_scraped_at = None
                     scraping_failed = False
                     
-                    # Only attempt scraping for Yahoo resolved URLs (company articles)
-                    if (category == "company" and 
-                        source_url and 
-                        "finance.yahoo.com" in url and 
-                        resolved_url != url):  # We have a resolved original URL
+                    # Check if we should attempt content scraping
+                    should_scrape = False
+                    scrape_url = None
+                    
+                    # For Yahoo Finance resolved URLs
+                    if (source_url and "finance.yahoo.com" in url and resolved_url != url):
+                        should_scrape = True
+                        scrape_url = resolved_url
                         
-                        content, status = safe_content_scraper(resolved_url, domain, scraped_domains)
+                    # For Google News resolved URLs  
+                    elif ("news.google.com" in url and resolved_url != url and 
+                          resolved_url.startswith(('http://', 'https://'))):
+                        should_scrape = True
+                        scrape_url = resolved_url
+                    
+                    if should_scrape and scrape_url:
+                        # Check if domain is on paywall list
+                        scrape_domain = normalize_domain(urlparse(scrape_url).netloc.lower())
                         
-                        if content:
-                            scraped_content = content
-                            content_scraped_at = datetime.now(timezone.utc)
-                            stats["content_scraped"] += 1
-                            LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
+                        if scrape_domain in PAYWALL_DOMAINS:
+                            stats["scraping_skipped"] += 1
+                            LOG.info(f"Skipping paywall domain: {scrape_domain}")
                         else:
-                            scraping_failed = True
-                            scraping_error = status
-                            stats["content_failed"] += 1
-                            LOG.warning(f"Content scraping failed: {status}")
+                            content, status = safe_content_scraper(scrape_url, scrape_domain, scraped_domains)
+                            
+                            if content:
+                                scraped_content = content
+                                content_scraped_at = datetime.now(timezone.utc)
+                                stats["content_scraped"] += 1
+                                LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
+                            else:
+                                scraping_failed = True
+                                scraping_error = status
+                                stats["content_failed"] += 1
+                                LOG.warning(f"Content scraping failed: {status}")
                     else:
                         stats["scraping_skipped"] += 1
                     

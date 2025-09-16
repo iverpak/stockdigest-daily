@@ -272,7 +272,7 @@ def update_schema_for_content():
 
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Extract article content from URL using newspaper3k with enhanced paywall detection
+    Extract article content from URL using newspaper3k with enhanced detection
     """
     try:
         # Check for known paywall domains first
@@ -298,6 +298,31 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         if not content:
             return None, "No content extracted"
         
+        # Check for cookie banners and consent pages
+        cookie_indicators = [
+            "we use cookies", "accept all cookies", "cookie policy",
+            "privacy policy and terms of service", "consent to the use",
+            "personalizing content and advertising", "marketing cookies",
+            "essential cookies", "functional cookies", "deny optional",
+            "accept all or closing out of this banner", "revised from time to time"
+        ]
+        
+        content_lower = content.lower()
+        cookie_count = sum(1 for indicator in cookie_indicators if indicator in content_lower)
+        
+        # If multiple cookie indicators and content is short, likely a cookie page
+        if cookie_count >= 3 and len(content) < 800:
+            return None, "Cookie consent page detected"
+        
+        # If content starts with cookie text, likely a banner page
+        cookie_start_indicators = [
+            "we use cookies to understand",
+            "this site uses cookies",
+            "by continuing to use this site"
+        ]
+        if any(content_lower.startswith(indicator) for indicator in cookie_start_indicators):
+            return None, "Cookie banner content detected"
+        
         # Enhanced paywall indicators
         paywall_indicators = [
             "subscribe to continue", "unlock this story", "premium content",
@@ -305,17 +330,18 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
             "create free account", "log in to continue", "paywall",
             "this article is for subscribers", "register to read",
             "403 forbidden", "401 unauthorized", "access denied",
-            "subscription", "premium", "behind paywall", "member only"
+            "subscription", "premium", "behind paywall", "member only",
+            "upgrade to premium", "become a subscriber"
         ]
         
-        content_lower = content.lower()
         if any(indicator in content_lower for indicator in paywall_indicators):
             return None, "Paywall content detected"
         
         # Check for error pages
         error_indicators = [
             "404", "page not found", "forbidden",
-            "this page doesn't exist", "error occurred"
+            "this page doesn't exist", "error occurred",
+            "internal server error", "service unavailable"
         ]
         
         if any(error in content_lower for error in error_indicators):
@@ -325,10 +351,7 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         if len(content) < 100:
             return None, "Content too short"
         
-        # Limit content length for storage
-        if len(content) > 2000:
-            content = content[:2000] + "..."
-        
+        # Store full content (removed 2000 char limit)
         LOG.info(f"Successfully extracted {len(content)} chars from {domain}")
         return content, None
         
@@ -585,8 +608,8 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
         content_clean = re.sub(r'<[^>]+>', '', content_clean)
         content_clean = re.sub(r'\s+', ' ', content_clean).strip()
         
-        if len(content_clean) > 800:
-            content_clean = content_clean[:800] + "..."
+        if len(content_clean) > 2000:
+            content_clean = content_clean[:2000] + "..."
         
         content_clean = html.escape(content_clean)
         

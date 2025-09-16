@@ -28,6 +28,8 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from bs4 import BeautifulSoup
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -1258,6 +1260,65 @@ class DomainResolver:
             LOG.warning(f"URL resolution failed for {url}: {e}")
             fallback_domain = urlparse(url).netloc.lower() if url else None
             return url, normalize_domain(fallback_domain), None
+
+    def _resolve_google_news_url_advanced(self, url: str) -> Optional[str]:
+        """
+        Advanced Google News URL resolution using internal API
+        Falls back to existing method if this fails
+        """
+        try:
+            # Only attempt for Google News URLs
+            if "news.google.com" not in url:
+                return None
+                
+            headers = {
+                'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+            }
+            
+            # Get the page content
+            resp = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Find the c-wiz element with data-p attribute
+            c_wiz = soup.select_one('c-wiz[data-p]')
+            if not c_wiz:
+                return None
+                
+            data_p = c_wiz.get('data-p')
+            if not data_p:
+                return None
+                
+            # Parse the embedded JSON
+            obj = json.loads(data_p.replace('%.@.', '["garturlreq",'))
+            
+            # Prepare the payload for the internal API
+            payload = {
+                'f.req': json.dumps([[['Fbv4je', json.dumps(obj[:-6] + obj[-2:]), 'null', 'generic']]])
+            }
+            
+            # Make the API call
+            api_url = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
+            response = requests.post(api_url, headers=headers, data=payload, timeout=10)
+            
+            if response.status_code != 200:
+                return None
+                
+            # Parse the response
+            response_text = response.text.replace(")]}'", "")
+            response_json = json.loads(response_text)
+            array_string = response_json[0][2]
+            article_url = json.loads(array_string)[1]
+            
+            if article_url and len(article_url) > 10:  # Basic validation
+                LOG.info(f"Advanced Google News resolution: {article_url}")
+                return article_url
+                
+        except Exception as e:
+            LOG.debug(f"Advanced Google News resolution failed for {url}: {e}")
+            return None
+        
+        return None
     
     def get_formal_name(self, domain):
         """Get formal name for domain with caching"""
@@ -1300,8 +1361,17 @@ class DomainResolver:
         return fallback
     
     def _handle_google_news(self, url, title):
-        """Handle Google News URL resolution with database-first domain mapping"""
-        # Try direct resolution first
+        """Handle Google News URL resolution with advanced and fallback methods"""
+        
+        # Try advanced resolution first
+        advanced_url = self._resolve_google_news_url_advanced(url)
+        if advanced_url:
+            domain = normalize_domain(urlparse(advanced_url).netloc.lower())
+            if not self._is_spam_domain(domain):
+                LOG.info(f"Advanced resolution: {url} -> {advanced_url}")
+                return advanced_url, domain, None
+        
+        # Fall back to existing method (direct resolution + title extraction)
         try:
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -1311,20 +1381,20 @@ class DomainResolver:
             if final_url != url and "news.google.com" not in final_url:
                 domain = normalize_domain(urlparse(final_url).netloc.lower())
                 if not self._is_spam_domain(domain):
+                    LOG.info(f"Direct resolution: {url} -> {final_url}")
                     return final_url, domain, None
         except:
             pass
         
-        # Fall back to title extraction
+        # Existing title extraction fallback
         if title and not contains_non_latin_script(title):
             clean_title, source = extract_source_from_title_smart(title)
             if source and not self._is_spam_source(source):
-                # Try to resolve publication name to actual domain using database + AI
                 resolved_domain = self._resolve_publication_to_domain(source)
                 if resolved_domain:
+                    LOG.info(f"Title resolution: {source} -> {resolved_domain}")
                     return url, resolved_domain, None
                 else:
-                    # If AI can't resolve it, mark as unresolved rather than creating "unknown-"
                     LOG.warning(f"Could not resolve publication '{source}' to domain")
                     return url, "google-news-unresolved", None
         

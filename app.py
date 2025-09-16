@@ -36,6 +36,9 @@ from urllib3.util.retry import Retry
 
 from collections import defaultdict
 
+from playwright.sync_api import sync_playwright
+import asyncio
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -448,6 +451,95 @@ def create_scraping_session():
     
     return session
 
+# Add this function after your existing extract_article_content function
+def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Enhanced article extraction using Playwright for JavaScript-heavy sites
+    """
+    try:
+        # Check for known paywall domains first
+        if normalize_domain(domain) in PAYWALL_DOMAINS:
+            return None, f"Paywall domain: {domain}"
+        
+        with sync_playwright() as p:
+            # Launch browser with stealth settings
+            browser = p.chromium.launch(
+                headless=True,  # Set to False for debugging
+                args=[
+                    '--no-sandbox',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-web-security',
+                    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                ]
+            )
+            
+            # Create new page with realistic settings
+            page = browser.new_page(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            
+            # Navigate to page with timeout
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            
+            # Wait a bit for dynamic content
+            page.wait_for_timeout(2000)
+            
+            # Try multiple content extraction methods
+            content = None
+            
+            # Method 1: Try article tag
+            article_content = page.query_selector('article')
+            if article_content:
+                content = article_content.inner_text()
+            
+            # Method 2: Try main content selectors
+            if not content:
+                selectors = [
+                    '[role="main"]',
+                    '.article-content',
+                    '.story-content',
+                    '.entry-content',
+                    '.post-content'
+                ]
+                for selector in selectors:
+                    element = page.query_selector(selector)
+                    if element:
+                        content = element.inner_text()
+                        break
+            
+            # Method 3: Fallback to body text (filtered)
+            if not content:
+                content = page.evaluate("""
+                    () => {
+                        // Remove script and style elements
+                        const scripts = document.querySelectorAll('script, style, nav, header, footer, aside');
+                        scripts.forEach(el => el.remove());
+                        
+                        // Get main content areas
+                        const main = document.querySelector('main, [role="main"], .main-content');
+                        return main ? main.innerText : document.body.innerText;
+                    }
+                """)
+            
+            browser.close()
+            
+            if not content or len(content.strip()) < 100:
+                return None, "Insufficient content extracted"
+            
+            # Validate content quality
+            is_valid, validation_msg = validate_scraped_content(content, url, domain)
+            if not is_valid:
+                return None, validation_msg
+            
+            LOG.info(f"Playwright successfully extracted {len(content)} chars from {domain}")
+            return content.strip(), None
+            
+    except Exception as e:
+        error_msg = f"Playwright extraction failed: {str(e)}"
+        LOG.warning(f"Playwright failed for {url}: {error_msg}")
+        return None, error_msg
+
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
@@ -558,22 +650,36 @@ def validate_scraped_content(content, url, domain):
 # Create global session
 scraping_session = create_scraping_session()
 
-def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
-    Safely scrape content with enhanced strategies (removed domain deduplication)
-    Returns: (content, status_message)
+    Enhanced scraper with Playwright fallback for failed requests
     """
     
-    # Log domain for tracking but don't skip based on previous scraping
-    LOG.debug(f"Scraping {domain} (enhanced mode)")
+    # First try your existing method
+    content, error = safe_content_scraper(url, domain, scraped_domains)
     
-    # Extract content using enhanced method
-    content, error = extract_article_content(url, domain)
-    
+    # If successful, return immediately
     if content:
-        return content, f"Successfully scraped {len(content)} chars"
-    else:
-        return None, error or "Unknown error"
+        return content, f"Successfully scraped {len(content)} chars with requests"
+    
+    # If failed and it's a high-value domain, try Playwright
+    high_value_domains = {
+        'zacks.com', 'finance.yahoo.com', 'marketwatch.com', 'tradingview.com',
+        'barrons.com', 'nasdaq.com', 'msn.com', 'fool.com', 'benzinga.com'
+    }
+    
+    normalized_domain = normalize_domain(domain)
+    if normalized_domain in high_value_domains:
+        LOG.info(f"Trying Playwright fallback for high-value domain: {domain}")
+        playwright_content, playwright_error = extract_article_content_with_playwright(url, domain)
+        
+        if playwright_content:
+            return playwright_content, f"Playwright success: {len(playwright_content)} chars"
+        else:
+            return None, f"Both methods failed - Requests: {error}, Playwright: {playwright_error}"
+    
+    # For low-value domains, don't waste time on Playwright
+    return None, f"Requests failed: {error} (Playwright not attempted for this domain)"
 
 def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
     """

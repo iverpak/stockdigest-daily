@@ -1269,7 +1269,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url,
                             scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_impact, ai_reasoning, ai_summary,  # ADD THIS LINE
+                            ai_impact, ai_reasoning, ai_summary,
                             source_tier, event_multiplier, event_multiplier_reason,
                             relevance_boost, relevance_boost_reason, numeric_bonus,
                             penalty_multiplier, penalty_reason
@@ -1280,7 +1280,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         feed["id"], feed["ticker"], final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                        ai_impact, ai_reasoning, ai_summary,  # ADD THIS LINE
+                        ai_impact, ai_reasoning, ai_summary,
                         source_tier, event_multiplier, event_multiplier_reason,
                         relevance_boost, relevance_boost_reason, numeric_bonus,
                         penalty_multiplier, penalty_reason

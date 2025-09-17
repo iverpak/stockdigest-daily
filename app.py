@@ -3284,7 +3284,7 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
             "tickers": tickers or "all"
         }
     
-    html = build_digest_html_with_content(articles_by_ticker, days if days > 0 else 1)
+    html = build_digest_html(articles_by_ticker, days if days > 0 else 1)
     
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
@@ -3502,7 +3502,7 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
             "tickers": tickers or "all"
         }
     
-    html = build_digest_html_with_content(articles_by_ticker, days if days > 0 else 1)
+    html = build_digest_html(articles_by_ticker, days if days > 0 else 1)
     
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"

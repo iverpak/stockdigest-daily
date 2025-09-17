@@ -894,11 +894,12 @@ def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains:
     # For low-value domains, don't waste time on Playwright
     return None, f"Requests failed: {error} (Playwright not attempted for this domain)"
 
-def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None) -> Dict[str, int]:
+def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None, 
+                                       enable_ai_scoring: bool = True, max_ai_articles: int = None) -> Dict[str, int]:
     """
-    Enhanced feed processing with intelligent Yahoo redirect handling and duplicate prevention
-    FIXED: Use provided keywords instead of regenerating them
-    FIXED: Allow re-processing of articles that need AI analysis
+    Enhanced feed processing with selective AI scoring and content scraping
+    - enable_ai_scoring: Whether to run AI analysis on articles
+    - max_ai_articles: Maximum number of articles to process with AI per feed
     """
     stats = {
         "processed": 0, 
@@ -909,16 +910,30 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "content_scraped": 0,
         "content_failed": 0,
         "scraping_skipped": 0,
-        "ai_reanalyzed": 0  # New stat for tracking re-analysis
+        "ai_reanalyzed": 0,
+        "ai_scored": 0,
+        "basic_scored": 0
     }
     
     scraped_domains = set()
+    ai_processed_count = 0
     
     try:
         parsed = feedparser.parse(feed["url"])
-        LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries")
+        LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries (AI: {'enabled' if enable_ai_scoring else 'disabled'})")
         
+        # Sort entries by publication date (newest first) if available
+        entries_with_dates = []
         for entry in parsed.entries:
+            pub_date = None
+            if hasattr(entry, "published_parsed"):
+                pub_date = parse_datetime(entry.published_parsed)
+            entries_with_dates.append((entry, pub_date))
+        
+        # Sort by date (newest first), then by original order
+        entries_with_dates.sort(key=lambda x: (x[1] or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+        
+        for entry, _ in entries_with_dates:
             stats["processed"] += 1
             
             url = getattr(entry, "link", None)
@@ -974,7 +989,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # FIXED: Enhanced duplicate check - allow re-processing if AI analysis is missing
+                    # Check for duplicates
                     cur.execute("""
                         SELECT id, ai_impact, ai_reasoning, quality_score 
                         FROM found_url 
@@ -983,11 +998,11 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     existing_article = cur.fetchone()
                     
                     if existing_article:
-                        # Article exists - check if it needs AI re-analysis
-                        if existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None:
+                        # Handle existing article re-analysis if needed
+                        if (enable_ai_scoring and max_ai_articles and ai_processed_count < max_ai_articles and
+                            (existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None)):
                             LOG.info(f"Re-analyzing existing article: {title[:60]}... (missing AI data)")
                             
-                            # Calculate quality score using AI for existing article - UPDATED 4-parameter return
                             quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
                                 title=title,
                                 domain=final_domain, 
@@ -997,7 +1012,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                 keywords=keywords
                             )
                             
-                            # Extract components for database storage
+                            # Extract components
                             source_tier = components.get('source_tier') if components else None
                             event_multiplier = components.get('event_multiplier') if components else None
                             event_multiplier_reason = components.get('event_multiplier_reason') if components else None
@@ -1007,7 +1022,6 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             penalty_multiplier = components.get('penalty_multiplier') if components else None
                             penalty_reason = components.get('penalty_reason') if components else None
                             
-                            # Update the existing article with AI analysis AND components
                             cur.execute("""
                                 UPDATE found_url 
                                 SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
@@ -1025,90 +1039,111 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             
                             if cur.rowcount > 0:
                                 stats["ai_reanalyzed"] += 1
-                                stats["duplicates"] += 1  # Still count as duplicate for stats
-                                LOG.info(f"Updated existing article [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... (AI Score: {quality_score:.1f}, Impact: {ai_impact})")
-                            else:
-                                LOG.warning(f"Failed to update existing article: {title[:60]}...")
-                        else:
-                            # Article exists and already has AI analysis - true duplicate
-                            stats["duplicates"] += 1
-                            LOG.debug(f"Skipping true duplicate: {title[:60]}...")
+                                ai_processed_count += 1
                         
-                        continue  # Move to next article regardless
+                        stats["duplicates"] += 1
+                        continue
                     
-                    # Article doesn't exist - proceed with normal insertion
                     # Parse publish date
                     published_at = None
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Content scraping logic
+                    # Determine if this article should get full AI processing
+                    should_use_ai = (enable_ai_scoring and 
+                                   (max_ai_articles is None or ai_processed_count < max_ai_articles))
+                    
+                    # Content scraping logic - only for AI-processed articles
                     scraped_content = None
                     scraping_error = None
                     content_scraped_at = None
                     scraping_failed = False
                     
-                    # Determine if we should scrape content
-                    should_scrape = False
-                    scrape_url = None
-                    
-                    # For Yahoo Finance URLs (direct or via Google redirect)
-                    if (final_source_url and "finance.yahoo.com" in (url if not is_google_to_yahoo else final_source_url)):
-                        should_scrape = True
-                        scrape_url = final_resolved_url
+                    if should_use_ai:
+                        # Determine if we should scrape content
+                        should_scrape = False
+                        scrape_url = None
                         
-                    # For Google News resolved URLs (non-Yahoo)
-                    elif ("news.google.com" in url and final_resolved_url != url and 
-                          not is_google_to_yahoo and final_resolved_url.startswith(('http://', 'https://'))):
-                        should_scrape = True
-                        scrape_url = final_resolved_url
-                    
-                    if should_scrape and scrape_url:
-                        scrape_domain = normalize_domain(urlparse(scrape_url).netloc.lower())
-                        
-                        if scrape_domain in PAYWALL_DOMAINS:
-                            stats["scraping_skipped"] += 1
-                            LOG.info(f"Skipping paywall domain: {scrape_domain}")
-                        else:
-                            content, status = safe_content_scraper_with_playwright(scrape_url, scrape_domain, scraped_domains)
+                        # For Yahoo Finance URLs (direct or via Google redirect)
+                        if (final_source_url and "finance.yahoo.com" in (url if not is_google_to_yahoo else final_source_url)):
+                            should_scrape = True
+                            scrape_url = final_resolved_url
                             
-                            if content:
-                                scraped_content = content
-                                content_scraped_at = datetime.now(timezone.utc)
-                                stats["content_scraped"] += 1
-                                LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
+                        # For Google News resolved URLs (non-Yahoo)
+                        elif ("news.google.com" in url and final_resolved_url != url and 
+                              not is_google_to_yahoo and final_resolved_url.startswith(('http://', 'https://'))):
+                            should_scrape = True
+                            scrape_url = final_resolved_url
+                        
+                        if should_scrape and scrape_url:
+                            scrape_domain = normalize_domain(urlparse(scrape_url).netloc.lower())
+                            
+                            if scrape_domain in PAYWALL_DOMAINS:
+                                stats["scraping_skipped"] += 1
+                                LOG.info(f"Skipping paywall domain: {scrape_domain}")
                             else:
-                                scraping_failed = True
-                                scraping_error = status
-                                stats["content_failed"] += 1
-                                LOG.warning(f"Content scraping failed: {status}")
+                                content, status = safe_content_scraper_with_playwright(scrape_url, scrape_domain, scraped_domains)
+                                
+                                if content:
+                                    scraped_content = content
+                                    content_scraped_at = datetime.now(timezone.utc)
+                                    stats["content_scraped"] += 1
+                                    LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
+                                else:
+                                    scraping_failed = True
+                                    scraping_error = status
+                                    stats["content_failed"] += 1
+                                    LOG.warning(f"Content scraping failed: {status}")
+                        else:
+                            stats["scraping_skipped"] += 1
                     else:
                         stats["scraping_skipped"] += 1
                     
-                    # Calculate quality score using AI - FIXED: Use provided keywords and get components
-                    quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-                        title=title,
-                        domain=final_domain, 
-                        ticker=feed["ticker"],
-                        description=description,
-                        category=category,
-                        keywords=keywords  # Use the keywords passed to this function
-                    )
-                    
-                    # Extract individual components for database storage
-                    source_tier = components.get('source_tier') if components else None
-                    event_multiplier = components.get('event_multiplier') if components else None
-                    event_multiplier_reason = components.get('event_multiplier_reason') if components else None
-                    relevance_boost = components.get('relevance_boost') if components else None
-                    relevance_boost_reason = components.get('relevance_boost_reason') if components else None
-                    numeric_bonus = components.get('numeric_bonus') if components else None
-                    penalty_multiplier = components.get('penalty_multiplier') if components else None
-                    penalty_reason = components.get('penalty_reason') if components else None
+                    # Calculate quality score - AI or fallback
+                    if should_use_ai:
+                        quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
+                            title=title,
+                            domain=final_domain, 
+                            ticker=feed["ticker"],
+                            description=description,
+                            category=category,
+                            keywords=keywords
+                        )
+                        
+                        # Extract components
+                        source_tier = components.get('source_tier') if components else None
+                        event_multiplier = components.get('event_multiplier') if components else None
+                        event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+                        relevance_boost = components.get('relevance_boost') if components else None
+                        relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+                        numeric_bonus = components.get('numeric_bonus') if components else None
+                        penalty_multiplier = components.get('penalty_multiplier') if components else None
+                        penalty_reason = components.get('penalty_reason') if components else None
+                        
+                        ai_processed_count += 1
+                        stats["ai_scored"] += 1
+                        LOG.info(f"AI scored: {title[:60]}... (Score: {quality_score:.1f}, Impact: {ai_impact})")
+                    else:
+                        # Use basic fallback scoring - NO AI analysis
+                        quality_score = _fallback_quality_score(title, final_domain, feed["ticker"], description, keywords)
+                        ai_impact = None
+                        ai_reasoning = None
+                        source_tier = None
+                        event_multiplier = None
+                        event_multiplier_reason = None
+                        relevance_boost = None
+                        relevance_boost_reason = None
+                        numeric_bonus = None
+                        penalty_multiplier = None
+                        penalty_reason = None
+                        
+                        stats["basic_scored"] += 1
+                        LOG.debug(f"Basic scored: {title[:60]}... (Score: {quality_score:.1f})")
                     
                     # Use scraped content for display, fallback to description
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article with final resolved information AND scoring components
+                    # Insert article with appropriate scoring data
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1134,9 +1169,10 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        content_info = f"with analyzed content" if scraped_content else "no content analysis"
+                        processing_type = "AI analysis" if should_use_ai else "basic processing"
+                        content_info = f"with content" if scraped_content else "no content"
                         source_info = "via Google→Yahoo" if is_google_to_yahoo else "direct"
-                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({content_info}) ({source_info})")
+                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({processing_type}, {content_info}) ({source_info})")
                         
             except Exception as e:
                 LOG.error(f"Database error for '{title[:50]}': {e}")
@@ -1145,16 +1181,14 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
-    # Log final Playwright stats
-    if playwright_stats["attempted"] > 0:
-        log_playwright_stats()
-        LOG.info(f"PLAYWRIGHT FINAL REPORT: Attempted to recover {playwright_stats['attempted']} failed URLs")
+    # Log processing summary
+    LOG.info(f"Feed processing complete - AI articles: {stats['ai_scored']}, Basic articles: {stats['basic_scored']}, Content scraped: {stats['content_scraped']}")
     
     return stats
     
 def _format_article_html_with_content(article: Dict, category: str) -> str:
     """
-    Enhanced article HTML formatting that displays analyzed content
+    Enhanced article HTML formatting that handles both AI-analyzed and basic articles
     """
     import html
     
@@ -1199,9 +1233,15 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     # Determine the actual link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # Quality score styling (disabled for now, but keeping structure)
-    score = article["quality_score"]
-    score_class = "med-score"  # Neutral since we're not scoring
+    # Quality score styling - only show if AI analyzed
+    score_html = ""
+    quality_score = article.get("quality_score")
+    ai_impact = article.get("ai_impact")
+    
+    if ai_impact is not None and quality_score is not None:
+        # This article was AI analyzed - show score
+        score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
+        score_html = f'<span class="score {score_class}">Score: {quality_score:.0f}</span>'
     
     # Build metadata badges for category-specific information
     metadata_badges = []
@@ -1217,12 +1257,16 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     
     # Get content - prioritize scraped content, fall back to description
     content_to_display = ""
+    content_source_indicator = ""
+    
     if article.get("scraped_content"):
         content_to_display = article["scraped_content"]
-        content_source = "analyzed"  # CHANGED from "scraped"
+        content_source_indicator = " [ANALYZED]"
     elif article.get("description"):
         content_to_display = article["description"]
-        content_source = "description"
+        # Only show [DESC] if this was an AI-analyzed article, otherwise show nothing
+        if ai_impact is not None:
+            content_source_indicator = " [DESC]"
     
     description_html = ""
     if content_to_display:
@@ -1234,17 +1278,14 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
             content_clean = content_clean[:800] + "..."
         
         content_clean = html.escape(content_clean)
-        
-        # Add indicator of content source - CHANGED to use "ANALYZED"
-        source_indicator = " [ANALYZED]" if content_source == "analyzed" else " [DESC]"
-        description_html = f"<br><div class='description'>{content_clean}<em>{source_indicator}</em></div>"
+        description_html = f"<br><div class='description'>{content_clean}<em>{content_source_indicator}</em></div>"
     
     return f"""
     <div class='article {category}'>
         <div class='article-header'>
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
-            <span class='score {score_class}'>Score: {score:.0f}</span>
+            {score_html}
         </div>
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
@@ -3096,113 +3137,7 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
         "recipient": DIGEST_TO
     }
 
-# Missing function 2: Enhanced digest HTML builder
-def build_digest_html_with_content(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
-    """Build HTML email digest using the enhanced article formatting with content indicators"""
-    # Get ticker metadata for display
-    ticker_metadata = {}
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        if config:
-            ticker_metadata[ticker] = {
-                "industry_keywords": config.get("industry_keywords", []),
-                "competitors": config.get("competitors", [])
-            }
-    
-    # Use the new timestamp formatting
-    current_time_est = format_timestamp_est(datetime.now(timezone.utc))
-    
-    html = [
-        "<html><head><style>",
-        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
-        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
-        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
-        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
-        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
-        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
-        ".article-header { margin-bottom: 5px; }",
-        ".article-content { }",
-        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
-        ".company { border-left-color: #27ae60; }",
-        ".industry { border-left-color: #f39c12; }",
-        ".competitor { border-left-color: #e74c3c; }",
-        ".meta { color: #95a5a6; font-size: 11px; }",
-        ".score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-        ".high-score { background-color: #d4edda; color: #155724; }",
-        ".med-score { background-color: #fff3cd; color: #856404; }",
-        ".low-score { background-color: #f8d7da; color: #721c24; }",
-        ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
-        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
-        ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
-        ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
-        "a { color: #2980b9; text-decoration: none; }",
-        "a:hover { text-decoration: underline; }",
-        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
-        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-        "</style></head><body>",
-        f"<h1>Stock Intelligence Report - Content Analysis System</h1>",  # CHANGED
-        f"<div class='summary'>",
-        f"<strong>Report Period:</strong> Last {period_days} days<br>",
-        f"<strong>Generated:</strong> {current_time_est}<br>",
-        f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
-        f"<strong>Mode:</strong> Enhanced AI Analysis with Category-Specific Scoring",  # CHANGED
-        "</div>"
-    ]
-    
-    for ticker, categories in articles_by_ticker.items():
-        total_articles = sum(len(articles) for articles in categories.values())
-        
-        html.append(f"<div class='ticker-section'>")
-        html.append(f"<h2>{ticker} - {total_articles} Total Articles</h2>")
-        
-        # Add keyword information with improved styling
-        if ticker in ticker_metadata:
-            metadata = ticker_metadata[ticker]
-            html.append("<div class='keywords'>")
-            html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
-            if metadata.get("industry_keywords"):
-                industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
-                html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
-            if metadata.get("competitors"):
-                competitor_badges = [f'<span class="competitor-badge">🏢 {comp}</span>' for comp in metadata['competitors']]
-                html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}")
-            html.append("</div>")
-        
-        # Company News Section
-        if "company" in categories and categories["company"]:
-            html.append(f"<h3>Company News ({len(categories['company'])} articles)</h3>")
-            for article in categories["company"][:50]:
-                html.append(_format_article_html_with_content(article, "company"))
-        
-        # Industry News Section
-        if "industry" in categories and categories["industry"]:
-            html.append(f"<h3>Industry & Market News ({len(categories['industry'])} articles)</h3>")
-            for article in categories["industry"][:50]:
-                html.append(_format_article_html_with_content(article, "industry"))
-        
-        # Competitor News Section
-        if "competitor" in categories and categories["competitor"]:
-            html.append(f"<h3>Competitor Intelligence ({len(categories['competitor'])} articles)</h3>")
-            for article in categories["competitor"][:50]:
-                html.append(_format_article_html_with_content(article, "competitor"))
-        
-        html.append("</div>")
-    
-    html.append("""
-        <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
-            <strong>About This Enhanced Analysis System:</strong><br>
-            • Content Analysis: Yahoo Finance resolved URLs are analyzed for full article content<br>
-            • [ANALYZED] indicator shows articles where full content was extracted and processed<br>
-            • [DESC] indicator shows fallback to original description<br>
-            • Category-Specific AI Scoring: Different AI models for Company, Industry, and Competitor news<br>
-            • Enhanced relevance scoring based on context and business impact<br>
-            • Intelligent domain deduplication and rate limiting for responsible scraping<br>
-            • Multi-tiered content quality validation and spam filtering
-        </div>
-        </body></html>
-    """)
-    
-    return "".join(html)
+ild_digest_html_with_cont
 
 def _format_article_html(article: Dict, category: str) -> str:
     """Format article HTML with AI analysis display"""
@@ -3545,17 +3480,18 @@ def admin_init(request: Request, body: InitRequest):
 @APP.post("/cron/ingest")
 def cron_ingest(
     request: Request,
-    minutes: int = Query(default=1440, description="Time window in minutes"),
+    minutes: int = Query(default=15, description="Time window in minutes - optimized for 15min cycles"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """
-    Enhanced ingest with content scraping for Yahoo feeds
-    FIXED: Use stored keywords instead of regenerating
+    Optimized ingest with selective AI scoring and content scraping
+    - Company articles: First 20 get full AI processing
+    - Industry articles: First 5 per keyword get AI processing  
+    - Competitor articles: First 5 per keyword get AI processing
+    - All others: Basic processing only
     """
     require_admin(request)
     ensure_schema()
-    
-    # Ensure content scraping schema is in place
     update_schema_for_content()
     
     # Get feeds for specified tickers
@@ -3599,8 +3535,15 @@ def cron_ingest(
         "total_content_scraped": 0,
         "total_content_failed": 0,
         "total_scraping_skipped": 0,
+        "total_ai_scored": 0,
+        "total_basic_scored": 0,
         "by_ticker": {},
-        "by_category": {"company": 0, "industry": 0, "competitor": 0}
+        "by_category": {"company": 0, "industry": 0, "competitor": 0},
+        "processing_limits": {
+            "company_ai_limit": 20,
+            "industry_ai_limit": 5,
+            "competitor_ai_limit": 5
+        }
     }
     
     # Group feeds by ticker for better processing
@@ -3608,10 +3551,12 @@ def cron_ingest(
     for feed in feeds:
         ticker = feed["ticker"]
         if ticker not in feeds_by_ticker:
-            feeds_by_ticker[ticker] = []
-        feeds_by_ticker[ticker].append(feed)
+            feeds_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
+        
+        category = feed.get("category", "company")
+        feeds_by_ticker[ticker][category].append(feed)
     
-    # FIXED: Load all ticker metadata once at the start to avoid regeneration
+    # Load ticker metadata once
     ticker_metadata_cache = {}
     for ticker in feeds_by_ticker.keys():
         config = get_ticker_config(ticker)
@@ -3627,53 +3572,91 @@ def cron_ingest(
                 "competitors": []
             }
     
-    # Process each ticker's feeds
+    # Process each ticker's feeds with limits
     for ticker, ticker_feeds in feeds_by_ticker.items():
-        metadata = ticker_metadata_cache[ticker]  # Use cached metadata
+        metadata = ticker_metadata_cache[ticker]
         ticker_stats = {
             "inserted": 0, 
             "duplicates": 0, 
             "blocked_spam": 0, 
             "content_scraped": 0,
             "content_failed": 0,
-            "scraping_skipped": 0
+            "scraping_skipped": 0,
+            "ai_scored": 0,
+            "basic_scored": 0
         }
         
-        for feed in ticker_feeds:
-            category = feed.get("category", "company")
+        # Track AI processing counts per category for this ticker
+        company_ai_count = 0
+        industry_ai_counts = {}  # Track per keyword
+        competitor_ai_counts = {}  # Track per keyword
+        
+        # Process company feeds first (highest priority for AI)
+        for feed in ticker_feeds["company"]:
+            enable_ai = company_ai_count < 20  # First 20 company articles get AI
+            max_ai = 20 - company_ai_count if enable_ai else 0
             
-            # Use appropriate keywords based on category
-            if category == "company":
-                category_keywords = []  # Company news doesn't need additional keywords
-            elif category == "industry":
-                category_keywords = metadata.get("industry_keywords", [])
-            elif category == "competitor":
-                category_keywords = metadata.get("competitors", [])
-            else:
-                category_keywords = []
+            stats = ingest_feed_with_content_scraping(
+                feed=feed, 
+                category="company", 
+                keywords=[],  # Company news doesn't need additional keywords
+                enable_ai_scoring=enable_ai,
+                max_ai_articles=max_ai
+            )
             
-            # Use the enhanced scraping function with the cached keywords
-            stats = ingest_feed_with_content_scraping(feed, category, category_keywords)
+            company_ai_count += stats.get("ai_scored", 0)
+            _update_ticker_stats(ticker_stats, total_stats, stats, "company")
             
-            total_stats["feeds_processed"] += 1
-            total_stats["total_inserted"] += stats["inserted"]
-            total_stats["total_duplicates"] += stats["duplicates"]
-            total_stats["total_blocked_spam"] += stats.get("blocked_spam", 0)
-            total_stats["total_content_scraped"] += stats.get("content_scraped", 0)
-            total_stats["total_content_failed"] += stats.get("content_failed", 0)
-            total_stats["total_scraping_skipped"] += stats.get("scraping_skipped", 0)
-            total_stats["by_category"][category] += stats["inserted"]
+            LOG.info(f"Company feed processed: {feed['name']} - AI: {stats.get('ai_scored', 0)}, Basic: {stats.get('basic_scored', 0)}")
+        
+        # Process industry feeds (5 per keyword)
+        for feed in ticker_feeds["industry"]:
+            keyword = feed.get("search_keyword", "default")
             
-            ticker_stats["inserted"] += stats["inserted"]
-            ticker_stats["duplicates"] += stats["duplicates"]
-            ticker_stats["blocked_spam"] += stats.get("blocked_spam", 0)
-            ticker_stats["content_scraped"] += stats.get("content_scraped", 0)
-            ticker_stats["content_failed"] += stats.get("content_failed", 0)
-            ticker_stats["scraping_skipped"] += stats.get("scraping_skipped", 0)
+            if keyword not in industry_ai_counts:
+                industry_ai_counts[keyword] = 0
             
-            LOG.info(f"Feed {feed['name']} [{category}]: {stats}")
+            enable_ai = industry_ai_counts[keyword] < 5  # First 5 per industry keyword
+            max_ai = 5 - industry_ai_counts[keyword] if enable_ai else 0
+            
+            stats = ingest_feed_with_content_scraping(
+                feed=feed,
+                category="industry",
+                keywords=metadata.get("industry_keywords", []),
+                enable_ai_scoring=enable_ai,
+                max_ai_articles=max_ai
+            )
+            
+            industry_ai_counts[keyword] += stats.get("ai_scored", 0)
+            _update_ticker_stats(ticker_stats, total_stats, stats, "industry")
+            
+            LOG.info(f"Industry feed processed: {feed['name']} ({keyword}) - AI: {stats.get('ai_scored', 0)}, Basic: {stats.get('basic_scored', 0)}")
+        
+        # Process competitor feeds (5 per competitor)
+        for feed in ticker_feeds["competitor"]:
+            keyword = feed.get("search_keyword", "default")
+            
+            if keyword not in competitor_ai_counts:
+                competitor_ai_counts[keyword] = 0
+            
+            enable_ai = competitor_ai_counts[keyword] < 5  # First 5 per competitor
+            max_ai = 5 - competitor_ai_counts[keyword] if enable_ai else 0
+            
+            stats = ingest_feed_with_content_scraping(
+                feed=feed,
+                category="competitor",
+                keywords=metadata.get("competitors", []),
+                enable_ai_scoring=enable_ai,
+                max_ai_articles=max_ai
+            )
+            
+            competitor_ai_counts[keyword] += stats.get("ai_scored", 0)
+            _update_ticker_stats(ticker_stats, total_stats, stats, "competitor")
+            
+            LOG.info(f"Competitor feed processed: {feed['name']} ({keyword}) - AI: {stats.get('ai_scored', 0)}, Basic: {stats.get('basic_scored', 0)}")
         
         total_stats["by_ticker"][ticker] = ticker_stats
+        LOG.info(f"Ticker {ticker} complete - Total AI: {ticker_stats['ai_scored']}, Total Basic: {ticker_stats['basic_scored']}")
     
     # Clean old articles
     cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
@@ -3685,7 +3668,36 @@ def cron_ingest(
         deleted = cur.rowcount
     
     total_stats["old_articles_deleted"] = deleted
+    total_stats["optimization_summary"] = {
+        "ai_processed_articles": total_stats["total_ai_scored"],
+        "basic_processed_articles": total_stats["total_basic_scored"],
+        "content_analysis_rate": f"{total_stats['total_content_scraped']}/{total_stats['total_ai_scored']}" if total_stats['total_ai_scored'] > 0 else "0/0",
+        "processing_mode": "Selective AI (Company: 20, Industry: 5/keyword, Competitor: 5/keyword)"
+    }
+    
     return total_stats
+
+def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):
+    """Helper to update statistics"""
+    ticker_stats["inserted"] += stats["inserted"]
+    ticker_stats["duplicates"] += stats["duplicates"]
+    ticker_stats["blocked_spam"] += stats.get("blocked_spam", 0)
+    ticker_stats["content_scraped"] += stats.get("content_scraped", 0)
+    ticker_stats["content_failed"] += stats.get("content_failed", 0)
+    ticker_stats["scraping_skipped"] += stats.get("scraping_skipped", 0)
+    ticker_stats["ai_scored"] += stats.get("ai_scored", 0)
+    ticker_stats["basic_scored"] += stats.get("basic_scored", 0)
+    
+    total_stats["feeds_processed"] += 1
+    total_stats["total_inserted"] += stats["inserted"]
+    total_stats["total_duplicates"] += stats["duplicates"]
+    total_stats["total_blocked_spam"] += stats.get("blocked_spam", 0)
+    total_stats["total_content_scraped"] += stats.get("content_scraped", 0)
+    total_stats["total_content_failed"] += stats.get("content_failed", 0)
+    total_stats["total_scraping_skipped"] += stats.get("scraping_skipped", 0)
+    total_stats["total_ai_scored"] += stats.get("ai_scored", 0)
+    total_stats["total_basic_scored"] += stats.get("basic_scored", 0)
+    total_stats["by_category"][category] += stats["inserted"]
 
 @APP.post("/cron/digest")
 def cron_digest(

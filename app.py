@@ -2425,81 +2425,106 @@ domain_resolver = DomainResolver()
 class FeedManager:
     @staticmethod
     def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
-        """Create all feeds for a ticker with proper validation"""
+        """Create feeds only if under the limits - CHECK EXISTING COUNTS FIRST"""
         feeds = []
         company_name = metadata.get("company_name", ticker)
         
         LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
         
-        # Company feeds
-        company_feeds = [
-            {
-                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                "name": f"Google News: {company_name}",
-                "category": "company",
-                "search_keyword": company_name
-            },
-            {
-                "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
-                "name": f"Yahoo Finance: {ticker}",
-                "category": "company",
-                "search_keyword": ticker
-            }
-        ]
+        # Check existing feed counts
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT category, COUNT(*) as count
+                FROM source_feed 
+                WHERE ticker = %s AND active = TRUE
+                GROUP BY category
+            """, (ticker,))
+            
+            existing_counts = {row["category"]: row["count"] for row in cur.fetchall()}
+            
+            LOG.info(f"  EXISTING FEEDS: Company={existing_counts.get('company', 0)}, Industry={existing_counts.get('industry', 0)}, Competitor={existing_counts.get('competitor', 0)}")
         
-        for feed in company_feeds:
-            LOG.info(f"  COMPANY FEED: {feed['name']}")
-            LOG.info(f"    URL: {feed['url']}")
+        # Company feeds - always ensure we have the core 2
+        existing_company_count = existing_counts.get('company', 0)
+        if existing_company_count < 2:
+            company_feeds = [
+                {
+                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    "name": f"Google News: {company_name}",
+                    "category": "company",
+                    "search_keyword": company_name
+                },
+                {
+                    "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+                    "name": f"Yahoo Finance: {ticker}",
+                    "category": "company",
+                    "search_keyword": ticker
+                }
+            ]
+            feeds.extend(company_feeds)
+            LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
+        else:
+            LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
         
-        feeds.extend(company_feeds)
+        # Industry feeds - MAX 5 TOTAL
+        existing_industry_count = existing_counts.get('industry', 0)
+        if existing_industry_count < 5:
+            available_slots = 5 - existing_industry_count
+            industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
+            
+            LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
+            
+            for keyword in industry_keywords:
+                feed = {
+                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    "name": f"Industry: {keyword}",
+                    "category": "industry",
+                    "search_keyword": keyword
+                }
+                feeds.append(feed)
+                LOG.info(f"    INDUSTRY: {keyword}")
+        else:
+            LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (5/5)")
         
-        # Industry feeds
-        industry_keywords = metadata.get("industry_keywords", [])[:3]
-        LOG.info(f"  INDUSTRY FEEDS ({len(industry_keywords)} keywords):")
-        for keyword in industry_keywords:
-            feed = {
-                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
-                "name": f"Industry: {keyword}",
-                "category": "industry",
-                "search_keyword": keyword
-            }
-            feeds.append(feed)
-            LOG.info(f"    INDUSTRY: {keyword}")
-            LOG.info(f"      URL: {feed['url']}")
+        # Competitor feeds - MAX 3 COMPETITORS (6 total feeds = 3 Google + 3 Yahoo)
+        existing_competitor_count = existing_counts.get('competitor', 0)
+        # Each competitor creates 2 feeds (Google + Yahoo), so divide by 2 for competitor count
+        existing_competitor_entities = existing_competitor_count // 2
         
-        # Competitor feeds
-        competitors = metadata.get("competitors", [])[:3]
-        LOG.info(f"  COMPETITOR FEEDS ({len(competitors)} competitors):")
-        for comp in competitors:
-            if isinstance(comp, dict):
-                comp_name = comp.get('name', '')
-                comp_ticker = comp.get('ticker')
-                
-                # Validate different from main ticker
-                if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
-                    comp_feeds = [
-                        {
-                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                            "name": f"Competitor: {comp_name}",
-                            "category": "competitor",
-                            "search_keyword": comp_name,
-                            "competitor_ticker": comp_ticker
-                        },
-                        {
-                            "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                            "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                            "category": "competitor",
-                            "search_keyword": comp_ticker,
-                            "competitor_ticker": comp_ticker
-                        }
-                    ]
+        if existing_competitor_entities < 3:
+            available_competitor_slots = 3 - existing_competitor_entities
+            competitors = metadata.get("competitors", [])[:available_competitor_slots]
+            
+            LOG.info(f"  COMPETITOR FEEDS: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(metadata.get('competitors', []))})")
+            
+            for comp in competitors:
+                if isinstance(comp, dict):
+                    comp_name = comp.get('name', '')
+                    comp_ticker = comp.get('ticker')
                     
-                    for feed in comp_feeds:
-                        feeds.append(feed)
-                        LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker})")
-                        LOG.info(f"      URL: {feed['url']}")
+                    if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
+                        comp_feeds = [
+                            {
+                                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                                "name": f"Competitor: {comp_name}",
+                                "category": "competitor",
+                                "search_keyword": comp_name,
+                                "competitor_ticker": comp_ticker
+                            },
+                            {
+                                "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                                "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                                "category": "competitor",
+                                "search_keyword": comp_ticker,
+                                "competitor_ticker": comp_ticker
+                            }
+                        ]
+                        feeds.extend(comp_feeds)
+                        LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds")
+        else:
+            LOG.info(f"  COMPETITOR FEEDS: Skipping - already at limit (3/3 competitors)")
         
-        LOG.info(f"TOTAL FEEDS CREATED for {ticker}: {len(feeds)}")
+        LOG.info(f"TOTAL NEW FEEDS for {ticker}: {len(feeds)}")
         return feeds
     
     @staticmethod
@@ -3466,7 +3491,7 @@ def root():
 
 @APP.post("/admin/init")
 def admin_init(request: Request, body: InitRequest):
-    """Initialize database and generate AI-powered feeds for specified tickers - ENHANCED"""
+    """Initialize database and generate AI-powered feeds for specified tickers - ENHANCED with limit checking"""
     require_admin(request)
     ensure_schema()
     
@@ -3482,9 +3507,20 @@ def admin_init(request: Request, body: InitRequest):
         # Get or generate metadata with AI
         keywords = get_or_create_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
-        # Build feed URLs for all categories (now includes Yahoo feeds)
+        # Build feed URLs for all categories - will check existing counts and only create what's needed
         feeds = feed_manager.create_feeds_for_ticker(ticker, keywords)
         
+        if not feeds:
+            LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")
+            results.append({
+                "ticker": ticker,
+                "message": "No new feeds created - already at limits",
+                "feeds_created": 0
+            })
+            continue
+        
+        # Create the feeds that are needed
+        ticker_feed_count = 0
         for feed_config in feeds:
             feed_id = upsert_feed(
                 url=feed_config["url"],
@@ -3503,28 +3539,44 @@ def admin_init(request: Request, body: InitRequest):
                 "competitor_ticker": feed_config.get("competitor_ticker"),
                 "id": feed_id
             })
+            ticker_feed_count += 1
         
-        LOG.info(f"=== COMPLETED {ticker}: {len(feeds)} feeds created ===")
+        LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created ===")
     
-    # ADD SUMMARY LOGGING:
+    # Final summary logging
     LOG.info("=== INITIALIZATION COMPLETE ===")
     LOG.info("SUMMARY:")
+    
+    feeds_by_ticker = {}
+    for result in results:
+        if "feed" in result:  # Only count actual feed creations, not "no feeds needed" messages
+            ticker = result['ticker']
+            if ticker not in feeds_by_ticker:
+                feeds_by_ticker[ticker] = {"company": 0, "industry": 0, "competitor": 0}
+            category = result.get('category', 'company')
+            feeds_by_ticker[ticker][category] += 1
+    
     for ticker in body.tickers:
-        ticker_feeds = [r for r in results if r['ticker'] == ticker]
-        company_feeds = len([f for f in ticker_feeds if f['category'] == 'company'])
-        industry_feeds = len([f for f in ticker_feeds if f['category'] == 'industry'])
-        competitor_feeds = len([f for f in ticker_feeds if f['category'] == 'competitor'])
-        
-        LOG.info(f"  {ticker}: {len(ticker_feeds)} total feeds")
-        LOG.info(f"    Company: {company_feeds}, Industry: {industry_feeds}, Competitor: {competitor_feeds}")
+        if ticker in feeds_by_ticker:
+            ticker_feeds = feeds_by_ticker[ticker]
+            LOG.info(f"  {ticker}: {sum(ticker_feeds.values())} new feeds created")
+            LOG.info(f"    Company: {ticker_feeds['company']}, Industry: {ticker_feeds['industry']}, Competitor: {ticker_feeds['competitor']}")
+        else:
+            LOG.info(f"  {ticker}: 0 new feeds created (already at limits)")
+    
+    total_feeds_created = len([r for r in results if "feed" in r])
     
     return {
         "status": "initialized",
         "tickers": body.tickers,
-        "feeds": results,
-        "message": f"Generated {len(results)} feeds using AI-powered keyword analysis (Google + Yahoo sources)"
+        "feeds": [r for r in results if "feed" in r],  # Only return actual feed creations
+        "summary": {
+            "total_feeds_created": total_feeds_created,
+            "feeds_by_ticker": feeds_by_ticker,
+            "tickers_at_limit": [r["ticker"] for r in results if "message" in r]
+        },
+        "message": f"Generated {total_feeds_created} new feeds using AI-powered keyword analysis (respecting limits: max 5 industry, max 3 competitors)"
     }
-
 @APP.post("/cron/ingest")
 def cron_ingest(
     request: Request,

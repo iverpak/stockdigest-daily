@@ -1602,138 +1602,6 @@ def calculate_quality_score(
         score = _fallback_quality_score(title, domain, ticker, description, keywords)
         return score, None, None, None
 
-# Update the database insertion in ingest_feed_with_content_scraping()
-# Replace the AI scoring section with this:
-
-# Calculate quality score using AI - FIXED: Use provided keywords and get components
-quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-    title=title,
-    domain=final_domain, 
-    ticker=feed["ticker"],
-    description=description,
-    category=category,
-    keywords=keywords
-)
-
-# Extract individual components for database storage
-source_tier = components.get('source_tier') if components else None
-event_multiplier = components.get('event_multiplier') if components else None
-event_multiplier_reason = components.get('event_multiplier_reason') if components else None
-relevance_boost = components.get('relevance_boost') if components else None
-relevance_boost_reason = components.get('relevance_boost_reason') if components else None
-numeric_bonus = components.get('numeric_bonus') if components else None
-penalty_multiplier = components.get('penalty_multiplier') if components else None
-penalty_reason = components.get('penalty_reason') if components else None
-
-# Use scraped content for display, fallback to description
-display_content = scraped_content if scraped_content else description
-
-# Insert article with final resolved information AND scoring components
-cur.execute("""
-    INSERT INTO found_url (
-        url, resolved_url, url_hash, title, description,
-        feed_id, ticker, domain, quality_score, published_at,
-        category, search_keyword, original_source_url,
-        scraped_content, content_scraped_at, scraping_failed, scraping_error,
-        ai_impact, ai_reasoning,
-        source_tier, event_multiplier, event_multiplier_reason,
-        relevance_boost, relevance_boost_reason, numeric_bonus,
-        penalty_multiplier, penalty_reason
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    RETURNING id
-""", (
-    url, final_resolved_url, url_hash, title, display_content,
-    feed["id"], feed["ticker"], final_domain, quality_score, published_at,
-    category, feed.get("search_keyword"), final_source_url,
-    scraped_content, content_scraped_at, scraping_failed, scraping_error,
-    ai_impact, ai_reasoning,
-    source_tier, event_multiplier, event_multiplier_reason,
-    relevance_boost, relevance_boost_reason, numeric_bonus,
-    penalty_multiplier, penalty_reason
-))
-
-# Also update the existing article re-analysis section:
-# Replace the existing UPDATE query with this expanded version:
-
-if existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None:
-    LOG.info(f"Re-analyzing existing article: {title[:60]}... (missing AI data)")
-    
-    # Calculate quality score using AI for existing article
-    quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-        title=title,
-        domain=final_domain, 
-        ticker=feed["ticker"],
-        description=description,
-        category=category,
-        keywords=keywords
-    )
-    
-    # Extract components for database storage
-    source_tier = components.get('source_tier') if components else None
-    event_multiplier = components.get('event_multiplier') if components else None
-    event_multiplier_reason = components.get('event_multiplier_reason') if components else None
-    relevance_boost = components.get('relevance_boost') if components else None
-    relevance_boost_reason = components.get('relevance_boost_reason') if components else None
-    numeric_bonus = components.get('numeric_bonus') if components else None
-    penalty_multiplier = components.get('penalty_multiplier') if components else None
-    penalty_reason = components.get('penalty_reason') if components else None
-    
-    # Update the existing article with AI analysis AND components
-    cur.execute("""
-        UPDATE found_url 
-        SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
-            source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
-            relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
-            penalty_multiplier = %s, penalty_reason = %s
-        WHERE id = %s
-    """, (
-        quality_score, ai_impact, ai_reasoning,
-        source_tier, event_multiplier, event_multiplier_reason,
-        relevance_boost, relevance_boost_reason, numeric_bonus,
-        penalty_multiplier, penalty_reason,
-        existing_article["id"]
-    ))
-
-# Update the rerun-ai-analysis endpoint similarly:
-# In the rerun_ai_analysis function, replace the update section:
-
-# Run AI analysis
-quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-    title=article["title"],
-    domain=article["domain"],
-    ticker=ticker,
-    description=article["description"] or "",
-    category=category,
-    keywords=keywords
-)
-
-# Extract components
-source_tier = components.get('source_tier') if components else None
-event_multiplier = components.get('event_multiplier') if components else None
-event_multiplier_reason = components.get('event_multiplier_reason') if components else None
-relevance_boost = components.get('relevance_boost') if components else None
-relevance_boost_reason = components.get('relevance_boost_reason') if components else None
-numeric_bonus = components.get('numeric_bonus') if components else None
-penalty_multiplier = components.get('penalty_multiplier') if components else None
-penalty_reason = components.get('penalty_reason') if components else None
-
-# Update the article with ALL scoring data
-with db() as conn, conn.cursor() as cur:
-    cur.execute("""
-        UPDATE found_url 
-        SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
-            source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
-            relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
-            penalty_multiplier = %s, penalty_reason = %s
-        WHERE id = %s
-    """, (
-        quality_score, ai_impact, ai_reasoning,
-        source_tier, event_multiplier, event_multiplier_reason,
-        relevance_boost, relevance_boost_reason, numeric_bonus,
-        penalty_multiplier, penalty_reason,
-        article["id"]
-    ))
-
 def _fallback_quality_score(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
     """Fallback scoring when AI is unavailable"""
     base_score = 50.0
@@ -1977,6 +1845,41 @@ DO NOT calculate any scores - just provide the components."""
     
     return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
 
+def calculate_score_from_components(components: Dict) -> float:
+    """
+    Calculate quality score from AI-provided components using our own formula
+    Formula: (100 × source_tier × event_multiplier × relevance_boost) × penalty_multiplier + numeric_bonus
+    """
+    try:
+        source_tier = float(components.get('source_tier', 0.5))
+        event_multiplier = float(components.get('event_multiplier', 1.0))
+        relevance_boost = float(components.get('relevance_boost', 1.0))
+        numeric_bonus = float(components.get('numeric_bonus', 0.0))
+        penalty_multiplier = float(components.get('penalty_multiplier', 1.0))
+        
+        # Validate ranges
+        source_tier = max(0.1, min(1.0, source_tier))
+        event_multiplier = max(0.1, min(2.0, event_multiplier))
+        relevance_boost = max(0.5, min(1.5, relevance_boost))
+        numeric_bonus = max(0.0, min(1.0, numeric_bonus))
+        penalty_multiplier = max(0.1, min(1.0, penalty_multiplier))
+        
+        # Calculate score using exact formula - penalty applies to base score, then add numeric bonus
+        base_score = 100 * source_tier * event_multiplier * relevance_boost
+        penalized_score = base_score * penalty_multiplier
+        final_score_raw = penalized_score + numeric_bonus
+        
+        # Clamp to valid range
+        final_score = max(0.0, min(100.0, final_score_raw))
+        
+        LOG.info(f"COMPONENT CALCULATION: (100 × {source_tier} × {event_multiplier} × {relevance_boost}) × {penalty_multiplier} + {numeric_bonus} = {final_score:.1f}")
+        
+        return final_score
+        
+    except (ValueError, TypeError) as e:
+        LOG.error(f"Invalid components for score calculation: {e}, using fallback score 50.0")
+        return 50.0
+
 def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: Dict, source_tier: float) -> Tuple[float, str, str, Dict]:
     """Make AI request for components only, calculate score ourselves"""
     headers = {
@@ -2034,41 +1937,6 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
     LOG.info(f"  Impact: {impact} | Reason: {reason}")
     
     return calculated_score, impact, reason, components
-
-def calculate_score_from_components(components: Dict) -> float:
-    """
-    Calculate quality score from AI-provided components using our own formula
-    Formula: (100 × source_tier × event_multiplier × relevance_boost) × penalty_multiplier + numeric_bonus
-    """
-    try:
-        source_tier = float(components.get('source_tier', 0.5))
-        event_multiplier = float(components.get('event_multiplier', 1.0))
-        relevance_boost = float(components.get('relevance_boost', 1.0))
-        numeric_bonus = float(components.get('numeric_bonus', 0.0))
-        penalty_multiplier = float(components.get('penalty_multiplier', 1.0))
-        
-        # Validate ranges
-        source_tier = max(0.1, min(1.0, source_tier))
-        event_multiplier = max(0.1, min(2.0, event_multiplier))
-        relevance_boost = max(0.5, min(1.5, relevance_boost))
-        numeric_bonus = max(0.0, min(1.0, numeric_bonus))
-        penalty_multiplier = max(0.1, min(1.0, penalty_multiplier))
-        
-        # Calculate score using exact formula - penalty applies to base score, then add numeric bonus
-        base_score = 100 * source_tier * event_multiplier * relevance_boost
-        penalized_score = base_score * penalty_multiplier
-        final_score_raw = penalized_score + numeric_bonus
-        
-        # Clamp to valid range
-        final_score = max(0.0, min(100.0, final_score_raw))
-        
-        LOG.info(f"COMPONENT CALCULATION: (100 × {source_tier} × {event_multiplier} × {relevance_boost}) × {penalty_multiplier} + {numeric_bonus} = {final_score:.1f}")
-        
-        return final_score
-        
-    except (ValueError, TypeError) as e:
-        LOG.error(f"Invalid components for score calculation: {e}, using fallback score 50.0")
-        return 50.0
 
 def get_url_hash(url: str, resolved_url: str = None) -> str:
     """Generate hash for URL deduplication, using resolved URL if available"""

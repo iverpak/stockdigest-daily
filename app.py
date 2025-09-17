@@ -894,13 +894,103 @@ def safe_content_scraper_with_playwright(url: str, domain: str, scraped_domains:
     # For low-value domains, don't waste time on Playwright
     return None, f"Requests failed: {error} (Playwright not attempted for this domain)"
 
+def safe_content_scraper_with_playwright_limited(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+    """
+    Enhanced scraper with per-keyword limits - only successful scrapes count toward limit
+    """
+    global scraping_stats
+    
+    # Check limits based on category
+    if category == "company":
+        if scraping_stats["company_scraped"] >= scraping_stats["limits"]["company"]:
+            return None, f"Company limit reached ({scraping_stats['company_scraped']}/{scraping_stats['limits']['company']})"
+    
+    elif category == "industry":
+        keyword_count = scraping_stats["industry_scraped_by_keyword"].get(keyword, 0)
+        if keyword_count >= scraping_stats["limits"]["industry_per_keyword"]:
+            return None, f"Industry keyword '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['industry_per_keyword']})"
+    
+    elif category == "competitor":
+        keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
+        if keyword_count >= scraping_stats["limits"]["competitor_per_keyword"]:
+            return None, f"Competitor '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['competitor_per_keyword']})"
+    
+    # First try your existing method
+    content, error = safe_content_scraper(url, domain, scraped_domains)
+    
+    # If successful with requests, count it and return
+    if content:
+        _update_scraping_stats(category, keyword, True)
+        return content, f"Successfully scraped {len(content)} chars with requests"
+    
+    # Log failed attempt but don't count toward limit
+    scraping_stats["failed_scrapes"] += 1
+    
+    # Try Playwright fallback for ANY domain (not just high-value ones)
+    LOG.info(f"Trying Playwright fallback for: {domain} (failed attempts don't count toward limit)")
+    
+    # Update Playwright stats (for monitoring, not limits)
+    playwright_stats["attempted"] += 1
+    normalized_domain = normalize_domain(domain)
+    playwright_stats["by_domain"][normalized_domain]["attempts"] += 1
+    
+    playwright_content, playwright_error = extract_article_content_with_playwright(url, domain)
+    
+    if playwright_content:
+        # SUCCESS - count toward limit
+        playwright_stats["successful"] += 1
+        playwright_stats["by_domain"][normalized_domain]["successes"] += 1
+        
+        _update_scraping_stats(category, keyword, True)
+        
+        # Log stats every 10 attempts
+        if playwright_stats["attempted"] % 10 == 0:
+            log_playwright_stats()
+            
+        return playwright_content, f"Playwright success: {len(playwright_content)} chars"
+    else:
+        # FAILURE - don't count toward limit
+        playwright_stats["failed"] += 1
+        scraping_stats["failed_scrapes"] += 1
+        
+        # Log stats every 10 attempts
+        if playwright_stats["attempted"] % 10 == 0:
+            log_playwright_stats()
+            
+        return None, f"Both methods failed - Requests: {error}, Playwright: {playwright_error} (not counted toward limit)"
+
+def _update_scraping_stats(category: str, keyword: str, success: bool):
+    """Helper to update scraping statistics"""
+    global scraping_stats
+    
+    if success:
+        scraping_stats["successful_scrapes"] += 1
+        
+        if category == "company":
+            scraping_stats["company_scraped"] += 1
+            LOG.info(f"SCRAPING SUCCESS: Company {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']} | Total: {scraping_stats['successful_scrapes']}")
+        
+        elif category == "industry":
+            if keyword not in scraping_stats["industry_scraped_by_keyword"]:
+                scraping_stats["industry_scraped_by_keyword"][keyword] = 0
+            scraping_stats["industry_scraped_by_keyword"][keyword] += 1
+            keyword_count = scraping_stats["industry_scraped_by_keyword"][keyword]
+            LOG.info(f"SCRAPING SUCCESS: Industry '{keyword}' {keyword_count}/{scraping_stats['limits']['industry_per_keyword']} | Total: {scraping_stats['successful_scrapes']}")
+        
+        elif category == "competitor":
+            if keyword not in scraping_stats["competitor_scraped_by_keyword"]:
+                scraping_stats["competitor_scraped_by_keyword"][keyword] = 0
+            scraping_stats["competitor_scraped_by_keyword"][keyword] += 1
+            keyword_count = scraping_stats["competitor_scraped_by_keyword"][keyword]
+            LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']}")
+
 def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None, 
                                        enable_ai_scoring: bool = True, max_ai_articles: int = None) -> Dict[str, int]:
     """
-    Enhanced feed processing with selective AI scoring and content scraping
-    - enable_ai_scoring: Whether to run AI analysis on articles
-    - max_ai_articles: Maximum number of articles to process with AI per feed
+    Enhanced feed processing with per-keyword scraping limits
     """
+    global scraping_stats
+    
     stats = {
         "processed": 0, 
         "inserted": 0, 
@@ -918,9 +1008,22 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     scraped_domains = set()
     ai_processed_count = 0
     
+    # Get the keyword for this feed (for limit tracking)
+    feed_keyword = feed.get("search_keyword", "unknown")
+    
     try:
         parsed = feedparser.parse(feed["url"])
         LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries (AI: {'enabled' if enable_ai_scoring else 'disabled'})")
+        
+        # Log current limits for this category/keyword
+        if category == "company":
+            LOG.info(f"  Scraping limit for company: {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}")
+        elif category == "industry":
+            current_count = scraping_stats["industry_scraped_by_keyword"].get(feed_keyword, 0)
+            LOG.info(f"  Scraping limit for industry '{feed_keyword}': {current_count}/{scraping_stats['limits']['industry_per_keyword']}")
+        elif category == "competitor":
+            current_count = scraping_stats["competitor_scraped_by_keyword"].get(feed_keyword, 0)
+            LOG.info(f"  Scraping limit for competitor '{feed_keyword}': {current_count}/{scraping_stats['limits']['competitor_per_keyword']}")
         
         # Sort entries by publication date (newest first) if available
         entries_with_dates = []
@@ -930,7 +1033,6 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 pub_date = parse_datetime(entry.published_parsed)
             entries_with_dates.append((entry, pub_date))
         
-        # Sort by date (newest first), then by original order
         entries_with_dates.sort(key=lambda x: (x[1] or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
         
         for entry, _ in entries_with_dates:
@@ -940,7 +1042,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             title = getattr(entry, "title", "") or "No Title"
             raw_description = getattr(entry, "summary", "") if hasattr(entry, "summary") else ""
             
-            # Filter description - only keep if it adds value
+            # Filter description
             description = ""
             if raw_description and is_description_valuable(title, raw_description):
                 description = raw_description
@@ -960,7 +1062,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 stats["blocked_spam"] += 1
                 continue
             
-            # SPECIAL CASE: Google Feed → Yahoo Finance redirect handling
+            # Handle Google->Yahoo redirects
             is_google_to_yahoo = (
                 "news.google.com" in url and 
                 "finance.yahoo.com" in url and 
@@ -968,13 +1070,11 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             )
             
             if is_google_to_yahoo:
-                LOG.info(f"Google→Yahoo redirect detected: {url} → {resolved_url}")
                 original_source = extract_yahoo_finance_source_optimized(resolved_url)
                 if original_source:
                     final_resolved_url = original_source
                     final_domain = normalize_domain(urlparse(original_source).netloc.lower())
                     final_source_url = resolved_url
-                    LOG.info(f"Yahoo source extracted: {original_source}")
                 else:
                     final_resolved_url = resolved_url
                     final_domain = domain
@@ -984,7 +1084,6 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 final_domain = domain
                 final_source_url = source_url
             
-            # Generate hash based on FINAL resolved URL
             url_hash = get_url_hash(url, final_resolved_url)
             
             try:
@@ -998,21 +1097,16 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     existing_article = cur.fetchone()
                     
                     if existing_article:
-                        # Handle existing article re-analysis if needed
+                        # Handle re-analysis if needed (existing logic)
                         if (enable_ai_scoring and max_ai_articles and ai_processed_count < max_ai_articles and
                             (existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None)):
-                            LOG.info(f"Re-analyzing existing article: {title[:60]}... (missing AI data)")
                             
                             quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-                                title=title,
-                                domain=final_domain, 
-                                ticker=feed["ticker"],
-                                description=description,
-                                category=category,
-                                keywords=keywords
+                                title=title, domain=final_domain, ticker=feed["ticker"],
+                                description=description, category=category, keywords=keywords
                             )
                             
-                            # Extract components
+                            # Update with components
                             source_tier = components.get('source_tier') if components else None
                             event_multiplier = components.get('event_multiplier') if components else None
                             event_multiplier_reason = components.get('event_multiplier_reason') if components else None
@@ -1053,7 +1147,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     should_use_ai = (enable_ai_scoring and 
                                    (max_ai_articles is None or ai_processed_count < max_ai_articles))
                     
-                    # Content scraping logic - only for AI-processed articles
+                    # Content scraping logic with per-keyword limits
                     scraped_content = None
                     scraping_error = None
                     content_scraped_at = None
@@ -1082,35 +1176,31 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                 stats["scraping_skipped"] += 1
                                 LOG.info(f"Skipping paywall domain: {scrape_domain}")
                             else:
-                                content, status = safe_content_scraper_with_playwright(scrape_url, scrape_domain, scraped_domains)
+                                # Use the new limited scraper with keyword tracking
+                                content, status = safe_content_scraper_with_playwright_limited(
+                                    scrape_url, scrape_domain, category, feed_keyword, scraped_domains
+                                )
                                 
                                 if content:
                                     scraped_content = content
                                     content_scraped_at = datetime.now(timezone.utc)
                                     stats["content_scraped"] += 1
-                                    LOG.info(f"Content scraped: {title[:60]}... ({len(content)} chars)")
                                 else:
                                     scraping_failed = True
                                     scraping_error = status
                                     stats["content_failed"] += 1
-                                    LOG.warning(f"Content scraping failed: {status}")
                         else:
                             stats["scraping_skipped"] += 1
                     else:
                         stats["scraping_skipped"] += 1
                     
-                    # Calculate quality score - AI or fallback
+                    # Calculate quality score
                     if should_use_ai:
                         quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-                            title=title,
-                            domain=final_domain, 
-                            ticker=feed["ticker"],
-                            description=description,
-                            category=category,
-                            keywords=keywords
+                            title=title, domain=final_domain, ticker=feed["ticker"],
+                            description=description, category=category, keywords=keywords
                         )
                         
-                        # Extract components
                         source_tier = components.get('source_tier') if components else None
                         event_multiplier = components.get('event_multiplier') if components else None
                         event_multiplier_reason = components.get('event_multiplier_reason') if components else None
@@ -1122,9 +1212,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         
                         ai_processed_count += 1
                         stats["ai_scored"] += 1
-                        LOG.info(f"AI scored: {title[:60]}... (Score: {quality_score:.1f}, Impact: {ai_impact})")
                     else:
-                        # Use basic fallback scoring - NO AI analysis
                         quality_score = _fallback_quality_score(title, final_domain, feed["ticker"], description, keywords)
                         ai_impact = None
                         ai_reasoning = None
@@ -1136,14 +1224,11 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         numeric_bonus = None
                         penalty_multiplier = None
                         penalty_reason = None
-                        
                         stats["basic_scored"] += 1
-                        LOG.debug(f"Basic scored: {title[:60]}... (Score: {quality_score:.1f})")
                     
-                    # Use scraped content for display, fallback to description
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article with appropriate scoring data
+                    # Insert article
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1180,9 +1265,6 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
-    
-    # Log processing summary
-    LOG.info(f"Feed processing complete - AI articles: {stats['ai_scored']}, Basic articles: {stats['basic_scored']}, Content scraped: {stats['content_scraped']}")
     
     return stats
     
@@ -3577,6 +3659,7 @@ def admin_init(request: Request, body: InitRequest):
         },
         "message": f"Generated {total_feeds_created} new feeds using AI-powered keyword analysis (respecting limits: max 5 industry, max 3 competitors)"
     }
+ 
 @APP.post("/cron/ingest")
 def cron_ingest(
     request: Request,
@@ -3584,19 +3667,24 @@ def cron_ingest(
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """
-    Optimized ingest with selective AI scoring and content scraping
-    - Company articles: First 20 get full AI processing
-    - Industry articles: First 5 per keyword get AI processing  
-    - Competitor articles: First 5 per keyword get AI processing
+    Optimized ingest with per-keyword scraping limits
+    - Company articles: First 20 get full AI processing and scraping (20 scrapes max)
+    - Industry articles: First 5 per keyword get AI processing and scraping (5×5 = 25 scrapes max) 
+    - Competitor articles: First 5 per keyword get AI processing and scraping (5×N competitors)
     - All others: Basic processing only
+    - Playwright: Attempts any failed request, not just high-value domains
     """
     require_admin(request)
     ensure_schema()
     update_schema_for_content()
     
+    # Reset scraping stats for this run
+    reset_scraping_stats()
+    
     LOG.info("=== CRON INGEST STARTING ===")
     LOG.info(f"Processing window: {minutes} minutes")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
+    LOG.info(f"Scraping limits: Company={scraping_stats['limits']['company']}, Industry={scraping_stats['limits']['industry_per_keyword']}/keyword, Competitor={scraping_stats['limits']['competitor_per_keyword']}/keyword")
     
     # Get feeds for specified tickers
     with db() as conn, conn.cursor() as cur:
@@ -3821,12 +3909,39 @@ def cron_ingest(
     total_stats["old_articles_deleted"] = deleted
     LOG.info(f"Deleted {deleted} old articles (older than {DEFAULT_RETAIN_DAYS} days)")
     
+    # Add scraping stats to the final return
+    total_stats["scraping_summary"] = {
+        "successful_scrapes": scraping_stats["successful_scrapes"],
+        "failed_scrapes": scraping_stats["failed_scrapes"],
+        "company_scraped": f"{scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}",
+        "industry_scraped_by_keyword": {
+            keyword: f"{count}/{scraping_stats['limits']['industry_per_keyword']}" 
+            for keyword, count in scraping_stats["industry_scraped_by_keyword"].items()
+        },
+        "competitor_scraped_by_keyword": {
+            keyword: f"{count}/{scraping_stats['limits']['competitor_per_keyword']}" 
+            for keyword, count in scraping_stats["competitor_scraped_by_keyword"].items()
+        },
+        "note": "Only successful scrapes count toward limits, Playwright attempts all domains"
+    }
+    
     total_stats["optimization_summary"] = {
         "ai_processed_articles": total_stats["total_ai_scored"],
         "basic_processed_articles": total_stats["total_basic_scored"],
         "content_analysis_rate": f"{total_stats['total_content_scraped']}/{total_stats['total_ai_scored']}" if total_stats['total_ai_scored'] > 0 else "0/0",
-        "processing_mode": "Selective AI (Company: 20, Industry: 5/keyword, Competitor: 5/keyword)"
+        "processing_mode": "Selective AI + Per-keyword scraping limits (Company: 20, Industry: 5/keyword, Competitor: 5/keyword)"
     }
+    
+    LOG.info("=== SCRAPING FINAL SUMMARY ===")
+    LOG.info(f"  Successful scrapes: {scraping_stats['successful_scrapes']}")
+    LOG.info(f"  Failed scrapes (not counted): {scraping_stats['failed_scrapes']}")
+    LOG.info(f"  Company: {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}")
+    
+    for keyword, count in scraping_stats["industry_scraped_by_keyword"].items():
+        LOG.info(f"  Industry '{keyword}': {count}/{scraping_stats['limits']['industry_per_keyword']}")
+    
+    for keyword, count in scraping_stats["competitor_scraped_by_keyword"].items():
+        LOG.info(f"  Competitor '{keyword}': {count}/{scraping_stats['limits']['competitor_per_keyword']}")
     
     LOG.info("=== CRON INGEST COMPLETE ===")
     LOG.info(f"FINAL SUMMARY:")

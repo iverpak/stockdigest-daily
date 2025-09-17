@@ -1273,7 +1273,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             source_tier, event_multiplier, event_multiplier_reason,
                             relevance_boost, relevance_boost_reason, numeric_bonus,
                             penalty_multiplier, penalty_reason
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,

@@ -3410,7 +3410,6 @@ def send_email(subject: str, html_body: str, text_attachment: str, to: str = Non
         msg.attach(body_part)
         
         # Add text file attachment
-        from email.mime.text import MIMEText
         attachment = MIMEText(text_attachment)
         attachment.add_header('Content-Disposition', 'attachment', filename='ai_scoring_evaluation.txt')
         msg.attach(attachment)

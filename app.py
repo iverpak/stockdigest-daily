@@ -2429,8 +2429,10 @@ class FeedManager:
         feeds = []
         company_name = metadata.get("company_name", ticker)
         
+        LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
+        
         # Company feeds
-        feeds.extend([
+        company_feeds = [
             {
                 "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
                 "name": f"Google News: {company_name}",
@@ -2443,26 +2445,39 @@ class FeedManager:
                 "category": "company",
                 "search_keyword": ticker
             }
-        ])
+        ]
+        
+        for feed in company_feeds:
+            LOG.info(f"  COMPANY FEED: {feed['name']}")
+            LOG.info(f"    URL: {feed['url']}")
+        
+        feeds.extend(company_feeds)
         
         # Industry feeds
-        for keyword in metadata.get("industry_keywords", [])[:3]:
-            feeds.append({
+        industry_keywords = metadata.get("industry_keywords", [])[:3]
+        LOG.info(f"  INDUSTRY FEEDS ({len(industry_keywords)} keywords):")
+        for keyword in industry_keywords:
+            feed = {
                 "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
                 "name": f"Industry: {keyword}",
                 "category": "industry",
                 "search_keyword": keyword
-            })
+            }
+            feeds.append(feed)
+            LOG.info(f"    INDUSTRY: {keyword}")
+            LOG.info(f"      URL: {feed['url']}")
         
         # Competitor feeds
-        for comp in metadata.get("competitors", [])[:3]:
+        competitors = metadata.get("competitors", [])[:3]
+        LOG.info(f"  COMPETITOR FEEDS ({len(competitors)} competitors):")
+        for comp in competitors:
             if isinstance(comp, dict):
                 comp_name = comp.get('name', '')
                 comp_ticker = comp.get('ticker')
                 
                 # Validate different from main ticker
                 if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
-                    feeds.extend([
+                    comp_feeds = [
                         {
                             "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
                             "name": f"Competitor: {comp_name}",
@@ -2477,8 +2492,14 @@ class FeedManager:
                             "search_keyword": comp_ticker,
                             "competitor_ticker": comp_ticker
                         }
-                    ])
+                    ]
+                    
+                    for feed in comp_feeds:
+                        feeds.append(feed)
+                        LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker})")
+                        LOG.info(f"      URL: {feed['url']}")
         
+        LOG.info(f"TOTAL FEEDS CREATED for {ticker}: {len(feeds)}")
         return feeds
     
     @staticmethod
@@ -2629,7 +2650,22 @@ JSON format:
                 if comp["ticker"].upper() != ticker.upper():  # Prevent self-reference
                     competitors.append(comp)
         
-        LOG.info(f"Generated metadata for {ticker}: {len(industry_keywords)} keywords, {len(competitors)} competitors")
+        # ENHANCED LOGGING
+        LOG.info(f"=== AI METADATA GENERATED for {ticker} ===")
+        LOG.info(f"Company Name: {company_name}")
+        LOG.info(f"Industry Keywords ({len(industry_keywords)}):")
+        for i, keyword in enumerate(industry_keywords, 1):
+            LOG.info(f"  {i}. {keyword}")
+        
+        LOG.info(f"Competitors ({len(competitors)}):")
+        for i, comp in enumerate(competitors, 1):
+            LOG.info(f"  {i}. {comp['name']} ({comp['ticker']})")
+        
+        if len(competitors) < 3:
+            LOG.warning(f"Only {len(competitors)} valid competitors found for {ticker}")
+        
+        LOG.info(f"=== METADATA COMPLETE for {ticker} ===")
+        
         return {
             "company_name": company_name,
             "industry_keywords": industry_keywords,
@@ -3137,8 +3173,6 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
         "recipient": DIGEST_TO
     }
 
-ild_digest_html_with_cont
-
 def _format_article_html(article: Dict, category: str) -> str:
     """Format article HTML with AI analysis display"""
     import html
@@ -3440,8 +3474,10 @@ def admin_init(request: Request, body: InitRequest):
         return {"status": "error", "message": "OpenAI API key not configured"}
     
     results = []
+    LOG.info("=== INITIALIZATION STARTING ===")
+    
     for ticker in body.tickers:
-        LOG.info(f"Initializing ticker: {ticker}")
+        LOG.info(f"=== INITIALIZING TICKER: {ticker} ===")
         
         # Get or generate metadata with AI
         keywords = get_or_create_ticker_metadata(ticker, force_refresh=body.force_refresh)
@@ -3468,7 +3504,19 @@ def admin_init(request: Request, body: InitRequest):
                 "id": feed_id
             })
         
-        LOG.info(f"Created {len(feeds)} feeds for {ticker} (including Yahoo feeds)")
+        LOG.info(f"=== COMPLETED {ticker}: {len(feeds)} feeds created ===")
+    
+    # ADD SUMMARY LOGGING:
+    LOG.info("=== INITIALIZATION COMPLETE ===")
+    LOG.info("SUMMARY:")
+    for ticker in body.tickers:
+        ticker_feeds = [r for r in results if r['ticker'] == ticker]
+        company_feeds = len([f for f in ticker_feeds if f['category'] == 'company'])
+        industry_feeds = len([f for f in ticker_feeds if f['category'] == 'industry'])
+        competitor_feeds = len([f for f in ticker_feeds if f['category'] == 'competitor'])
+        
+        LOG.info(f"  {ticker}: {len(ticker_feeds)} total feeds")
+        LOG.info(f"    Company: {company_feeds}, Industry: {industry_feeds}, Competitor: {competitor_feeds}")
     
     return {
         "status": "initialized",
@@ -3493,6 +3541,10 @@ def cron_ingest(
     require_admin(request)
     ensure_schema()
     update_schema_for_content()
+    
+    LOG.info("=== CRON INGEST STARTING ===")
+    LOG.info(f"Processing window: {minutes} minutes")
+    LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
     # Get feeds for specified tickers
     with db() as conn, conn.cursor() as cur:
@@ -3525,8 +3577,20 @@ def cron_ingest(
         feeds = list(cur.fetchall())
     
     if not feeds:
+        LOG.warning("No active feeds found")
         return {"status": "no_feeds", "message": "No active feeds found for specified tickers"}
     
+    # ENHANCED FEED LOGGING
+    feeds_by_category = {"company": 0, "industry": 0, "competitor": 0}
+    for feed in feeds:
+        category = feed.get("category", "company")
+        feeds_by_category[category] += 1
+
+    LOG.info(f"=== FEEDS TO PROCESS: {len(feeds)} total ===")
+    LOG.info(f"  Company feeds: {feeds_by_category['company']}")  
+    LOG.info(f"  Industry feeds: {feeds_by_category['industry']}")
+    LOG.info(f"  Competitor feeds: {feeds_by_category['competitor']}")
+
     total_stats = {
         "feeds_processed": 0,
         "total_inserted": 0,
@@ -3556,8 +3620,19 @@ def cron_ingest(
         category = feed.get("category", "company")
         feeds_by_ticker[ticker][category].append(feed)
     
+    # Log ticker breakdown
+    LOG.info("=== FEEDS BY TICKER ===")
+    for ticker in feeds_by_ticker.keys():
+        ticker_feed_counts = {
+            "company": len(feeds_by_ticker[ticker]["company"]),
+            "industry": len(feeds_by_ticker[ticker]["industry"]), 
+            "competitor": len(feeds_by_ticker[ticker]["competitor"])
+        }
+        LOG.info(f"  {ticker}: Company={ticker_feed_counts['company']}, Industry={ticker_feed_counts['industry']}, Competitor={ticker_feed_counts['competitor']}")
+    
     # Load ticker metadata once
     ticker_metadata_cache = {}
+    LOG.info("=== LOADING TICKER METADATA ===")
     for ticker in feeds_by_ticker.keys():
         config = get_ticker_config(ticker)
         if config:
@@ -3565,15 +3640,19 @@ def cron_ingest(
                 "industry_keywords": config.get("industry_keywords", []),
                 "competitors": config.get("competitors", [])
             }
+            LOG.info(f"  {ticker}: {len(config.get('industry_keywords', []))} industry keywords, {len(config.get('competitors', []))} competitors")
         else:
-            LOG.warning(f"No stored metadata found for {ticker} - using empty keywords")
+            LOG.warning(f"  {ticker}: No stored metadata found - using empty keywords")
             ticker_metadata_cache[ticker] = {
                 "industry_keywords": [],
                 "competitors": []
             }
     
     # Process each ticker's feeds with limits
+    LOG.info("=== STARTING FEED PROCESSING ===")
     for ticker, ticker_feeds in feeds_by_ticker.items():
+        LOG.info(f"=== PROCESSING TICKER: {ticker} ===")
+        
         metadata = ticker_metadata_cache[ticker]
         ticker_stats = {
             "inserted": 0, 
@@ -3592,9 +3671,14 @@ def cron_ingest(
         competitor_ai_counts = {}  # Track per keyword
         
         # Process company feeds first (highest priority for AI)
+        if ticker_feeds["company"]:
+            LOG.info(f"  Processing {len(ticker_feeds['company'])} company feeds...")
+            
         for feed in ticker_feeds["company"]:
             enable_ai = company_ai_count < 20  # First 20 company articles get AI
             max_ai = 20 - company_ai_count if enable_ai else 0
+            
+            LOG.info(f"    Company Feed: {feed['name']} (AI: {'enabled' if enable_ai else 'disabled'}, max: {max_ai})")
             
             stats = ingest_feed_with_content_scraping(
                 feed=feed, 
@@ -3607,9 +3691,12 @@ def cron_ingest(
             company_ai_count += stats.get("ai_scored", 0)
             _update_ticker_stats(ticker_stats, total_stats, stats, "company")
             
-            LOG.info(f"Company feed processed: {feed['name']} - AI: {stats.get('ai_scored', 0)}, Basic: {stats.get('basic_scored', 0)}")
+            LOG.info(f"      Result: AI={stats.get('ai_scored', 0)}, Basic={stats.get('basic_scored', 0)}, Inserted={stats.get('inserted', 0)}")
         
         # Process industry feeds (5 per keyword)
+        if ticker_feeds["industry"]:
+            LOG.info(f"  Processing {len(ticker_feeds['industry'])} industry feeds...")
+            
         for feed in ticker_feeds["industry"]:
             keyword = feed.get("search_keyword", "default")
             
@@ -3618,6 +3705,8 @@ def cron_ingest(
             
             enable_ai = industry_ai_counts[keyword] < 5  # First 5 per industry keyword
             max_ai = 5 - industry_ai_counts[keyword] if enable_ai else 0
+            
+            LOG.info(f"    Industry Feed: {feed['name']} - Keyword: {keyword} (AI: {'enabled' if enable_ai else 'disabled'}, max: {max_ai})")
             
             stats = ingest_feed_with_content_scraping(
                 feed=feed,
@@ -3630,9 +3719,12 @@ def cron_ingest(
             industry_ai_counts[keyword] += stats.get("ai_scored", 0)
             _update_ticker_stats(ticker_stats, total_stats, stats, "industry")
             
-            LOG.info(f"Industry feed processed: {feed['name']} ({keyword}) - AI: {stats.get('ai_scored', 0)}, Basic: {stats.get('basic_scored', 0)}")
+            LOG.info(f"      Result: AI={stats.get('ai_scored', 0)}, Basic={stats.get('basic_scored', 0)}, Inserted={stats.get('inserted', 0)}")
         
         # Process competitor feeds (5 per competitor)
+        if ticker_feeds["competitor"]:
+            LOG.info(f"  Processing {len(ticker_feeds['competitor'])} competitor feeds...")
+            
         for feed in ticker_feeds["competitor"]:
             keyword = feed.get("search_keyword", "default")
             
@@ -3641,6 +3733,8 @@ def cron_ingest(
             
             enable_ai = competitor_ai_counts[keyword] < 5  # First 5 per competitor
             max_ai = 5 - competitor_ai_counts[keyword] if enable_ai else 0
+            
+            LOG.info(f"    Competitor Feed: {feed['name']} - Keyword: {keyword} (AI: {'enabled' if enable_ai else 'disabled'}, max: {max_ai})")
             
             stats = ingest_feed_with_content_scraping(
                 feed=feed,
@@ -3653,12 +3747,17 @@ def cron_ingest(
             competitor_ai_counts[keyword] += stats.get("ai_scored", 0)
             _update_ticker_stats(ticker_stats, total_stats, stats, "competitor")
             
-            LOG.info(f"Competitor feed processed: {feed['name']} ({keyword}) - AI: {stats.get('ai_scored', 0)}, Basic: {stats.get('basic_scored', 0)}")
+            LOG.info(f"      Result: AI={stats.get('ai_scored', 0)}, Basic={stats.get('basic_scored', 0)}, Inserted={stats.get('inserted', 0)}")
         
         total_stats["by_ticker"][ticker] = ticker_stats
-        LOG.info(f"Ticker {ticker} complete - Total AI: {ticker_stats['ai_scored']}, Total Basic: {ticker_stats['basic_scored']}")
+        LOG.info(f"=== TICKER {ticker} COMPLETE ===")
+        LOG.info(f"  Total AI Processed: {ticker_stats['ai_scored']}")
+        LOG.info(f"  Total Basic Processed: {ticker_stats['basic_scored']}")
+        LOG.info(f"  Total Articles Inserted: {ticker_stats['inserted']}")
+        LOG.info(f"  Content Scraped: {ticker_stats['content_scraped']}")
     
     # Clean old articles
+    LOG.info("=== CLEANING OLD ARTICLES ===")
     cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
     with db() as conn, conn.cursor() as cur:
         if tickers:
@@ -3668,12 +3767,23 @@ def cron_ingest(
         deleted = cur.rowcount
     
     total_stats["old_articles_deleted"] = deleted
+    LOG.info(f"Deleted {deleted} old articles (older than {DEFAULT_RETAIN_DAYS} days)")
+    
     total_stats["optimization_summary"] = {
         "ai_processed_articles": total_stats["total_ai_scored"],
         "basic_processed_articles": total_stats["total_basic_scored"],
         "content_analysis_rate": f"{total_stats['total_content_scraped']}/{total_stats['total_ai_scored']}" if total_stats['total_ai_scored'] > 0 else "0/0",
         "processing_mode": "Selective AI (Company: 20, Industry: 5/keyword, Competitor: 5/keyword)"
     }
+    
+    LOG.info("=== CRON INGEST COMPLETE ===")
+    LOG.info(f"FINAL SUMMARY:")
+    LOG.info(f"  Feeds Processed: {total_stats['feeds_processed']}")
+    LOG.info(f"  Articles Inserted: {total_stats['total_inserted']}")
+    LOG.info(f"  AI Analyzed: {total_stats['total_ai_scored']}")
+    LOG.info(f"  Basic Processed: {total_stats['total_basic_scored']}")
+    LOG.info(f"  Content Scraped: {total_stats['total_content_scraped']}")
+    LOG.info(f"  Processing Efficiency: {total_stats['total_ai_scored']}AI + {total_stats['total_basic_scored']}Basic = {total_stats['total_ai_scored'] + total_stats['total_basic_scored']} total processed")
     
     return total_stats
 

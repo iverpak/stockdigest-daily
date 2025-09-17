@@ -392,6 +392,8 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_quality_score ON found_url(quality_score);
             """)
 
+    update_schema_for_enhanced_metadata()
+
 # Add these fields to your database schema
 def update_schema_for_content():
     """Add content scraping fields to found_url table"""
@@ -402,6 +404,18 @@ def update_schema_for_content():
             ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
             ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
         """)
+
+def update_schema_for_enhanced_metadata():
+    """Add enhanced metadata fields to ticker_config table"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS sector VARCHAR(255);
+            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS industry VARCHAR(255);
+            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS sub_industry VARCHAR(255);
+            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS sector_profile JSONB;
+            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS aliases_brands_assets JSONB;
+        """)
+
 
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -1795,15 +1809,26 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     
     return max(10.0, min(90.0, base_score))
 
-def generate_ai_summary(scraped_content: str, title: str, ticker: str) -> Optional[str]:
-    """Generate hedge fund analyst summary from scraped content"""
+def generate_ai_summary(scraped_content: str, title: str, ticker: str, description: str = "") -> Optional[str]:
+    """Generate hedge fund analyst summary from scraped content using enhanced prompt"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
     
     try:
-        prompt = f"""As a hedge fund analyst, write a 3-5 sentence summary of this article about {ticker}. Focus on key financial implications, market impact, and investment considerations. Be concise and analytical.
+        prompt = f"""As a hedge-fund analyst, summarize the article about {ticker} in 3-5 sentences.
 
-Article: {scraped_content[:2000]}"""  # Limit content to avoid token limits
+Use this decision logic:
+1) Source text = scraped_content.
+2) Extract: (a) WHAT happened (entity + action), (b) MAGNITUDE (only numbers actually present: EPS/rev/%, $ capex, units/capacity, price moves, dates), (c) WHY it matters (cost/price/volume/regulatory effect), (d) TIMING/CATALYSTS (deadlines, commissioning, votes, guidance dates), (e) NET TAKEAWAY (implication for economics/positioning).
+3) If text is PR/opinion/preview or lacks hard numbers, state that plainly and keep to verifiable facts.
+4) Do not invent data or compare to prior periods unless stated. No recommendations.
+
+Write 3-5 sentences, crisp and factual.
+
+ticker: {ticker}
+title: {title}
+description_snippet: {description[:500] if description else ""}
+scraped_content: {scraped_content[:2000]}"""
 
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -1825,7 +1850,7 @@ Article: {scraped_content[:2000]}"""  # Limit content to avoid token limits
         if response.status_code == 200:
             result = response.json()
             summary = result["choices"][0]["message"]["content"].strip()
-            LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars")
+            LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
             return summary
         else:
             LOG.warning(f"AI summary failed: {response.status_code}")
@@ -1949,10 +1974,18 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str, tic
     return search_keyword
 
 def _ai_quality_score_company_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
-    """AI-powered component extraction for company articles - returns components for our calculation"""
+    """Enhanced AI-powered component extraction for company articles"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
+    
+    # Get enhanced metadata for this ticker if available
+    config = get_ticker_config(ticker)
+    company_name = config.get("name", ticker) if config else ticker
+    
+    # Build brand alias regex if we have enhanced metadata stored
+    brand_alias_regex = ""
+    # This would be populated from the enhanced metadata if stored
     
     schema = {
         "name": "company_news_components",
@@ -1960,74 +1993,98 @@ def _ai_quality_score_company_components(title: str, domain: str, ticker: str, d
         "schema": {
             "type": "object",
             "properties": {
-                "source_tier_input": {"type": "number"},
-                "event_multiplier": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+                "event_multiplier": {"type": "number", "minimum": 0.5, "maximum": 2.0},
                 "event_multiplier_reason": {"type": "string"},
-                "relevance_boost": {"type": "number", "minimum": 0.5, "maximum": 1.5},
+                "relevance_boost": {"type": "number", "minimum": 1.0, "maximum": 1.3},
                 "relevance_boost_reason": {"type": "string"},
-                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                "penalty_multiplier": {"type": "number", "minimum": 0.1, "maximum": 1.0},
+                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 0.4},
+                "penalty_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.0},
                 "penalty_reason": {"type": "string"},
-                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
-                "reason_short": {"type": "string"}
+                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Neutral"]},
+                "reason_short": {"type": "string"},
+                "debug_tags": {"type": "array", "items": {"type": "string"}}
             },
-            "required": ["source_tier_input", "event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short"],
+            "required": ["event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short", "debug_tags"],
             "additionalProperties": False
         }
     }
     
-    system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-Analyze the article and provide ONLY the scoring components. Do NOT calculate the final score.
+    system_prompt = f"""You are a hedge-fund news scorer for COMPANY context affecting {company_name}. Base ALL judgments ONLY on title and description_snippet. Do NOT compute a final score. Return STRICT JSON exactly as specified.
 
 INPUTS PROVIDED:
-- source_tier = {source_tier} (already calculated - use this exact value)
+- bucket = "company_news"
+- company_ticker = "{ticker}"
+- company_name = "{company_name}"
 - title = "{title}"
-- description = "{desc_snippet}"
-- company = {ticker}
+- description_snippet = "{desc_snippet}"
+- source_tier = {source_tier} (already calculated)
 
-PROVIDE THESE COMPONENTS:
+GENERAL RELEVANCE FACTORS (APPLY IN ORDER; USE FIRST MATCH):
+- 1.3 Direct company match: title/desc matches ticker/company_name OR a named asset/subsidiary unique to the firm.
+- 1.2 First-order exposure: named counterparty contract/customer/supplier that binds economics to the firm (with $$, units, volumes, pricing, or %, OR a named regulator decision on the firm).
+- 1.1 Second-order but specific: sector/policy/benchmark/geography explicitly tied to the firm's core inputs/channels/geos.
+- 1.0 Vague/off-sector: generic market commentary, far geographies, or missing a clear tie to firm economics.
 
-source_tier_input: Use exactly {source_tier} (provided)
+EVENT MULTIPLIER (PICK ONE):
+- 2.0 Hard corporate actions: M&A (acquires/divests/spin), bankruptcy/Chapter 11, delist/halt/recall, large asset closure, definitive regulatory fines/settlements with $.
+- 1.8 Capital actions: major buyback start/upsizing, dividend initiation/meaningful change, debt/equity issuance, rating change with outlook.
+- 1.6 Binding regulatory/procedural decisions affecting the company (approval/denial, tariff specific to the firm).
+- 1.5 Signed commercial contracts/backlog/LOIs with named counterparties and $$ or units.
+- 1.4 Earnings/guidance (scheduled reports, pre-announcements) with numbers.
+- 1.2-1.1 Management changes, product launches without numbers, notable partnerships w/o $$.
+- 1.0 Miscellaneous updates with unclear financial impact.
+- 0.9 Institutional flows (13F, small stake changes) with no activism/merger intent.
+- 0.6 Price-move explainers/recaps/opinion/education; previews with no new facts.
+- 0.5 Routine PR (awards, CSR, conference attendance) with no economic detail.
 
-event_multiplier (choose ONE that best fits title+description):
-2.0 = halt/shut/delist/recall/probed/sues/settles/guides/cuts/raises/acquires/divests/spin-off
-1.6 = regulatory/policy directly affecting {ticker}
-1.5 = contracts/commitments/backlog announcements for {ticker}
-1.4 = earnings/guidance releases for {ticker}
-1.1 = analyst rating/price-target changes for {ticker}
-0.6 = opinion/education pieces about {ticker}
-0.5 = routine PR announcements from {ticker}
+NUMERIC BONUS (COMPANY) --- CAP = +0.40:
+- +0.20 Per clearly material FINANCIAL figure (EPS, revenue, margin, FCF, capex, buyback $, guidance delta, unit/capacity adds/cuts) that is NEW in this item (max 2 such adds).
+- +0.10 Additional supporting numeric detail (mix, ASP, utilization, backlog change) that ties to economics.
+- +0.00 Trivial counts (e.g., "added 879 shares"), headcounts, vague % with no base.
 
-relevance_boost:
-1.3 = if title/description clearly mentions {ticker}, "Vistra", or {ticker}'s specific assets/operations
-1.0 = if {ticker} not directly mentioned or unclear relevance
+PENALTIES (COMPANY):
+- 0.5 PR/sponsored/marketing tone or PR domains; "market size will reach ... CAGR ..."
+- 0.6 Question/listicle/prediction ("Top X...", "Should you...", "What to watch")
+- 1.0 Otherwise
 
-numeric_bonus: +0.1 for each concrete number in title+description (%, $, MW figures), max +0.3
+IMPACT DIRECTION (COMPANY):
+- Positive: beats/raises; upgrades; accretive deals; favorable rulings; capacity adds with demand.
+- Negative: misses/cuts; downgrades; dilutive raises; adverse rulings; closures/recalls.
+- Mixed: e.g., guide up YoY but down QoQ; cost up but price up; EPS beat on lower quality.
+- Neutral: minor 10b5-1 sales (<5% holdings), routine housekeeping, ceremonial PR.
 
-penalty_multiplier (check title+description):
-0.6 = if question/listicle/prediction format
-0.5 = if PR-ish announcements
-1.0 = otherwise
+DEFENSIVE CLAMPS (ALWAYS APPLY):
+- If title indicates price-move recap without concrete action → event=0.6; numeric_bonus=0.
+- If 13F/holding tweaks only → event=0.9; numeric_bonus=0.
+- If "Rule 10b5-1" and <5% of reported holdings → event ≤1.1; impact=Neutral.
+- If data insufficient (no event keywords & no numbers) → event ≤1.1; numeric_bonus=0.
 
-Provide impact_on_main based on shareholder impact, reason_short ≤140 chars.
-DO NOT calculate any scores - just provide the components."""
+RETURN STRICT JSON ONLY."""
 
     user_payload = {
         "bucket": "company_news",
         "company_ticker": ticker,
+        "company_name": company_name,
         "title": title,
         "description_snippet": desc_snippet,
-        "source_tier": source_tier,
-        "keywords": keywords or []
+        "source_tier": source_tier
     }
     
     return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
 
 def _ai_quality_score_industry_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
-    """AI-powered component extraction for industry articles"""
+    """Enhanced AI-powered component extraction for industry articles"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
+    
+    # Get enhanced metadata for this ticker if available
+    config = get_ticker_config(ticker)
+    company_name = config.get("name", ticker) if config else ticker
+    
+    # Build sector profile if we have enhanced metadata
+    sector_profile = {}
+    # This would be populated from enhanced metadata if stored
     
     schema = {
         "name": "industry_market_components",
@@ -2035,73 +2092,98 @@ def _ai_quality_score_industry_components(title: str, domain: str, ticker: str, 
         "schema": {
             "type": "object",
             "properties": {
-                "source_tier_input": {"type": "number"},
-                "event_multiplier": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+                "event_multiplier": {"type": "number", "minimum": 0.6, "maximum": 1.6},
                 "event_multiplier_reason": {"type": "string"},
-                "relevance_boost": {"type": "number", "minimum": 0.5, "maximum": 1.5},
+                "relevance_boost": {"type": "number", "minimum": 1.0, "maximum": 1.2},
                 "relevance_boost_reason": {"type": "string"},
-                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                "penalty_multiplier": {"type": "number", "minimum": 0.1, "maximum": 1.0},
+                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 0.3},
+                "penalty_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.0},
                 "penalty_reason": {"type": "string"},
-                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
-                "reason_short": {"type": "string"}
+                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Neutral"]},
+                "reason_short": {"type": "string"},
+                "debug_tags": {"type": "array", "items": {"type": "string"}}
             },
-            "required": ["source_tier_input", "event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short"],
+            "required": ["event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short", "debug_tags"],
             "additionalProperties": False
         }
     }
     
-    system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-Analyze the article and provide ONLY the scoring components. Do NOT calculate the final score.
+    system_prompt = f"""You are a hedge-fund news scorer for INDUSTRY context affecting {company_name}. Base ALL judgments ONLY on title and description_snippet. Do NOT compute a final score. Return STRICT JSON exactly as specified.
 
 INPUTS PROVIDED:
-- source_tier = {source_tier} (already calculated - use this exact value)
+- bucket = "industry_market"
+- target_company_ticker = "{ticker}"
+- company_name = "{company_name}"
 - title = "{title}"
-- description = "{desc_snippet}"
-- target_company = {ticker} (energy utility)
+- description_snippet = "{desc_snippet}"
 - industry_keywords = {keywords or []}
+- sector_profile = {sector_profile}
 
-PROVIDE THESE COMPONENTS:
+GENERAL RELEVANCE FACTORS (INDUSTRY):
+- 1.2 Article explicitly mentions any of sector_profile.core_inputs / benchmarks / core_geos / core_channels in a way that clearly affects sector economics (cost, price, availability, demand).
+- 1.1 Sector-matching but adjacent geo/channel (e.g., EU policy for US-centric firm) or early-stage proposals with plausible path to effect.
+- 1.0 Generic macro/sustainability platitudes or unrelated sub-sector news.
 
-source_tier_input: Use exactly {source_tier} (provided)
+EVENT MULTIPLIER (INDUSTRY):
+- 1.6 Enacted policy/regulation with effective dates/geos (tariffs, standards, reimbursement, safety/emissions rules) that shape sector economics.
+- 1.5 Input/commodity/benchmark supply-demand or price shocks tied to core_inputs/benchmarks (e.g., ore/energy shortage, index spike), or infrastructure funding passed.
+- 1.4 Ecosystem capacity/capex/standardization (new mills/lines, grid or logistics expansions, standards adoption) with implications for cost/throughput.
+- 1.1 Reputable research/indices (PMI sub-indices, monthly production, government stats) directly relevant.
+- 1.0 Sector commentary without new data.
+- 0.6 Market-size/vendor marketing/CSR with no quantified economics.
 
-event_multiplier (choose ONE that best fits title+description):
-1.6 = policy/regulation shaping sector economics (energy policy, utility regulations, grid standards)
-1.5 = commodity/input supply-demand changes (natural gas prices, coal supply, renewable capacity)
-1.4 = large ecosystem deals/capex/standards (major power plant construction, grid infrastructure, energy storage)
-1.1 = research/indices (energy sector reports, utility performance studies)
-0.6 = PR/market-size advertisements (industry growth predictions, market reports)
+NUMERIC BONUS (INDUSTRY) --- CAP = +0.30:
+- +0.15 Clear magnitude on policy/price/capacity (e.g., tariff %; index +X%; capacity +Y units; capex $ with commissioning date).
+- +0.10 Secondary corroboration (inventory days, utilization, lead times).
+- +0.05 Concrete effective date/time-to-impact (e.g., "effective Jan 1, 2026").
+- +0.00 Vague "billions by 2030" TAM claims without sources/method.
 
-relevance_boost (examine title+description+keywords):
-1.1 = if energy/utility sector topic clearly relates to {ticker}'s business (power generation, energy markets, utility operations)
-1.0 = if topic seems unrelated to energy utilities or too general
+PENALTIES (INDUSTRY):
+- 0.5 Vendor PR/marketing puff or TAM-CAGR boilerplate.
+- 0.6 Opinion/listicle/forecast pieces without cited data.
+- 1.0 Otherwise.
 
-numeric_bonus: +0.1 for each concrete number in title+description (%, $, MW, capacity figures), max +0.3
+IMPACT DIRECTION (ON TARGET COMPANY):
+- Positive: inputs down; favorable tariffs/subsidies; demand-side stimulus in core channels; supportive benchmark moves.
+- Negative: inputs up/shortages; adverse tariffs/quotas; regulatory burdens increasing costs; unfavorable benchmark shifts.
+- Mixed: opposing forces (e.g., input up but prices up).
+- Neutral: data points not yet directional.
 
-penalty_multiplier (check title+description):
-0.6 = if question/listicle/prediction format ("Should you...", "Best...", "Top...", "Will X happen?")
-0.5 = if PR-ish ("announces expansion", "market size expected to grow", "unveils breakthrough")
-1.0 = otherwise
+DEFENSIVE CLAMPS:
+- If core_inputs/benchmarks/geos/channels not mentioned and no numbers → relevance=1.0; event ≤1.0; numeric_bonus=0.
+- Title/desc only: cap numeric_bonus at +0.20; require explicit units/%/$ to award any bonus.
 
-Provide impact_on_main based on implications for {ticker}, reason_short ≤140 chars.
-DO NOT calculate any scores - just provide the components."""
+RETURN STRICT JSON ONLY."""
 
     user_payload = {
         "bucket": "industry_market",
         "target_company_ticker": ticker,
         "title": title,
         "description_snippet": desc_snippet,
-        "source_tier": source_tier,
-        "industry_keywords": keywords or []
+        "industry_keywords": keywords or [],
+        "sector_profile": sector_profile
     }
     
     return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
 
 def _ai_quality_score_competitor_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
-    """AI-powered component extraction for competitor articles"""
+    """Enhanced AI-powered component extraction for competitor articles"""
     
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
+    
+    # Get enhanced metadata for this ticker if available
+    config = get_ticker_config(ticker)
+    company_name = config.get("name", ticker) if config else ticker
+    
+    # Build competitor whitelist from stored metadata
+    competitor_whitelist = []
+    if config and config.get("competitors"):
+        for comp_str in config["competitors"]:
+            # Extract ticker from "Name (TICKER)" format
+            match = re.search(r'\(([A-Z]{1,5})\)', comp_str)
+            if match:
+                competitor_whitelist.append(match.group(1))
     
     schema = {
         "name": "competitor_intel_components",
@@ -2109,64 +2191,75 @@ def _ai_quality_score_competitor_components(title: str, domain: str, ticker: str
         "schema": {
             "type": "object",
             "properties": {
-                "source_tier_input": {"type": "number"},
-                "event_multiplier": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+                "event_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.7},
                 "event_multiplier_reason": {"type": "string"},
-                "relevance_boost": {"type": "number", "minimum": 0.5, "maximum": 1.5},
+                "relevance_boost": {"type": "number", "minimum": 1.0, "maximum": 1.2},
                 "relevance_boost_reason": {"type": "string"},
-                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                "penalty_multiplier": {"type": "number", "minimum": 0.1, "maximum": 1.0},
+                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 0.35},
+                "penalty_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.0},
                 "penalty_reason": {"type": "string"},
-                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Unclear"]},
-                "reason_short": {"type": "string"}
+                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Neutral"]},
+                "reason_short": {"type": "string"},
+                "debug_tags": {"type": "array", "items": {"type": "string"}}
             },
-            "required": ["source_tier_input", "event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short"],
+            "required": ["event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short", "debug_tags"],
             "additionalProperties": False
         }
     }
     
-    system_prompt = f"""You are a hedge-fund news scorer. Return strict JSON ONLY (no prose).
-Analyze the article and provide ONLY the scoring components. Do NOT calculate the final score.
+    system_prompt = f"""You are a hedge-fund news scorer for COMPETITIVE intelligence affecting {company_name}. Base ALL judgments ONLY on title and description_snippet. Do NOT compute a final score. Return STRICT JSON exactly as specified.
 
 INPUTS PROVIDED:
-- source_tier = {source_tier} (already calculated - use this exact value)
+- bucket = "competitor_intel"
+- target_company_ticker = "{ticker}"
+- company_name = "{company_name}"
 - title = "{title}"
-- description = "{desc_snippet}"
-- target_company = {ticker}
-- competitors = {keywords or []}
+- description_snippet = "{desc_snippet}"
+- competitor_whitelist = {competitor_whitelist}
 
-PROVIDE THESE COMPONENTS:
+GENERAL RELEVANCE FACTORS (COMPETITOR):
+- 1.2 The SUBJECT of the article is in competitor_whitelist AND explicit competitive implications are stated (price/capacity/share/customer win/loss).
+- 1.1 Close adjacent peer (same sub-industry) with explicit implications, but not in whitelist.
+- 1.0 Vague peer reference, editorial/preview, or off-universe.
 
-source_tier_input: Use exactly {source_tier} (provided)
+EVENT MULTIPLIER (COMPETITOR):
+- 1.7 Rival hard events likely to shift share/price: M&A, major capacity adds/cuts, price hikes/cuts, plant shutdown/curtailment, large customer win/loss with $$.
+- 1.6 Capital structure stress/advantage: punitive refi, large equity raise, rating cut to HY, covenant issues; or major cost advantage emergence.
+- 1.4 Rival guidance with numbers, product/pricing launch with explicit $$/units, meaningful opex/capex changes.
+- 1.1 Management changes or announcements without tangible economics.
+- 1.0 Miscellaneous/unclear impact on competitive landscape.
+- 0.9 Holdings/13F flows about the peer (non-activist).
+- 0.6 Opinion/preview/"why it moved" without new facts.
+- 0.5 Routine PR by the peer with no economics.
 
-event_multiplier (choose ONE that best fits title+description):
-1.7 = rival hard events (M&A, delist, shutdown, major pricing moves by competitors)
-1.6 = rival capital structure/asset sales that affect competitive positioning
-1.4 = rival product launches/pricing changes/strategic moves
-0.9 = institutional holdings changes (13F filings, fund movements)
-0.6 = opinion pieces about competitors
+NUMERIC BONUS (COMPETITOR) --- CAP = +0.35:
+- +0.20 Concrete economics: announced capacity (units/Mt/MW), explicit price change %, contract value, guide deltas that plausibly affect the target company's market.
+- +0.10 Secondary figures (utilization, mix, input cost changes) that inform rivalry economics.
+- +0.00 Trivial numbers (share counts, social metrics).
 
-relevance_boost:
-1.2 = if a clear {ticker} competitor is the subject and competitive implications are obvious
-1.0 = if competitor connection unclear or implications for {ticker} are vague
+PENALTIES (COMPETITOR):
+- 0.5 Press release/sponsored content or vendor marketing.
+- 0.6 Question/listicle/preview framing.
+- 1.0 Otherwise.
 
-numeric_bonus: +0.1 for each concrete number in title+description (%, $, capacity figures), max +0.3
+IMPACT DIRECTION (ON TARGET COMPANY):
+- Positive: rival capacity cuts/outages; rival distress; rival price increases; loss of a key customer by the rival that the target might win.
+- Negative: rival capacity adds; under-cut pricing; rival wins a key customer from target; rival cost breakthrough.
+- Mixed: simultaneous adds and shutdowns, or price up but input costs fall for both.
+- Neutral: editorial notes, small sponsorships, or ambiguous previews.
 
-penalty_multiplier (check title+description):
-0.6 = if question/listicle/prediction format
-0.5 = if PR-ish announcements
-1.0 = otherwise
+DEFENSIVE CLAMPS:
+- If the subject company is NOT a plausible peer (fails whitelist and not same sub-industry) → relevance=1.0; event ≤1.1; numeric_bonus=0.
+- If only title/desc and no concrete economics → event ≤1.1; numeric_bonus=0.
 
-Provide impact_on_main based on competitive implications for {ticker}, reason_short ≤140 chars.
-DO NOT calculate any scores - just provide the components."""
+RETURN STRICT JSON ONLY."""
 
     user_payload = {
         "bucket": "competitor_intel",
         "target_company_ticker": ticker,
         "title": title,
         "description_snippet": desc_snippet,
-        "source_tier": source_tier,
-        "competitor_context": keywords or []
+        "competitor_whitelist": competitor_whitelist
     }
     
     return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
@@ -2841,40 +2934,12 @@ feed_manager = FeedManager()
 class TickerManager:
     @staticmethod
     def get_or_create_metadata(ticker: str, force_refresh: bool = False) -> Dict:
-        """Unified ticker metadata management"""
-        # Check database first
-        if not force_refresh:
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT ticker, name, industry_keywords, competitors, ai_generated
-                    FROM ticker_config WHERE ticker = %s AND active = TRUE
-                """, (ticker,))
-                config = cur.fetchone()
-                
-                if config:
-                    # Process competitors back to structured format
-                    competitors = []
-                    for comp_str in config.get("competitors", []):
-                        match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
-                        if match:
-                            competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
-                        else:
-                            competitors.append({"name": comp_str, "ticker": None})
-                    
-                    return {
-                        "company_name": config.get("name", ticker),
-                        "industry_keywords": config.get("industry_keywords", []),
-                        "competitors": competitors
-                    }
-        
-        # Generate with AI
-        ai_metadata = generate_ticker_metadata_with_ai(ticker)
-        TickerManager.store_metadata(ticker, ai_metadata)
-        return ai_metadata
+        # Keep your existing get_or_create_metadata method unchanged
+        # ... existing code ...
     
     @staticmethod
     def store_metadata(ticker: str, metadata: Dict):
-        """Store ticker metadata in database"""
+        """Store enhanced ticker metadata in database"""
         # Convert competitors to storage format
         competitors_for_db = []
         for comp in metadata.get("competitors", []):
@@ -2888,39 +2953,73 @@ class TickerManager:
         
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO ticker_config (ticker, name, industry_keywords, competitors, ai_generated)
-                VALUES (%s, %s, %s, %s, TRUE)
+                INSERT INTO ticker_config (
+                    ticker, name, industry_keywords, competitors, ai_generated,
+                    sector, industry, sub_industry, sector_profile, aliases_brands_assets
+                ) VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s)
                 ON CONFLICT (ticker) DO UPDATE
-                SET name = EXCLUDED.name, industry_keywords = EXCLUDED.industry_keywords,
-                    competitors = EXCLUDED.competitors, updated_at = NOW()
+                SET name = EXCLUDED.name, 
+                    industry_keywords = EXCLUDED.industry_keywords,
+                    competitors = EXCLUDED.competitors, 
+                    sector = EXCLUDED.sector,
+                    industry = EXCLUDED.industry,
+                    sub_industry = EXCLUDED.sub_industry,
+                    sector_profile = EXCLUDED.sector_profile,
+                    aliases_brands_assets = EXCLUDED.aliases_brands_assets,
+                    updated_at = NOW()
             """, (
-                ticker, metadata.get("company_name", ticker),
-                metadata.get("industry_keywords", []), competitors_for_db
+                ticker, 
+                metadata.get("company_name", ticker),
+                metadata.get("industry_keywords", []), 
+                competitors_for_db,
+                metadata.get("sector", ""),
+                metadata.get("industry", ""),
+                metadata.get("sub_industry", ""),
+                json.dumps(metadata.get("sector_profile", {})),
+                json.dumps(metadata.get("aliases_brands_assets", {}))
             ))
 
-# Global instance  
-ticker_manager = TickerManager()
-
 def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, Any]:
-    """Streamlined AI metadata generation with single API call"""
+    """Enhanced AI metadata generation with sector profile and aliases"""
     if not OPENAI_API_KEY:
         LOG.error("OpenAI API key not configured")
         return {"industry_keywords": [], "competitors": [], "company_name": ticker}
 
-    prompt = f"""For stock ticker "{ticker}", provide:
-1. Full company name (without Inc/Corp unless critical)
-2. Five specific industry keywords (2-3 words each, avoid generic terms)
-3. Three direct public competitors with tickers
+    prompt = f"""You are a financial analyst. Return STRICT JSON ONLY.
 
-JSON format:
+For stock ticker "{ticker}":
+
+1) Confirm the company and provide sector context and peers.
+2) Output fields exactly as below. Avoid generic terms. Prefer GICS-style naming.
+3) Peers MUST be public, primarily competing in the same core business.
+4) Add sector_profile so Industry routing can reason about inputs/channels/geos/benchmarks.
+5) Add aliases/brands/assets for better Company relevance.
+6) Include confidence fields to allow post-run validation.
+
+JSON schema to return:
 {{
     "company_name": "Company Name",
-    "industry_keywords": ["Keyword1", "Keyword2", "Keyword3", "Keyword4", "Keyword5"],
+    "ticker": "{ticker}",
+    "sector": "GICS Sector", 
+    "industry": "GICS Industry",
+    "sub_industry": "GICS Sub-Industry",
+    "industry_keywords": ["2-3 word term", "...", "...", "...", "..."],
     "competitors": [
-        {{"name": "Competitor 1", "ticker": "TICK1"}},
-        {{"name": "Competitor 2", "ticker": "TICK2"}},
-        {{"name": "Competitor 3", "ticker": "TICK3"}}
-    ]
+        {{"name": "Competitor 1", "ticker": "TICK1", "confidence": 0.9}},
+        {{"name": "Competitor 2", "ticker": "TICK2", "confidence": 0.8}},
+        {{"name": "Competitor 3", "ticker": "TICK3", "confidence": 0.7}}
+    ],
+    "sector_profile": {{
+        "core_inputs": ["commodity/input", "key cost driver", "..."],
+        "core_channels": ["end-market channel 1", "end-market 2"],
+        "core_geos": ["primary region(s) of ops/sales"],
+        "benchmarks": ["index/benchmark used in pricing or regulation"]
+    }},
+    "aliases_brands_assets": {{
+        "aliases": ["legal DBA", "common shortened names"],
+        "brands": ["notable product lines/brands"], 
+        "assets": ["plants/facilities/major projects if named"]
+    }}
 }}"""
 
     try:
@@ -2935,11 +3034,11 @@ JSON format:
                 {"role": "system", "content": "You are a financial analyst. Provide accurate stock information in valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 200,
+            "max_tokens": 400,
             "response_format": {"type": "json_object"}
         }
 
-        LOG.info(f"Generating metadata for {ticker} with single AI call")
+        LOG.info(f"Generating enhanced metadata for {ticker} with single AI call")
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
         
         if response.status_code != 200:
@@ -2950,7 +3049,7 @@ JSON format:
         content = result["choices"][0]["message"]["content"]
         metadata = json.loads(content)
         
-        # Validate and clean data
+        # Validate and clean data - keep existing format for compatibility
         company_name = metadata.get("company_name", ticker)
         industry_keywords = [kw.title() for kw in metadata.get("industry_keywords", [])[:5]]
         competitors = []
@@ -2958,29 +3057,49 @@ JSON format:
         for comp in metadata.get("competitors", [])[:3]:
             if isinstance(comp, dict) and comp.get("name") and comp.get("ticker"):
                 if comp["ticker"].upper() != ticker.upper():  # Prevent self-reference
-                    competitors.append(comp)
+                    competitors.append({
+                        "name": comp["name"],
+                        "ticker": comp["ticker"],
+                        "confidence": comp.get("confidence", 0.8)
+                    })
+        
+        # Store enhanced metadata in a way that's backward compatible
+        enhanced_metadata = {
+            "company_name": company_name,
+            "industry_keywords": industry_keywords,
+            "competitors": competitors,
+            # New enhanced fields
+            "sector_profile": metadata.get("sector_profile", {}),
+            "aliases_brands_assets": metadata.get("aliases_brands_assets", {}),
+            "sector": metadata.get("sector", ""),
+            "industry": metadata.get("industry", ""),
+            "sub_industry": metadata.get("sub_industry", "")
+        }
         
         # ENHANCED LOGGING
-        LOG.info(f"=== AI METADATA GENERATED for {ticker} ===")
+        LOG.info(f"=== ENHANCED AI METADATA GENERATED for {ticker} ===")
         LOG.info(f"Company Name: {company_name}")
+        LOG.info(f"Sector: {metadata.get('sector', 'N/A')}")
         LOG.info(f"Industry Keywords ({len(industry_keywords)}):")
         for i, keyword in enumerate(industry_keywords, 1):
             LOG.info(f"  {i}. {keyword}")
         
         LOG.info(f"Competitors ({len(competitors)}):")
         for i, comp in enumerate(competitors, 1):
-            LOG.info(f"  {i}. {comp['name']} ({comp['ticker']})")
+            LOG.info(f"  {i}. {comp['name']} ({comp['ticker']}) - Confidence: {comp.get('confidence', 0.8)}")
         
-        if len(competitors) < 3:
-            LOG.warning(f"Only {len(competitors)} valid competitors found for {ticker}")
+        # Log enhanced fields
+        sector_profile = metadata.get("sector_profile", {})
+        if sector_profile:
+            LOG.info(f"Sector Profile:")
+            LOG.info(f"  Core Inputs: {sector_profile.get('core_inputs', [])}")
+            LOG.info(f"  Core Channels: {sector_profile.get('core_channels', [])}")
+            LOG.info(f"  Core Geos: {sector_profile.get('core_geos', [])}")
+            LOG.info(f"  Benchmarks: {sector_profile.get('benchmarks', [])}")
         
-        LOG.info(f"=== METADATA COMPLETE for {ticker} ===")
+        LOG.info(f"=== ENHANCED METADATA COMPLETE for {ticker} ===")
         
-        return {
-            "company_name": company_name,
-            "industry_keywords": industry_keywords,
-            "competitors": competitors
-        }
+        return enhanced_metadata
 
     except Exception as e:
         LOG.error(f"AI metadata generation failed for {ticker}: {e}")

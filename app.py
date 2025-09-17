@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set
 from contextlib import contextmanager
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 import newspaper
 from newspaper import Article
@@ -3447,7 +3447,7 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
                     f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
                     f.source_tier, f.event_multiplier, f.event_multiplier_reason,
                     f.relevance_boost, f.relevance_boost_reason, f.numeric_bonus,
-                    f.penalty_multiplier, f.penalty_reason, f.competitor_ticker
+                    f.penalty_multiplier, f.penalty_reason
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -3824,7 +3824,7 @@ def admin_init(request: Request, body: InitRequest):
         keywords = get_or_create_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
         # Build feed URLs for all categories - will check existing counts and only create what's needed
-        feeds = feed_manager.create_feeds_for_ticker(ticker, keywords)
+        feeds = feed_manager.(ticker, keywords)
         
         if not feeds:
             LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")

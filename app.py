@@ -996,23 +996,27 @@ def _update_scraping_stats(category: str, keyword: str, success: bool):
     if success:
         scraping_stats["successful_scrapes"] += 1
         
+        # Calculate overall success rate
+        total_attempts = scraping_stats["successful_scrapes"] + scraping_stats["failed_scrapes"]
+        success_rate = (scraping_stats["successful_scrapes"] / total_attempts) * 100 if total_attempts > 0 else 0
+        
         if category == "company":
             scraping_stats["company_scraped"] += 1
-            LOG.info(f"SCRAPING SUCCESS: Company {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']} | Total: {scraping_stats['successful_scrapes']}")
+            LOG.info(f"SCRAPING SUCCESS: Company {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% scrape success overall)")
         
         elif category == "industry":
             if keyword not in scraping_stats["industry_scraped_by_keyword"]:
                 scraping_stats["industry_scraped_by_keyword"][keyword] = 0
             scraping_stats["industry_scraped_by_keyword"][keyword] += 1
             keyword_count = scraping_stats["industry_scraped_by_keyword"][keyword]
-            LOG.info(f"SCRAPING SUCCESS: Industry '{keyword}' {keyword_count}/{scraping_stats['limits']['industry_per_keyword']} | Total: {scraping_stats['successful_scrapes']}")
+            LOG.info(f"SCRAPING SUCCESS: Industry '{keyword}' {keyword_count}/{scraping_stats['limits']['industry_per_keyword']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% scrape success overall)")
         
         elif category == "competitor":
             if keyword not in scraping_stats["competitor_scraped_by_keyword"]:
                 scraping_stats["competitor_scraped_by_keyword"][keyword] = 0
             scraping_stats["competitor_scraped_by_keyword"][keyword] += 1
             keyword_count = scraping_stats["competitor_scraped_by_keyword"][keyword]
-            LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']}")
+            LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% scrape success overall)")
 
 def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None, 
                                        enable_ai_scoring: bool = True, max_ai_articles: int = None) -> Dict[str, int]:

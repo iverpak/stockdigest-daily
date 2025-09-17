@@ -317,6 +317,7 @@ def ensure_schema():
                     scraping_error TEXT,
                     ai_impact VARCHAR(20),
                     ai_reasoning TEXT,
+                    ai_summary TEXT,
                     source_tier DECIMAL(3,2),
                     event_multiplier DECIMAL(3,2),
                     event_multiplier_reason TEXT,
@@ -365,6 +366,7 @@ def ensure_schema():
                 -- Add any missing columns to existing tables
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_impact VARCHAR(20);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_reasoning TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS source_tier DECIMAL(3,2);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier DECIMAL(3,2);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier_reason TEXT;
@@ -378,7 +380,6 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
                 ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
                 
                 -- Essential indexes
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
@@ -1268,18 +1269,18 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url,
                             scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_impact, ai_reasoning, ai_summary,
+                            ai_impact, ai_reasoning, ai_summary,  # ADD THIS LINE
                             source_tier, event_multiplier, event_multiplier_reason,
                             relevance_boost, relevance_boost_reason, numeric_bonus,
                             penalty_multiplier, penalty_reason
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)  # ADD ONE MORE %s
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
                         feed["id"], feed["ticker"], final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                        ai_impact, ai_reasoning, ai_summary,
+                        ai_impact, ai_reasoning, ai_summary,  # ADD THIS LINE
                         source_tier, event_multiplier, event_multiplier_reason,
                         relevance_boost, relevance_boost_reason, numeric_bonus,
                         penalty_multiplier, penalty_reason
@@ -3427,24 +3428,26 @@ def send_email_with_text_attachment(subject: str, html_body: str, text_attachmen
         LOG.error(f"Email send failed: {e}")
         return False
 
-# Missing function 1: Enhanced digest fetching
 def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
-    """Fetch categorized articles for digest with content scraping data"""
+    """Fetch categorized articles for digest with content scraping data and AI summaries"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     
     days = int(hours / 24) if hours >= 24 else 0
     period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
     
     with db() as conn, conn.cursor() as cur:
-        # Enhanced query to include content scraping fields
+        # Enhanced query to include AI summary field
         if tickers:
             cur.execute("""
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning,
-                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
+                    f.found_at, f.category, f.original_source_url,
+                    f.search_keyword, f.ai_impact, f.ai_reasoning, f.ai_summary,
+                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
+                    f.source_tier, f.event_multiplier, f.event_multiplier_reason,
+                    f.relevance_boost, f.relevance_boost_reason, f.numeric_bonus,
+                    f.penalty_multiplier, f.penalty_reason, f.competitor_ticker
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -3457,9 +3460,12 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
                 SELECT 
                     f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning,
-                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
+                    f.found_at, f.category, f.original_source_url,
+                    f.search_keyword, f.ai_impact, f.ai_reasoning, f.ai_summary,
+                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
+                    f.source_tier, f.event_multiplier, f.event_multiplier_reason,
+                    f.relevance_boost, f.relevance_boost_reason, f.numeric_bonus,
+                    f.penalty_multiplier, f.penalty_reason, f.competitor_ticker
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
@@ -3505,15 +3511,16 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
             "tickers": tickers or "all"
         }
     
-    html = build_digest_html(articles_by_ticker, days if days > 0 else 1)
+    # Use the new digest function with text export
+    html, text_export = build_digest_html_with_text_export(articles_by_ticker, days if days > 0 else 1)
     
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email(subject, html)
+    success = send_email_with_text_attachment(subject, html, text_export)
     
     # Count by category and content scraping
     category_counts = {"company": 0, "industry": 0, "competitor": 0}
-    content_stats = {"scraped": 0, "failed": 0, "skipped": 0}
+    content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
     
     for ticker_cats in articles_by_ticker.values():
         for cat, arts in ticker_cats.items():
@@ -3525,6 +3532,9 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
                     content_stats['failed'] += 1
                 else:
                     content_stats['skipped'] += 1
+                
+                if art.get('ai_summary'):
+                    content_stats['ai_summaries'] += 1
     
     return {
         "status": "sent" if success else "failed",
@@ -4237,7 +4247,7 @@ def cron_digest(
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers for digest")
 ):
-    """Generate and send email digest with content scraping data"""
+    """Generate and send email digest with content scraping data and AI summaries"""
     require_admin(request)
     ensure_schema()
     

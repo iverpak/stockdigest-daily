@@ -1018,10 +1018,11 @@ def _update_scraping_stats(category: str, keyword: str, success: bool):
             keyword_count = scraping_stats["competitor_scraped_by_keyword"][keyword]
             LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% scrape success overall)")
 
-def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None, 
+# Update the ingest function to include AI summary generation
+def ingest_feed_with_content_scraping_and_summary(feed: Dict, category: str = "company", keywords: List[str] = None, 
                                        enable_ai_scoring: bool = True, max_ai_articles: int = None) -> Dict[str, int]:
     """
-    Enhanced feed processing with per-keyword scraping limits
+    Enhanced feed processing with AI summaries for scraped content
     """
     global scraping_stats
     
@@ -1036,7 +1037,8 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "scraping_skipped": 0,
         "ai_reanalyzed": 0,
         "ai_scored": 0,
-        "basic_scored": 0
+        "basic_scored": 0,
+        "ai_summaries_generated": 0
     }
     
     scraped_domains = set()
@@ -1048,16 +1050,6 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     try:
         parsed = feedparser.parse(feed["url"])
         LOG.info(f"Processing feed [{category}]: {feed['name']} - {len(parsed.entries)} entries (AI: {'enabled' if enable_ai_scoring else 'disabled'})")
-        
-        # Log current limits for this category/keyword
-        if category == "company":
-            LOG.info(f"  Scraping limit for company: {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}")
-        elif category == "industry":
-            current_count = scraping_stats["industry_scraped_by_keyword"].get(feed_keyword, 0)
-            LOG.info(f"  Scraping limit for industry '{feed_keyword}': {current_count}/{scraping_stats['limits']['industry_per_keyword']}")
-        elif category == "competitor":
-            current_count = scraping_stats["competitor_scraped_by_keyword"].get(feed_keyword, 0)
-            LOG.info(f"  Scraping limit for competitor '{feed_keyword}': {current_count}/{scraping_stats['limits']['competitor_per_keyword']}")
         
         # Sort entries by publication date (newest first) if available
         entries_with_dates = []
@@ -1186,6 +1178,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     scraping_error = None
                     content_scraped_at = None
                     scraping_failed = False
+                    ai_summary = None
                     
                     if should_use_ai:
                         # Determine if we should scrape content
@@ -1210,7 +1203,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                 stats["scraping_skipped"] += 1
                                 LOG.info(f"Skipping paywall domain: {scrape_domain}")
                             else:
-                                # Use the new limited scraper with keyword tracking
+                                # Use the limited scraper with keyword tracking
                                 content, status = safe_content_scraper_with_playwright_limited(
                                     scrape_url, scrape_domain, category, feed_keyword, scraped_domains
                                 )
@@ -1219,6 +1212,11 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                     scraped_content = content
                                     content_scraped_at = datetime.now(timezone.utc)
                                     stats["content_scraped"] += 1
+                                    
+                                    # Generate AI summary if we have scraped content
+                                    ai_summary = generate_ai_summary(scraped_content, title, feed["ticker"])
+                                    if ai_summary:
+                                        stats["ai_summaries_generated"] += 1
                                 else:
                                     scraping_failed = True
                                     scraping_error = status
@@ -1262,25 +1260,25 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article
+                    # Insert article with AI summary
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url,
                             scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_impact, ai_reasoning,
+                            ai_impact, ai_reasoning, ai_summary,
                             source_tier, event_multiplier, event_multiplier_reason,
                             relevance_boost, relevance_boost_reason, numeric_bonus,
                             penalty_multiplier, penalty_reason
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
                         feed["id"], feed["ticker"], final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                        ai_impact, ai_reasoning,
+                        ai_impact, ai_reasoning, ai_summary,
                         source_tier, event_multiplier, event_multiplier_reason,
                         relevance_boost, relevance_boost_reason, numeric_bonus,
                         penalty_multiplier, penalty_reason
@@ -1289,7 +1287,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     if cur.fetchone():
                         stats["inserted"] += 1
                         processing_type = "AI analysis" if should_use_ai else "basic processing"
-                        content_info = f"with content" if scraped_content else "no content"
+                        content_info = f"with content + summary" if scraped_content and ai_summary else f"with content" if scraped_content else "no content"
                         source_info = "via Google→Yahoo" if is_google_to_yahoo else "direct"
                         LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({processing_type}, {content_info}) ({source_info})")
                         
@@ -1301,10 +1299,19 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
     return stats
-    
-def _format_article_html_with_content(article: Dict, category: str) -> str:
+
+# Update the database schema to include ai_summary field
+def update_schema_for_ai_summary():
+    """Add AI summary field to found_url table"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
+        """)
+
+# Updated article formatting function
+def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
     """
-    Enhanced article HTML formatting that handles both AI-analyzed and basic articles
+    Enhanced article HTML formatting with AI summaries and better competitor names
     """
     import html
     
@@ -1351,6 +1358,7 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     
     # Quality score styling - only show if AI analyzed
     score_html = ""
+    analyzed_html = ""
     quality_score = article.get("quality_score")
     ai_impact = article.get("ai_impact")
     
@@ -1358,12 +1366,21 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
         # This article was AI analyzed - show score
         score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
         score_html = f'<span class="score {score_class}">Score: {quality_score:.0f}</span>'
+        
+        # Show "Analyzed" badge if we have scraped content and AI summary
+        if article.get('scraped_content') and article.get('ai_summary'):
+            analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
     
-    # Build metadata badges for category-specific information
+    # Build metadata badges for category-specific information with better names
     metadata_badges = []
     
     if category == "competitor" and article.get('search_keyword'):
-        competitor_name = article['search_keyword']
+        # Use the improved competitor name function
+        competitor_name = get_competitor_display_name(
+            article['search_keyword'], 
+            article.get('competitor_ticker'),
+            ticker_metadata_cache or {}
+        )
         metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
     elif category == "industry" and article.get('search_keyword'):
         industry_keyword = article['search_keyword']
@@ -1371,30 +1388,25 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
     
     enhanced_metadata = "".join(metadata_badges)
     
-    # Get content - prioritize scraped content, fall back to description
-    content_to_display = ""
-    content_source_indicator = ""
+    # AI Summary section (replaces scraped content display)
+    ai_summary_html = ""
+    if article.get("ai_summary"):
+        clean_summary = html.escape(article["ai_summary"].strip())
+        ai_summary_html = f"<br><div class='ai-summary'><strong>📊 Analysis:</strong> {clean_summary}</div>"
     
-    if article.get("scraped_content"):
-        content_to_display = article["scraped_content"]
-        content_source_indicator = " [ANALYZED]"
-    elif article.get("description"):
-        content_to_display = article["description"]
-        # Only show [DESC] if this was an AI-analyzed article, otherwise show nothing
-        if ai_impact is not None:
-            content_source_indicator = " [DESC]"
-    
+    # Get description and format it (only if no AI summary)
     description_html = ""
-    if content_to_display:
-        content_clean = html.unescape(content_to_display.strip())
-        content_clean = re.sub(r'<[^>]+>', '', content_clean)
-        content_clean = re.sub(r'\s+', ' ', content_clean).strip()
+    if not article.get("ai_summary") and article.get("description"):
+        description = article["description"].strip()
+        description = html.unescape(description)
+        description = re.sub(r'<[^>]+>', '', description)
+        description = re.sub(r'\s+', ' ', description).strip()
         
-        if len(content_clean) > 800:
-            content_clean = content_clean[:800] + "..."
+        if len(description) > 500:
+            description = description[:500] + "..."
         
-        content_clean = html.escape(content_clean)
-        description_html = f"<br><div class='description'>{content_clean}<em>{content_source_indicator}</em></div>"
+        description = html.escape(description)
+        description_html = f"<br><div class='description'>{description}</div>"
     
     return f"""
     <div class='article {category}'>
@@ -1402,10 +1414,12 @@ def _format_article_html_with_content(article: Dict, category: str) -> str:
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
             {score_html}
+            {analyzed_html}
         </div>
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
             <span class='meta'> | {pub_date}</span>
+            {ai_summary_html}
             {description_html}
         </div>
     </div>
@@ -1778,6 +1792,159 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
         base_score += min(keyword_matches * 5, 15)
     
     return max(10.0, min(90.0, base_score))
+
+def generate_ai_summary(scraped_content: str, title: str, ticker: str) -> Optional[str]:
+    """Generate hedge fund analyst summary from scraped content"""
+    if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None
+    
+    try:
+        prompt = f"""As a hedge fund analyst, write a 3-5 sentence summary of this article about {ticker}. Focus on key financial implications, market impact, and investment considerations. Be concise and analytical.
+
+Article: {scraped_content[:2000]}"""  # Limit content to avoid token limits
+
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a hedge fund analyst. Provide concise, analytical summaries focusing on financial implications."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 150,
+            "temperature": 0.3
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
+        
+        if response.status_code == 200:
+            result = response.json()
+            summary = result["choices"][0]["message"]["content"].strip()
+            LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars")
+            return summary
+        else:
+            LOG.warning(f"AI summary failed: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        LOG.warning(f"AI summary generation failed: {e}")
+        return None
+
+def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> str:
+    """Create structured text file for AI evaluation of scoring quality"""
+    
+    text_lines = []
+    text_lines.append("STOCK NEWS AGGREGATOR - AI SCORING EVALUATION DATA")
+    text_lines.append("=" * 60)
+    text_lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    text_lines.append("")
+    text_lines.append("PURPOSE: Evaluate quality scoring algorithm performance")
+    text_lines.append("INSTRUCTIONS: Analyze patterns in scoring components vs article content")
+    text_lines.append("=" * 60)
+    text_lines.append("")
+    
+    article_count = 0
+    
+    for ticker, categories in articles_by_ticker.items():
+        text_lines.append(f"TICKER: {ticker}")
+        text_lines.append("-" * 40)
+        
+        for category, articles in categories.items():
+            if not articles:
+                continue
+                
+            text_lines.append(f"\nCATEGORY: {category.upper()}")
+            text_lines.append("")
+            
+            for article in articles:
+                article_count += 1
+                
+                text_lines.append(f"ARTICLE {article_count}:")
+                text_lines.append(f"Type: {category}")
+                text_lines.append(f"Ticker: {ticker}")
+                text_lines.append(f"Title: {article.get('title', 'No Title')}")
+                text_lines.append(f"Domain: {article.get('domain', 'unknown')}")
+                
+                if article.get('published_at'):
+                    text_lines.append(f"Published: {article['published_at']}")
+                
+                if article.get('search_keyword'):
+                    text_lines.append(f"Search Keyword: {article['search_keyword']}")
+                
+                text_lines.append("")
+                
+                # AI Analysis section
+                text_lines.append("AI ANALYSIS:")
+                quality_score = article.get('quality_score', 0)
+                text_lines.append(f"Final Score: {quality_score:.1f}")
+                
+                # Show scoring components if available
+                if article.get('source_tier'):
+                    text_lines.append(f"Source Tier: {article['source_tier']}")
+                if article.get('event_multiplier'):
+                    text_lines.append(f"Event Multiplier: {article['event_multiplier']} - {article.get('event_multiplier_reason', '')}")
+                if article.get('relevance_boost'):
+                    text_lines.append(f"Relevance Boost: {article['relevance_boost']} - {article.get('relevance_boost_reason', '')}")
+                if article.get('numeric_bonus'):
+                    text_lines.append(f"Numeric Bonus: {article['numeric_bonus']}")
+                if article.get('penalty_multiplier'):
+                    text_lines.append(f"Penalty: {article['penalty_multiplier']} - {article.get('penalty_reason', '')}")
+                
+                ai_impact = article.get('ai_impact', 'N/A')
+                ai_reasoning = article.get('ai_reasoning', 'N/A')
+                text_lines.append(f"Impact: {ai_impact}")
+                text_lines.append(f"Reasoning: {ai_reasoning}")
+                text_lines.append("")
+                
+                # Original description
+                if article.get('description'):
+                    text_lines.append("ORIGINAL DESCRIPTION:")
+                    text_lines.append(article['description'])
+                    text_lines.append("")
+                
+                # Scraped content
+                if article.get('scraped_content'):
+                    text_lines.append("SCRAPED CONTENT:")
+                    text_lines.append(article['scraped_content'])
+                else:
+                    text_lines.append("SCRAPED CONTENT: Not available")
+                
+                text_lines.append("")
+                text_lines.append("-" * 80)
+                text_lines.append("")
+    
+    text_lines.append(f"\nTOTAL ARTICLES: {article_count}")
+    text_lines.append("END OF EVALUATION DATA")
+    
+    return "\n".join(text_lines)
+
+def get_competitor_display_name(search_keyword: str, competitor_ticker: str, ticker_metadata_cache: Dict) -> str:
+    """Get full company name for competitor display in emails"""
+    if not search_keyword:
+        return competitor_ticker or "Unknown Competitor"
+    
+    # For all tickers, check if we have metadata with competitors
+    for ticker, metadata in ticker_metadata_cache.items():
+        competitors = metadata.get("competitors", [])
+        for comp in competitors:
+            if isinstance(comp, dict):
+                # Check if this competitor matches either by name or ticker
+                if (comp.get("name", "").lower() == search_keyword.lower() or 
+                    comp.get("ticker", "").lower() == (competitor_ticker or "").lower()):
+                    return comp.get("name", search_keyword)
+            else:
+                # Old format - string that might contain both name and ticker
+                if search_keyword.lower() in comp.lower():
+                    # Extract just the name part (before any parentheses)
+                    name_match = re.match(r'^([^(]+)', comp)
+                    if name_match:
+                        return name_match.group(1).strip()
+    
+    # Fallback to search keyword (which should be the company name for Google feeds)
+    return search_keyword
 
 def _ai_quality_score_company_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
     """AI-powered component extraction for company articles - returns components for our calculation"""
@@ -3098,17 +3265,31 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
 # Email Digest
 # ------------------------------------------------------------------------------
 # Enhanced CSS styles to be added to the build_digest_html function
-def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> str:
-    """Build HTML email digest using the enhanced article formatting with content indicators"""
-    # Get ticker metadata for display
-    ticker_metadata = {}
+# Update CSS to include analyzed badge styling
+def build_digest_html_with_text_export(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
+    """Build HTML email digest and return both HTML and text export"""
+    
+    # Load ticker metadata for competitor names
+    ticker_metadata_cache = {}
     for ticker in articles_by_ticker.keys():
         config = get_ticker_config(ticker)
         if config:
-            ticker_metadata[ticker] = {
+            # Convert competitors back to dict format for the helper function
+            competitors = []
+            for comp_str in config.get("competitors", []):
+                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                if match:
+                    competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+                else:
+                    competitors.append({"name": comp_str, "ticker": None})
+            
+            ticker_metadata_cache[ticker] = {
                 "industry_keywords": config.get("industry_keywords", []),
-                "competitors": config.get("competitors", [])
+                "competitors": competitors
             }
+    
+    # Generate text export for AI evaluation
+    text_export = create_ai_evaluation_text(articles_by_ticker)
     
     # Use the new timestamp formatting
     current_time_est = format_timestamp_est(datetime.now(timezone.utc))
@@ -3124,6 +3305,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".article-header { margin-bottom: 5px; }",
         ".article-content { }",
         ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+        ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
         ".company { border-left-color: #27ae60; }",
         ".industry { border-left-color: #f39c12; }",
         ".competitor { border-left-color: #e74c3c; }",
@@ -3132,6 +3314,7 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".high-score { background-color: #d4edda; color: #155724; }",
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".analyzed-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
         ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
@@ -3141,12 +3324,12 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
         ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
         "</style></head><body>",
-        f"<h1>Stock Intelligence Report - Content Scraping Test</h1>",
+        f"<h1>Stock Intelligence Report</h1>",
         f"<div class='summary'>",
         f"<strong>Report Period:</strong> Last {period_days} days<br>",
         f"<strong>Generated:</strong> {current_time_est}<br>",
         f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
-        f"<strong>Mode:</strong> Content Scraping Test (10 articles max, AI scoring disabled)",
+        f"<strong>AI Features:</strong> Content Analysis + Hedge Fund Summaries",
         "</div>"
     ]
     
@@ -3157,15 +3340,15 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         html.append(f"<h2>{ticker} - {total_articles} Total Articles</h2>")
         
         # Add keyword information with improved styling
-        if ticker in ticker_metadata:
-            metadata = ticker_metadata[ticker]
+        if ticker in ticker_metadata_cache:
+            metadata = ticker_metadata_cache[ticker]
             html.append("<div class='keywords'>")
             html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
             if metadata.get("industry_keywords"):
                 industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
                 html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
             if metadata.get("competitors"):
-                competitor_badges = [f'<span class="competitor-badge">🏢 {comp}</span>' for comp in metadata['competitors']]
+                competitor_badges = [f'<span class="competitor-badge">🏢 {comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
                 html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}")
             html.append("</div>")
         
@@ -3173,38 +3356,75 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         if "company" in categories and categories["company"]:
             html.append(f"<h3>Company News ({len(categories['company'])} articles)</h3>")
             for article in categories["company"][:50]:
-                html.append(_format_article_html_with_content(article, "company"))
+                html.append(_format_article_html_with_ai_summary(article, "company", ticker_metadata_cache))
         
         # Industry News Section
         if "industry" in categories and categories["industry"]:
             html.append(f"<h3>Industry & Market News ({len(categories['industry'])} articles)</h3>")
             for article in categories["industry"][:50]:
-                html.append(_format_article_html_with_content(article, "industry"))
+                html.append(_format_article_html_with_ai_summary(article, "industry", ticker_metadata_cache))
         
         # Competitor News Section
         if "competitor" in categories and categories["competitor"]:
             html.append(f"<h3>Competitor Intelligence ({len(categories['competitor'])} articles)</h3>")
             for article in categories["competitor"][:50]:
-                html.append(_format_article_html_with_content(article, "competitor"))
+                html.append(_format_article_html_with_ai_summary(article, "competitor", ticker_metadata_cache))
         
         html.append("</div>")
     
     html.append("""
         <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
-            <strong>About This Test Report:</strong><br>
-            • Content Scraping Test: Yahoo Finance resolved URLs are scraped for full article content<br>
-            • [SCRAPED] indicator shows articles where full content was extracted<br>
-            • [DESC] indicator shows fallback to original description<br>
-            • AI Quality Scoring temporarily disabled to focus on content extraction<br>
-            • Limited to first 10 articles per feed run for safety testing<br>
-            • Domain deduplication: each domain scraped max once per run<br>
-            • 3-7 second delays between scraping requests for politeness<br>
-            • Only company-category Yahoo Finance articles are scraped for now
+            <strong>Enhanced AI Features:</strong><br>
+            • Content Analysis: Full article scraping with intelligent extraction<br>
+            • Hedge Fund Summaries: AI-generated analytical summaries for scraped content<br>
+            • Component-Based Scoring: Transparent quality scoring with detailed reasoning<br>
+            • "Analyzed" badge indicates articles with both scraped content and AI summary
         </div>
         </body></html>
     """)
     
-    return "".join(html)
+    html_content = "".join(html)
+    
+    return html_content, text_export
+
+# Updated email sending function with text attachment
+def send_email_with_text_attachment(subject: str, html_body: str, text_attachment: str, to: str = None):
+    """Send email with text file attachment for AI evaluation"""
+    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
+        LOG.error("SMTP not fully configured")
+        return False
+    
+    try:
+        recipient = to or DIGEST_TO
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = recipient
+        
+        # Create the email body
+        body_part = MIMEMultipart("alternative")
+        body_part.attach(MIMEText("Please view this email in HTML format.", "plain"))
+        body_part.attach(MIMEText(html_body, "html"))
+        msg.attach(body_part)
+        
+        # Add text file attachment
+        from email.mime.text import MIMEText
+        attachment = MIMEText(text_attachment)
+        attachment.add_header('Content-Disposition', 'attachment', filename='ai_scoring_evaluation.txt')
+        msg.attach(attachment)
+        
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            if SMTP_STARTTLS:
+                server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
+        
+        LOG.info(f"Email with text attachment sent to {recipient}")
+        return True
+        
+    except Exception as e:
+        LOG.error(f"Email send failed: {e}")
+        return False
 
 # Missing function 1: Enhanced digest fetching
 def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:

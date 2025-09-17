@@ -1273,7 +1273,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             source_tier, event_multiplier, event_multiplier_reason,
                             relevance_boost, relevance_boost_reason, numeric_bonus,
                             penalty_multiplier, penalty_reason
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)  # ADD ONE MORE %s
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)  # ADD ONE MORE %s
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
@@ -3268,7 +3268,7 @@ def ingest_feed(feed: Dict, category: str = "company", keywords: List[str] = Non
 # ------------------------------------------------------------------------------
 # Enhanced CSS styles to be added to the build_digest_html function
 # Update CSS to include analyzed badge styling
-def build_digest_html_with_text_export(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
+def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
     """Build HTML email digest and return both HTML and text export"""
     
     # Load ticker metadata for competitor names
@@ -3390,7 +3390,7 @@ def build_digest_html_with_text_export(articles_by_ticker: Dict[str, Dict[str, L
     return html_content, text_export
 
 # Updated email sending function with text attachment
-def send_email_with_text_attachment(subject: str, html_body: str, text_attachment: str, to: str = None):
+def send_email(subject: str, html_body: str, text_attachment: str, to: str = None):
     """Send email with text file attachment for AI evaluation"""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
@@ -3512,11 +3512,11 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
         }
     
     # Use the new digest function with text export
-    html, text_export = build_digest_html_with_text_export(articles_by_ticker, days if days > 0 else 1)
+    html, text_export = build_digest_html(articles_by_ticker, days if days > 0 else 1)
     
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email_with_text_attachment(subject, html, text_export)
+    success = send_email(subject, html, text_export)
     
     # Count by category and content scraping
     category_counts = {"company": 0, "industry": 0, "competitor": 0}
@@ -3762,37 +3762,6 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
         "content_scraping_stats": content_stats,
         "recipient": DIGEST_TO
     }
-
-def send_email(subject: str, html_body: str, to: str = None):
-    """Send email via SMTP"""
-    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
-        LOG.error("SMTP not fully configured")
-        return False
-    
-    try:
-        recipient = to or DIGEST_TO
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = recipient
-        
-        # Add plain text version
-        text_body = "Please view this email in HTML format."
-        msg.attach(MIMEText(text_body, "plain"))
-        msg.attach(MIMEText(html_body, "html"))
-        
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            if SMTP_STARTTLS:
-                server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
-        
-        LOG.info(f"Email sent to {recipient}")
-        return True
-        
-    except Exception as e:
-        LOG.error(f"Email send failed: {e}")
-        return False
 
 # ------------------------------------------------------------------------------
 # Auth Middleware

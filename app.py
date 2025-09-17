@@ -2934,8 +2934,36 @@ feed_manager = FeedManager()
 class TickerManager:
     @staticmethod
     def get_or_create_metadata(ticker: str, force_refresh: bool = False) -> Dict:
-        # Keep your existing get_or_create_metadata method unchanged
-        # ... existing code ...
+        """Unified ticker metadata management"""
+        # Check database first
+        if not force_refresh:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ticker, name, industry_keywords, competitors, ai_generated
+                    FROM ticker_config WHERE ticker = %s AND active = TRUE
+                """, (ticker,))
+                config = cur.fetchone()
+                
+                if config:
+                    # Process competitors back to structured format
+                    competitors = []
+                    for comp_str in config.get("competitors", []):
+                        match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                        if match:
+                            competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+                        else:
+                            competitors.append({"name": comp_str, "ticker": None})
+                    
+                    return {
+                        "company_name": config.get("name", ticker),
+                        "industry_keywords": config.get("industry_keywords", []),
+                        "competitors": competitors
+                    }
+        
+        # Generate with AI
+        ai_metadata = generate_ticker_metadata_with_ai(ticker)
+        TickerManager.store_metadata(ticker, ai_metadata)
+        return ai_metadata
     
     @staticmethod
     def store_metadata(ticker: str, metadata: Dict):

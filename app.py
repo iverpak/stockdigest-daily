@@ -378,6 +378,7 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
                 ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
                 
                 -- Essential indexes
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
@@ -1019,7 +1020,7 @@ def _update_scraping_stats(category: str, keyword: str, success: bool):
             LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% scrape success overall)")
 
 # Update the ingest function to include AI summary generation
-def ingest_feed_with_content_scraping_and_summary(feed: Dict, category: str = "company", keywords: List[str] = None, 
+def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None, 
                                        enable_ai_scoring: bool = True, max_ai_articles: int = None) -> Dict[str, int]:
     """
     Enhanced feed processing with AI summaries for scraped content

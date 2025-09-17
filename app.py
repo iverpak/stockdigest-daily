@@ -210,6 +210,36 @@ DOMAIN_STRATEGIES = {
     }
 }
 
+# Add this near your other global variables and functions
+scraping_stats = {
+    "successful_scrapes": 0,
+    "failed_scrapes": 0,
+    "company_scraped": 0,
+    "industry_scraped_by_keyword": {},
+    "competitor_scraped_by_keyword": {},
+    "limits": {
+        "company": 20,
+        "industry_per_keyword": 5,
+        "competitor_per_keyword": 5
+    }
+}
+
+def reset_scraping_stats():
+    """Reset scraping stats for new run"""
+    global scraping_stats
+    scraping_stats = {
+        "successful_scrapes": 0,
+        "failed_scrapes": 0,
+        "company_scraped": 0,
+        "industry_scraped_by_keyword": {},
+        "competitor_scraped_by_keyword": {},
+        "limits": {
+            "company": 20,
+            "industry_per_keyword": 5,
+            "competitor_per_keyword": 5
+        }
+    }
+
 # Global tracking for domain access timing
 domain_last_accessed = {}
 last_scraped_domain = None

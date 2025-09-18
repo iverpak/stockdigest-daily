@@ -2323,9 +2323,10 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     
     return selected_results
 
-def _apply_quality_domain_and_smart_fill(articles: List[Dict], ai_selected: List[Dict], category: str, limit: int, low_quality_domains: Set[str]) -> List[Dict]:
+def _apply_quality_domain_selection_only(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str]) -> List[Dict]:
     """
-    Apply quality domain selection and smart limit filling to AI triage results
+    Apply quality domain selection to AI triage results - NO BACKFILL, NO REDUCTION
+    Only adds quality domains, never reduces the count below AI selection + quality domains
     """
     # Step 1: Quality Domain Selection with Filtering
     quality_selected = []
@@ -2357,68 +2358,19 @@ def _apply_quality_domain_and_smart_fill(articles: List[Dict], ai_selected: List
                 "confidence": 0.8
             })
     
-    # Step 2: Smart Limit Filling with Domain Tier Consideration
+    # Step 2: Combine AI + Quality Domains (NO BACKFILL, NO LIMITS)
     combined_selected = ai_selected + quality_selected
     
-    if len(combined_selected) < limit:
-        remaining_slots = limit - len(combined_selected)
-        selected_indices = {item["id"] for item in combined_selected}
-        
-        # Get remaining articles with enhanced filtering and domain tier scoring
-        remaining_articles = []
-        for idx, article in enumerate(articles):
-            if idx in selected_indices:
-                continue
-                
-            domain = normalize_domain(article.get("domain", ""))
-            title = article.get("title", "").lower()
-            
-            # Apply enhanced filtering
-            if domain in low_quality_domains:
-                continue
-                
-            if is_insider_trading_article(title):
-                continue
-            
-            # Calculate domain tier score for prioritization
-            domain_tier = DOMAIN_TIERS.get(domain, 0.3)
-            pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
-            
-            # Prioritize by domain tier first, then recency
-            priority_score = (domain_tier * 1000) + (pub_time.timestamp() / 1000)
-            
-            remaining_articles.append((idx, priority_score, pub_time, domain_tier))
-        
-        # Sort by priority score (higher = better)
-        remaining_articles.sort(key=lambda x: x[1], reverse=True)
-        
-        # Add best remaining articles to fill slots
-        for idx, priority_score, pub_time, domain_tier in remaining_articles[:remaining_slots]:
-            combined_selected.append({
-                "id": idx,
-                "scrape_priority": 4,
-                "likely_repeat": False,
-                "repeat_key": "",
-                "why": f"High-tier domain fill (tier: {domain_tier:.1f})",
-                "confidence": 0.6
-            })
-    
-    # Limit to the maximum allowed and sort by priority
+    # Sort by priority (lower number = higher priority)
     combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
-    final_selected = combined_selected[:limit]
     
-    # Enhanced logging with proper counts
+    # Enhanced logging
     ai_count = len(ai_selected)
-    quality_count_before_limit = len(quality_selected)
-    quality_count_actual = len([item for item in final_selected if item.get("why", "").startswith("Quality domain")])
-    fill_count = len(final_selected) - ai_count - quality_count_actual
+    quality_count = len(quality_selected)
     
-    if quality_count_before_limit > quality_count_actual:
-        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count_actual} Quality ({quality_count_before_limit} found, limited) + {fill_count} Smart-fill = {len(final_selected)} total")
-    else:
-        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count_actual} Quality + {fill_count} Smart-fill = {len(final_selected)} total")
+    LOG.info(f"No-limit triage {category}: {ai_count} AI + {quality_count} Quality = {len(combined_selected)} total (no reduction applied)")
     
-    return final_selected
+    return combined_selected
 
 def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """

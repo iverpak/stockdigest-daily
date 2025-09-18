@@ -95,13 +95,8 @@ SPAM_DOMAINS = {
 QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
-    "yahoo.com/finance", "finance.yahoo.com",
     "businesswire.com", "prnewswire.com", "globenewswire.com",
-    "tipranks.com", "www.tipranks.com", "tipranks",
-    "simplywall.st", "www.simplywall.st", "simplywall",
-    "dailyitem.com", "www.dailyitem.com",
-    "marketscreener.com", "www.marketscreener.com", "marketscreener",
-    "insidermoneky.com", "seekingalpha.com/pro", "fool.com"
+    "insidermoneky.com", "seekingalpha.com/pro"
 }
 
 # Known paywall domains to skip during content scraping
@@ -2588,13 +2583,17 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str, tic
         competitors = metadata.get("competitors", [])
         for comp in competitors:
             if isinstance(comp, dict):
+                # FIXED: Handle None values from .get() calls
+                comp_name = comp.get("name") or ""
+                comp_ticker = comp.get("ticker") or ""
+                
                 # Check if this competitor matches either by name or ticker
-                if (comp.get("name", "").lower() == search_keyword.lower() or 
-                    comp.get("ticker", "").lower() == (competitor_ticker or "").lower()):
-                    return comp.get("name", search_keyword)
+                if (comp_name.lower() == search_keyword.lower() or 
+                    comp_ticker.lower() == (competitor_ticker or "").lower()):
+                    return comp_name if comp_name else search_keyword
             else:
                 # Old format - string that might contain both name and ticker
-                if search_keyword.lower() in comp.lower():
+                if comp and search_keyword.lower() in comp.lower():
                     # Extract just the name part (before any parentheses)
                     name_match = re.match(r'^([^(]+)', comp)
                     if name_match:

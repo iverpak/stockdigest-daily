@@ -2323,31 +2323,28 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     
     return selected_results
 
-def _apply_quality_domain_selection_only(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str]) -> List[Dict]:
+def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str], target_limit: int) -> List[Dict]:
     """
-    Apply quality domain selection to AI triage results - NO BACKFILL, NO REDUCTION
-    Only adds quality domains, never reduces the count below AI selection + quality domains
+    Apply tiered backfill to reach target limits using domain rankings
+    Priority: AI Selected > Quality Domains > Tier 1 > Tier 0.9 > ... > Tier 0.1
     """
-    # Step 1: Quality Domain Selection with Filtering
-    quality_selected = []
-    ai_selected_indices = {item["id"] for item in ai_selected}
+    # Step 1: Start with AI selections
+    combined_selected = list(ai_selected)
+    selected_indices = {item["id"] for item in ai_selected}
     
+    # Step 2: Add quality domains (not already AI selected)
+    quality_selected = []
     for idx, article in enumerate(articles):
-        if idx in ai_selected_indices:  # Already selected by AI
+        if idx in selected_indices or len(combined_selected) >= target_limit:
             continue
             
         domain = normalize_domain(article.get("domain", ""))
         title = article.get("title", "").lower()
         
-        # Skip low-quality domains
-        if domain in low_quality_domains:
+        # Skip low-quality domains and insider trading
+        if domain in low_quality_domains or is_insider_trading_article(title):
             continue
             
-        # Skip insider trading articles
-        if is_insider_trading_article(title):
-            continue
-        
-        # Check if it's a quality domain
         if domain in QUALITY_DOMAINS:
             quality_selected.append({
                 "id": idx,
@@ -2357,28 +2354,91 @@ def _apply_quality_domain_selection_only(articles: List[Dict], ai_selected: List
                 "why": f"Quality domain: {domain}",
                 "confidence": 0.8
             })
+            selected_indices.add(idx)
     
-    # Step 2: Combine AI + Quality Domains (NO BACKFILL, NO LIMITS)
-    combined_selected = ai_selected + quality_selected
+    combined_selected.extend(quality_selected)
     
-    # Sort by priority (lower number = higher priority)
+    # Step 3: Tiered backfill if still under target
+    if len(combined_selected) < target_limit:
+        remaining_slots = target_limit - len(combined_selected)
+        
+        # Group remaining articles by domain tier
+        tier_groups = {}
+        for idx, article in enumerate(articles):
+            if idx in selected_indices:
+                continue
+                
+            domain = normalize_domain(article.get("domain", ""))
+            title = article.get("title", "").lower()
+            
+            # Skip low-quality domains and insider trading
+            if domain in low_quality_domains or is_insider_trading_article(title):
+                continue
+            
+            tier = DOMAIN_TIERS.get(domain, 0.3)  # Default tier for unknown domains
+            
+            if tier not in tier_groups:
+                tier_groups[tier] = []
+            tier_groups[tier].append({
+                "id": idx,
+                "article": article,
+                "tier": tier,
+                "domain": domain
+            })
+        
+        # Fill remaining slots starting from highest tier
+        backfill_selected = []
+        for tier in sorted(tier_groups.keys(), reverse=True):  # High to low (1.0 → 0.1)
+            if len(backfill_selected) >= remaining_slots:
+                break
+                
+            tier_articles = tier_groups[tier]
+            
+            # Sort by publication time within tier (newest first)
+            tier_articles.sort(
+                key=lambda x: x["article"].get("published_at") or datetime.min.replace(tzinfo=timezone.utc), 
+                reverse=True
+            )
+            
+            slots_available = remaining_slots - len(backfill_selected)
+            for article_data in tier_articles[:slots_available]:
+                backfill_selected.append({
+                    "id": article_data["id"],
+                    "scrape_priority": 3,
+                    "likely_repeat": False,
+                    "repeat_key": "",
+                    "why": f"Tier {article_data['tier']} backfill from {article_data['domain']}",
+                    "confidence": 0.4
+                })
+        
+        combined_selected.extend(backfill_selected)
+    
+    # Final sort by priority (lower number = higher priority)
     combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
+    
+    # Enforce target limit
+    final_selected = combined_selected[:target_limit]
     
     # Enhanced logging
     ai_count = len(ai_selected)
     quality_count = len(quality_selected)
+    backfill_count = len(final_selected) - ai_count - quality_count
     
-    LOG.info(f"No-limit triage {category}: {ai_count} AI + {quality_count} Quality = {len(combined_selected)} total (no reduction applied)")
+    LOG.info(f"Tiered backfill {category}: {ai_count} AI + {quality_count} Quality + {backfill_count} Backfill = {len(final_selected)}/{target_limit}")
     
-    return combined_selected
+    return final_selected
 
-def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
+def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str, List[Dict]], ticker: str, target_limits: Dict[str, int] = None) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage - FIXED: No backfill limits, no reductions, fix index errors
+    Enhanced triage with tiered backfill to reach target limits
     """
     if not OPENAI_API_KEY:
-        LOG.warning("OpenAI API key not configured - using quality domains only")
+        LOG.warning("OpenAI API key not configured - using quality domains and backfill only")
         return {"company": [], "industry": [], "competitor": []}
+    
+    # Default limits if not provided
+    if not target_limits:
+        target_limits = {"company": 20, "industry": 15, "competitor": 15}
     
     selected_results = {"company": [], "industry": [], "competitor": []}
     
@@ -2405,10 +2465,11 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
         except:
             pass
     
-    # COMPANY: Process as single batch (no limits applied)
+    # COMPANY: Process with backfill to limit
     if "company" in articles_by_category and articles_by_category["company"]:
         articles = articles_by_category["company"]
-        LOG.info(f"Starting triage for company: {len(articles)} articles (no limit)")
+        target = target_limits.get("company", 20)
+        LOG.info(f"Starting triage for company: {len(articles)} articles (target: {target})")
         
         try:
             ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
@@ -2416,15 +2477,16 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
             LOG.error(f"AI triage failed for company: {e}")
             ai_selected = []
         
-        # Apply quality domain selection only (no limits)
-        selected_results["company"] = _apply_quality_domain_selection_only(
-            articles, ai_selected, "company", LOW_QUALITY_DOMAINS
+        # Apply tiered backfill to reach target
+        selected_results["company"] = _apply_tiered_backfill_to_limits(
+            articles, ai_selected, "company", LOW_QUALITY_DOMAINS, target
         )
     
-    # INDUSTRY: Process by keyword batches (no limits applied)
+    # INDUSTRY: Process by keyword batches with backfill
     if "industry" in articles_by_category and articles_by_category["industry"]:
         articles = articles_by_category["industry"]
-        LOG.info(f"Starting triage for industry: {len(articles)} articles (no limit per keyword)")
+        target = target_limits.get("industry", 15)
+        LOG.info(f"Starting triage for industry: {len(articles)} articles (target: {target})")
         
         # Group articles by search_keyword
         articles_by_keyword = {}
@@ -2434,13 +2496,17 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 articles_by_keyword[keyword] = []
             articles_by_keyword[keyword].append((idx, article))
         
-        # Process each keyword separately (no limits)
+        # Calculate per-keyword target (distribute total target across keywords)
+        num_keywords = len(articles_by_keyword)
+        per_keyword_target = max(1, target // num_keywords) if num_keywords > 0 else target
+        
+        # Process each keyword separately
         all_industry_selected = []
         for keyword, keyword_articles in articles_by_keyword.items():
             if not keyword_articles:
                 continue
                 
-            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles (no limit)")
+            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles (target: {per_keyword_target})")
             
             # Create mini-article list for this keyword
             keyword_article_list = [article for idx, article in keyword_articles]
@@ -2451,41 +2517,41 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 
                 # Convert mini-indices back to full indices
                 for item in keyword_selected:
-                    if item["id"] < len(keyword_articles):  # FIX INDEX ERROR
+                    if item["id"] < len(keyword_articles):
                         original_idx = keyword_articles[item["id"]][0]
                         item["id"] = original_idx
                         item["why"] = f"[{keyword}] {item['why']}"
                 
-                # Apply quality domain selection (no limits)
-                limited_keyword_selected = _apply_quality_domain_selection_only(
-                    keyword_article_list, keyword_selected, "industry", LOW_QUALITY_DOMAINS
+                # Apply tiered backfill for this keyword
+                keyword_selected_with_backfill = _apply_tiered_backfill_to_limits(
+                    keyword_article_list, keyword_selected, "industry", LOW_QUALITY_DOMAINS, per_keyword_target
                 )
                 
                 # Convert back to full article indices for final results
-                for item in limited_keyword_selected:
-                    if item["id"] < len(keyword_articles):  # FIX INDEX ERROR
+                for item in keyword_selected_with_backfill:
+                    if item["id"] < len(keyword_articles):
                         original_idx = keyword_articles[item["id"]][0]
                         item["id"] = original_idx
                         if not item["why"].startswith(f"[{keyword}]"):
                             item["why"] = f"[{keyword}] {item['why']}"
                 
-                all_industry_selected.extend(limited_keyword_selected)
-                LOG.info(f"    Keyword '{keyword}' final selection: {len(limited_keyword_selected)} articles")
+                all_industry_selected.extend(keyword_selected_with_backfill)
+                LOG.info(f"    Keyword '{keyword}' final selection: {len(keyword_selected_with_backfill)} articles")
                 
             except Exception as e:
                 LOG.error(f"AI triage failed for industry keyword '{keyword}': {e}")
         
         selected_results["industry"] = all_industry_selected
     
-    # COMPETITOR: Process by competitor batches (no limits applied) 
+    # COMPETITOR: Process by competitor batches with backfill
     if "competitor" in articles_by_category and articles_by_category["competitor"]:
         articles = articles_by_category["competitor"]
-        LOG.info(f"Starting triage for competitor: {len(articles)} articles (no limit per competitor)")
+        target = target_limits.get("competitor", 15)
+        LOG.info(f"Starting triage for competitor: {len(articles)} articles (target: {target})")
         
-        # Group articles by competitor_ticker (not search_keyword) to consolidate
+        # Group articles by competitor_ticker
         articles_by_competitor = {}
         for idx, article in enumerate(articles):
-            # Try to get competitor_ticker from database for this article
             search_keyword = article.get("search_keyword", "unknown")
             
             try:
@@ -2507,13 +2573,17 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 articles_by_competitor[consolidation_key] = []
             articles_by_competitor[consolidation_key].append((idx, article))
         
-        # Process each competitor separately (no limits)
+        # Calculate per-competitor target
+        num_competitors = len(articles_by_competitor)
+        per_competitor_target = max(1, target // num_competitors) if num_competitors > 0 else target
+        
+        # Process each competitor separately
         all_competitor_selected = []
         for competitor, competitor_articles in articles_by_competitor.items():
             if not competitor_articles:
                 continue
                 
-            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles (no limit)")
+            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles (target: {per_competitor_target})")
             
             # Create mini-article list for this competitor
             competitor_article_list = [article for idx, article in competitor_articles]
@@ -2524,26 +2594,26 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 
                 # Convert mini-indices back to full indices
                 for item in competitor_selected:
-                    if item["id"] < len(competitor_articles):  # FIX INDEX ERROR
+                    if item["id"] < len(competitor_articles):
                         original_idx = competitor_articles[item["id"]][0]
                         item["id"] = original_idx
                         item["why"] = f"[{competitor}] {item['why']}"
                 
-                # Apply quality domain selection (no limits)
-                limited_competitor_selected = _apply_quality_domain_selection_only(
-                    competitor_article_list, competitor_selected, "competitor", LOW_QUALITY_DOMAINS
+                # Apply tiered backfill for this competitor
+                competitor_selected_with_backfill = _apply_tiered_backfill_to_limits(
+                    competitor_article_list, competitor_selected, "competitor", LOW_QUALITY_DOMAINS, per_competitor_target
                 )
                 
                 # Convert back to full article indices for final results
-                for item in limited_competitor_selected:
-                    if item["id"] < len(competitor_articles):  # FIX INDEX ERROR
+                for item in competitor_selected_with_backfill:
+                    if item["id"] < len(competitor_articles):
                         original_idx = competitor_articles[item["id"]][0]
                         item["id"] = original_idx
                         if not item["why"].startswith(f"[{competitor}]"):
                             item["why"] = f"[{competitor}] {item['why']}"
                 
-                all_competitor_selected.extend(limited_competitor_selected)
-                LOG.info(f"    Competitor '{competitor}' final selection: {len(limited_competitor_selected)} articles")
+                all_competitor_selected.extend(competitor_selected_with_backfill)
+                LOG.info(f"    Competitor '{competitor}' final selection: {len(competitor_selected_with_backfill)} articles")
                 
             except Exception as e:
                 LOG.error(f"AI triage failed for competitor '{competitor}': {e}")
@@ -2552,7 +2622,8 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
     
     # Final summary
     total_selected = sum(len(items) for items in selected_results.values())
-    LOG.info(f"=== TRIAGE COMPLETE: {total_selected} articles selected (no limits applied) ===")
+    total_target = sum(target_limits.values())
+    LOG.info(f"=== TRIAGE COMPLETE WITH BACKFILL: {total_selected}/{total_target} articles selected ===")
     
     return selected_results
 
@@ -2655,7 +2726,7 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(payload, separators=(",", ":"))}
             ],
-            "max_completion_tokens": 1600,  # Use correct parameter name
+            "max_completion_tokens": 5000,  # Use correct parameter name
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
@@ -5789,13 +5860,24 @@ def cron_ingest(
     
     LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} articles ingested (limits enforced) ===")
     
-    # PHASE 2: Enhanced AI Triage + Quality Domains + Limit Filling
-    LOG.info("=== PHASE 2: ENHANCED AI TRIAGE (AI + QUALITY DOMAINS + LIMIT FILLING) ===")
+    # PHASE 2: Enhanced AI Triage + Quality Domains + Tiered Backfill
+    LOG.info("=== PHASE 2: ENHANCED AI TRIAGE WITH TIERED BACKFILL ===")
     triage_results = {}
     
     for ticker in articles_by_ticker.keys():
-        LOG.info(f"Running enhanced triage for {ticker}")
-        selected_results = perform_ai_triage_batch_with_quality_domains(articles_by_ticker[ticker], ticker)
+        LOG.info(f"Running enhanced triage with backfill for {ticker}")
+        
+        # Calculate dynamic limits for this ticker
+        config = get_ticker_config(ticker)
+        industry_keywords = config.get("industry_keywords", []) if config else []
+        competitors = config.get("competitors", []) if config else []
+        
+        target_limits = {"company": 20, "industry": 15, "competitor": 15}
+        selected_results = perform_ai_triage_batch_with_tiered_backfill(articles_by_ticker[ticker], ticker, target_limits)
+            articles_by_ticker[ticker], 
+            ticker, 
+            target_limits
+        )
         triage_results[ticker] = selected_results
         
         # Update database with triage results

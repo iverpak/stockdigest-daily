@@ -2208,8 +2208,42 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
     
     return selected_results
 
+def _safe_json_loads(s: str) -> Dict:
+    """
+    Robust JSON parsing:
+      - strip code fences if any
+      - find outermost JSON object
+      - fallback to {} on failure
+    """
+    s = s.strip()
+    
+    # Strip ```json ... ``` fences if present
+    if s.startswith("```"):
+        s = s.strip("`")
+        # after stripping backticks, content may start with 'json\n'
+        if s.lower().startswith("json"):
+            s = s[4:].lstrip()
+    
+    # Quick path - try to parse as-is
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+    
+    # Fallback: slice from first '{' to last '}' (common when trailing notes appear)
+    try:
+        start = s.find("{")
+        end = s.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(s[start:end + 1])
+    except Exception:
+        pass
+    
+    LOG.error("Failed to parse JSON. First 200 chars:\n" + s[:200])
+    return {"selected_ids": [], "selected": [], "skipped": []}
+
 def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
-    """Make API request to OpenAI for triage and return full results"""
+    """Make API request to OpenAI for triage and return full results with robust error handling"""
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -2219,30 +2253,30 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
         data = {
             "model": OPENAI_MODEL,
             "temperature": 0,
+            "response_format": {"type": "json_object"},  # CRITICAL: Force JSON output
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload)}
+                {"role": "user", "content": json.dumps(payload, separators=(",", ":"))}
             ],
-            "max_completion_tokens": 1000
+            "max_tokens": 1600,  # FIXED: Use correct parameter name, increased limit
         }
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
         
         if response.status_code != 200:
             LOG.error(f"OpenAI triage API error {response.status_code}: {response.text}")
             return []
         
         result = response.json()
-        content = result["choices"][0]["message"]["content"]
+        content = result["choices"][0]["message"]["content"] or ""
         
-        # Parse the JSON response
-        triage_result = json.loads(content)
+        # Use robust JSON parsing
+        triage_result = _safe_json_loads(content)
         
-        # Sort by priority (P1=1 is highest) then return full data
+        # Extract and sort selected items
         selected = triage_result.get("selected", [])
         selected.sort(key=lambda x: x.get("scrape_priority", 5))
         
-        # Return full article data with triage info
         return selected
         
     except Exception as e:
@@ -2271,7 +2305,7 @@ def _triage_company_articles_full(articles: List[Dict], ticker: str, company_nam
             "primary_id": i
         })
     
-    # Build the API payload (same as before)
+    # Build the API payload
     payload = {
         "bucket": "company",
         "target_cap": 30,
@@ -2282,7 +2316,7 @@ def _triage_company_articles_full(articles: List[Dict], ticker: str, company_nam
         "items": items
     }
     
-    # Same system prompt as before
+    # Updated system prompt with strict JSON ending
     system_prompt = f"""You are a hedge-fund news router doing PRE-SCRAPE TRIAGE for COMPANY items.
 
 Assume NO article body. Base ALL judgments ONLY on: title, domain, source_tier, and the provided metadata.
@@ -2303,20 +2337,6 @@ Capital/structure: buyback|tender|special dividend|equity offering|convertible|r
 Operations/econ: guidance|preannounce|beats|misses|earnings|margin|backlog|contract|long-term agreement|supply deal|price increase|price cut|capacity add|closure|curtailment|capex plan
 Regulatory/legal: approval|license|tariff|quota|sanction|fine|settlement|DOJ|FTC|SEC|antitrust
 
-NUMERIC CUES (COMPANY)
-- Financial: EPS/revenue %, margin %, FCF, guidance deltas, buyback $, offering size/pricing, ratings level.
-- Operating: capacity/units (MW/Mt/kt/GWh/lines/rigs/aircraft/rooms), utilization %, ASP/price %, contract value/term, commissioning/open dates.
-- Dates: effective/close dates, Q# YYYY.
-- Ownership: insider % or $ size (material only), stake size if activist/strategic.
-
-SPECIAL CLAMPS
-- 13F/position micro-changes without activism/merger intent ⇒ low priority.
-- Price-move explainers/listicles ("Why X rose", "Top Y...") ⇒ low priority unless new numbers.
-- PR domains are allowed; down-prioritize only if unnumbered or likely_repeat.
-
-REPEAT HANDLING (lightweight)
-If likely_repeat=true and id ≠ primary_id, set lower priority (e.g., P4--P5) unless this item has a clearly higher source_tier than its primary.
-
 PRIORITY BANDS (1 best → 5 lowest)
 P1: hard event + concrete numbers + high relevance
 P2: hard event but soft numbers OR clear economic implication (pricing/capacity) with high relevance
@@ -2324,7 +2344,15 @@ P3: moderate signal (contract/guide mention) with some specificity
 P4: weak/remote/editorial or small ownership flows
 P5: likely_repeat or listicle/recap style with no data
 
-OUTPUT (STRICT JSON)
+SELECTION GUARANTEES
+- Never select more than target_cap; set the rest to "skipped".
+- Always include all referenced "id"s in either "selected" or "skipped".
+- If you select nothing, still return empty arrays.
+- Do not echo any inputs.
+
+Return ONLY one minified JSON object. No code fences. No comments. No text outside the JSON. If nothing qualifies, return {{"selected_ids":[],"selected":[],"skipped":[]}}.
+
+OUTPUT FORMAT:
 {{
 "selected_ids": [ <id>, ... ],
 "selected": [
@@ -2381,17 +2409,6 @@ Benchmark/input shocks: HRC|LME/COMEX metals|Henry Hub/TTF|Brent/WTI|freight ind
 Ecosystem/capacity/logistics: new plants/lines/mills|grid/transmission|spectrum allocation|port/rail constraints|export bans/quotas|waivers
 Authoritative data: government/agency prints (inventory/production/PMI sub-indices), methodology changes in benchmarks
 
-NUMERIC CUES (INDUSTRY)
-- Policy: effective dates, phase-in schedules, rate/percentage levels, quota tonnage.
-- Benchmarks/inputs: index level or % move, spread changes, inventory days, lead times.
-- Capacity/logistics: nameplate units, capex $, commissioning timelines.
-- Research/indices: month-over-month/YoY changes, diffusion index levels.
-
-SPECIAL CLAMPS
-- Remarks/op-eds without enacted dates or magnitudes → lower priority than enacted policy or benchmark prints.
-- Vendor marketing/TAM-CAGR fluff without sources → low priority unless it includes sector_profile benchmarks/inputs with numbers.
-- PR allowed; down-prioritize only if unnumbered or likely_repeat.
-
 PRIORITY BANDS
 P1: enacted policy with effective dates/levels OR benchmark/input shock with magnitude
 P2: capacity/logistics/standardization with quantified units/timelines
@@ -2399,7 +2416,15 @@ P3: authoritative indices/research directly tied to sector_profile
 P4: early proposals/adjacent geo/channel without numbers
 P5: likely_repeat/vendor puff/unsourced TAM claims
 
-OUTPUT (STRICT JSON)
+SELECTION GUARANTEES
+- Never select more than target_cap; set the rest to "skipped".
+- Always include all referenced "id"s in either "selected" or "skipped".
+- If you select nothing, still return empty arrays.
+- Do not echo any inputs.
+
+Return ONLY one minified JSON object. No code fences. No comments. No text outside the JSON. If nothing qualifies, return {{"selected_ids":[],"selected":[],"skipped":[]}}.
+
+OUTPUT FORMAT:
 {{
 "selected_ids": [ <id>, ... ],
 "selected": [
@@ -2465,15 +2490,6 @@ Rival hard events: M&A|capacity add/cut|plant open|shutdown|outage|strike|price 
 Financing/health: equity raise|distressed refi|covenant stress|rating cut to HY|asset sale to raise cash
 Guidance/ops: guide raise/cut with numbers|ASP/mix change|cost breakthrough|input contract locked/renegotiated
 
-NUMERIC CUES (COMPETITOR)
-- Capacity/throughput units (MW/Mt/kt/lines/rigs/aircraft), utilization %, price change %, contract $/tenor, guide deltas.
-- Cost/inputs if explicit (hedge locked %, surcharge %, input price %).
-- Dates (commissioning/restart/effective).
-
-SPECIAL CLAMPS
-- Non-activist 13F/position stories about peers → low priority.
-- PR allowed; down-prioritize if unnumbered or likely_repeat.
-
 PRIORITY BANDS
 P1: rival hard event + numbers (clear impact on competition)
 P2: rival hard event with soft numbers OR clear price/capacity signal
@@ -2481,7 +2497,15 @@ P3: peer guidance with figures; meaningful customer wins/losses
 P4: weak/remote/editorial
 P5: likely_repeat
 
-OUTPUT (STRICT JSON)
+SELECTION GUARANTEES
+- Never select more than target_cap; set the rest to "skipped".
+- Always include all referenced "id"s in either "selected" or "skipped".
+- If you select nothing, still return empty arrays.
+- Do not echo any inputs.
+
+Return ONLY one minified JSON object. No code fences. No comments. No text outside the JSON. If nothing qualifies, return {{"selected_ids":[],"selected":[],"skipped":[]}}.
+
+OUTPUT FORMAT:
 {{
 "selected_ids": [ <id>, ... ],
 "selected": [
@@ -4334,28 +4358,36 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
 
 # Updated email sending function with text attachment
 def send_email(subject: str, html_body: str, text_attachment: str, to: str = None):
-    """Send email with text file attachment for AI evaluation"""
+    """Send email with text content inline instead of as attachment to avoid blocking"""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
     
     try:
         recipient = to or DIGEST_TO
-        msg = MIMEMultipart("mixed")
+        msg = MIMEMultipart("alternative")  # Changed from "mixed"
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient
         
-        # Create the email body
-        body_part = MIMEMultipart("alternative")
-        body_part.attach(MIMEText("Please view this email in HTML format.", "plain"))
-        body_part.attach(MIMEText(html_body, "html"))
-        msg.attach(body_part)
+        # Add text attachment content inline at the end of HTML if it exists
+        if text_attachment and len(text_attachment.strip()) > 0:
+            html_with_attachment = html_body + f"""
+            <hr style="margin-top: 40px; border: 1px solid #ddd;">
+            <h3>AI Evaluation Data (for analysis)</h3>
+            <pre style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-size: 10px; line-height: 1.2; max-height: 400px; overflow-y: auto; white-space: pre-wrap;">
+{text_attachment[:10000]}...
+            </pre>
+            <p style="font-size: 11px; color: #666;">
+                <em>Note: This is evaluation data for AI scoring analysis. Full data truncated for email size limits.</em>
+            </p>
+            """
+        else:
+            html_with_attachment = html_body
         
-        # Add text file attachment
-        attachment = MIMEText(text_attachment)
-        attachment.add_header('Content-Disposition', 'attachment', filename='ai_scoring_evaluation.txt')
-        msg.attach(attachment)
+        # Create email body without attachment
+        msg.attach(MIMEText("Please view this email in HTML format.", "plain"))
+        msg.attach(MIMEText(html_with_attachment, "html"))
         
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             if SMTP_STARTTLS:
@@ -4363,7 +4395,7 @@ def send_email(subject: str, html_body: str, text_attachment: str, to: str = Non
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
         
-        LOG.info(f"Email with text attachment sent to {recipient}")
+        LOG.info(f"Email sent inline (no attachment) to {recipient}")
         return True
         
     except Exception as e:

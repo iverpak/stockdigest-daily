@@ -380,6 +380,7 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
                 ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS competitor_ticker VARCHAR(10);
                 
                 -- Essential indexes
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);

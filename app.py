@@ -96,7 +96,10 @@ QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
     "businesswire.com", "prnewswire.com", "globenewswire.com",
-    "insidermonkey.com", "seekingalpha.com"
+    "insidermonkey.com", "seekingalpha.com",
+    "theglobeandmail.com",
+    "apnews.com",
+    "reuters.com",
 }
 
 # Known paywall domains to skip during content scraping
@@ -5902,6 +5905,19 @@ def rerun_ai_analysis(
         "limit_used": limit,
         "tickers": tickers or "all",
         "message": f"Re-analyzed {updated} articles with fresh AI scoring"
+    }
+
+@APP.get("/admin/test-yahoo-resolution")
+def test_yahoo_resolution(request: Request, url: str = Query(...)):
+    """Test Yahoo Finance URL resolution"""
+    require_admin(request)
+    
+    result = domain_resolver.resolve_url_and_domain(url, "Test Title")
+    return {
+        "original_url": url,
+        "resolved_url": result[0],
+        "domain": result[1],
+        "source_url": result[2]
     }
 
 # ------------------------------------------------------------------------------

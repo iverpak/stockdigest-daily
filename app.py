@@ -263,7 +263,7 @@ def reset_scraping_stats():
     }
 
 def _update_ingestion_stats(category: str, keyword: str):
-    """Helper to update ingestion statistics"""
+    """Helper to update ingestion statistics - FIXED for competitor consolidation"""
     global ingestion_stats
     
     if category == "company":
@@ -278,6 +278,7 @@ def _update_ingestion_stats(category: str, keyword: str):
         LOG.info(f"INGESTION: Industry '{keyword}' {keyword_count}/{ingestion_stats['limits']['industry_per_keyword']}")
     
     elif category == "competitor":
+        # FIXED: Use competitor_ticker as the consolidation key, not search_keyword
         if keyword not in ingestion_stats["competitor_ingested_by_keyword"]:
             ingestion_stats["competitor_ingested_by_keyword"][keyword] = 0
         ingestion_stats["competitor_ingested_by_keyword"][keyword] += 1
@@ -285,7 +286,7 @@ def _update_ingestion_stats(category: str, keyword: str):
         LOG.info(f"INGESTION: Competitor '{keyword}' {keyword_count}/{ingestion_stats['limits']['competitor_per_keyword']}")
 
 def _check_ingestion_limit(category: str, keyword: str) -> bool:
-    """Check if we can ingest more articles for this category/keyword"""
+    """Check if we can ingest more articles for this category/keyword - FIXED for competitor consolidation"""
     global ingestion_stats
     
     if category == "company":
@@ -296,6 +297,7 @@ def _check_ingestion_limit(category: str, keyword: str) -> bool:
         return keyword_count < ingestion_stats["limits"]["industry_per_keyword"]
     
     elif category == "competitor":
+        # FIXED: Use competitor_ticker as the consolidation key, not search_keyword
         keyword_count = ingestion_stats["competitor_ingested_by_keyword"].get(keyword, 0)
         return keyword_count < ingestion_stats["limits"]["competitor_per_keyword"]
     
@@ -1567,46 +1569,16 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     return stats
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion - count existing + new articles from current time window"""
+    """Basic feed ingestion with per-category limits during ingestion (50/25/25) - COUNT ALL URLs INCLUDING EXISTING - NO AI ANALYSIS"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
     
     category = feed.get("category", "company")
-    feed_keyword = feed.get("search_keyword", "unknown")
     
-    # PRE-COUNT: Check how many articles already exist for this category/keyword from current window
-    current_run_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)  # Match your cron window
-    
-    try:
-        with db() as conn, conn.cursor() as cur:
-            if category == "company":
-                cur.execute("""
-                    SELECT COUNT(*) as existing_count 
-                    FROM found_url 
-                    WHERE ticker = %s AND category = %s AND found_at >= %s
-                """, (feed["ticker"], category, current_run_cutoff))
-            elif category == "industry":
-                cur.execute("""
-                    SELECT COUNT(*) as existing_count 
-                    FROM found_url 
-                    WHERE ticker = %s AND category = %s AND search_keyword = %s AND found_at >= %s
-                """, (feed["ticker"], category, feed_keyword, current_run_cutoff))
-            elif category == "competitor":
-                cur.execute("""
-                    SELECT COUNT(*) as existing_count 
-                    FROM found_url 
-                    WHERE ticker = %s AND category = %s AND search_keyword = %s AND found_at >= %s
-                """, (feed["ticker"], category, feed_keyword, current_run_cutoff))
-            
-            existing_count = cur.fetchone()["existing_count"]
-            
-            # PRE-LOAD the counter with existing articles
-            if existing_count > 0:
-                LOG.info(f"PRE-COUNT: Found {existing_count} existing {category} articles for '{feed_keyword}' in current window")
-                for _ in range(existing_count):
-                    _update_ingestion_stats(category, feed_keyword)
-    
-    except Exception as e:
-        LOG.warning(f"Failed to pre-count existing articles: {e}")
+    # FIXED: Use competitor_ticker for competitor feeds, search_keyword for others
+    if category == "competitor":
+        feed_keyword = feed.get("competitor_ticker", "unknown")  # Use competitor_ticker for consolidation
+    else:
+        feed_keyword = feed.get("search_keyword", "unknown")
     
     try:
         parsed = feedparser.parse(feed["url"])
@@ -1624,10 +1596,10 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
         for entry, _ in entries_with_dates:
             stats["processed"] += 1
             
-            # Check limit BEFORE processing - now includes pre-counted articles
+            # Check limit BEFORE processing - this now includes ALL URLs
             if not _check_ingestion_limit(category, feed_keyword):
                 stats["limit_reached"] += 1
-                LOG.info(f"INGESTION LIMIT REACHED: Stopping ingestion for {category} '{feed_keyword}' (includes existing articles)")
+                LOG.info(f"INGESTION LIMIT REACHED: Stopping ingestion for {category} '{feed_keyword}'")
                 break
             
             url = getattr(entry, "link", None)
@@ -1654,7 +1626,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 stats["blocked_spam"] += 1
                 continue
             
-            # Handle Google->Yahoo redirects (same as before)
+            # Handle Google->Yahoo redirects
             is_google_to_yahoo = (
                 "news.google.com" in url and 
                 "finance.yahoo.com" in url and 
@@ -1684,7 +1656,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
-                        # Don't count duplicates again - they were pre-counted
+                        # CRITICAL CHANGE: Still count duplicates toward limit
+                        _update_ingestion_stats(category, feed_keyword)
                         continue
                     
                     # Parse publish date
@@ -1692,12 +1665,20 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Basic quality score (no AI)
-                    basic_quality_score = _fallback_quality_score(title, final_domain, feed["ticker"], description, [])
+                    # FIXED: Use truly basic scoring - NO AI CALLS WHATSOEVER
+                    domain_tier = _get_domain_tier(final_domain, title, description)
+                    basic_quality_score = 50.0 + (domain_tier - 0.5) * 20  # Simple domain-based scoring
+                    
+                    # Add ticker mention bonus
+                    if feed["ticker"].upper() in title.upper():
+                        basic_quality_score += 10
+                    
+                    # Clamp to reasonable range
+                    basic_quality_score = max(20.0, min(80.0, basic_quality_score))
                     
                     display_content = description
                     
-                    # Insert NEW article
+                    # Insert article with basic data only - NO AI FIELDS
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1715,7 +1696,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        # Count NEW insertions toward limit
+                        # Update ingestion stats AFTER successful insertion
                         _update_ingestion_stats(category, feed_keyword)
                         
             except Exception as e:
@@ -2231,7 +2212,7 @@ def calculate_quality_score(
         return score, None, None, None
 
 def _fallback_quality_score(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
-    """Fallback scoring when AI is unavailable"""
+    """Fallback scoring when AI is unavailable - GUARANTEED NO AI CALLS"""
     base_score = 50.0
     
     # Domain tier bonus
@@ -2239,7 +2220,7 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     base_score += (domain_tier - 0.5) * 20  # Scale tier to score impact
     
     # Ticker mention bonus
-    if ticker.upper() in title.upper():
+    if ticker and ticker.upper() in title.upper():
         base_score += 10
     
     # Keyword relevance bonus
@@ -2248,7 +2229,7 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
         keyword_matches = sum(1 for kw in keywords if kw.lower() in title_lower)
         base_score += min(keyword_matches * 5, 15)
     
-    return max(10.0, min(90.0, base_score))
+    return max(20.0, min(80.0, base_score))
 
 def generate_ai_summary(scraped_content: str, title: str, ticker: str, description: str = "") -> Optional[str]:
     """Generate hedge fund analyst summary from scraped content using enhanced prompt"""

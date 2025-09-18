@@ -2592,15 +2592,64 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
             "Content-Type": "application/json"
         }
         
+        # Define JSON schema for structured output
+        triage_schema = {
+            "name": "triage_results",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "selected_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"}
+                    },
+                    "selected": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 5},
+                                "likely_repeat": {"type": "boolean"},
+                                "repeat_key": {"type": "string"},
+                                "why": {"type": "string"},
+                                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                            },
+                            "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                            "additionalProperties": False
+                        }
+                    },
+                    "skipped": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "scrape_priority": {"type": "integer", "minimum": 3, "maximum": 5},
+                                "likely_repeat": {"type": "boolean"},
+                                "repeat_key": {"type": "string"},
+                                "why": {"type": "string"},
+                                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                            },
+                            "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                "required": ["selected_ids", "selected", "skipped"],
+                "additionalProperties": False
+            }
+        }
+        
         data = {
             "model": OPENAI_MODEL,
             "temperature": 0,
-            "response_format": {"type": "json_object"},  # CRITICAL: Force JSON output
+            "response_format": {"type": "json_schema", "json_schema": triage_schema},  # Force structured JSON
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(payload, separators=(",", ":"))}
             ],
-            "max_tokens": 1600,  # FIXED: Use correct parameter name, increased limit
+            "max_completion_tokens": 1600,  # Use correct parameter name
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
@@ -2612,8 +2661,13 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
         result = response.json()
         content = result["choices"][0]["message"]["content"] or ""
         
-        # Use robust JSON parsing
-        triage_result = _safe_json_loads(content)
+        # Parse JSON - should be clean with structured output
+        try:
+            triage_result = json.loads(content)
+        except json.JSONDecodeError as e:
+            LOG.error(f"JSON parsing failed despite structured output: {e}")
+            LOG.error(f"Response content: {content[:500]}")
+            return []
         
         # Extract and sort selected items
         selected = triage_result.get("selected", [])
@@ -2626,6 +2680,7 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
         return []
 
 # Update the individual triage functions to use the new _full suffix
+
 def _triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, aliases_brands_assets: Dict, sector_profile: Dict) -> List[Dict]:
     """Triage company articles using optimized prompt - returns full results"""
     
@@ -2658,7 +2713,7 @@ def _triage_company_articles_full(articles: List[Dict], ticker: str, company_nam
         "items": items
     }
     
-    # Updated system prompt with strict JSON ending
+    # Updated system prompt - removed JSON formatting instructions
     system_prompt = f"""You are a hedge-fund news router doing PRE-SCRAPE TRIAGE for COMPANY items.
 
 Assume NO article body. Base ALL judgments ONLY on: title, domain, source_tier, and the provided metadata.
@@ -2692,18 +2747,7 @@ SELECTION GUARANTEES
 - If you select nothing, still return empty arrays.
 - Do not echo any inputs.
 
-Return ONLY one minified JSON object. No code fences. No comments. No text outside the JSON. If nothing qualifies, return {{"selected_ids":[],"selected":[],"skipped":[]}}.
-
-OUTPUT FORMAT:
-{{
-"selected_ids": [ <id>, ... ],
-"selected": [
-{{ "id": <id>, "scrape_priority": 1|2|3|4|5, "likely_repeat": true|false, "repeat_key": "...", "why": "<=120 chars>", "confidence": 0.0..1.0 }}
-],
-"skipped": [
-{{ "id": <id>, "scrape_priority": 3|4|5, "likely_repeat": true|false, "repeat_key": "...", "why": "<=120 chars>", "confidence": 0.0..1.0 }}
-]
-}}"""
+The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
 
     return _make_triage_request_full(system_prompt, payload)
 
@@ -2736,6 +2780,7 @@ def _triage_industry_articles_full(articles: List[Dict], ticker: str, sector_pro
         "items": items
     }
     
+    # Updated system prompt - removed JSON formatting instructions
     system_prompt = f"""You are a hedge-fund news router doing PRE-SCRAPE TRIAGE for INDUSTRY items.
 
 Assume NO article body. Use only title, domain, source_tier, and sector_profile.
@@ -2764,18 +2809,7 @@ SELECTION GUARANTEES
 - If you select nothing, still return empty arrays.
 - Do not echo any inputs.
 
-Return ONLY one minified JSON object. No code fences. No comments. No text outside the JSON. If nothing qualifies, return {{"selected_ids":[],"selected":[],"skipped":[]}}.
-
-OUTPUT FORMAT:
-{{
-"selected_ids": [ <id>, ... ],
-"selected": [
-{{ "id": <id>, "scrape_priority": 1|2|3|4|5, "likely_repeat": true|false, "repeat_key": "...", "why": "<=120 chars>", "confidence": 0.0..1.0 }}
-],
-"skipped": [
-{{ "id": <id>, "scrape_priority": 3|4|5, "likely_repeat": true|false, "repeat_key": "...", "why": "<=120 chars>", "confidence": 0.0..1.0 }}
-]
-}}"""
+The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
 
     return _make_triage_request_full(system_prompt, payload)
 
@@ -2818,6 +2852,7 @@ def _triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: L
         "items": items
     }
     
+    # Updated system prompt - removed JSON formatting instructions
     system_prompt = f"""You are a hedge-fund news router doing PRE-SCRAPE TRIAGE for COMPETITOR items.
 
 Assume NO article body. Use only title, domain, source_tier, peers, and sector_profile.
@@ -2845,18 +2880,7 @@ SELECTION GUARANTEES
 - If you select nothing, still return empty arrays.
 - Do not echo any inputs.
 
-Return ONLY one minified JSON object. No code fences. No comments. No text outside the JSON. If nothing qualifies, return {{"selected_ids":[],"selected":[],"skipped":[]}}.
-
-OUTPUT FORMAT:
-{{
-"selected_ids": [ <id>, ... ],
-"selected": [
-{{ "id": <id>, "scrape_priority": 1|2|3|4|5, "likely_repeat": true|false, "repeat_key": "...", "why": "<=120 chars>", "confidence": 0.0..1.0 }}
-],
-"skipped": [
-{{ "id": <id>, "scrape_priority": 3|4|5, "likely_repeat": true|false, "repeat_key": "...", "why": "<=120 chars>", "confidence": 0.0..1.0 }}
-]
-}}"""
+The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
 
     return _make_triage_request_full(system_prompt, payload)
 
@@ -4699,48 +4723,48 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
     return html_content, text_export
 
 # Updated email sending function with text attachment
-def send_email(subject: str, html_body: str, text_attachment: str, to: str = None):
-    """Send email with text content inline instead of as attachment to avoid blocking"""
+def send_email(subject: str, html_body: str, text_attachment: str = None, to: str = None):
+    """Send email with optional text attachment"""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
     
-    # ADD THIS DEBUG LINE
-    LOG.info(f"Email text attachment length: {len(text_attachment) if text_attachment else 0}")
-    
     try:
         recipient = to or DIGEST_TO
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart()
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient
         
-        # Add text attachment content inline at the end of HTML if it exists
-        if text_attachment and len(text_attachment.strip()) > 0:
-            html_with_attachment = html_body + f"""
-            <hr style="margin-top: 40px; border: 1px solid #ddd;">
-            <h3>AI Evaluation Data (for analysis)</h3>
-            <pre style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-size: 10px; line-height: 1.2; max-height: 400px; overflow-y: auto; white-space: pre-wrap;">
-{text_attachment[:10000]}...
-            </pre>
-            <p style="font-size: 11px; color: #666;">
-                <em>Note: This is evaluation data for AI scoring analysis. Full data truncated for email size limits.</em>
-            </p>
-            """
-        else:
-            html_with_attachment = html_body
-        
-        # Create email body without attachment
+        # Add HTML body
         msg.attach(MIMEText("Please view this email in HTML format.", "plain"))
-        msg.attach(MIMEText(html_with_attachment, "html"))
+        msg.attach(MIMEText(html_body, "html"))
         
+        # Add text attachment if provided and not empty
+        if text_attachment and len(text_attachment.strip()) > 0:
+            try:
+                # Create text attachment
+                attachment = MIMEText(text_attachment, "plain", "utf-8")
+                attachment.add_header(
+                    "Content-Disposition", 
+                    "attachment", 
+                    filename="ai_evaluation_data.txt"
+                )
+                msg.attach(attachment)
+                LOG.info(f"Added text attachment: {len(text_attachment)} characters")
+            except Exception as e:
+                LOG.warning(f"Failed to add text attachment: {e}")
+                # Continue without attachment rather than failing
+        
+        # Send email
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             if SMTP_STARTTLS:
                 server.starttls()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
         
-        LOG.info(f"Email sent inline (no attachment) to {recipient}")
+        attachment_info = f" with attachment ({len(text_attachment)} chars)" if text_attachment else " (no attachment)"
+        LOG.info(f"Email sent{attachment_info} to {recipient}")
         return True
         
     except Exception as e:

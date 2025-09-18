@@ -2422,10 +2422,10 @@ def _apply_quality_domain_and_smart_fill(articles: List[Dict], ai_selected: List
 
 def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage with PER-KEYWORD limits: Company=20, Industry=5 per keyword, Competitor=5 per competitor
+    Enhanced triage - FIXED: No backfill limits, no reductions, fix index errors
     """
     if not OPENAI_API_KEY:
-        LOG.warning("OpenAI API key not configured - using quality domains and domain tiers only")
+        LOG.warning("OpenAI API key not configured - using quality domains only")
         return {"company": [], "industry": [], "competitor": []}
     
     selected_results = {"company": [], "industry": [], "competitor": []}
@@ -2453,10 +2453,10 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
         except:
             pass
     
-    # COMPANY: Process as single batch with limit 20
+    # COMPANY: Process as single batch (no limits applied)
     if "company" in articles_by_category and articles_by_category["company"]:
         articles = articles_by_category["company"]
-        LOG.info(f"Starting triage for company: {len(articles)} articles (limit: 20)")
+        LOG.info(f"Starting triage for company: {len(articles)} articles (no limit)")
         
         try:
             ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
@@ -2464,15 +2464,15 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
             LOG.error(f"AI triage failed for company: {e}")
             ai_selected = []
         
-        # Apply quality domain and smart fill logic with limit 20
-        selected_results["company"] = _apply_quality_domain_and_smart_fill(
-            articles, ai_selected, "company", 20, LOW_QUALITY_DOMAINS
+        # Apply quality domain selection only (no limits)
+        selected_results["company"] = _apply_quality_domain_selection_only(
+            articles, ai_selected, "company", LOW_QUALITY_DOMAINS
         )
     
-    # INDUSTRY: Process by keyword batches with 5 per keyword limit
+    # INDUSTRY: Process by keyword batches (no limits applied)
     if "industry" in articles_by_category and articles_by_category["industry"]:
         articles = articles_by_category["industry"]
-        LOG.info(f"Starting triage for industry: {len(articles)} articles (limit: 5 per keyword)")
+        LOG.info(f"Starting triage for industry: {len(articles)} articles (no limit per keyword)")
         
         # Group articles by search_keyword
         articles_by_keyword = {}
@@ -2482,13 +2482,13 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 articles_by_keyword[keyword] = []
             articles_by_keyword[keyword].append((idx, article))
         
-        # Process each keyword separately with 5 article limit each
+        # Process each keyword separately (no limits)
         all_industry_selected = []
         for keyword, keyword_articles in articles_by_keyword.items():
             if not keyword_articles:
                 continue
                 
-            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles (limit: 5)")
+            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles (no limit)")
             
             # Create mini-article list for this keyword
             keyword_article_list = [article for idx, article in keyword_articles]
@@ -2499,22 +2499,23 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 
                 # Convert mini-indices back to full indices
                 for item in keyword_selected:
-                    original_idx = keyword_articles[item["id"]][0]  # Get original index
-                    item["id"] = original_idx  # Update to original index
-                    item["why"] = f"[{keyword}] {item['why']}"  # Tag with keyword
+                    if item["id"] < len(keyword_articles):  # FIX INDEX ERROR
+                        original_idx = keyword_articles[item["id"]][0]
+                        item["id"] = original_idx
+                        item["why"] = f"[{keyword}] {item['why']}"
                 
-                # Apply per-keyword limit of 5 with quality domains and backfill
-                keyword_articles_full = [keyword_articles[i][1] for i in range(len(keyword_articles))]
-                limited_keyword_selected = _apply_quality_domain_and_smart_fill(
-                    keyword_articles_full, keyword_selected, "industry", 5, LOW_QUALITY_DOMAINS
+                # Apply quality domain selection (no limits)
+                limited_keyword_selected = _apply_quality_domain_selection_only(
+                    keyword_article_list, keyword_selected, "industry", LOW_QUALITY_DOMAINS
                 )
                 
                 # Convert back to full article indices for final results
                 for item in limited_keyword_selected:
-                    original_idx = keyword_articles[item["id"]][0]
-                    item["id"] = original_idx
-                    if not item["why"].startswith(f"[{keyword}]"):
-                        item["why"] = f"[{keyword}] {item['why']}"
+                    if item["id"] < len(keyword_articles):  # FIX INDEX ERROR
+                        original_idx = keyword_articles[item["id"]][0]
+                        item["id"] = original_idx
+                        if not item["why"].startswith(f"[{keyword}]"):
+                            item["why"] = f"[{keyword}] {item['why']}"
                 
                 all_industry_selected.extend(limited_keyword_selected)
                 LOG.info(f"    Keyword '{keyword}' final selection: {len(limited_keyword_selected)} articles")
@@ -2524,26 +2525,43 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
         
         selected_results["industry"] = all_industry_selected
     
-    # COMPETITOR: Process by competitor batches with 5 per competitor limit
+    # COMPETITOR: Process by competitor batches (no limits applied) 
     if "competitor" in articles_by_category and articles_by_category["competitor"]:
         articles = articles_by_category["competitor"]
-        LOG.info(f"Starting triage for competitor: {len(articles)} articles (limit: 5 per competitor)")
+        LOG.info(f"Starting triage for competitor: {len(articles)} articles (no limit per competitor)")
         
-        # Group articles by search_keyword (competitor name or ticker)
+        # Group articles by competitor_ticker (not search_keyword) to consolidate
         articles_by_competitor = {}
         for idx, article in enumerate(articles):
-            competitor = article.get("search_keyword", "unknown")
-            if competitor not in articles_by_competitor:
-                articles_by_competitor[competitor] = []
-            articles_by_competitor[competitor].append((idx, article))
+            # Try to get competitor_ticker from database for this article
+            search_keyword = article.get("search_keyword", "unknown")
+            
+            try:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT DISTINCT competitor_ticker 
+                        FROM source_feed 
+                        WHERE search_keyword = %s AND category = 'competitor' AND active = TRUE 
+                        AND competitor_ticker IS NOT NULL
+                        LIMIT 1
+                    """, (search_keyword,))
+                    result = cur.fetchone()
+                    
+                    consolidation_key = result["competitor_ticker"] if result else search_keyword
+            except Exception:
+                consolidation_key = search_keyword
+            
+            if consolidation_key not in articles_by_competitor:
+                articles_by_competitor[consolidation_key] = []
+            articles_by_competitor[consolidation_key].append((idx, article))
         
-        # Process each competitor separately with 5 article limit each
+        # Process each competitor separately (no limits)
         all_competitor_selected = []
         for competitor, competitor_articles in articles_by_competitor.items():
             if not competitor_articles:
                 continue
                 
-            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles (limit: 5)")
+            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles (no limit)")
             
             # Create mini-article list for this competitor
             competitor_article_list = [article for idx, article in competitor_articles]
@@ -2554,22 +2572,23 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 
                 # Convert mini-indices back to full indices
                 for item in competitor_selected:
-                    original_idx = competitor_articles[item["id"]][0]  # Get original index
-                    item["id"] = original_idx  # Update to original index
-                    item["why"] = f"[{competitor}] {item['why']}"  # Tag with competitor name
+                    if item["id"] < len(competitor_articles):  # FIX INDEX ERROR
+                        original_idx = competitor_articles[item["id"]][0]
+                        item["id"] = original_idx
+                        item["why"] = f"[{competitor}] {item['why']}"
                 
-                # Apply per-competitor limit of 5 with quality domains and backfill
-                competitor_articles_full = [competitor_articles[i][1] for i in range(len(competitor_articles))]
-                limited_competitor_selected = _apply_quality_domain_and_smart_fill(
-                    competitor_articles_full, competitor_selected, "competitor", 5, LOW_QUALITY_DOMAINS
+                # Apply quality domain selection (no limits)
+                limited_competitor_selected = _apply_quality_domain_selection_only(
+                    competitor_article_list, competitor_selected, "competitor", LOW_QUALITY_DOMAINS
                 )
                 
                 # Convert back to full article indices for final results
                 for item in limited_competitor_selected:
-                    original_idx = competitor_articles[item["id"]][0]
-                    item["id"] = original_idx
-                    if not item["why"].startswith(f"[{competitor}]"):
-                        item["why"] = f"[{competitor}] {item['why']}"
+                    if item["id"] < len(competitor_articles):  # FIX INDEX ERROR
+                        original_idx = competitor_articles[item["id"]][0]
+                        item["id"] = original_idx
+                        if not item["why"].startswith(f"[{competitor}]"):
+                            item["why"] = f"[{competitor}] {item['why']}"
                 
                 all_competitor_selected.extend(limited_competitor_selected)
                 LOG.info(f"    Competitor '{competitor}' final selection: {len(limited_competitor_selected)} articles")
@@ -2581,7 +2600,7 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
     
     # Final summary
     total_selected = sum(len(items) for items in selected_results.values())
-    LOG.info(f"=== TRIAGE COMPLETE: {total_selected} articles selected across all categories ===")
+    LOG.info(f"=== TRIAGE COMPLETE: {total_selected} articles selected (no limits applied) ===")
     
     return selected_results
 

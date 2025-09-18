@@ -96,7 +96,7 @@ QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
     "businesswire.com", "prnewswire.com", "globenewswire.com",
-    "insidermonkey.com", "seekingalpha.com/pro"
+    "insidermonkey.com", "seekingalpha.com"
 }
 
 # Known paywall domains to skip during content scraping
@@ -3970,7 +3970,13 @@ JSON schema to return:
         for i, comp in enumerate(competitors, 1):
             LOG.info(f"  {i}. {comp['name']} ({comp['ticker']}) - Confidence: {comp.get('confidence', 0.8)}")
         
-        LOG.info(f"=== ENHANCED METADATA COMPLETE for {ticker} ===
+        LOG.info(f"=== ENHANCED METADATA COMPLETE for {ticker} ===")
+        
+        return enhanced_metadata
+
+    except Exception as e:
+        LOG.error(f"AI metadata generation failed for {ticker}: {e}")
+        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Wrapper for backward compatibility"""
@@ -4895,11 +4901,13 @@ def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[st
             "tickers": tickers or "all"
         }
     
-    html = build_digest_html(articles_by_ticker, days if days > 0 else 1)
+    # FIXED: build_digest_html now returns tuple, extract first element
+    html, text_export = build_digest_html(articles_by_ticker, days if days > 0 else 1)
     
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email(subject, html)
+    # FIXED: Add empty text attachment parameter
+    success = send_email(subject, html, "")
     
     # Count by category and content scraping
     category_counts = {"company": 0, "industry": 0, "competitor": 0}
@@ -5437,10 +5445,11 @@ def force_digest(request: Request, body: ForceDigestRequest):
     if total_articles == 0:
         return {"status": "no_articles", "message": "No articles found in database"}
     
-    html = build_digest_html(articles_by_ticker, 7)
+    # FIXED: Extract HTML from tuple and add empty text attachment
+    html, text_export = build_digest_html(articles_by_ticker, 7)
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email(subject, html)
+    success = send_email(subject, html, "")
     
     return {
         "status": "sent" if success else "failed",

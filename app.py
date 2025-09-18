@@ -2885,44 +2885,134 @@ The response will be automatically formatted as structured JSON with selected_id
     return _make_triage_request_full(system_prompt, payload)
 
 def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
-    """Make API request to OpenAI for triage and return full results"""
+    """Make API request to OpenAI for triage and return full results with comprehensive logging"""
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json"
         }
         
+        # Define JSON schema for structured output
+        triage_schema = {
+            "name": "triage_results",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "selected_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"}
+                    },
+                    "selected": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 5},
+                                "likely_repeat": {"type": "boolean"},
+                                "repeat_key": {"type": "string"},
+                                "why": {"type": "string"},
+                                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                            },
+                            "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                            "additionalProperties": False
+                        }
+                    },
+                    "skipped": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "scrape_priority": {"type": "integer", "minimum": 3, "maximum": 5},
+                                "likely_repeat": {"type": "boolean"},
+                                "repeat_key": {"type": "string"},
+                                "why": {"type": "string"},
+                                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                            },
+                            "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                "required": ["selected_ids", "selected", "skipped"],
+                "additionalProperties": False
+            }
+        }
+        
         data = {
             "model": OPENAI_MODEL,
             "temperature": 0,
+            "response_format": {"type": "json_schema", "json_schema": triage_schema},  # Force structured JSON
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload)}
+                {"role": "user", "content": json.dumps(payload, separators=(",", ":"))}
             ],
-            "max_completion_tokens": 1000
+            "max_completion_tokens": 1600,
         }
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
+        # COMPREHENSIVE LOGGING - Log the full request being sent to OpenAI
+        LOG.info("=== OPENAI TRIAGE REQUEST DEBUG ===")
+        LOG.info(f"Bucket: {payload.get('bucket', 'unknown')}")
+        LOG.info(f"Target cap: {payload.get('target_cap', 'unknown')}")
+        LOG.info(f"Items count: {len(payload.get('items', []))}")
+        LOG.info(f"System prompt length: {len(system_prompt)} chars")
+        LOG.info(f"User payload length: {len(json.dumps(payload))} chars")
+        
+        # Log first few items to see what we're sending
+        items = payload.get('items', [])
+        for i, item in enumerate(items[:3]):  # Log first 3 items
+            LOG.info(f"Item {i}: id={item.get('id')}, title='{item.get('title', '')[:50]}...', domain={item.get('domain')}")
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
         
         if response.status_code != 200:
             LOG.error(f"OpenAI triage API error {response.status_code}: {response.text}")
             return []
         
         result = response.json()
-        content = result["choices"][0]["message"]["content"]
+        content = result["choices"][0]["message"]["content"] or ""
         
-        # Parse the JSON response
-        triage_result = json.loads(content)
+        # LOG THE FULL RESPONSE FOR DEBUGGING
+        LOG.info("=== OPENAI TRIAGE RESPONSE DEBUG ===")
+        LOG.info(f"Response length: {len(content)} chars")
+        LOG.info(f"Raw response (first 500 chars): {content[:500]}")
+        if len(content) > 500:
+            LOG.info(f"Raw response (last 200 chars): ...{content[-200:]}")
         
-        # Sort by priority (P1=1 is highest) then return full data
+        # Parse JSON - should be clean with structured output
+        try:
+            triage_result = json.loads(content)
+            LOG.info(f"Parsed successfully: {len(triage_result.get('selected', []))} selected, {len(triage_result.get('skipped', []))} skipped")
+        except json.JSONDecodeError as e:
+            LOG.error(f"JSON parsing failed despite structured output: {e}")
+            LOG.error(f"Error position: line {getattr(e, 'lineno', '?')}, column {getattr(e, 'colno', '?')}")
+            LOG.error(f"Full response content for debugging:")
+            LOG.error(content)
+            return []
+        
+        # Extract and sort selected items
         selected = triage_result.get("selected", [])
-        selected.sort(key=lambda x: x.get("scrape_priority", 5))
         
-        # Return full article data with triage info
-        return selected
+        # Validate each selected item has required fields
+        validated_selected = []
+        for item in selected:
+            if all(key in item for key in ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"]):
+                validated_selected.append(item)
+            else:
+                LOG.error(f"Invalid selected item missing required fields: {item}")
+        
+        validated_selected.sort(key=lambda x: x.get("scrape_priority", 5))
+        
+        LOG.info(f"=== TRIAGE COMPLETE: {len(validated_selected)} valid selections ===")
+        return validated_selected
         
     except Exception as e:
         LOG.error(f"Triage request failed: {e}")
+        LOG.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        LOG.error(f"Full traceback: {traceback.format_exc()}")
         return []
 
 def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> str:

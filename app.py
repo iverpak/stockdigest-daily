@@ -1884,6 +1884,7 @@ def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
                 retain_days: int = 90, search_keyword: str = None, 
                 competitor_ticker: str = None) -> int:
     """Simplified feed upsert with category storage"""
+    LOG.info(f"DEBUG: Upserting feed - ticker: {ticker}, name: {name}, category: {category}, search_keyword: {search_keyword}")
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)

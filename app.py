@@ -119,24 +119,19 @@ PAYWALL_DOMAINS = {
     "accessnewswire.com", "www.accessnewswire.com",
 }
 
-# Domain authority tiers for AI scoring
 DOMAIN_TIERS = {
-    # Tier A (1.0) - Premier financial news
     "reuters.com": 1.0, 
     "wsj.com": 1.0, 
     "ft.com": 1.0,
     "bloomberg.com": 1.0,
-    
-    # Tier A- (0.9) - Major wire services
+    "sec.gov": 1.0,
     "apnews.com": 0.9,
-    
-    # Tier B (0.7) - Strong trade/tech press
+    "nasdaq.com": 0.8,
     "techcrunch.com": 0.7, 
     "cnbc.com": 0.7, 
     "marketwatch.com": 0.7,
     "barrons.com": 0.7,
-    
-    # Tier C (0.4) - Aggregators and opinion sites
+    "investors.com": 0.6,
     "finance.yahoo.com": 0.4, 
     "yahoo.com": 0.4, 
     "news.yahoo.com": 0.4,
@@ -149,14 +144,17 @@ DOMAIN_TIERS = {
     "simplywall.st": 0.4, 
     "investing.com": 0.4,
     "insidermonkey.com": 0.4,
-    "investors.com": 0.4,
-    
-    # Tier D (0.2) - PR wires
+    "businesswire.com": 0.3,
+    "streetinsider.com": 0.3,
+    "thefly.com": 0.3,
     "globenewswire.com": 0.2, 
     "prnewswire.com": 0.2, 
-    "businesswire.com": 0.2,
     "openpr.com": 0.2, 
     "financialcontent.com": 0.2,
+    "accesswire.com": 0.2,
+    "defensenews.com": 0.2,
+    "defense-world.net": 0.1,
+    "defenseworld.net": 0.1,
 }
 
 # Source hints for upgrading aggregator content
@@ -867,6 +865,61 @@ def validate_scraped_content(content, url, domain):
 
 # Create global session
 scraping_session = create_scraping_session()
+
+def is_insider_trading_article(title: str) -> bool:
+    """
+    Detect insider trading/institutional flow articles that are typically low-value
+    """
+    title_lower = title.lower()
+    
+    # Insider trading patterns
+    insider_patterns = [
+        # Executive transactions
+        r"\w+\s+(ceo|cfo|coo|president|director|officer|executive)\s+\w+\s+(sells?|buys?|purchases?)",
+        r"(sells?|buys?|purchases?)\s+\$[\d,]+\.?\d*[km]?\s+(in\s+shares?|worth\s+of)",
+        r"(insider|executive|officer|director|ceo|cfo)\s+(selling|buying|sold|bought)",
+        
+        # Institutional flow patterns  
+        r"\w+\s+(capital|management|advisors?|investments?|llc|inc\.?)\s+(buys?|sells?|invests?|increases?|decreases?)",
+        r"(invests?|buys?)\s+\$[\d,]+\.?\d*[km]?\s+in",
+        r"shares?\s+(sold|bought)\s+by\s+",
+        r"(increases?|decreases?|trims?|adds?\s+to)\s+(stake|position|holdings?)\s+in",
+        
+        # Specific low-value phrases
+        r"buys?\s+\d+\s+shares?",
+        r"sells?\s+\d+\s+shares?", 
+        r"shares?\s+(sold|purchased|bought)\s+by",
+        r"\$[\d,]+\.?\d*[km]?\s+stake",
+        r"(quarterly|q\d)\s+holdings?\s+(report|filing)",
+        r"13f\s+filing",
+        r"form\s+4\s+filing"
+    ]
+    
+    # Check against patterns
+    for pattern in insider_patterns:
+        if re.search(pattern, title_lower):
+            return True
+    
+    # Additional heuristics
+    # Small dollar amounts (under $50M) with "sells" or "buys"
+    small_amount_pattern = r"\$(\d+(?:,\d{3})*(?:\.\d+)?)\s*([km])?"
+    matches = re.findall(small_amount_pattern, title_lower)
+    if matches and any(word in title_lower for word in ["sells", "buys", "purchases", "sold", "bought"]):
+        for amount_str, unit in matches:
+            try:
+                amount = float(amount_str.replace(",", ""))
+                if unit.lower() == 'k':
+                    amount *= 1000
+                elif unit.lower() == 'm':
+                    amount *= 1000000
+                
+                # Flag transactions under $50M as likely insider trading
+                if amount < 50000000:
+                    return True
+            except:
+                continue
+    
+    return False
 
 def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
@@ -2112,15 +2165,24 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
 
 def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage with quality domain auto-selection and limit filling
+    Enhanced triage with insider trading filtering, domain tier consideration, and smart limit filling
     """
     if not OPENAI_API_KEY:
-        LOG.warning("OpenAI API key not configured - using quality domains only")
+        LOG.warning("OpenAI API key not configured - using quality domains and domain tiers only")
         return {"company": [], "industry": [], "competitor": []}
     
     # Limits for each category
     limits = {"company": 20, "industry": 5, "competitor": 5}
     selected_results = {"company": [], "industry": [], "competitor": []}
+    
+    # Low-quality domains to avoid in manual triage
+    LOW_QUALITY_DOMAINS = {
+        "defense-world.net", "defensenews.com", "defenseworld.net",
+        "zacks.com",  # Too repetitive
+        "thefly.com",  # Often paywalled
+        "accesswire.com",  # Press release aggregator
+        "streetinsider.com"  # Often repetitive insider trading
+    }
     
     # Get ticker metadata for enhanced prompts
     config = get_ticker_config(ticker)
@@ -2146,7 +2208,7 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
             
         LOG.info(f"Starting enhanced triage for {category}: {len(articles)} articles")
         
-        # Step 1: AI Triage
+        # Step 1: AI Triage (unchanged)
         try:
             if category == "company":
                 ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
@@ -2162,60 +2224,93 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
             LOG.error(f"AI triage failed for {category}: {e}")
             ai_selected = []
         
-        # Step 2: Quality Domain Selection
+        # Step 2: Enhanced Quality Domain Selection with Filtering
         quality_selected = []
         ai_selected_indices = {item["id"] for item in ai_selected}
         
         for idx, article in enumerate(articles):
-            if idx not in ai_selected_indices:  # Not already selected by AI
-                domain = normalize_domain(article.get("domain", ""))
-                if domain in QUALITY_DOMAINS:
-                    quality_selected.append({
-                        "id": idx,
-                        "scrape_priority": 2,  # Medium priority for quality domains
-                        "likely_repeat": False,
-                        "repeat_key": "",
-                        "why": f"Quality domain: {domain}",
-                        "confidence": 0.8
-                    })
+            if idx in ai_selected_indices:  # Already selected by AI
+                continue
+                
+            domain = normalize_domain(article.get("domain", ""))
+            title = article.get("title", "").lower()
+            
+            # Skip low-quality domains
+            if domain in LOW_QUALITY_DOMAINS:
+                continue
+                
+            # Skip insider trading articles
+            if is_insider_trading_article(title):
+                continue
+            
+            # Check if it's a quality domain
+            if domain in QUALITY_DOMAINS:
+                quality_selected.append({
+                    "id": idx,
+                    "scrape_priority": 2,  # Medium priority for quality domains
+                    "likely_repeat": False,
+                    "repeat_key": "",
+                    "why": f"Quality domain: {domain}",
+                    "confidence": 0.8
+                })
         
-        # Step 3: Combine and Fill to Limits
+        # Step 3: Smart Limit Filling with Domain Tier Consideration
         combined_selected = ai_selected + quality_selected
-        
-        # Sort by priority (lower number = higher priority)
-        combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
-        
-        # Step 4: Fill remaining slots if under limit
         limit = limits.get(category, 5)
+        
         if len(combined_selected) < limit:
             remaining_slots = limit - len(combined_selected)
             selected_indices = {item["id"] for item in combined_selected}
             
-            # Get remaining articles sorted by publication time (newest first)
+            # Get remaining articles with enhanced filtering and domain tier scoring
             remaining_articles = []
             for idx, article in enumerate(articles):
-                if idx not in selected_indices:
-                    pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
-                    remaining_articles.append((idx, pub_time))
+                if idx in selected_indices:
+                    continue
+                    
+                domain = normalize_domain(article.get("domain", ""))
+                title = article.get("title", "").lower()
+                
+                # Apply enhanced filtering
+                if domain in LOW_QUALITY_DOMAINS:
+                    continue
+                    
+                if is_insider_trading_article(title):
+                    continue
+                
+                # Calculate domain tier score for prioritization
+                domain_tier = DOMAIN_TIERS.get(domain, 0.3)  # Default to low tier
+                pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+                
+                # Prioritize by domain tier first, then recency
+                priority_score = (domain_tier * 1000) + (pub_time.timestamp() / 1000)
+                
+                remaining_articles.append((idx, priority_score, pub_time, domain_tier))
             
-            # Sort by publication time (newest first)
+            # Sort by priority score (higher = better)
             remaining_articles.sort(key=lambda x: x[1], reverse=True)
             
-            # Add most recent articles to fill slots
-            for idx, _ in remaining_articles[:remaining_slots]:
+            # Add best remaining articles to fill slots
+            for idx, priority_score, pub_time, domain_tier in remaining_articles[:remaining_slots]:
                 combined_selected.append({
                     "id": idx,
-                    "scrape_priority": 4,  # Lower priority for time-based selection
+                    "scrape_priority": 4,  # Lower priority for limit filling
                     "likely_repeat": False,
                     "repeat_key": "",
-                    "why": "Recent article - limit filling",
+                    "why": f"High-tier domain fill (tier: {domain_tier:.1f})",
                     "confidence": 0.6
                 })
         
-        # Limit to the maximum allowed
+        # Limit to the maximum allowed and sort by priority
+        combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
         selected_results[category] = combined_selected[:limit]
         
-        LOG.info(f"Enhanced triage {category}: {len(ai_selected)} AI + {len(quality_selected)} Quality + {len(combined_selected) - len(ai_selected) - len(quality_selected)} Time-based = {len(selected_results[category])} total")
+        # Enhanced logging
+        ai_count = len(ai_selected)
+        quality_count = len(quality_selected)
+        fill_count = len(selected_results[category]) - ai_count - quality_count
+        
+        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count} Quality + {fill_count} Smart-fill = {len(selected_results[category])} total")
     
     return selected_results
 

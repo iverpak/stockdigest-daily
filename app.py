@@ -1824,7 +1824,11 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                                 len(candidate_url) > 20 and
                                 'finance.yahoo.com' not in candidate_url and
                                 not candidate_url.startswith('//') and
-                                '.' in parsed.netloc):
+                                '.' in parsed.netloc and
+                                # FIXED: Add validation to exclude images and other non-article URLs
+                                not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')) and
+                                not '/api/' in candidate_url.lower() and
+                                not 'yimg.com' in candidate_url.lower()):
                                 
                                 LOG.info(f"Successfully extracted Yahoo source: {candidate_url}")
                                 return candidate_url
@@ -1836,9 +1840,10 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                     LOG.debug(f"Processing match failed: {e}")
                     continue
         
-        # Fallback: Look for any reasonable URLs in the content
+        # FIXED: More restrictive fallback patterns that exclude images
         fallback_patterns = [
-            r'https://(?!finance\.yahoo\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[^\s"<>]*(?:news|article|story|press)[^\s"<>]*',
+            # Only match URLs that are likely to be news articles
+            r'https://(?!finance\.yahoo\.com|s\.yimg\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
             r'https://stockstory\.org/[^\s"<>]*',
         ]
         
@@ -1848,7 +1853,11 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                 candidate_url = match.group(0).rstrip('",')
                 try:
                     parsed = urlparse(candidate_url)
-                    if parsed.scheme and parsed.netloc:
+                    if (parsed.scheme and parsed.netloc and
+                        # Additional validation for fallback URLs
+                        not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js')) and
+                        not '/api/' in candidate_url.lower() and
+                        len(candidate_url) > 30):  # Minimum reasonable URL length
                         LOG.info(f"Fallback extraction successful: {candidate_url}")
                         return candidate_url
                 except Exception:

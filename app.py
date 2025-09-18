@@ -1567,11 +1567,46 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     return stats
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion with per-category limits during ingestion (50/25/25) - COUNT ALL URLs INCLUDING EXISTING"""
+    """Basic feed ingestion - count existing + new articles from current time window"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
     
     category = feed.get("category", "company")
     feed_keyword = feed.get("search_keyword", "unknown")
+    
+    # PRE-COUNT: Check how many articles already exist for this category/keyword from current window
+    current_run_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)  # Match your cron window
+    
+    try:
+        with db() as conn, conn.cursor() as cur:
+            if category == "company":
+                cur.execute("""
+                    SELECT COUNT(*) as existing_count 
+                    FROM found_url 
+                    WHERE ticker = %s AND category = %s AND found_at >= %s
+                """, (feed["ticker"], category, current_run_cutoff))
+            elif category == "industry":
+                cur.execute("""
+                    SELECT COUNT(*) as existing_count 
+                    FROM found_url 
+                    WHERE ticker = %s AND category = %s AND search_keyword = %s AND found_at >= %s
+                """, (feed["ticker"], category, feed_keyword, current_run_cutoff))
+            elif category == "competitor":
+                cur.execute("""
+                    SELECT COUNT(*) as existing_count 
+                    FROM found_url 
+                    WHERE ticker = %s AND category = %s AND search_keyword = %s AND found_at >= %s
+                """, (feed["ticker"], category, feed_keyword, current_run_cutoff))
+            
+            existing_count = cur.fetchone()["existing_count"]
+            
+            # PRE-LOAD the counter with existing articles
+            if existing_count > 0:
+                LOG.info(f"PRE-COUNT: Found {existing_count} existing {category} articles for '{feed_keyword}' in current window")
+                for _ in range(existing_count):
+                    _update_ingestion_stats(category, feed_keyword)
+    
+    except Exception as e:
+        LOG.warning(f"Failed to pre-count existing articles: {e}")
     
     try:
         parsed = feedparser.parse(feed["url"])
@@ -1589,10 +1624,10 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
         for entry, _ in entries_with_dates:
             stats["processed"] += 1
             
-            # Check limit BEFORE processing - this now includes ALL URLs
+            # Check limit BEFORE processing - now includes pre-counted articles
             if not _check_ingestion_limit(category, feed_keyword):
                 stats["limit_reached"] += 1
-                LOG.info(f"INGESTION LIMIT REACHED: Stopping ingestion for {category} '{feed_keyword}'")
+                LOG.info(f"INGESTION LIMIT REACHED: Stopping ingestion for {category} '{feed_keyword}' (includes existing articles)")
                 break
             
             url = getattr(entry, "link", None)
@@ -1619,7 +1654,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 stats["blocked_spam"] += 1
                 continue
             
-            # Handle Google->Yahoo redirects
+            # Handle Google->Yahoo redirects (same as before)
             is_google_to_yahoo = (
                 "news.google.com" in url and 
                 "finance.yahoo.com" in url and 
@@ -1649,8 +1684,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
-                        # CRITICAL CHANGE: Still count duplicates toward limit
-                        _update_ingestion_stats(category, feed_keyword)
+                        # Don't count duplicates again - they were pre-counted
                         continue
                     
                     # Parse publish date
@@ -1663,7 +1697,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     display_content = description
                     
-                    # Insert article with basic data only
+                    # Insert NEW article
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1681,7 +1715,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        # Update ingestion stats AFTER successful insertion
+                        # Count NEW insertions toward limit
                         _update_ingestion_stats(category, feed_keyword)
                         
             except Exception as e:
@@ -2326,7 +2360,7 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
 def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str], target_limit: int) -> List[Dict]:
     """
     Apply tiered backfill to reach target limits using domain rankings
-    Priority: AI Selected > Quality Domains > Tier 1 > Tier 0.9 > ... > Tier 0.1
+    NEVER reduce AI + Quality selections, only backfill UP TO limit
     """
     # Step 1: Start with AI selections
     combined_selected = list(ai_selected)
@@ -2335,7 +2369,7 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
     # Step 2: Add quality domains (not already AI selected)
     quality_selected = []
     for idx, article in enumerate(articles):
-        if idx in selected_indices or len(combined_selected) >= target_limit:
+        if idx in selected_indices:
             continue
             
         domain = normalize_domain(article.get("domain", ""))
@@ -2358,9 +2392,12 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
     
     combined_selected.extend(quality_selected)
     
-    # Step 3: Tiered backfill if still under target
-    if len(combined_selected) < target_limit:
-        remaining_slots = target_limit - len(combined_selected)
+    # Step 3: Tiered backfill ONLY if under target (never reduce)
+    current_count = len(combined_selected)
+    backfill_selected = []
+    
+    if current_count < target_limit:
+        remaining_slots = target_limit - current_count
         
         # Group remaining articles by domain tier
         tier_groups = {}
@@ -2387,7 +2424,6 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
             })
         
         # Fill remaining slots starting from highest tier
-        backfill_selected = []
         for tier in sorted(tier_groups.keys(), reverse=True):  # High to low (1.0 → 0.1)
             if len(backfill_selected) >= remaining_slots:
                 break
@@ -2416,13 +2452,13 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
     # Final sort by priority (lower number = higher priority)
     combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
     
-    # Enforce target limit
-    final_selected = combined_selected[:target_limit]
+    # NEVER REDUCE - return all AI + Quality + Backfill selections
+    final_selected = combined_selected  # REMOVED the [:target_limit] slice
     
     # Enhanced logging
     ai_count = len(ai_selected)
     quality_count = len(quality_selected)
-    backfill_count = len(final_selected) - ai_count - quality_count
+    backfill_count = len(backfill_selected)
     
     LOG.info(f"Tiered backfill {category}: {ai_count} AI + {quality_count} Quality + {backfill_count} Backfill = {len(final_selected)}/{target_limit}")
     

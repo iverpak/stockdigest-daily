@@ -1358,6 +1358,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # Quality score styling - only show if AI analyzed
     score_html = ""
     analyzed_html = ""
+    impact_html = ""
     quality_score = article.get("quality_score")
     ai_impact = article.get("ai_impact")
     
@@ -1365,6 +1366,15 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         # This article was AI analyzed - show score
         score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
         score_html = f'<span class="score {score_class}">Score: {quality_score:.0f}</span>'
+        
+        # Show impact next to score with appropriate styling
+        impact_class = {
+            "positive": "impact-positive", 
+            "negative": "impact-negative", 
+            "mixed": "impact-mixed", 
+            "neutral": "impact-neutral"
+        }.get(ai_impact.lower(), "impact-neutral")
+        impact_html = f'<span class="impact {impact_class}">{ai_impact}</span>'
         
         # Show "Analyzed" badge if we have scraped content and AI summary
         if article.get('scraped_content') and article.get('ai_summary'):
@@ -1413,6 +1423,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
             {score_html}
+            {impact_html}
             {analyzed_html}
         </div>
         <div class='article-content'>
@@ -1862,11 +1873,64 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
         text_lines.append(f"TICKER: {ticker}")
         text_lines.append("-" * 40)
         
+        # Add enhanced metadata for each ticker
+        config = get_ticker_config(ticker)
+        if config:
+            text_lines.append("ENHANCED METADATA:")
+            text_lines.append(f"Company Name: {config.get('name', ticker)}")
+            text_lines.append(f"Sector: {config.get('sector', 'N/A')}")
+            text_lines.append(f"Industry: {config.get('industry', 'N/A')}")
+            text_lines.append(f"Sub-Industry: {config.get('sub_industry', 'N/A')}")
+            
+            # Industry keywords
+            if config.get("industry_keywords"):
+                text_lines.append(f"Industry Keywords: {', '.join(config['industry_keywords'])}")
+            
+            # Competitors
+            if config.get("competitors"):
+                text_lines.append(f"Competitors: {', '.join(config['competitors'])}")
+            
+            # Sector profile
+            sector_profile = config.get("sector_profile")
+            if sector_profile:
+                try:
+                    if isinstance(sector_profile, str):
+                        sector_data = json.loads(sector_profile)
+                    else:
+                        sector_data = sector_profile
+                    
+                    if sector_data.get("core_inputs"):
+                        text_lines.append(f"Core Inputs: {', '.join(sector_data['core_inputs'])}")
+                    if sector_data.get("core_geos"):
+                        text_lines.append(f"Core Geographies: {', '.join(sector_data['core_geos'])}")
+                    if sector_data.get("core_channels"):
+                        text_lines.append(f"Core Channels: {', '.join(sector_data['core_channels'])}")
+                except:
+                    pass
+            
+            # Aliases and brands
+            aliases_brands = config.get("aliases_brands_assets")
+            if aliases_brands:
+                try:
+                    if isinstance(aliases_brands, str):
+                        alias_data = json.loads(aliases_brands)
+                    else:
+                        alias_data = aliases_brands
+                    
+                    if alias_data.get("aliases"):
+                        text_lines.append(f"Aliases: {', '.join(alias_data['aliases'])}")
+                    if alias_data.get("brands"):
+                        text_lines.append(f"Brands: {', '.join(alias_data['brands'])}")
+                except:
+                    pass
+            
+            text_lines.append("")
+        
         for category, articles in categories.items():
             if not articles:
                 continue
                 
-            text_lines.append(f"\nCATEGORY: {category.upper()}")
+            text_lines.append(f"CATEGORY: {category.upper()}")
             text_lines.append("")
             
             for article in articles:
@@ -1886,14 +1950,14 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
                 
                 text_lines.append("")
                 
-                # AI Analysis section
+                # AI Analysis section with ALL components
                 text_lines.append("AI ANALYSIS:")
                 quality_score = article.get('quality_score', 0)
                 text_lines.append(f"Final Score: {quality_score:.1f}")
                 
-                # Show scoring components if available
+                # Show ALL scoring components for verification
                 if article.get('source_tier'):
-                    text_lines.append(f"Source Tier: {article['source_tier']}")
+                    text_lines.append(f"Source Tier: {article['source_tier']} (Domain: {article.get('domain', 'unknown')})")
                 if article.get('event_multiplier'):
                     text_lines.append(f"Event Multiplier: {article['event_multiplier']} - {article.get('event_multiplier_reason', '')}")
                 if article.get('relevance_boost'):
@@ -1901,7 +1965,13 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
                 if article.get('numeric_bonus'):
                     text_lines.append(f"Numeric Bonus: {article['numeric_bonus']}")
                 if article.get('penalty_multiplier'):
-                    text_lines.append(f"Penalty: {article['penalty_multiplier']} - {article.get('penalty_reason', '')}")
+                    text_lines.append(f"Penalty Multiplier: {article['penalty_multiplier']} - {article.get('penalty_reason', '')}")
+                
+                # Calculation verification
+                if all(article.get(field) is not None for field in ['source_tier', 'event_multiplier', 'relevance_boost', 'penalty_multiplier']):
+                    calculated = ((100 * article['source_tier'] * article['event_multiplier'] * article['relevance_boost']) * 
+                                article['penalty_multiplier'] + article.get('numeric_bonus', 0))
+                    text_lines.append(f"CALCULATION CHECK: (100 × {article['source_tier']} × {article['event_multiplier']} × {article['relevance_boost']}) × {article['penalty_multiplier']} + {article.get('numeric_bonus', 0)} = {calculated:.1f}")
                 
                 ai_impact = article.get('ai_impact', 'N/A')
                 ai_reasoning = article.get('ai_reasoning', 'N/A')
@@ -3361,10 +3431,18 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".high-score { background-color: #d4edda; color: #155724; }",
         ".med-score { background-color: #fff3cd; color: #856404; }",
         ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+        ".impact-positive { background-color: #d4edda; color: #155724; }",
+        ".impact-negative { background-color: #f8d7da; color: #721c24; }",
+        ".impact-mixed { background-color: #fff3cd; color: #856404; }",
+        ".impact-neutral { background-color: #e2e3e5; color: #383d41; }",
         ".analyzed-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
         ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
+        ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+        ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
+        ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
         ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
         "a { color: #2980b9; text-decoration: none; }",
         "a:hover { text-decoration: underline; }",
@@ -3386,17 +3464,49 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>{ticker} - {total_articles} Total Articles</h2>")
         
-        # Add keyword information with improved styling
+        # Enhanced keyword information with metadata
         if ticker in ticker_metadata_cache:
             metadata = ticker_metadata_cache[ticker]
             html.append("<div class='keywords'>")
             html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
+            
             if metadata.get("industry_keywords"):
                 industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
                 html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
+            
             if metadata.get("competitors"):
                 competitor_badges = [f'<span class="competitor-badge">🏢 {comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
-                html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}")
+                html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}<br>")
+            
+            # Enhanced metadata display
+            config = get_ticker_config(ticker)
+            if config:
+                # Sector information
+                if config.get("sector"):
+                    html.append(f"<strong>Sector:</strong> <span class='sector-badge'>🏭 {config['sector']}</span><br>")
+                
+                # Core geographies from sector profile
+                sector_profile = config.get("sector_profile")
+                if sector_profile and isinstance(sector_profile, str):
+                    try:
+                        sector_data = json.loads(sector_profile)
+                        if sector_data.get("core_geos"):
+                            geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_data["core_geos"][:3]]
+                            html.append(f"<strong>Core Regions:</strong> {' '.join(geo_badges)}<br>")
+                    except:
+                        pass
+                
+                # Aliases/brands from enhanced metadata
+                aliases_brands = config.get("aliases_brands_assets")
+                if aliases_brands and isinstance(aliases_brands, str):
+                    try:
+                        alias_data = json.loads(aliases_brands)
+                        if alias_data.get("aliases"):
+                            alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in alias_data["aliases"][:3]]
+                            html.append(f"<strong>Aliases:</strong> {' '.join(alias_badges)}")
+                    except:
+                        pass
+            
             html.append("</div>")
         
         # Company News Section

@@ -1039,6 +1039,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                                        enable_ai_scoring: bool = True, max_ai_articles: int = None) -> Dict[str, int]:
     """
     Enhanced feed processing with AI summaries for scraped content
+    Flow: Check scraping limits -> Scrape resolved URLs -> AI analysis only on successful scrapes
     """
     global scraping_stats
     
@@ -1185,64 +1186,46 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Determine if this article should get full AI processing
-                    should_use_ai = (enable_ai_scoring and 
-                                   (max_ai_articles is None or ai_processed_count < max_ai_articles))
-                    
-                    # Content scraping logic with per-keyword limits
+                    # Initialize content scraping variables
                     scraped_content = None
                     scraping_error = None
                     content_scraped_at = None
                     scraping_failed = False
                     ai_summary = None
+                    should_use_ai = False
                     
-                    if should_use_ai:
-                        # Determine if we should scrape content
-                        should_scrape = False
-                        scrape_url = None
+                    # Attempt content scraping (respects 20/5/5 limits)
+                    if final_resolved_url and final_resolved_url.startswith(('http://', 'https://')):
+                        scrape_domain = normalize_domain(urlparse(final_resolved_url).netloc.lower())
                         
-                        # For Yahoo Finance URLs (direct or via Google redirect)
-                        if (final_source_url and "finance.yahoo.com" in (url if not is_google_to_yahoo else final_source_url)):
-                            should_scrape = True
-                            scrape_url = final_resolved_url
-                            
-                        # For Google News resolved URLs (non-Yahoo)
-                        elif ("news.google.com" in url and final_resolved_url != url and 
-                              not is_google_to_yahoo and final_resolved_url.startswith(('http://', 'https://'))):
-                            should_scrape = True
-                            scrape_url = final_resolved_url
-                        
-                        if should_scrape and scrape_url:
-                            scrape_domain = normalize_domain(urlparse(scrape_url).netloc.lower())
-                            
-                            if scrape_domain in PAYWALL_DOMAINS:
-                                stats["scraping_skipped"] += 1
-                                LOG.info(f"Skipping paywall domain: {scrape_domain}")
-                            else:
-                                # Use the limited scraper with keyword tracking
-                                content, status = safe_content_scraper_with_playwright_limited(
-                                    scrape_url, scrape_domain, category, feed_keyword, scraped_domains
-                                )
-                                
-                                if content:
-                                    scraped_content = content
-                                    content_scraped_at = datetime.now(timezone.utc)
-                                    stats["content_scraped"] += 1
-                                    
-                                    # Generate AI summary if we have scraped content
-                                    ai_summary = generate_ai_summary(scraped_content, title, feed["ticker"])
-                                    if ai_summary:
-                                        stats["ai_summaries_generated"] += 1
-                                else:
-                                    scraping_failed = True
-                                    scraping_error = status
-                                    stats["content_failed"] += 1
-                        else:
+                        if scrape_domain in PAYWALL_DOMAINS:
                             stats["scraping_skipped"] += 1
+                            LOG.info(f"Skipping paywall domain: {scrape_domain}")
+                        else:
+                            # Check scraping limits and attempt scraping
+                            content, status = safe_content_scraper_with_playwright_limited(
+                                final_resolved_url, scrape_domain, category, feed_keyword, scraped_domains
+                            )
+                            
+                            if content:
+                                # Scraping successful - enable AI processing
+                                scraped_content = content
+                                content_scraped_at = datetime.now(timezone.utc)
+                                stats["content_scraped"] += 1
+                                should_use_ai = True
+                                
+                                # Generate AI summary from scraped content
+                                ai_summary = generate_ai_summary(scraped_content, title, feed["ticker"])
+                                if ai_summary:
+                                    stats["ai_summaries_generated"] += 1
+                            else:
+                                scraping_failed = True
+                                scraping_error = status
+                                stats["content_failed"] += 1
                     else:
                         stats["scraping_skipped"] += 1
                     
-                    # Calculate quality score
+                    # Calculate quality score (AI only runs if scraping was successful)
                     if should_use_ai:
                         quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
                             title=title, domain=final_domain, ticker=feed["ticker"],
@@ -1315,7 +1298,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
     return stats
-
+                                           
 # Update the database schema to include ai_summary field
 def update_schema_for_ai_summary():
     """Add AI summary field to found_url table"""

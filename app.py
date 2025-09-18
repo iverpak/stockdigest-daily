@@ -224,6 +224,10 @@ scraping_stats = {
     }
 }
 
+# Global instances
+ticker_manager = TickerManager()
+feed_manager = FeedManager()
+
 def reset_scraping_stats():
     """Reset scraping stats for new run"""
     global scraping_stats

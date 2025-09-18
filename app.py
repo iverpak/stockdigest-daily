@@ -96,7 +96,7 @@ QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
     "businesswire.com", "prnewswire.com", "globenewswire.com",
-    "insidermoneky.com", "seekingalpha.com/pro"
+    "insidermonkey.com", "seekingalpha.com/pro"
 }
 
 # Known paywall domains to skip during content scraping
@@ -2099,6 +2099,115 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     
     return selected_results
 
+def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
+    """
+    Enhanced triage with quality domain auto-selection and limit filling
+    """
+    if not OPENAI_API_KEY:
+        LOG.warning("OpenAI API key not configured - using quality domains only")
+        return {"company": [], "industry": [], "competitor": []}
+    
+    # Limits for each category
+    limits = {"company": 20, "industry": 5, "competitor": 5}
+    selected_results = {"company": [], "industry": [], "competitor": []}
+    
+    # Get ticker metadata for enhanced prompts
+    config = get_ticker_config(ticker)
+    company_name = config.get("name", ticker) if config else ticker
+    
+    # Build enhanced metadata
+    aliases_brands_assets = {"aliases": [], "brands": [], "assets": []}
+    sector_profile = {"core_inputs": [], "core_channels": [], "core_geos": [], "benchmarks": []}
+    
+    if config:
+        try:
+            if config.get("aliases_brands_assets"):
+                aliases_brands_assets = json.loads(config["aliases_brands_assets"]) if isinstance(config["aliases_brands_assets"], str) else config["aliases_brands_assets"]
+            if config.get("sector_profile"):
+                sector_profile = json.loads(config["sector_profile"]) if isinstance(config["sector_profile"], str) else config["sector_profile"]
+        except:
+            pass
+    
+    # Process each category
+    for category, articles in articles_by_category.items():
+        if not articles:
+            continue
+            
+        LOG.info(f"Starting enhanced triage for {category}: {len(articles)} articles")
+        
+        # Step 1: AI Triage
+        try:
+            if category == "company":
+                ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
+            elif category == "industry":
+                peers = config.get("competitors", []) if config else []
+                ai_selected = _triage_industry_articles_full(articles, ticker, sector_profile, peers)
+            elif category == "competitor":
+                peers = config.get("competitors", []) if config else []
+                ai_selected = _triage_competitor_articles_full(articles, ticker, peers, sector_profile)
+            else:
+                ai_selected = []
+        except Exception as e:
+            LOG.error(f"AI triage failed for {category}: {e}")
+            ai_selected = []
+        
+        # Step 2: Quality Domain Selection
+        quality_selected = []
+        ai_selected_indices = {item["id"] for item in ai_selected}
+        
+        for idx, article in enumerate(articles):
+            if idx not in ai_selected_indices:  # Not already selected by AI
+                domain = normalize_domain(article.get("domain", ""))
+                if domain in QUALITY_DOMAINS:
+                    quality_selected.append({
+                        "id": idx,
+                        "scrape_priority": 2,  # Medium priority for quality domains
+                        "likely_repeat": False,
+                        "repeat_key": "",
+                        "why": f"Quality domain: {domain}",
+                        "confidence": 0.8
+                    })
+        
+        # Step 3: Combine and Fill to Limits
+        combined_selected = ai_selected + quality_selected
+        
+        # Sort by priority (lower number = higher priority)
+        combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
+        
+        # Step 4: Fill remaining slots if under limit
+        limit = limits.get(category, 5)
+        if len(combined_selected) < limit:
+            remaining_slots = limit - len(combined_selected)
+            selected_indices = {item["id"] for item in combined_selected}
+            
+            # Get remaining articles sorted by publication time (newest first)
+            remaining_articles = []
+            for idx, article in enumerate(articles):
+                if idx not in selected_indices:
+                    pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+                    remaining_articles.append((idx, pub_time))
+            
+            # Sort by publication time (newest first)
+            remaining_articles.sort(key=lambda x: x[1], reverse=True)
+            
+            # Add most recent articles to fill slots
+            for idx, _ in remaining_articles[:remaining_slots]:
+                combined_selected.append({
+                    "id": idx,
+                    "scrape_priority": 4,  # Lower priority for time-based selection
+                    "likely_repeat": False,
+                    "repeat_key": "",
+                    "why": "Recent article - limit filling",
+                    "confidence": 0.6
+                })
+        
+        # Limit to the maximum allowed
+        selected_results[category] = combined_selected[:limit]
+        
+        LOG.info(f"Enhanced triage {category}: {len(ai_selected)} AI + {len(quality_selected)} Quality + {len(combined_selected) - len(ai_selected) - len(quality_selected)} Time-based = {len(selected_results[category])} total")
+    
+    return selected_results
+
 def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
     """Make API request to OpenAI for triage and return full results"""
     try:
@@ -2570,6 +2679,118 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
     
     text_lines.append(f"\nTOTAL ARTICLES: {article_count}")
     text_lines.append("END OF EVALUATION DATA")
+    
+    return "\n".join(text_lines)
+
+def create_triage_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], ticker_metadata_cache: Dict) -> str:
+    """Create structured text file for AI triage evaluation and improvement"""
+    
+    text_lines = []
+    text_lines.append("STOCK NEWS AGGREGATOR - AI TRIAGE EVALUATION DATA")
+    text_lines.append("=" * 60)
+    text_lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    text_lines.append("")
+    text_lines.append("PURPOSE: Evaluate triage algorithm performance and improve selection logic")
+    text_lines.append("INSTRUCTIONS: Analyze triage reasoning vs article titles for prompt optimization")
+    text_lines.append("=" * 60)
+    text_lines.append("")
+    
+    article_count = 0
+    
+    for ticker, categories in articles_by_ticker.items():
+        text_lines.append(f"TICKER: {ticker}")
+        text_lines.append("-" * 40)
+        
+        # Add enhanced metadata for each ticker
+        if ticker in ticker_metadata_cache:
+            metadata = ticker_metadata_cache[ticker]
+            text_lines.append("ENHANCED METADATA:")
+            text_lines.append(f"Company Name: {metadata.get('company_name', ticker)}")
+            text_lines.append(f"Sector: {metadata.get('sector', 'N/A')}")
+            
+            # Industry keywords
+            if metadata.get("industry_keywords"):
+                text_lines.append(f"Industry Keywords: {', '.join(metadata['industry_keywords'])}")
+            
+            # Competitors
+            if metadata.get("competitors"):
+                comp_names = [comp["name"] if isinstance(comp, dict) else comp for comp in metadata['competitors']]
+                text_lines.append(f"Competitors: {', '.join(comp_names)}")
+            
+            text_lines.append("")
+        
+        triage_data = triage_results.get(ticker, {})
+        
+        for category, articles in categories.items():
+            if not articles:
+                continue
+                
+            text_lines.append(f"CATEGORY: {category.upper()}")
+            text_lines.append("")
+            
+            # Get triage results for this category
+            category_triage = triage_data.get(category, [])
+            selected_article_data = {item["id"]: item for item in category_triage}
+            
+            for idx, article in enumerate(articles):
+                article_count += 1
+                
+                text_lines.append(f"ARTICLE {article_count}:")
+                text_lines.append(f"Type: {category}")
+                text_lines.append(f"Ticker: {ticker}")
+                text_lines.append(f"Index: {idx}")
+                text_lines.append(f"Title: {article.get('title', 'No Title')}")
+                text_lines.append(f"Domain: {article.get('domain', 'unknown')}")
+                
+                # Check domain tier
+                domain = normalize_domain(article.get("domain", ""))
+                source_tier = _get_domain_tier(domain, article.get("title", ""), article.get("description", ""))
+                text_lines.append(f"Source Tier: {source_tier}")
+                text_lines.append(f"Quality Domain: {'YES' if domain in QUALITY_DOMAINS else 'NO'}")
+                
+                if article.get('published_at'):
+                    text_lines.append(f"Published: {article['published_at']}")
+                
+                if article.get('search_keyword'):
+                    text_lines.append(f"Search Keyword: {article['search_keyword']}")
+                
+                text_lines.append("")
+                
+                # AI Triage Results
+                text_lines.append("AI TRIAGE RESULTS:")
+                if idx in selected_article_data:
+                    triage_item = selected_article_data[idx]
+                    priority = triage_item.get("scrape_priority", 5)
+                    confidence = triage_item.get("confidence", 0.0)
+                    reason = triage_item.get("why", "")
+                    
+                    text_lines.append(f"SELECTED: YES")
+                    text_lines.append(f"Priority: P{priority}")
+                    text_lines.append(f"Confidence: {confidence:.2f}")
+                    text_lines.append(f"AI Reasoning: {reason}")
+                else:
+                    text_lines.append(f"SELECTED: NO")
+                    text_lines.append(f"AI Reasoning: Not selected by triage algorithm")
+                
+                # Final selection status
+                will_scrape = (idx in selected_article_data) or (domain in QUALITY_DOMAINS)
+                text_lines.append(f"FINAL STATUS: {'WILL SCRAPE' if will_scrape else 'SKIPPED'}")
+                
+                text_lines.append("")
+                
+                # Original description for context
+                if article.get('description'):
+                    text_lines.append("ORIGINAL DESCRIPTION:")
+                    text_lines.append(article['description'])
+                else:
+                    text_lines.append("ORIGINAL DESCRIPTION: Not available")
+                
+                text_lines.append("")
+                text_lines.append("-" * 80)
+                text_lines.append("")
+    
+    text_lines.append(f"\nTOTAL ARTICLES EVALUATED: {article_count}")
+    text_lines.append("END OF TRIAGE EVALUATION DATA")
     
     return "\n".join(text_lines)
 
@@ -3432,7 +3653,7 @@ domain_resolver = DomainResolver()
 class FeedManager:
     @staticmethod
     def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
-        """Create feeds only if under the limits - CHECK EXISTING COUNTS FIRST"""
+        """Create feeds only if under the limits - UPDATED with 3 keyword max"""
         feeds = []
         company_name = metadata.get("company_name", ticker)
         
@@ -3473,11 +3694,11 @@ class FeedManager:
         else:
             LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
         
-        # Industry feeds - MAX 5 TOTAL
+        # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
         existing_industry_count = existing_counts.get('industry', 0)
-        if existing_industry_count < 5:
-            available_slots = 5 - existing_industry_count
-            industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
+        if existing_industry_count < 3:
+            available_slots = 3 - existing_industry_count
+            industry_keywords = metadata.get("industry_keywords", [])[:available_slots]  # Limit to available slots
             
             LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
             
@@ -3491,7 +3712,7 @@ class FeedManager:
                 feeds.append(feed)
                 LOG.info(f"    INDUSTRY: {keyword}")
         else:
-            LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (5/5)")
+            LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
         
         # Competitor feeds - MAX 3 COMPETITORS (6 total feeds = 3 Google + 3 Yahoo)
         existing_competitor_count = existing_counts.get('competitor', 0)
@@ -3641,7 +3862,7 @@ ticker_manager = TickerManager()
 feed_manager = FeedManager()
 
 def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, Any]:
-    """Enhanced AI metadata generation with sector profile and aliases"""
+    """Enhanced AI metadata generation with sector profile and aliases - LIMITED TO 3 KEYWORDS"""
     if not OPENAI_API_KEY:
         LOG.error("OpenAI API key not configured")
         return {"industry_keywords": [], "competitors": [], "company_name": ticker}
@@ -3653,9 +3874,9 @@ For stock ticker "{ticker}":
 1) Confirm the company and provide sector context and peers.
 2) Output fields exactly as below. Avoid generic terms. Prefer GICS-style naming.
 3) Peers MUST be public, primarily competing in the same core business.
-4) Add sector_profile so Industry routing can reason about inputs/channels/geos/benchmarks.
-5) Add aliases/brands/assets for better Company relevance.
-6) Include confidence fields to allow post-run validation.
+4) LIMIT industry_keywords to MAXIMUM 3 terms - only the most important ones.
+5) Add sector_profile so Industry routing can reason about inputs/channels/geos/benchmarks.
+6) Add aliases/brands/assets for better Company relevance.
 
 JSON schema to return:
 {{
@@ -3664,7 +3885,7 @@ JSON schema to return:
     "sector": "GICS Sector", 
     "industry": "GICS Industry",
     "sub_industry": "GICS Sub-Industry",
-    "industry_keywords": ["2-3 word term", "...", "...", "...", "..."],
+    "industry_keywords": ["most important term", "second term", "third term"],
     "competitors": [
         {{"name": "Competitor 1", "ticker": "TICK1", "confidence": 0.9}},
         {{"name": "Competitor 2", "ticker": "TICK2", "confidence": 0.8}},
@@ -3692,7 +3913,7 @@ JSON schema to return:
         data = {
             "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a financial analyst. Provide accurate stock information in valid JSON only."},
+                {"role": "system", "content": "You are a financial analyst. Provide accurate stock information in valid JSON only. LIMIT industry keywords to 3 maximum."},
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": 400,
@@ -3710,9 +3931,9 @@ JSON schema to return:
         content = result["choices"][0]["message"]["content"]
         metadata = json.loads(content)
         
-        # Validate and clean data - keep existing format for compatibility
+        # Validate and clean data - ENFORCE 3 keyword limit
         company_name = metadata.get("company_name", ticker)
-        industry_keywords = [kw.title() for kw in metadata.get("industry_keywords", [])[:5]]
+        industry_keywords = [kw.title() for kw in metadata.get("industry_keywords", [])[:3]]  # LIMIT TO 3
         competitors = []
         
         for comp in metadata.get("competitors", [])[:3]:
@@ -3727,7 +3948,7 @@ JSON schema to return:
         # Store enhanced metadata in a way that's backward compatible
         enhanced_metadata = {
             "company_name": company_name,
-            "industry_keywords": industry_keywords,
+            "industry_keywords": industry_keywords,  # MAX 3
             "competitors": competitors,
             # New enhanced fields
             "sector_profile": metadata.get("sector_profile", {}),
@@ -3741,7 +3962,7 @@ JSON schema to return:
         LOG.info(f"=== ENHANCED AI METADATA GENERATED for {ticker} ===")
         LOG.info(f"Company Name: {company_name}")
         LOG.info(f"Sector: {metadata.get('sector', 'N/A')}")
-        LOG.info(f"Industry Keywords ({len(industry_keywords)}):")
+        LOG.info(f"Industry Keywords ({len(industry_keywords)}/3 max):")
         for i, keyword in enumerate(industry_keywords, 1):
             LOG.info(f"  {i}. {keyword}")
         
@@ -3749,22 +3970,7 @@ JSON schema to return:
         for i, comp in enumerate(competitors, 1):
             LOG.info(f"  {i}. {comp['name']} ({comp['ticker']}) - Confidence: {comp.get('confidence', 0.8)}")
         
-        # Log enhanced fields
-        sector_profile = metadata.get("sector_profile", {})
-        if sector_profile:
-            LOG.info(f"Sector Profile:")
-            LOG.info(f"  Core Inputs: {sector_profile.get('core_inputs', [])}")
-            LOG.info(f"  Core Channels: {sector_profile.get('core_channels', [])}")
-            LOG.info(f"  Core Geos: {sector_profile.get('core_geos', [])}")
-            LOG.info(f"  Benchmarks: {sector_profile.get('benchmarks', [])}")
-        
-        LOG.info(f"=== ENHANCED METADATA COMPLETE for {ticker} ===")
-        
-        return enhanced_metadata
-
-    except Exception as e:
-        LOG.error(f"AI metadata generation failed for {ticker}: {e}")
-        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
+        LOG.info(f"=== ENHANCED METADATA COMPLETE for {ticker} ===
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Wrapper for backward compatibility"""
@@ -4159,20 +4365,48 @@ def send_email(subject: str, html_body: str, text_attachment: str, to: str = Non
         return False
 
 def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Send quick email with domain, title, and triage results before scraping"""
+    """Send enhanced quick email with domain, title, and triage results before scraping"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
+        
+        # Load ticker metadata for competitor names and enhanced info
+        ticker_metadata_cache = {}
+        for ticker in articles_by_ticker.keys():
+            config = get_ticker_config(ticker)
+            if config:
+                # Convert competitors back to dict format for the helper function
+                competitors = []
+                for comp_str in config.get("competitors", []):
+                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                    if match:
+                        competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+                    else:
+                        competitors.append({"name": comp_str, "ticker": None})
+                
+                ticker_metadata_cache[ticker] = {
+                    "industry_keywords": config.get("industry_keywords", []),
+                    "competitors": competitors,
+                    "sector": config.get("sector", ""),
+                    "company_name": config.get("name", ticker)
+                }
+        
+        # Generate triage evaluation text for attachment
+        triage_evaluation_text = create_triage_evaluation_text(articles_by_ticker, triage_results, ticker_metadata_cache)
         
         html = [
             "<html><head><style>",
             "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
             "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
             "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
-            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; }",
-            ".article { margin: 4px 0; padding: 6px; border-radius: 3px; }",
-            ".article-header { margin-bottom: 3px; }",
-            ".source { color: #6c757d; font-size: 11px; font-weight: bold; display: inline-block; }",
-            ".title { color: #2c3e50; margin-top: 2px; }",
+            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+            ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+            ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+            ".article-header { margin-bottom: 5px; }",
+            ".article-content { }",
+            ".company { border-left-color: #27ae60; }",
+            ".industry { border-left-color: #f39c12; }",
+            ".competitor { border-left-color: #e74c3c; }",
+            ".meta { color: #95a5a6; font-size: 11px; }",
             ".triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 8px; }",
             ".triage-selected { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }",
             ".triage-p1 { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
@@ -4181,18 +4415,29 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
             ".triage-p4 { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
             ".triage-p5 { background-color: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }",
             ".triage-skipped { background-color: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }",
-            ".company { border-left: 3px solid #27ae60; background-color: #f8fff9; }",
-            ".industry { border-left: 3px solid #f39c12; background-color: #fffdf8; }",
-            ".competitor { border-left: 3px solid #e74c3c; background-color: #fef9f9; }",
+            ".triage-quality { background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
             ".selected-for-scrape { background-color: #e8f5e8 !important; }",
+            ".quality-domain-selected { background-color: #e3f2fd !important; }",
+            ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
+            ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
+            ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
+            ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+            ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
             "</style></head><body>",
-            f"<h1>Quick Triage Report</h1>",
-            f"<p><strong>Generated:</strong> {current_time_est}</p>",
-            f"<p><strong>Status:</strong> Articles ingested and triaged, scraping and AI analysis pending...</p>",
+            f"<h1>Quick Intelligence Report - Triage Complete</h1>",
+            f"<div class='summary'>",
+            f"<strong>Generated:</strong> {current_time_est}<br>",
+            f"<strong>Status:</strong> Articles ingested and triaged, AI analysis and scraping in progress...<br>",
+            f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
+            f"<strong>AI Triage:</strong> Priority scoring complete + Quality domain selections",
+            "</div>"
         ]
         
         total_articles = 0
         total_selected = 0
+        total_quality_domains = 0
         
         for ticker, categories in articles_by_ticker.items():
             ticker_count = sum(len(articles) for articles in categories.values())
@@ -4203,9 +4448,41 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
             triage_data = triage_results.get(ticker, {})
             for category in ["company", "industry", "competitor"]:
                 ticker_selected += len(triage_data.get(category, []))
-            total_selected += ticker_selected
             
-            html.append(f"<h2>{ticker} - {ticker_count} Articles Found ({ticker_selected} selected for scraping)</h2>")
+            # Count quality domain articles
+            ticker_quality_domains = 0
+            for category, articles in categories.items():
+                for article in articles:
+                    domain = normalize_domain(article.get("domain", ""))
+                    if domain in QUALITY_DOMAINS:
+                        ticker_quality_domains += 1
+            
+            total_selected += ticker_selected
+            total_quality_domains += ticker_quality_domains
+            
+            html.append(f"<div class='ticker-section'>")
+            html.append(f"<h2>{ticker} - {ticker_count} Total Articles</h2>")
+            html.append(f"<p><strong>AI Triage Selected:</strong> {ticker_selected} articles | <strong>Quality Domains:</strong> {ticker_quality_domains} articles</p>")
+            
+            # Enhanced keyword information with metadata (similar to final email)
+            if ticker in ticker_metadata_cache:
+                metadata = ticker_metadata_cache[ticker]
+                html.append("<div class='keywords'>")
+                html.append(f"<strong>AI-Powered Monitoring Keywords:</strong><br>")
+                
+                if metadata.get("industry_keywords"):
+                    industry_badges = [f'<span class="industry-badge">{kw}</span>' for kw in metadata['industry_keywords']]
+                    html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
+                
+                if metadata.get("competitors"):
+                    competitor_badges = [f'<span class="competitor-badge">{comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
+                    html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}<br>")
+                
+                # Sector information
+                if metadata.get("sector"):
+                    html.append(f"<strong>Sector:</strong> <span class='sector-badge'>{metadata['sector']}</span>")
+                
+                html.append("</div>")
             
             for category, articles in categories.items():
                 if not articles:
@@ -4215,48 +4492,99 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
                 
-                html.append(f"<h3>{category.title()} ({len(articles)} articles, {len(category_triage)} selected)</h3>")
+                # Create combined list with triage priority and quality domain sorting
+                enhanced_articles = []
+                for idx, article in enumerate(articles):
+                    domain = normalize_domain(article.get("domain", ""))
+                    is_ai_selected = idx in selected_article_data
+                    is_quality_domain = domain in QUALITY_DOMAINS
+                    
+                    priority = 999  # Default low priority
+                    triage_reason = ""
+                    
+                    if is_ai_selected:
+                        priority = selected_article_data[idx].get("scrape_priority", 5)
+                        triage_reason = selected_article_data[idx].get("why", "")
+                    elif is_quality_domain:
+                        priority = 2.5  # Between P2 and P3 for quality domains
+                        triage_reason = "Quality domain auto-selected"
+                    
+                    enhanced_articles.append({
+                        "article": article,
+                        "idx": idx,
+                        "priority": priority,
+                        "is_ai_selected": is_ai_selected,
+                        "is_quality_domain": is_quality_domain,
+                        "triage_reason": triage_reason,
+                        "published_at": article.get("published_at")
+                    })
                 
-                for idx, article in enumerate(articles[:25]):  # Show up to 25 per category
+                # Sort: AI triage + quality domains first (by priority), then by publication time
+                enhanced_articles.sort(key=lambda x: (
+                    x["priority"],  # Lower priority number = higher priority
+                    -(x["published_at"].timestamp() if x["published_at"] else 0)  # Newer articles first
+                ))
+                
+                selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or a["is_quality_domain"]])
+                html.append(f"<h3>{category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
+                
+                for enhanced_article in enhanced_articles[:25]:  # Show up to 25 per category
+                    article = enhanced_article["article"]
                     domain = article.get("domain", "unknown")
                     title = article.get("title", "No Title")
                     
-                    # Check if this article was selected for scraping
-                    is_selected = idx in selected_article_data
+                    # Determine article class and triage badge
                     article_class = f"article {category}"
-                    if is_selected:
-                        article_class += " selected-for-scrape"
-                    
-                    # Build triage badge
                     triage_badge = ""
-                    if is_selected:
-                        triage_item = selected_article_data[idx]
-                        priority = triage_item.get("scrape_priority", 5)
-                        confidence = triage_item.get("confidence", 0.0)
-                        reason = triage_item.get("why", "")
-                        
-                        triage_badge = f'<span class="triage triage-p{priority}" title="{reason}">Triage P{priority} ({confidence:.1f})</span>'
+                    
+                    if enhanced_article["is_ai_selected"] and enhanced_article["is_quality_domain"]:
+                        article_class += " selected-for-scrape"
+                        priority = int(enhanced_article["priority"])
+                        triage_badge = f'<span class="triage triage-p{priority}" title="{enhanced_article["triage_reason"]}">AI P{priority}</span><span class="triage triage-quality">Quality</span>'
+                    elif enhanced_article["is_ai_selected"]:
+                        article_class += " selected-for-scrape"
+                        priority = int(enhanced_article["priority"])
+                        triage_badge = f'<span class="triage triage-p{priority}" title="{enhanced_article["triage_reason"]}">AI P{priority}</span>'
+                    elif enhanced_article["is_quality_domain"]:
+                        article_class += " quality-domain-selected"
+                        triage_badge = '<span class="triage triage-quality">Quality Domain</span>'
                     else:
                         triage_badge = '<span class="triage triage-skipped">Skipped</span>'
+                    
+                    # Format publication time
+                    pub_time = ""
+                    if article.get("published_at"):
+                        pub_time = format_timestamp_est(article["published_at"])
                     
                     html.append(f"""
                     <div class='{article_class}'>
                         <div class='article-header'>
-                            <span class='source'>{get_or_create_formal_domain_name(domain)}</span>
+                            <span class='source-badge'>{get_or_create_formal_domain_name(domain)}</span>
                             {triage_badge}
                         </div>
-                        <div class='title'>{title}</div>
+                        <div class='article-content'>
+                            <a href='{article.get("resolved_url") or article.get("url", "")}'>{title}</a>
+                            <span class='meta'> | {pub_time}</span>
+                        </div>
                     </div>
                     """)
+            
+            html.append("</div>")
         
-        html.append(f"<p><strong>Total Articles:</strong> {total_articles} (Selected for scraping: {total_selected})</p>")
-        html.append(f"<p><strong>Triage Legend:</strong> P1=Highest Priority, P2=High, P3=Medium, P4=Low, P5=Lowest Priority</p>")
+        total_to_scrape = total_selected + total_quality_domains
+        html.append(f"<div class='summary'>")
+        html.append(f"<strong>Total Articles:</strong> {total_articles}<br>")
+        html.append(f"<strong>AI Triage Selected:</strong> {total_selected}<br>")
+        html.append(f"<strong>Quality Domain Selected:</strong> {total_quality_domains}<br>")
+        html.append(f"<strong>Total for Scraping:</strong> {total_to_scrape}<br>")
+        html.append(f"<strong>Next:</strong> Full content analysis and hedge fund summaries in progress...")
+        html.append("</div>")
         html.append("</body></html>")
         
         html_content = "".join(html)
-        subject = f"Quick Triage: {total_selected}/{total_articles} articles selected - processing..."
+        subject = f"Quick Intelligence: {total_to_scrape} articles selected for analysis"
         
-        return send_email(subject, html_content, "")  # Empty text attachment
+        return send_email(subject, html_content, triage_evaluation_text)
         
     except Exception as e:
         LOG.error(f"Quick triage email send failed: {e}")
@@ -4735,11 +5063,11 @@ def cron_ingest(
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """
-    Optimized ingest with AI triage workflow:
+    Enhanced ingest with AI triage + quality domain workflow:
     1. Ingest all URLs from feeds (no AI processing)
-    2. Perform AI triage to select scraping candidates  
-    3. Send quick email with triage results
-    4. Scrape selected articles with limits (20/5/5)
+    2. Perform AI triage + quality domain selection + limit filling
+    3. Send enhanced quick email with triage results
+    4. Scrape selected articles
     5. Send final email with full analysis
     """
     require_admin(request)
@@ -4747,7 +5075,7 @@ def cron_ingest(
     update_schema_for_content()
     update_schema_for_triage()
     
-    LOG.info("=== CRON INGEST STARTING (TRIAGE WORKFLOW) ===")
+    LOG.info("=== CRON INGEST STARTING (ENHANCED TRIAGE WORKFLOW) ===")
     LOG.info(f"Processing window: {minutes} minutes")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
@@ -4815,13 +5143,13 @@ def cron_ingest(
     
     LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} articles ingested ===")
     
-    # PHASE 2: AI Triage
-    LOG.info("=== PHASE 2: AI TRIAGE ===")
+    # PHASE 2: Enhanced AI Triage + Quality Domains + Limit Filling
+    LOG.info("=== PHASE 2: ENHANCED AI TRIAGE (AI + QUALITY DOMAINS + LIMIT FILLING) ===")
     triage_results = {}
     
     for ticker in articles_by_ticker.keys():
-        LOG.info(f"Running triage for {ticker}")
-        selected_results = perform_ai_triage_batch(articles_by_ticker[ticker], ticker)
+        LOG.info(f"Running enhanced triage for {ticker}")
+        selected_results = perform_ai_triage_batch_with_quality_domains(articles_by_ticker[ticker], ticker)
         triage_results[ticker] = selected_results
         
         # Update database with triage results
@@ -4838,12 +5166,12 @@ def cron_ingest(
                             WHERE id = %s
                         """, (item.get("scrape_priority", 5), item.get("why", ""), article_id))
     
-    # PHASE 3: Send quick email with triage results
-    LOG.info("=== PHASE 3: SENDING QUICK TRIAGE EMAIL ===")
+    # PHASE 3: Send enhanced quick email with triage results
+    LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
     quick_email_sent = send_quick_ingest_email_with_triage(articles_by_ticker, triage_results)
-    LOG.info(f"Quick triage email sent: {quick_email_sent}")
+    LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
     
-    # PHASE 4: Scrape selected articles with limits
+    # PHASE 4: Scrape selected articles
     LOG.info("=== PHASE 4: SCRAPING SELECTED ARTICLES ===")
     scraping_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0}
     
@@ -4869,8 +5197,8 @@ def cron_ingest(
                 else:
                     scraping_stats["failed"] += 1
         
-        # Industry articles (limit 25 total across all keywords)
-        industry_selected = selected.get("industry", [])[:25]
+        # Industry articles (limit 5)
+        industry_selected = selected.get("industry", [])[:5]
         for item in industry_selected:
             article_idx = item["id"]
             if article_idx < len(articles_by_ticker[ticker]["industry"]):
@@ -4882,8 +5210,8 @@ def cron_ingest(
                 else:
                     scraping_stats["failed"] += 1
         
-        # Competitor articles (limit 15 total across all competitors)
-        competitor_selected = selected.get("competitor", [])[:15]
+        # Competitor articles (limit 5)
+        competitor_selected = selected.get("competitor", [])[:5]
         for item in competitor_selected:
             article_idx = item["id"]
             if article_idx < len(articles_by_ticker[ticker]["competitor"]):
@@ -4915,7 +5243,7 @@ def cron_ingest(
     
     return {
         "status": "completed",
-        "workflow": "5_phase_triage_with_dual_emails",
+        "workflow": "5_phase_enhanced_triage_with_quality_domains",
         "phase_1_ingest": ingest_stats,
         "phase_2_triage": {
             "tickers_processed": len(triage_results),
@@ -4925,7 +5253,7 @@ def cron_ingest(
         "phase_4_scraping": scraping_stats,
         "phase_5_final_email": final_digest_result,
         "cleanup": {"old_articles_deleted": deleted},
-        "message": f"Processed {ingest_stats['total_inserted']} articles, triaged and scraped {scraping_stats['scraped']} high-priority items, sent 2 emails"
+        "message": f"Processed {ingest_stats['total_inserted']} articles, enhanced triage selected {scraping_stats['scraped']} articles (AI + Quality Domains + Limit Filling), sent 2 emails"
     }
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):

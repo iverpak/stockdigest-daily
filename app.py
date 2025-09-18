@@ -1567,7 +1567,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     return stats
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion with per-category limits during ingestion (50/25/25)"""
+    """Basic feed ingestion with per-category limits during ingestion (50/25/25) - COUNT ALL URLs INCLUDING EXISTING"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
     
     category = feed.get("category", "company")
@@ -1589,7 +1589,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
         for entry, _ in entries_with_dates:
             stats["processed"] += 1
             
-            # Check limit BEFORE processing
+            # Check limit BEFORE processing - this now includes ALL URLs
             if not _check_ingestion_limit(category, feed_keyword):
                 stats["limit_reached"] += 1
                 LOG.info(f"INGESTION LIMIT REACHED: Stopping ingestion for {category} '{feed_keyword}'")
@@ -1649,6 +1649,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
+                        # CRITICAL CHANGE: Still count duplicates toward limit
+                        _update_ingestion_stats(category, feed_keyword)
                         continue
                     
                     # Parse publish date
@@ -1964,10 +1966,15 @@ def contains_non_latin_script(text: str) -> bool:
     return False
 
 def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
-    """Fixed Yahoo Finance source extraction - handles all Yahoo Finance domains"""
+    """Enhanced Yahoo Finance source extraction - handles all Yahoo Finance domains and author pages"""
     try:
         # Expand the domain check to include regional Yahoo Finance
         if not any(domain in url for domain in ["finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"]):
+            return None
+        
+        # Skip Yahoo author pages and video files
+        if any(skip_pattern in url for skip_pattern in ["/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov"]):
+            LOG.info(f"Skipping Yahoo author/video page: {url}")
             return None
             
         LOG.info(f"Extracting Yahoo Finance source from: {url}")
@@ -2026,12 +2033,15 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                                 parsed.netloc and 
                                 len(candidate_url) > 20 and
                                 'finance.yahoo.com' not in candidate_url and
+                                'ca.finance.yahoo.com' not in candidate_url and
                                 not candidate_url.startswith('//') and
                                 '.' in parsed.netloc and
-                                # FIXED: Add validation to exclude images and other non-article URLs
-                                not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')) and
+                                # Enhanced validation to exclude problematic URLs
+                                not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.mp4', '.avi', '.mov')) and
                                 not '/api/' in candidate_url.lower() and
-                                not 'yimg.com' in candidate_url.lower()):
+                                not 'yimg.com' in candidate_url.lower() and
+                                not '/author/' in candidate_url.lower() and
+                                not 'yahoo-finance-video' in candidate_url.lower()):
                                 
                                 LOG.info(f"Successfully extracted Yahoo source: {candidate_url}")
                                 return candidate_url
@@ -2043,10 +2053,10 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                     LOG.debug(f"Processing match failed: {e}")
                     continue
         
-        # FIXED: More restrictive fallback patterns that exclude images
+        # Enhanced fallback patterns that exclude author pages and videos
         fallback_patterns = [
-            # Only match URLs that are likely to be news articles
-            r'https://(?!finance\.yahoo\.com|s\.yimg\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
+            # Only match URLs that are likely to be news articles (not author pages)
+            r'https://(?!finance\.yahoo\.com|ca\.finance\.yahoo\.com|s\.yimg\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/(?!author/)[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
             r'https://stockstory\.org/[^\s"<>]*',
         ]
         
@@ -2058,8 +2068,10 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                     parsed = urlparse(candidate_url)
                     if (parsed.scheme and parsed.netloc and
                         # Additional validation for fallback URLs
-                        not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js')) and
+                        not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js', '.mp4', '.avi', '.mov')) and
                         not '/api/' in candidate_url.lower() and
+                        not '/author/' in candidate_url.lower() and
+                        not 'yahoo-finance-video' in candidate_url.lower() and
                         len(candidate_url) > 30):  # Minimum reasonable URL length
                         LOG.info(f"Fallback extraction successful: {candidate_url}")
                         return candidate_url
@@ -2410,14 +2422,12 @@ def _apply_quality_domain_and_smart_fill(articles: List[Dict], ai_selected: List
 
 def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage with keyword-level batching for industry and competitors
+    Enhanced triage with PER-KEYWORD limits: Company=20, Industry=5 per keyword, Competitor=5 per competitor
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - using quality domains and domain tiers only")
         return {"company": [], "industry": [], "competitor": []}
     
-    # Limits for each category
-    limits = {"company": 20, "industry": 5, "competitor": 5}
     selected_results = {"company": [], "industry": [], "competitor": []}
     
     # Low-quality domains to avoid in manual triage
@@ -2443,10 +2453,10 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
         except:
             pass
     
-    # COMPANY: Process as single batch (unchanged)
+    # COMPANY: Process as single batch with limit 20
     if "company" in articles_by_category and articles_by_category["company"]:
         articles = articles_by_category["company"]
-        LOG.info(f"Starting triage for company: {len(articles)} articles")
+        LOG.info(f"Starting triage for company: {len(articles)} articles (limit: 20)")
         
         try:
             ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
@@ -2454,15 +2464,15 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
             LOG.error(f"AI triage failed for company: {e}")
             ai_selected = []
         
-        # Apply quality domain and smart fill logic
+        # Apply quality domain and smart fill logic with limit 20
         selected_results["company"] = _apply_quality_domain_and_smart_fill(
-            articles, ai_selected, "company", limits["company"], LOW_QUALITY_DOMAINS
+            articles, ai_selected, "company", 20, LOW_QUALITY_DOMAINS
         )
     
-    # INDUSTRY: Process by keyword batches
+    # INDUSTRY: Process by keyword batches with 5 per keyword limit
     if "industry" in articles_by_category and articles_by_category["industry"]:
         articles = articles_by_category["industry"]
-        LOG.info(f"Starting triage for industry: {len(articles)} articles")
+        LOG.info(f"Starting triage for industry: {len(articles)} articles (limit: 5 per keyword)")
         
         # Group articles by search_keyword
         articles_by_keyword = {}
@@ -2472,13 +2482,13 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 articles_by_keyword[keyword] = []
             articles_by_keyword[keyword].append((idx, article))
         
-        # Process each keyword separately
+        # Process each keyword separately with 5 article limit each
         all_industry_selected = []
         for keyword, keyword_articles in articles_by_keyword.items():
             if not keyword_articles:
                 continue
                 
-            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
+            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles (limit: 5)")
             
             # Create mini-article list for this keyword
             keyword_article_list = [article for idx, article in keyword_articles]
@@ -2493,21 +2503,31 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                     item["id"] = original_idx  # Update to original index
                     item["why"] = f"[{keyword}] {item['why']}"  # Tag with keyword
                 
-                all_industry_selected.extend(keyword_selected)
-                LOG.info(f"    Keyword '{keyword}' triage: {len(keyword_selected)} selected")
+                # Apply per-keyword limit of 5 with quality domains and backfill
+                keyword_articles_full = [keyword_articles[i][1] for i in range(len(keyword_articles))]
+                limited_keyword_selected = _apply_quality_domain_and_smart_fill(
+                    keyword_articles_full, keyword_selected, "industry", 5, LOW_QUALITY_DOMAINS
+                )
+                
+                # Convert back to full article indices for final results
+                for item in limited_keyword_selected:
+                    original_idx = keyword_articles[item["id"]][0]
+                    item["id"] = original_idx
+                    if not item["why"].startswith(f"[{keyword}]"):
+                        item["why"] = f"[{keyword}] {item['why']}"
+                
+                all_industry_selected.extend(limited_keyword_selected)
+                LOG.info(f"    Keyword '{keyword}' final selection: {len(limited_keyword_selected)} articles")
                 
             except Exception as e:
                 LOG.error(f"AI triage failed for industry keyword '{keyword}': {e}")
         
-        # Apply quality domain and smart fill logic to combined results
-        selected_results["industry"] = _apply_quality_domain_and_smart_fill(
-            articles, all_industry_selected, "industry", limits["industry"], LOW_QUALITY_DOMAINS
-        )
+        selected_results["industry"] = all_industry_selected
     
-    # COMPETITOR: Process by competitor batches  
+    # COMPETITOR: Process by competitor batches with 5 per competitor limit
     if "competitor" in articles_by_category and articles_by_category["competitor"]:
         articles = articles_by_category["competitor"]
-        LOG.info(f"Starting triage for competitor: {len(articles)} articles")
+        LOG.info(f"Starting triage for competitor: {len(articles)} articles (limit: 5 per competitor)")
         
         # Group articles by search_keyword (competitor name or ticker)
         articles_by_competitor = {}
@@ -2517,13 +2537,13 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 articles_by_competitor[competitor] = []
             articles_by_competitor[competitor].append((idx, article))
         
-        # Process each competitor separately
+        # Process each competitor separately with 5 article limit each
         all_competitor_selected = []
         for competitor, competitor_articles in articles_by_competitor.items():
             if not competitor_articles:
                 continue
                 
-            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles")
+            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles (limit: 5)")
             
             # Create mini-article list for this competitor
             competitor_article_list = [article for idx, article in competitor_articles]
@@ -2538,16 +2558,30 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                     item["id"] = original_idx  # Update to original index
                     item["why"] = f"[{competitor}] {item['why']}"  # Tag with competitor name
                 
-                all_competitor_selected.extend(competitor_selected)
-                LOG.info(f"    Competitor '{competitor}' triage: {len(competitor_selected)} selected")
+                # Apply per-competitor limit of 5 with quality domains and backfill
+                competitor_articles_full = [competitor_articles[i][1] for i in range(len(competitor_articles))]
+                limited_competitor_selected = _apply_quality_domain_and_smart_fill(
+                    competitor_articles_full, competitor_selected, "competitor", 5, LOW_QUALITY_DOMAINS
+                )
+                
+                # Convert back to full article indices for final results
+                for item in limited_competitor_selected:
+                    original_idx = competitor_articles[item["id"]][0]
+                    item["id"] = original_idx
+                    if not item["why"].startswith(f"[{competitor}]"):
+                        item["why"] = f"[{competitor}] {item['why']}"
+                
+                all_competitor_selected.extend(limited_competitor_selected)
+                LOG.info(f"    Competitor '{competitor}' final selection: {len(limited_competitor_selected)} articles")
                 
             except Exception as e:
                 LOG.error(f"AI triage failed for competitor '{competitor}': {e}")
         
-        # Apply quality domain and smart fill logic to combined results
-        selected_results["competitor"] = _apply_quality_domain_and_smart_fill(
-            articles, all_competitor_selected, "competitor", limits["competitor"], LOW_QUALITY_DOMAINS
-        )
+        selected_results["competitor"] = all_competitor_selected
+    
+    # Final summary
+    total_selected = sum(len(items) for items in selected_results.values())
+    LOG.info(f"=== TRIAGE COMPLETE: {total_selected} articles selected across all categories ===")
     
     return selected_results
 
@@ -3017,7 +3051,7 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
         return []
 
 def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> str:
-    """Create structured text file for AI evaluation of scoring quality"""
+    """Create structured text file for AI evaluation of scoring quality with full metadata and AI summaries"""
     
     text_lines = []
     text_lines.append("STOCK NEWS AGGREGATOR - AI SCORING EVALUATION DATA")
@@ -3035,10 +3069,10 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
         text_lines.append(f"TICKER: {ticker}")
         text_lines.append("-" * 40)
         
-        # Add enhanced metadata for each ticker
+        # Add COMPLETE enhanced metadata for each ticker
         config = get_ticker_config(ticker)
         if config:
-            text_lines.append("ENHANCED METADATA:")
+            text_lines.append("COMPLETE TICKER METADATA:")
             text_lines.append(f"Company Name: {config.get('name', ticker)}")
             text_lines.append(f"Sector: {config.get('sector', 'N/A')}")
             text_lines.append(f"Industry: {config.get('industry', 'N/A')}")
@@ -3048,11 +3082,13 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
             if config.get("industry_keywords"):
                 text_lines.append(f"Industry Keywords: {', '.join(config['industry_keywords'])}")
             
-            # Competitors
+            # Competitors with full details
             if config.get("competitors"):
-                text_lines.append(f"Competitors: {', '.join(config['competitors'])}")
+                text_lines.append("Competitors:")
+                for i, comp in enumerate(config['competitors'], 1):
+                    text_lines.append(f"  {i}. {comp}")
             
-            # Sector profile
+            # Sector profile with full details
             sector_profile = config.get("sector_profile")
             if sector_profile:
                 try:
@@ -3061,16 +3097,19 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
                     else:
                         sector_data = sector_profile
                     
+                    text_lines.append("SECTOR PROFILE:")
                     if sector_data.get("core_inputs"):
-                        text_lines.append(f"Core Inputs: {', '.join(sector_data['core_inputs'])}")
+                        text_lines.append(f"  Core Inputs: {', '.join(sector_data['core_inputs'])}")
                     if sector_data.get("core_geos"):
-                        text_lines.append(f"Core Geographies: {', '.join(sector_data['core_geos'])}")
+                        text_lines.append(f"  Core Geographies: {', '.join(sector_data['core_geos'])}")
                     if sector_data.get("core_channels"):
-                        text_lines.append(f"Core Channels: {', '.join(sector_data['core_channels'])}")
-                except:
-                    pass
+                        text_lines.append(f"  Core Channels: {', '.join(sector_data['core_channels'])}")
+                    if sector_data.get("benchmarks"):
+                        text_lines.append(f"  Benchmarks: {', '.join(sector_data['benchmarks'])}")
+                except Exception as e:
+                    text_lines.append(f"SECTOR PROFILE: Error parsing - {e}")
             
-            # Aliases and brands
+            # Aliases, brands, and assets with full details
             aliases_brands = config.get("aliases_brands_assets")
             if aliases_brands:
                 try:
@@ -3079,12 +3118,15 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
                     else:
                         alias_data = aliases_brands
                     
+                    text_lines.append("ALIASES, BRANDS & ASSETS:")
                     if alias_data.get("aliases"):
-                        text_lines.append(f"Aliases: {', '.join(alias_data['aliases'])}")
+                        text_lines.append(f"  Aliases: {', '.join(alias_data['aliases'])}")
                     if alias_data.get("brands"):
-                        text_lines.append(f"Brands: {', '.join(alias_data['brands'])}")
-                except:
-                    pass
+                        text_lines.append(f"  Brands: {', '.join(alias_data['brands'])}")
+                    if alias_data.get("assets"):
+                        text_lines.append(f"  Key Assets: {', '.join(alias_data['assets'])}")
+                except Exception as e:
+                    text_lines.append(f"ALIASES/BRANDS: Error parsing - {e}")
             
             text_lines.append("")
         
@@ -3103,12 +3145,16 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
                 text_lines.append(f"Ticker: {ticker}")
                 text_lines.append(f"Title: {article.get('title', 'No Title')}")
                 text_lines.append(f"Domain: {article.get('domain', 'unknown')}")
+                text_lines.append(f"URL: {article.get('resolved_url') or article.get('url', 'N/A')}")
                 
                 if article.get('published_at'):
                     text_lines.append(f"Published: {article['published_at']}")
                 
                 if article.get('search_keyword'):
                     text_lines.append(f"Search Keyword: {article['search_keyword']}")
+                
+                if article.get('competitor_ticker'):
+                    text_lines.append(f"Competitor Ticker: {article['competitor_ticker']}")
                 
                 text_lines.append("")
                 
@@ -3139,7 +3185,22 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
                 ai_reasoning = article.get('ai_reasoning', 'N/A')
                 text_lines.append(f"Impact: {ai_impact}")
                 text_lines.append(f"Reasoning: {ai_reasoning}")
+                
+                # Triage information
+                if article.get('ai_triage_selected'):
+                    text_lines.append(f"AI Triage: SELECTED (Priority: {article.get('triage_priority', 'N/A')})")
+                    if article.get('triage_reasoning'):
+                        text_lines.append(f"Triage Reasoning: {article['triage_reasoning']}")
+                else:
+                    text_lines.append(f"AI Triage: NOT SELECTED")
+                
                 text_lines.append("")
+                
+                # AI SUMMARY (if available)
+                if article.get('ai_summary'):
+                    text_lines.append("AI HEDGE FUND SUMMARY:")
+                    text_lines.append(article['ai_summary'])
+                    text_lines.append("")
                 
                 # Original description
                 if article.get('description'):
@@ -3151,8 +3212,11 @@ def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]
                 if article.get('scraped_content'):
                     text_lines.append("SCRAPED CONTENT:")
                     text_lines.append(article['scraped_content'])
+                elif article.get('scraping_error'):
+                    text_lines.append("SCRAPING FAILED:")
+                    text_lines.append(article['scraping_error'])
                 else:
-                    text_lines.append("SCRAPED CONTENT: Not available")
+                    text_lines.append("SCRAPED CONTENT: Not attempted or not available")
                 
                 text_lines.append("")
                 text_lines.append("-" * 80)
@@ -4133,108 +4197,119 @@ domain_resolver = DomainResolver()
 
 class FeedManager:
     @staticmethod
-    def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
-        """Create feeds only if under the limits - UPDATED with 3 keyword max"""
-        feeds = []
-        company_name = metadata.get("company_name", ticker)
+def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
+    """Create feeds only if under the limits - FIXED competitor counting logic"""
+    feeds = []
+    company_name = metadata.get("company_name", ticker)
+    
+    LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
+    
+    # Check existing feed counts by unique competitor (not by feed count)
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT category, COUNT(*) as count,
+                   COUNT(DISTINCT COALESCE(competitor_ticker, search_keyword)) as unique_competitors
+            FROM source_feed 
+            WHERE ticker = %s AND active = TRUE
+            GROUP BY category
+        """, (ticker,))
         
-        LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
+        existing_data = {row["category"]: row for row in cur.fetchall()}
         
-        # Check existing feed counts
+        # Extract counts
+        existing_company_count = existing_data.get('company', {}).get('count', 0)
+        existing_industry_count = existing_data.get('industry', {}).get('count', 0)
+        existing_competitor_entities = existing_data.get('competitor', {}).get('unique_competitors', 0)  # Count unique competitors, not feeds
+        
+        LOG.info(f"  EXISTING FEEDS: Company={existing_company_count}, Industry={existing_industry_count}, Competitors={existing_competitor_entities} unique entities")
+    
+    # Company feeds - always ensure we have the core 2
+    if existing_company_count < 2:
+        company_feeds = [
+            {
+                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Google News: {company_name}",
+                "category": "company",
+                "search_keyword": company_name
+            },
+            {
+                "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+                "name": f"Yahoo Finance: {ticker}",
+                "category": "company",
+                "search_keyword": ticker
+            }
+        ]
+        feeds.extend(company_feeds)
+        LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
+    else:
+        LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
+    
+    # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
+    if existing_industry_count < 3:
+        available_slots = 3 - existing_industry_count
+        industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
+        
+        LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
+        
+        for keyword in industry_keywords:
+            feed = {
+                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Industry: {keyword}",
+                "category": "industry",
+                "search_keyword": keyword
+            }
+            feeds.append(feed)
+            LOG.info(f"    INDUSTRY: {keyword}")
+    else:
+        LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
+    
+    # Competitor feeds - MAX 3 UNIQUE COMPETITORS (each competitor can have multiple feeds but counts as 1 entity)
+    if existing_competitor_entities < 3:
+        available_competitor_slots = 3 - existing_competitor_entities
+        competitors = metadata.get("competitors", [])[:available_competitor_slots]
+        
+        LOG.info(f"  COMPETITOR ENTITIES: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(metadata.get('competitors', []))})")
+        
+        # Get existing competitor tickers to avoid duplicates
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT category, COUNT(*) as count
+                SELECT DISTINCT competitor_ticker 
                 FROM source_feed 
-                WHERE ticker = %s AND active = TRUE
-                GROUP BY category
+                WHERE ticker = %s AND category = 'competitor' AND active = TRUE
+                AND competitor_ticker IS NOT NULL
             """, (ticker,))
-            
-            existing_counts = {row["category"]: row["count"] for row in cur.fetchall()}
-            
-            LOG.info(f"  EXISTING FEEDS: Company={existing_counts.get('company', 0)}, Industry={existing_counts.get('industry', 0)}, Competitor={existing_counts.get('competitor', 0)}")
+            existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
         
-        # Company feeds - always ensure we have the core 2
-        existing_company_count = existing_counts.get('company', 0)
-        if existing_company_count < 2:
-            company_feeds = [
-                {
-                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    "name": f"Google News: {company_name}",
-                    "category": "company",
-                    "search_keyword": company_name
-                },
-                {
-                    "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
-                    "name": f"Yahoo Finance: {ticker}",
-                    "category": "company",
-                    "search_keyword": ticker
-                }
-            ]
-            feeds.extend(company_feeds)
-            LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
-        else:
-            LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
-        
-        # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
-        existing_industry_count = existing_counts.get('industry', 0)
-        if existing_industry_count < 3:
-            available_slots = 3 - existing_industry_count
-            industry_keywords = metadata.get("industry_keywords", [])[:available_slots]  # Limit to available slots
-            
-            LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
-            
-            for keyword in industry_keywords:
-                feed = {
-                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    "name": f"Industry: {keyword}",
-                    "category": "industry",
-                    "search_keyword": keyword
-                }
-                feeds.append(feed)
-                LOG.info(f"    INDUSTRY: {keyword}")
-        else:
-            LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
-        
-        # Competitor feeds - MAX 3 COMPETITORS (6 total feeds = 3 Google + 3 Yahoo)
-        existing_competitor_count = existing_counts.get('competitor', 0)
-        # Each competitor creates 2 feeds (Google + Yahoo), so divide by 2 for competitor count
-        existing_competitor_entities = existing_competitor_count // 2
-        
-        if existing_competitor_entities < 3:
-            available_competitor_slots = 3 - existing_competitor_entities
-            competitors = metadata.get("competitors", [])[:available_competitor_slots]
-            
-            LOG.info(f"  COMPETITOR FEEDS: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(metadata.get('competitors', []))})")
-            
-            for comp in competitors:
-                if isinstance(comp, dict):
-                    comp_name = comp.get('name', '')
-                    comp_ticker = comp.get('ticker')
-                    
-                    if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
-                        comp_feeds = [
-                            {
-                                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                                "name": f"Competitor: {comp_name}",
-                                "category": "competitor",
-                                "search_keyword": comp_name,
-                                "competitor_ticker": comp_ticker
-                            },
-                            {
-                                "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                                "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                                "category": "competitor",
-                                "search_keyword": comp_ticker,
-                                "competitor_ticker": comp_ticker
-                            }
-                        ]
-                        feeds.extend(comp_feeds)
-                        LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds")
-        else:
-            LOG.info(f"  COMPETITOR FEEDS: Skipping - already at limit (3/3 competitors)")
-        
-        LOG.info(f"TOTAL NEW FEEDS for {ticker}: {len(feeds)}")
-        return feeds
+        for comp in competitors:
+            if isinstance(comp, dict):
+                comp_name = comp.get('name', '')
+                comp_ticker = comp.get('ticker')
+                
+                if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name and comp_ticker not in existing_competitor_tickers:
+                    # Create 2 feeds per competitor (Google + Yahoo) but they count as 1 entity
+                    comp_feeds = [
+                        {
+                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                            "name": f"Competitor: {comp_name}",
+                            "category": "competitor",
+                            "search_keyword": comp_name,
+                            "competitor_ticker": comp_ticker
+                        },
+                        {
+                            "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                            "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                            "category": "competitor",
+                            "search_keyword": comp_ticker,
+                            "competitor_ticker": comp_ticker
+                        }
+                    ]
+                    feeds.extend(comp_feeds)
+                    LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
+    else:
+        LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
+    
+    LOG.info(f"TOTAL NEW FEEDS for {ticker}: {len(feeds)}")
+    return feeds
     
     @staticmethod
     def store_feeds(ticker: str, feeds: List[Dict], retain_days: int = 90) -> List[int]:
@@ -4368,9 +4443,9 @@ JSON schema to return:
     "sub_industry": "GICS Sub-Industry",
     "industry_keywords": ["most important term", "second term", "third term"],
     "competitors": [
-        {{"name": "Competitor 1", "ticker": "TICK1", "confidence": 0.9}},
-        {{"name": "Competitor 2", "ticker": "TICK2", "confidence": 0.8}},
-        {{"name": "Competitor 3", "ticker": "TICK3", "confidence": 0.7}}
+        {{"name": "Competitor 1", "ticker": "TICK1"}},
+        {{"name": "Competitor 2", "ticker": "TICK2"}},
+        {{"name": "Competitor 3", "ticker": "TICK3"}}
     ],
     "sector_profile": {{
         "core_inputs": ["commodity/input", "key cost driver", "..."],
@@ -4412,7 +4487,7 @@ JSON schema to return:
         content = result["choices"][0]["message"]["content"]
         metadata = json.loads(content)
         
-        # Validate and clean data - ENFORCE 3 keyword limit
+        # Validate and clean data - ENFORCE 3 keyword limit and remove confidence
         company_name = metadata.get("company_name", ticker)
         industry_keywords = [kw.title() for kw in metadata.get("industry_keywords", [])[:3]]  # LIMIT TO 3
         competitors = []
@@ -4422,8 +4497,8 @@ JSON schema to return:
                 if comp["ticker"].upper() != ticker.upper():  # Prevent self-reference
                     competitors.append({
                         "name": comp["name"],
-                        "ticker": comp["ticker"],
-                        "confidence": comp.get("confidence", 0.8)
+                        "ticker": comp["ticker"]
+                        # Removed confidence field
                     })
         
         # Store enhanced metadata in a way that's backward compatible
@@ -4449,7 +4524,7 @@ JSON schema to return:
         
         LOG.info(f"Competitors ({len(competitors)}):")
         for i, comp in enumerate(competitors, 1):
-            LOG.info(f"  {i}. {comp['name']} ({comp['ticker']}) - Confidence: {comp.get('confidence', 0.8)}")
+            LOG.info(f"  {i}. {comp['name']} ({comp['ticker']})")
         
         LOG.info(f"=== ENHANCED METADATA COMPLETE for {ticker} ===")
         
@@ -4650,8 +4725,6 @@ def is_description_valuable(title: str, description: str) -> bool:
 # ------------------------------------------------------------------------------
 # Email Digest
 # ------------------------------------------------------------------------------
-# Enhanced CSS styles to be added to the build_digest_html function
-# Update CSS to include analyzed badge styling
 def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
     """Build HTML email digest and return both HTML and text export"""
     
@@ -4671,7 +4744,13 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
             
             ticker_metadata_cache[ticker] = {
                 "industry_keywords": config.get("industry_keywords", []),
-                "competitors": competitors
+                "competitors": competitors,
+                "company_name": config.get("name", ticker),
+                "sector": config.get("sector", ""),
+                "industry": config.get("industry", ""),
+                "sub_industry": config.get("sub_industry", ""),
+                "sector_profile": config.get("sector_profile"),
+                "aliases_brands_assets": config.get("aliases_brands_assets")
             }
     
     # Generate text export for AI evaluation
@@ -4712,7 +4791,9 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
         ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
-        ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
+        ".brand-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fce4ec; color: #ad1457; border: 1px solid #f8bbd9; }",
+        ".asset-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #c5cae9; }",
+        ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
         "a { color: #2980b9; text-decoration: none; }",
         "a:hover { text-decoration: underline; }",
         ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
@@ -4733,68 +4814,103 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>{ticker} - {total_articles} Total Articles</h2>")
         
-        # Enhanced keyword information with metadata
+        # Enhanced keyword information with full metadata
         if ticker in ticker_metadata_cache:
             metadata = ticker_metadata_cache[ticker]
             html.append("<div class='keywords'>")
-            html.append(f"<strong>🤖 AI-Powered Monitoring Keywords:</strong><br>")
+            html.append(f"<strong>🤖 AI-Powered Monitoring Configuration:</strong><br><br>")
             
+            # Company details
+            if metadata.get("company_name"):
+                html.append(f"<strong>Company:</strong> {metadata['company_name']}<br>")
+            
+            # Sector information
+            if metadata.get("sector"):
+                html.append(f"<strong>Sector:</strong> <span class='sector-badge'>🏭 {metadata['sector']}</span><br>")
+            if metadata.get("industry"):
+                html.append(f"<strong>Industry:</strong> {metadata['industry']}<br>")
+            if metadata.get("sub_industry"):
+                html.append(f"<strong>Sub-Industry:</strong> {metadata['sub_industry']}<br>")
+            
+            # Keywords and competitors
             if metadata.get("industry_keywords"):
                 industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
-                html.append(f"<strong>Industry:</strong> {' '.join(industry_badges)}<br>")
+                html.append(f"<strong>Industry Keywords:</strong> {' '.join(industry_badges)}<br>")
             
             if metadata.get("competitors"):
                 competitor_badges = [f'<span class="competitor-badge">🏢 {comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
                 html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}<br>")
             
-            # Enhanced metadata display
-            config = get_ticker_config(ticker)
-            if config:
-                # Sector information
-                if config.get("sector"):
-                    html.append(f"<strong>Sector:</strong> <span class='sector-badge'>🏭 {config['sector']}</span><br>")
-                
-                # Core geographies from sector profile
-                sector_profile = config.get("sector_profile")
-                if sector_profile and isinstance(sector_profile, str):
-                    try:
+            # Enhanced metadata from sector profile
+            sector_profile = metadata.get("sector_profile")
+            if sector_profile:
+                try:
+                    if isinstance(sector_profile, str):
                         sector_data = json.loads(sector_profile)
-                        if sector_data.get("core_geos"):
-                            geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_data["core_geos"][:3]]
-                            html.append(f"<strong>Core Regions:</strong> {' '.join(geo_badges)}<br>")
-                    except:
-                        pass
-                
-                # Aliases/brands from enhanced metadata
-                aliases_brands = config.get("aliases_brands_assets")
-                if aliases_brands and isinstance(aliases_brands, str):
-                    try:
+                    else:
+                        sector_data = sector_profile
+                    
+                    if sector_data.get("core_geos"):
+                        geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_data["core_geos"][:5]]
+                        html.append(f"<strong>Core Geographies:</strong> {' '.join(geo_badges)}<br>")
+                    
+                    if sector_data.get("core_inputs"):
+                        input_badges = [f'<span class="sector-badge">⚡ {inp}</span>' for inp in sector_data["core_inputs"][:5]]
+                        html.append(f"<strong>Core Inputs:</strong> {' '.join(input_badges)}<br>")
+                    
+                    if sector_data.get("core_channels"):
+                        channel_badges = [f'<span class="geography-badge">📊 {ch}</span>' for ch in sector_data["core_channels"][:5]]
+                        html.append(f"<strong>Core Channels:</strong> {' '.join(channel_badges)}<br>")
+                        
+                except Exception as e:
+                    LOG.warning(f"Error parsing sector profile for {ticker}: {e}")
+            
+            # Aliases, brands, and assets
+            aliases_brands = metadata.get("aliases_brands_assets")
+            if aliases_brands:
+                try:
+                    if isinstance(aliases_brands, str):
                         alias_data = json.loads(aliases_brands)
-                        if alias_data.get("aliases"):
-                            alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in alias_data["aliases"][:3]]
-                            html.append(f"<strong>Aliases:</strong> {' '.join(alias_badges)}")
-                    except:
-                        pass
+                    else:
+                        alias_data = aliases_brands
+                    
+                    if alias_data.get("aliases"):
+                        alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in alias_data["aliases"][:5]]
+                        html.append(f"<strong>Aliases:</strong> {' '.join(alias_badges)}<br>")
+                    
+                    if alias_data.get("brands"):
+                        brand_badges = [f'<span class="brand-badge">🏪 {brand}</span>' for brand in alias_data["brands"][:5]]
+                        html.append(f"<strong>Brands:</strong> {' '.join(brand_badges)}<br>")
+                    
+                    if alias_data.get("assets"):
+                        asset_badges = [f'<span class="asset-badge">🏗️ {asset}</span>' for asset in alias_data["assets"][:5]]
+                        html.append(f"<strong>Key Assets:</strong> {' '.join(asset_badges)}")
+                        
+                except Exception as e:
+                    LOG.warning(f"Error parsing aliases/brands for {ticker}: {e}")
             
             html.append("</div>")
         
-        # Company News Section
-        if "company" in categories and categories["company"]:
-            html.append(f"<h3>Company News ({len(categories['company'])} articles)</h3>")
-            for article in categories["company"][:50]:
-                html.append(_format_article_html_with_ai_summary(article, "company", ticker_metadata_cache))
-        
-        # Industry News Section
-        if "industry" in categories and categories["industry"]:
-            html.append(f"<h3>Industry & Market News ({len(categories['industry'])} articles)</h3>")
-            for article in categories["industry"][:50]:
-                html.append(_format_article_html_with_ai_summary(article, "industry", ticker_metadata_cache))
-        
-        # Competitor News Section
-        if "competitor" in categories and categories["competitor"]:
-            html.append(f"<h3>Competitor Intelligence ({len(categories['competitor'])} articles)</h3>")
-            for article in categories["competitor"][:50]:
-                html.append(_format_article_html_with_ai_summary(article, "competitor", ticker_metadata_cache))
+        # Sort articles within each category - prioritize triaged/analyzed articles, then by time
+        for category in ["company", "industry", "competitor"]:
+            if category in categories and categories[category]:
+                articles = categories[category]
+                
+                # Sort: AI triaged/analyzed first, then quality domains, then by time
+                def sort_key(article):
+                    is_analyzed = bool(article.get('ai_summary') or article.get('ai_triage_selected'))
+                    has_quality_domain = normalize_domain(article.get("domain", "")) in QUALITY_DOMAINS
+                    pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+                    
+                    # Priority: 0 = analyzed, 1 = quality domain, 2 = other
+                    priority = 0 if is_analyzed else (1 if has_quality_domain else 2)
+                    return (priority, -pub_time.timestamp())
+                
+                sorted_articles = sorted(articles, key=sort_key)
+                
+                html.append(f"<h3>{category.title()} News ({len(articles)} articles)</h3>")
+                for article in sorted_articles[:100]:  # Show up to 100 articles
+                    html.append(_format_article_html_with_ai_summary(article, category, ticker_metadata_cache))
         
         html.append("</div>")
     
@@ -4863,7 +4979,7 @@ def send_email(subject: str, html_body: str, text_attachment: str = None, to: st
         return False
 
 def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Send enhanced quick email with domain, title, and triage results before scraping"""
+    """Send enhanced quick email with domain, title, triage results and keyword information"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
         
@@ -4923,6 +5039,7 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
             ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+            ".category-keywords { background-color: #f0f8ff; padding: 8px; margin: 5px 0; border-radius: 4px; font-size: 11px; border-left: 3px solid #3498db; }",
             "</style></head><body>",
             f"<h1>Quick Intelligence Report - Triage Complete</h1>",
             f"<div class='summary'>",
@@ -4990,6 +5107,20 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
                 
+                # Show category-specific keywords before articles
+                category_keywords_html = ""
+                if category == "industry" and ticker in ticker_metadata_cache:
+                    keywords = ticker_metadata_cache[ticker].get("industry_keywords", [])
+                    if keywords:
+                        keyword_badges = [f'<span class="industry-badge">{kw}</span>' for kw in keywords]
+                        category_keywords_html = f"<div class='category-keywords'><strong>Monitoring Keywords:</strong> {' '.join(keyword_badges)}</div>"
+                
+                elif category == "competitor" and ticker in ticker_metadata_cache:
+                    competitors = ticker_metadata_cache[ticker].get("competitors", [])
+                    if competitors:
+                        comp_badges = [f'<span class="competitor-badge">{comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in competitors]
+                        category_keywords_html = f"<div class='category-keywords'><strong>Monitoring Competitors:</strong> {' '.join(comp_badges)}</div>"
+                
                 # Create combined list with triage priority and quality domain sorting
                 enhanced_articles = []
                 for idx, article in enumerate(articles):
@@ -5025,11 +5156,27 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                 
                 selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or a["is_quality_domain"]])
                 html.append(f"<h3>{category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
+                html.append(category_keywords_html)  # Add category keywords
                 
-                for enhanced_article in enhanced_articles[:25]:  # Show up to 25 per category
+                for enhanced_article in enhanced_articles[:100]:  # Show up to 100 per category
                     article = enhanced_article["article"]
                     domain = article.get("domain", "unknown")
                     title = article.get("title", "No Title")
+                    
+                    # Add keyword badge for this specific article
+                    article_keyword_badge = ""
+                    if category in ["industry", "competitor"] and article.get('search_keyword'):
+                        keyword = article['search_keyword']
+                        if category == "industry":
+                            article_keyword_badge = f'<span class="industry-badge">{keyword}</span>'
+                        elif category == "competitor":
+                            # Get full competitor name
+                            comp_name = get_competitor_display_name(
+                                keyword, 
+                                article.get('competitor_ticker'),
+                                ticker_metadata_cache
+                            )
+                            article_keyword_badge = f'<span class="competitor-badge">{comp_name}</span>'
                     
                     # Determine article class and triage badge
                     article_class = f"article {category}"
@@ -5058,6 +5205,7 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                     <div class='{article_class}'>
                         <div class='article-header'>
                             <span class='source-badge'>{get_or_create_formal_domain_name(domain)}</span>
+                            {article_keyword_badge}
                             {triage_badge}
                         </div>
                         <div class='article-content'>

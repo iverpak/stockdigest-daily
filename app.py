@@ -5872,8 +5872,13 @@ def cron_ingest(
         industry_keywords = config.get("industry_keywords", []) if config else []
         competitors = config.get("competitors", []) if config else []
         
-        target_limits = {"company": 20, "industry": 15, "competitor": 15}
-        selected_results = perform_ai_triage_batch_with_tiered_backfill(articles_by_ticker[ticker], ticker, target_limits)
+        target_limits = {
+            "company": 20,
+            "industry": len(industry_keywords) * 5,  # 5 per keyword
+            "competitor": len(competitors) * 5        # 5 per competitor
+        }
+        
+        selected_results = perform_ai_triage_batch_with_tiered_backfill(
             articles_by_ticker[ticker], 
             ticker, 
             target_limits

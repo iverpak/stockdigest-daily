@@ -2163,9 +2163,106 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     
     return selected_results
 
+def _apply_quality_domain_and_smart_fill(articles: List[Dict], ai_selected: List[Dict], category: str, limit: int, low_quality_domains: Set[str]) -> List[Dict]:
+    """
+    Apply quality domain selection and smart limit filling to AI triage results
+    """
+    # Step 1: Quality Domain Selection with Filtering
+    quality_selected = []
+    ai_selected_indices = {item["id"] for item in ai_selected}
+    
+    for idx, article in enumerate(articles):
+        if idx in ai_selected_indices:  # Already selected by AI
+            continue
+            
+        domain = normalize_domain(article.get("domain", ""))
+        title = article.get("title", "").lower()
+        
+        # Skip low-quality domains
+        if domain in low_quality_domains:
+            continue
+            
+        # Skip insider trading articles
+        if is_insider_trading_article(title):
+            continue
+        
+        # Check if it's a quality domain
+        if domain in QUALITY_DOMAINS:
+            quality_selected.append({
+                "id": idx,
+                "scrape_priority": 2,
+                "likely_repeat": False,
+                "repeat_key": "",
+                "why": f"Quality domain: {domain}",
+                "confidence": 0.8
+            })
+    
+    # Step 2: Smart Limit Filling with Domain Tier Consideration
+    combined_selected = ai_selected + quality_selected
+    
+    if len(combined_selected) < limit:
+        remaining_slots = limit - len(combined_selected)
+        selected_indices = {item["id"] for item in combined_selected}
+        
+        # Get remaining articles with enhanced filtering and domain tier scoring
+        remaining_articles = []
+        for idx, article in enumerate(articles):
+            if idx in selected_indices:
+                continue
+                
+            domain = normalize_domain(article.get("domain", ""))
+            title = article.get("title", "").lower()
+            
+            # Apply enhanced filtering
+            if domain in low_quality_domains:
+                continue
+                
+            if is_insider_trading_article(title):
+                continue
+            
+            # Calculate domain tier score for prioritization
+            domain_tier = DOMAIN_TIERS.get(domain, 0.3)
+            pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+            
+            # Prioritize by domain tier first, then recency
+            priority_score = (domain_tier * 1000) + (pub_time.timestamp() / 1000)
+            
+            remaining_articles.append((idx, priority_score, pub_time, domain_tier))
+        
+        # Sort by priority score (higher = better)
+        remaining_articles.sort(key=lambda x: x[1], reverse=True)
+        
+        # Add best remaining articles to fill slots
+        for idx, priority_score, pub_time, domain_tier in remaining_articles[:remaining_slots]:
+            combined_selected.append({
+                "id": idx,
+                "scrape_priority": 4,
+                "likely_repeat": False,
+                "repeat_key": "",
+                "why": f"High-tier domain fill (tier: {domain_tier:.1f})",
+                "confidence": 0.6
+            })
+    
+    # Limit to the maximum allowed and sort by priority
+    combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
+    final_selected = combined_selected[:limit]
+    
+    # Enhanced logging with proper counts
+    ai_count = len(ai_selected)
+    quality_count_before_limit = len(quality_selected)
+    quality_count_actual = len([item for item in final_selected if item.get("why", "").startswith("Quality domain")])
+    fill_count = len(final_selected) - ai_count - quality_count_actual
+    
+    if quality_count_before_limit > quality_count_actual:
+        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count_actual} Quality ({quality_count_before_limit} found, limited) + {fill_count} Smart-fill = {len(final_selected)} total")
+    else:
+        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count_actual} Quality + {fill_count} Smart-fill = {len(final_selected)} total")
+    
+    return final_selected
+
 def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage with insider trading filtering, domain tier consideration, and smart limit filling
+    Enhanced triage with keyword-level batching for industry and competitors
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - using quality domains and domain tiers only")
@@ -2178,10 +2275,7 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
     # Low-quality domains to avoid in manual triage
     LOW_QUALITY_DOMAINS = {
         "defense-world.net", "defensenews.com", "defenseworld.net",
-        "zacks.com",  # Too repetitive
-        "thefly.com",  # Often paywalled
-        "accesswire.com",  # Press release aggregator
-        "streetinsider.com"  # Often repetitive insider trading
+        "zacks.com", "thefly.com", "accesswire.com", "streetinsider.com"
     }
     
     # Get ticker metadata for enhanced prompts
@@ -2201,116 +2295,111 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
         except:
             pass
     
-    # Process each category
-    for category, articles in articles_by_category.items():
-        if not articles:
-            continue
-            
-        LOG.info(f"Starting enhanced triage for {category}: {len(articles)} articles")
+    # COMPANY: Process as single batch (unchanged)
+    if "company" in articles_by_category and articles_by_category["company"]:
+        articles = articles_by_category["company"]
+        LOG.info(f"Starting triage for company: {len(articles)} articles")
         
-        # Step 1: AI Triage (unchanged)
         try:
-            if category == "company":
-                ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
-            elif category == "industry":
-                peers = config.get("competitors", []) if config else []
-                ai_selected = _triage_industry_articles_full(articles, ticker, sector_profile, peers)
-            elif category == "competitor":
-                peers = config.get("competitors", []) if config else []
-                ai_selected = _triage_competitor_articles_full(articles, ticker, peers, sector_profile)
-            else:
-                ai_selected = []
+            ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
         except Exception as e:
-            LOG.error(f"AI triage failed for {category}: {e}")
+            LOG.error(f"AI triage failed for company: {e}")
             ai_selected = []
         
-        # Step 2: Enhanced Quality Domain Selection with Filtering
-        quality_selected = []
-        ai_selected_indices = {item["id"] for item in ai_selected}
+        # Apply quality domain and smart fill logic
+        selected_results["company"] = _apply_quality_domain_and_smart_fill(
+            articles, ai_selected, "company", limits["company"], LOW_QUALITY_DOMAINS
+        )
+    
+    # INDUSTRY: Process by keyword batches
+    if "industry" in articles_by_category and articles_by_category["industry"]:
+        articles = articles_by_category["industry"]
+        LOG.info(f"Starting triage for industry: {len(articles)} articles")
         
+        # Group articles by search_keyword
+        articles_by_keyword = {}
         for idx, article in enumerate(articles):
-            if idx in ai_selected_indices:  # Already selected by AI
+            keyword = article.get("search_keyword", "unknown")
+            if keyword not in articles_by_keyword:
+                articles_by_keyword[keyword] = []
+            articles_by_keyword[keyword].append((idx, article))
+        
+        # Process each keyword separately
+        all_industry_selected = []
+        for keyword, keyword_articles in articles_by_keyword.items():
+            if not keyword_articles:
                 continue
                 
-            domain = normalize_domain(article.get("domain", ""))
-            title = article.get("title", "").lower()
+            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
             
-            # Skip low-quality domains
-            if domain in LOW_QUALITY_DOMAINS:
+            # Create mini-article list for this keyword
+            keyword_article_list = [article for idx, article in keyword_articles]
+            
+            try:
+                peers = config.get("competitors", []) if config else []
+                keyword_selected = _triage_industry_articles_full(keyword_article_list, ticker, sector_profile, peers)
+                
+                # Convert mini-indices back to full indices
+                for item in keyword_selected:
+                    original_idx = keyword_articles[item["id"]][0]  # Get original index
+                    item["id"] = original_idx  # Update to original index
+                    item["why"] = f"[{keyword}] {item['why']}"  # Tag with keyword
+                
+                all_industry_selected.extend(keyword_selected)
+                LOG.info(f"    Keyword '{keyword}' triage: {len(keyword_selected)} selected")
+                
+            except Exception as e:
+                LOG.error(f"AI triage failed for industry keyword '{keyword}': {e}")
+        
+        # Apply quality domain and smart fill logic to combined results
+        selected_results["industry"] = _apply_quality_domain_and_smart_fill(
+            articles, all_industry_selected, "industry", limits["industry"], LOW_QUALITY_DOMAINS
+        )
+    
+    # COMPETITOR: Process by competitor batches  
+    if "competitor" in articles_by_category and articles_by_category["competitor"]:
+        articles = articles_by_category["competitor"]
+        LOG.info(f"Starting triage for competitor: {len(articles)} articles")
+        
+        # Group articles by search_keyword (competitor name or ticker)
+        articles_by_competitor = {}
+        for idx, article in enumerate(articles):
+            competitor = article.get("search_keyword", "unknown")
+            if competitor not in articles_by_competitor:
+                articles_by_competitor[competitor] = []
+            articles_by_competitor[competitor].append((idx, article))
+        
+        # Process each competitor separately
+        all_competitor_selected = []
+        for competitor, competitor_articles in articles_by_competitor.items():
+            if not competitor_articles:
                 continue
                 
-            # Skip insider trading articles
-            if is_insider_trading_article(title):
-                continue
+            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles")
             
-            # Check if it's a quality domain
-            if domain in QUALITY_DOMAINS:
-                quality_selected.append({
-                    "id": idx,
-                    "scrape_priority": 2,  # Medium priority for quality domains
-                    "likely_repeat": False,
-                    "repeat_key": "",
-                    "why": f"Quality domain: {domain}",
-                    "confidence": 0.8
-                })
-        
-        # Step 3: Smart Limit Filling with Domain Tier Consideration
-        combined_selected = ai_selected + quality_selected
-        limit = limits.get(category, 5)
-        
-        if len(combined_selected) < limit:
-            remaining_slots = limit - len(combined_selected)
-            selected_indices = {item["id"] for item in combined_selected}
+            # Create mini-article list for this competitor
+            competitor_article_list = [article for idx, article in competitor_articles]
             
-            # Get remaining articles with enhanced filtering and domain tier scoring
-            remaining_articles = []
-            for idx, article in enumerate(articles):
-                if idx in selected_indices:
-                    continue
-                    
-                domain = normalize_domain(article.get("domain", ""))
-                title = article.get("title", "").lower()
+            try:
+                peers = config.get("competitors", []) if config else []
+                competitor_selected = _triage_competitor_articles_full(competitor_article_list, ticker, peers, sector_profile)
                 
-                # Apply enhanced filtering
-                if domain in LOW_QUALITY_DOMAINS:
-                    continue
-                    
-                if is_insider_trading_article(title):
-                    continue
+                # Convert mini-indices back to full indices
+                for item in competitor_selected:
+                    original_idx = competitor_articles[item["id"]][0]  # Get original index
+                    item["id"] = original_idx  # Update to original index
+                    item["why"] = f"[{competitor}] {item['why']}"  # Tag with competitor name
                 
-                # Calculate domain tier score for prioritization
-                domain_tier = DOMAIN_TIERS.get(domain, 0.3)  # Default to low tier
-                pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+                all_competitor_selected.extend(competitor_selected)
+                LOG.info(f"    Competitor '{competitor}' triage: {len(competitor_selected)} selected")
                 
-                # Prioritize by domain tier first, then recency
-                priority_score = (domain_tier * 1000) + (pub_time.timestamp() / 1000)
-                
-                remaining_articles.append((idx, priority_score, pub_time, domain_tier))
-            
-            # Sort by priority score (higher = better)
-            remaining_articles.sort(key=lambda x: x[1], reverse=True)
-            
-            # Add best remaining articles to fill slots
-            for idx, priority_score, pub_time, domain_tier in remaining_articles[:remaining_slots]:
-                combined_selected.append({
-                    "id": idx,
-                    "scrape_priority": 4,  # Lower priority for limit filling
-                    "likely_repeat": False,
-                    "repeat_key": "",
-                    "why": f"High-tier domain fill (tier: {domain_tier:.1f})",
-                    "confidence": 0.6
-                })
+            except Exception as e:
+                LOG.error(f"AI triage failed for competitor '{competitor}': {e}")
         
-        # Limit to the maximum allowed and sort by priority
-        combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
-        selected_results[category] = combined_selected[:limit]
-        
-        # Enhanced logging
-        ai_count = len(ai_selected)
-        quality_count = len(quality_selected)
-        fill_count = len(selected_results[category]) - ai_count - quality_count
-        
-        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count} Quality + {fill_count} Smart-fill = {len(selected_results[category])} total")
+        # Apply quality domain and smart fill logic to combined results
+        selected_results["competitor"] = _apply_quality_domain_and_smart_fill(
+            articles, all_competitor_selected, "competitor", limits["competitor"], LOW_QUALITY_DOMAINS
+        )
     
     return selected_results
 
@@ -2402,7 +2491,7 @@ def _triage_company_articles_full(articles: List[Dict], ticker: str, company_nam
         items.append({
             "id": i,
             "url": article.get("resolved_url") or article.get("url", ""),
-            "title": article.get("title", ""),
+            "title": json.dumps(article.get("title", "")).strip('"'),
             "domain": domain,
             "published_at": article.get("published_at").isoformat() if article.get("published_at") else "2024-01-01T00:00:00Z",
             "source_tier": round(source_tier, 2),
@@ -2483,7 +2572,7 @@ def _triage_industry_articles_full(articles: List[Dict], ticker: str, sector_pro
         items.append({
             "id": i,
             "url": article.get("resolved_url") or article.get("url", ""),
-            "title": article.get("title", ""),
+            "title": json.dumps(article.get("title", "")).strip('"'),
             "domain": domain,
             "published_at": article.get("published_at").isoformat() if article.get("published_at") else "2024-01-01T00:00:00Z",
             "source_tier": round(source_tier, 2),
@@ -2564,7 +2653,7 @@ def _triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: L
         items.append({
             "id": i,
             "url": article.get("resolved_url") or article.get("url", ""),
-            "title": article.get("title", ""),
+            "title": json.dumps(article.get("title", "")).strip('"'),
             "domain": domain,
             "published_at": article.get("published_at").isoformat() if article.get("published_at") else "2024-01-01T00:00:00Z",
             "source_tier": round(source_tier, 2),

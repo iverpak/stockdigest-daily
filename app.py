@@ -1158,7 +1158,7 @@ def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, tic
             
             if scrape_domain not in PAYWALL_DOMAINS:
                 # Use the enhanced scraper with limits
-                content, status = safe_content_scraper_with_playwright_limited_v2(
+                content, status = safe_content_scraper_with_playwright_limited(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
                 
@@ -5503,7 +5503,7 @@ def cron_ingest(
     
     for feed in feeds:
         try:
-            stats = ingest_feed_basic_only_with_limits(feed)
+            stats = ingest_feed_basic_only(feed)
             
             # Collect articles for triage
             ticker = feed["ticker"]
@@ -5596,7 +5596,7 @@ def cron_ingest(
             article_idx = item["id"]
             if article_idx < len(articles_by_ticker[ticker]["company"]):
                 article = articles_by_ticker[ticker]["company"][article_idx]
-                success = scrape_and_analyze_article_with_limits(article, "company", metadata, ticker)
+                success = scrape_and_analyze_article(article, "company", metadata, ticker)
                 if success:
                     scraping_final_stats["scraped"] += 1
                     scraping_final_stats["ai_analyzed"] += 1
@@ -5615,7 +5615,7 @@ def cron_ingest(
                 if not _check_scraping_limit("industry", keyword):
                     continue  # Skip this article, try next
                 
-                success = scrape_and_analyze_article_with_limits(article, "industry", metadata, ticker)
+                success = scrape_and_analyze_article(article, "industry", metadata, ticker)
                 if success:
                     scraping_final_stats["scraped"] += 1
                     scraping_final_stats["ai_analyzed"] += 1
@@ -5634,7 +5634,7 @@ def cron_ingest(
                 if not _check_scraping_limit("competitor", keyword):
                     continue  # Skip this article, try next
                 
-                success = scrape_and_analyze_article_with_limits(article, "competitor", metadata, ticker)
+                success = scrape_and_analyze_article(article, "competitor", metadata, ticker)
                 if success:
                     scraping_final_stats["scraped"] += 1
                     scraping_final_stats["ai_analyzed"] += 1

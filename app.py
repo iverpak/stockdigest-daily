@@ -4843,7 +4843,7 @@ def cron_ingest(
     quick_email_sent = send_quick_ingest_email_with_triage(articles_by_ticker, triage_results)
     LOG.info(f"Quick triage email sent: {quick_email_sent}")
     
-    # PHASE 4: Scrape selected articles with limits (same as before)
+    # PHASE 4: Scrape selected articles with limits
     LOG.info("=== PHASE 4: SCRAPING SELECTED ARTICLES ===")
     scraping_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0}
     
@@ -4856,14 +4856,12 @@ def cron_ingest(
         
         selected = triage_results.get(ticker, {})
         
-        # Scrape company articles (limit 20)
-        company_articles = articles_by_ticker[ticker]["company"]
-        company_selected = selected.get("company", [])[:20]  # Apply limit
-        
+        # Company articles (limit 20)
+        company_selected = selected.get("company", [])[:20]
         for item in company_selected:
             article_idx = item["id"]
-            if article_idx < len(company_articles):
-                article = company_articles[article_idx]
+            if article_idx < len(articles_by_ticker[ticker]["company"]):
+                article = articles_by_ticker[ticker]["company"][article_idx]
                 success = scrape_and_analyze_article(article, "company", metadata, ticker)
                 if success:
                     scraping_stats["scraped"] += 1
@@ -4871,10 +4869,38 @@ def cron_ingest(
                 else:
                     scraping_stats["failed"] += 1
         
-        # Similar for industry and competitor (same logic as before)
-        # ... rest of scraping logic unchanged
+        # Industry articles (limit 25 total across all keywords)
+        industry_selected = selected.get("industry", [])[:25]
+        for item in industry_selected:
+            article_idx = item["id"]
+            if article_idx < len(articles_by_ticker[ticker]["industry"]):
+                article = articles_by_ticker[ticker]["industry"][article_idx]
+                success = scrape_and_analyze_article(article, "industry", metadata, ticker)
+                if success:
+                    scraping_stats["scraped"] += 1
+                    scraping_stats["ai_analyzed"] += 1
+                else:
+                    scraping_stats["failed"] += 1
+        
+        # Competitor articles (limit 15 total across all competitors)
+        competitor_selected = selected.get("competitor", [])[:15]
+        for item in competitor_selected:
+            article_idx = item["id"]
+            if article_idx < len(articles_by_ticker[ticker]["competitor"]):
+                article = articles_by_ticker[ticker]["competitor"][article_idx]
+                success = scrape_and_analyze_article(article, "competitor", metadata, ticker)
+                if success:
+                    scraping_stats["scraped"] += 1
+                    scraping_stats["ai_analyzed"] += 1
+                else:
+                    scraping_stats["failed"] += 1
     
     LOG.info(f"=== PHASE 4 COMPLETE: {scraping_stats['scraped']} articles scraped and analyzed ===")
+    
+    # PHASE 5: Send final comprehensive email
+    LOG.info("=== PHASE 5: SENDING FINAL COMPREHENSIVE EMAIL ===")
+    final_digest_result = fetch_digest_articles_with_content(minutes / 60, list(articles_by_ticker.keys()) if articles_by_ticker else None)
+    LOG.info(f"Final comprehensive email status: {final_digest_result.get('status', 'unknown')}")
     
     # Clean old articles
     cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
@@ -4889,7 +4915,7 @@ def cron_ingest(
     
     return {
         "status": "completed",
-        "workflow": "triage_based_with_quick_email",
+        "workflow": "5_phase_triage_with_dual_emails",
         "phase_1_ingest": ingest_stats,
         "phase_2_triage": {
             "tickers_processed": len(triage_results),
@@ -4897,8 +4923,9 @@ def cron_ingest(
         },
         "phase_3_quick_email": {"sent": quick_email_sent},
         "phase_4_scraping": scraping_stats,
+        "phase_5_final_email": final_digest_result,
         "cleanup": {"old_articles_deleted": deleted},
-        "message": f"Processed {ingest_stats['total_inserted']} articles, triaged and scraped {scraping_stats['scraped']} high-priority items"
+        "message": f"Processed {ingest_stats['total_inserted']} articles, triaged and scraped {scraping_stats['scraped']} high-priority items, sent 2 emails"
     }
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):

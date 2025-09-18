@@ -4197,119 +4197,119 @@ domain_resolver = DomainResolver()
 
 class FeedManager:
     @staticmethod
-def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
-    """Create feeds only if under the limits - FIXED competitor counting logic"""
-    feeds = []
-    company_name = metadata.get("company_name", ticker)
-    
-    LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
-    
-    # Check existing feed counts by unique competitor (not by feed count)
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT category, COUNT(*) as count,
-                   COUNT(DISTINCT COALESCE(competitor_ticker, search_keyword)) as unique_competitors
-            FROM source_feed 
-            WHERE ticker = %s AND active = TRUE
-            GROUP BY category
-        """, (ticker,))
+    def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
+        """Create feeds only if under the limits - FIXED competitor counting logic"""
+        feeds = []
+        company_name = metadata.get("company_name", ticker)
         
-        existing_data = {row["category"]: row for row in cur.fetchall()}
+        LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
         
-        # Extract counts
-        existing_company_count = existing_data.get('company', {}).get('count', 0)
-        existing_industry_count = existing_data.get('industry', {}).get('count', 0)
-        existing_competitor_entities = existing_data.get('competitor', {}).get('unique_competitors', 0)  # Count unique competitors, not feeds
-        
-        LOG.info(f"  EXISTING FEEDS: Company={existing_company_count}, Industry={existing_industry_count}, Competitors={existing_competitor_entities} unique entities")
-    
-    # Company feeds - always ensure we have the core 2
-    if existing_company_count < 2:
-        company_feeds = [
-            {
-                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                "name": f"Google News: {company_name}",
-                "category": "company",
-                "search_keyword": company_name
-            },
-            {
-                "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
-                "name": f"Yahoo Finance: {ticker}",
-                "category": "company",
-                "search_keyword": ticker
-            }
-        ]
-        feeds.extend(company_feeds)
-        LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
-    else:
-        LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
-    
-    # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
-    if existing_industry_count < 3:
-        available_slots = 3 - existing_industry_count
-        industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
-        
-        LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
-        
-        for keyword in industry_keywords:
-            feed = {
-                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
-                "name": f"Industry: {keyword}",
-                "category": "industry",
-                "search_keyword": keyword
-            }
-            feeds.append(feed)
-            LOG.info(f"    INDUSTRY: {keyword}")
-    else:
-        LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
-    
-    # Competitor feeds - MAX 3 UNIQUE COMPETITORS (each competitor can have multiple feeds but counts as 1 entity)
-    if existing_competitor_entities < 3:
-        available_competitor_slots = 3 - existing_competitor_entities
-        competitors = metadata.get("competitors", [])[:available_competitor_slots]
-        
-        LOG.info(f"  COMPETITOR ENTITIES: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(metadata.get('competitors', []))})")
-        
-        # Get existing competitor tickers to avoid duplicates
+        # Check existing feed counts by unique competitor (not by feed count)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT competitor_ticker 
+                SELECT category, COUNT(*) as count,
+                       COUNT(DISTINCT COALESCE(competitor_ticker, search_keyword)) as unique_competitors
                 FROM source_feed 
-                WHERE ticker = %s AND category = 'competitor' AND active = TRUE
-                AND competitor_ticker IS NOT NULL
+                WHERE ticker = %s AND active = TRUE
+                GROUP BY category
             """, (ticker,))
-            existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
+            
+            existing_data = {row["category"]: row for row in cur.fetchall()}
+            
+            # Extract counts
+            existing_company_count = existing_data.get('company', {}).get('count', 0)
+            existing_industry_count = existing_data.get('industry', {}).get('count', 0)
+            existing_competitor_entities = existing_data.get('competitor', {}).get('unique_competitors', 0)  # Count unique competitors, not feeds
+            
+            LOG.info(f"  EXISTING FEEDS: Company={existing_company_count}, Industry={existing_industry_count}, Competitors={existing_competitor_entities} unique entities")
         
-        for comp in competitors:
-            if isinstance(comp, dict):
-                comp_name = comp.get('name', '')
-                comp_ticker = comp.get('ticker')
-                
-                if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name and comp_ticker not in existing_competitor_tickers:
-                    # Create 2 feeds per competitor (Google + Yahoo) but they count as 1 entity
-                    comp_feeds = [
-                        {
-                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                            "name": f"Competitor: {comp_name}",
-                            "category": "competitor",
-                            "search_keyword": comp_name,
-                            "competitor_ticker": comp_ticker
-                        },
-                        {
-                            "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                            "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                            "category": "competitor",
-                            "search_keyword": comp_ticker,
-                            "competitor_ticker": comp_ticker
-                        }
-                    ]
-                    feeds.extend(comp_feeds)
-                    LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
-    else:
-        LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
-    
-    LOG.info(f"TOTAL NEW FEEDS for {ticker}: {len(feeds)}")
-    return feeds
+        # Company feeds - always ensure we have the core 2
+        if existing_company_count < 2:
+            company_feeds = [
+                {
+                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    "name": f"Google News: {company_name}",
+                    "category": "company",
+                    "search_keyword": company_name
+                },
+                {
+                    "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+                    "name": f"Yahoo Finance: {ticker}",
+                    "category": "company",
+                    "search_keyword": ticker
+                }
+            ]
+            feeds.extend(company_feeds)
+            LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
+        else:
+            LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
+        
+        # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
+        if existing_industry_count < 3:
+            available_slots = 3 - existing_industry_count
+            industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
+            
+            LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
+            
+            for keyword in industry_keywords:
+                feed = {
+                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    "name": f"Industry: {keyword}",
+                    "category": "industry",
+                    "search_keyword": keyword
+                }
+                feeds.append(feed)
+                LOG.info(f"    INDUSTRY: {keyword}")
+        else:
+            LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
+        
+        # Competitor feeds - MAX 3 UNIQUE COMPETITORS (each competitor can have multiple feeds but counts as 1 entity)
+        if existing_competitor_entities < 3:
+            available_competitor_slots = 3 - existing_competitor_entities
+            competitors = metadata.get("competitors", [])[:available_competitor_slots]
+            
+            LOG.info(f"  COMPETITOR ENTITIES: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(metadata.get('competitors', []))})")
+            
+            # Get existing competitor tickers to avoid duplicates
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT competitor_ticker 
+                    FROM source_feed 
+                    WHERE ticker = %s AND category = 'competitor' AND active = TRUE
+                    AND competitor_ticker IS NOT NULL
+                """, (ticker,))
+                existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
+            
+            for comp in competitors:
+                if isinstance(comp, dict):
+                    comp_name = comp.get('name', '')
+                    comp_ticker = comp.get('ticker')
+                    
+                    if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name and comp_ticker not in existing_competitor_tickers:
+                        # Create 2 feeds per competitor (Google + Yahoo) but they count as 1 entity
+                        comp_feeds = [
+                            {
+                                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                                "name": f"Competitor: {comp_name}",
+                                "category": "competitor",
+                                "search_keyword": comp_name,
+                                "competitor_ticker": comp_ticker
+                            },
+                            {
+                                "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                                "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                                "category": "competitor",
+                                "search_keyword": comp_ticker,
+                                "competitor_ticker": comp_ticker
+                            }
+                        ]
+                        feeds.extend(comp_feeds)
+                        LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
+        else:
+            LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
+        
+        LOG.info(f"TOTAL NEW FEEDS for {ticker}: {len(feeds)}")
+        return feeds
     
     @staticmethod
     def store_feeds(ticker: str, feeds: List[Dict], retain_days: int = 90) -> List[int]:

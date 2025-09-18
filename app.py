@@ -1719,7 +1719,7 @@ def update_schema_for_ai_summary():
 # Updated article formatting function
 def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
     """
-    Enhanced article HTML formatting with AI summaries and better competitor names
+    Enhanced article HTML formatting with AI summaries and database-based competitor names - NO REDUNDANT KEYWORDS
     """
     import html
     
@@ -1789,17 +1789,17 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         if article.get('scraped_content') and article.get('ai_summary'):
             analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
     
-    # Build metadata badges for category-specific information with better names
+    # Build metadata badges for category-specific information with DATABASE LOOKUP
     metadata_badges = []
     
-    if category == "competitor" and article.get('search_keyword'):
-        # Use the improved competitor name function
-        competitor_name = get_competitor_display_name(
-            article['search_keyword'], 
-            article.get('competitor_ticker'),
-            ticker_metadata_cache or {}
-        )
+    if category == "competitor":
+        # Use competitor_ticker first (most reliable), fallback to search_keyword
+        competitor_ticker = article.get('competitor_ticker')
+        search_keyword = article.get('search_keyword')
+        
+        competitor_name = get_competitor_display_name(search_keyword, competitor_ticker)
         metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
+        
     elif category == "industry" and article.get('search_keyword'):
         industry_keyword = article['search_keyword']
         metadata_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
@@ -3398,34 +3398,26 @@ def create_triage_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[D
     
     return "\n".join(text_lines)
 
-def get_competitor_display_name(search_keyword: str, competitor_ticker: str, ticker_metadata_cache: Dict) -> str:
-    """Get full company name for competitor display in emails"""
-    if not search_keyword:
-        return competitor_ticker or "Unknown Competitor"
+def get_competitor_display_name(search_keyword: str, competitor_ticker: str, ticker_metadata_cache: Dict = None) -> str:
+    """Get full company name for competitor display - USE DATABASE DIRECTLY"""
     
-    # For all tickers, check if we have metadata with competitors
-    for ticker, metadata in ticker_metadata_cache.items():
-        competitors = metadata.get("competitors", [])
-        for comp in competitors:
-            if isinstance(comp, dict):
-                # FIXED: Handle None values from .get() calls
-                comp_name = comp.get("name") or ""
-                comp_ticker = comp.get("ticker") or ""
+    # If we have the competitor_ticker, look it up in ticker_config table
+    if competitor_ticker:
+        try:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT name FROM ticker_config 
+                    WHERE ticker = %s AND active = TRUE
+                """, (competitor_ticker,))
+                result = cur.fetchone()
                 
-                # Check if this competitor matches either by name or ticker
-                if (comp_name.lower() == search_keyword.lower() or 
-                    comp_ticker.lower() == (competitor_ticker or "").lower()):
-                    return comp_name if comp_name else search_keyword
-            else:
-                # Old format - string that might contain both name and ticker
-                if comp and search_keyword.lower() in comp.lower():
-                    # Extract just the name part (before any parentheses)
-                    name_match = re.match(r'^([^(]+)', comp)
-                    if name_match:
-                        return name_match.group(1).strip()
+                if result and result["name"]:
+                    return result["name"]
+        except Exception as e:
+            LOG.debug(f"Database lookup failed for competitor {competitor_ticker}: {e}")
     
-    # Fallback to search keyword (which should be the company name for Google feeds)
-    return search_keyword
+    # Fallback: return the search_keyword (which should be the company name for Google feeds)
+    return search_keyword or competitor_ticker or "Unknown Competitor"
 
 def _ai_quality_score_company_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
     """Enhanced AI-powered component extraction for company articles"""
@@ -5049,7 +5041,7 @@ def send_email(subject: str, html_body: str, text_attachment: str = None, to: st
         return False
 
 def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Send enhanced quick email with domain, title, triage results and keyword information"""
+    """Send enhanced quick email with domain, title, triage results - REMOVED REDUNDANT KEYWORD SECTIONS"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
         
@@ -5109,7 +5101,6 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
             ".keywords { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 11px; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-            ".category-keywords { background-color: #f0f8ff; padding: 8px; margin: 5px 0; border-radius: 4px; font-size: 11px; border-left: 3px solid #3498db; }",
             "</style></head><body>",
             f"<h1>Quick Intelligence Report - Triage Complete</h1>",
             f"<div class='summary'>",
@@ -5177,19 +5168,7 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
                 
-                # Show category-specific keywords before articles
-                category_keywords_html = ""
-                if category == "industry" and ticker in ticker_metadata_cache:
-                    keywords = ticker_metadata_cache[ticker].get("industry_keywords", [])
-                    if keywords:
-                        keyword_badges = [f'<span class="industry-badge">{kw}</span>' for kw in keywords]
-                        category_keywords_html = f"<div class='category-keywords'><strong>Monitoring Keywords:</strong> {' '.join(keyword_badges)}</div>"
-                
-                elif category == "competitor" and ticker in ticker_metadata_cache:
-                    competitors = ticker_metadata_cache[ticker].get("competitors", [])
-                    if competitors:
-                        comp_badges = [f'<span class="competitor-badge">{comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in competitors]
-                        category_keywords_html = f"<div class='category-keywords'><strong>Monitoring Competitors:</strong> {' '.join(comp_badges)}</div>"
+                # REMOVED: category-specific keywords section - no more redundant "Monitoring Keywords" or "Monitoring Competitors"
                 
                 # Create combined list with triage priority and quality domain sorting
                 enhanced_articles = []
@@ -5226,7 +5205,6 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                 
                 selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or a["is_quality_domain"]])
                 html.append(f"<h3>{category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
-                html.append(category_keywords_html)  # Add category keywords
                 
                 for enhanced_article in enhanced_articles[:100]:  # Show up to 100 per category
                     article = enhanced_article["article"]
@@ -5240,11 +5218,10 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                         if category == "industry":
                             article_keyword_badge = f'<span class="industry-badge">{keyword}</span>'
                         elif category == "competitor":
-                            # Get full competitor name
+                            # Get full competitor name using database lookup
                             comp_name = get_competitor_display_name(
                                 keyword, 
-                                article.get('competitor_ticker'),
-                                ticker_metadata_cache
+                                article.get('competitor_ticker')
                             )
                             article_keyword_badge = f'<span class="competitor-badge">{comp_name}</span>'
                     

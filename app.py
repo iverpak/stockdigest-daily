@@ -263,7 +263,7 @@ def reset_scraping_stats():
     }
 
 def _update_ingestion_stats(category: str, keyword: str):
-    """Helper to update ingestion statistics - FIXED: Consolidate competitor counting by ticker"""
+    """Helper to update ingestion statistics"""
     global ingestion_stats
     
     if category == "company":
@@ -278,40 +278,14 @@ def _update_ingestion_stats(category: str, keyword: str):
         LOG.info(f"INGESTION: Industry '{keyword}' {keyword_count}/{ingestion_stats['limits']['industry_per_keyword']}")
     
     elif category == "competitor":
-        # FIXED: For competitors, use competitor_ticker as the consolidation key
-        # This will consolidate "Danaher Corporation" and "DHR" under the same ticker
-        
-        # Try to get the actual competitor ticker from the database
-        try:
-            with db() as conn, conn.cursor() as cur:
-                # Find the competitor_ticker for this search_keyword
-                cur.execute("""
-                    SELECT DISTINCT competitor_ticker 
-                    FROM source_feed 
-                    WHERE search_keyword = %s AND category = 'competitor' AND active = TRUE 
-                    AND competitor_ticker IS NOT NULL
-                    LIMIT 1
-                """, (keyword,))
-                result = cur.fetchone()
-                
-                if result:
-                    # Use the competitor ticker as the consolidation key
-                    consolidation_key = result["competitor_ticker"]
-                else:
-                    # Fallback to keyword if no ticker found
-                    consolidation_key = keyword
-        except Exception as e:
-            LOG.warning(f"Failed to get competitor ticker for {keyword}, using keyword: {e}")
-            consolidation_key = keyword
-        
-        if consolidation_key not in ingestion_stats["competitor_ingested_by_keyword"]:
-            ingestion_stats["competitor_ingested_by_keyword"][consolidation_key] = 0
-        ingestion_stats["competitor_ingested_by_keyword"][consolidation_key] += 1
-        keyword_count = ingestion_stats["competitor_ingested_by_keyword"][consolidation_key]
-        LOG.info(f"INGESTION: Competitor '{consolidation_key}' {keyword_count}/{ingestion_stats['limits']['competitor_per_keyword']} (via '{keyword}')")
+        if keyword not in ingestion_stats["competitor_ingested_by_keyword"]:
+            ingestion_stats["competitor_ingested_by_keyword"][keyword] = 0
+        ingestion_stats["competitor_ingested_by_keyword"][keyword] += 1
+        keyword_count = ingestion_stats["competitor_ingested_by_keyword"][keyword]
+        LOG.info(f"INGESTION: Competitor '{keyword}' {keyword_count}/{ingestion_stats['limits']['competitor_per_keyword']}")
 
 def _check_ingestion_limit(category: str, keyword: str) -> bool:
-    """Check if we can ingest more articles for this category/keyword - FIXED: Use consolidation for competitors"""
+    """Check if we can ingest more articles for this category/keyword"""
     global ingestion_stats
     
     if category == "company":
@@ -322,23 +296,7 @@ def _check_ingestion_limit(category: str, keyword: str) -> bool:
         return keyword_count < ingestion_stats["limits"]["industry_per_keyword"]
     
     elif category == "competitor":
-        # FIXED: Use same consolidation logic as _update_ingestion_stats
-        try:
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT DISTINCT competitor_ticker 
-                    FROM source_feed 
-                    WHERE search_keyword = %s AND category = 'competitor' AND active = TRUE 
-                    AND competitor_ticker IS NOT NULL
-                    LIMIT 1
-                """, (keyword,))
-                result = cur.fetchone()
-                
-                consolidation_key = result["competitor_ticker"] if result else keyword
-        except Exception:
-            consolidation_key = keyword
-        
-        keyword_count = ingestion_stats["competitor_ingested_by_keyword"].get(consolidation_key, 0)
+        keyword_count = ingestion_stats["competitor_ingested_by_keyword"].get(keyword, 0)
         return keyword_count < ingestion_stats["limits"]["competitor_per_keyword"]
     
     return False
@@ -2014,14 +1972,9 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
         if not any(domain in url for domain in ["finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"]):
             return None
         
-        # Skip Yahoo author pages, video files, and other problematic URLs
-        skip_patterns = [
-            "/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov",
-            "/video/", "/videos/", "/live/", "/m/", "/mobile/"
-        ]
-        
-        if any(skip_pattern in url for skip_pattern in skip_patterns):
-            LOG.info(f"Skipping Yahoo problematic page: {url}")
+        # Skip Yahoo author pages and video files
+        if any(skip_pattern in url for skip_pattern in ["/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov"]):
+            LOG.info(f"Skipping Yahoo author/video page: {url}")
             return None
             
         LOG.info(f"Extracting Yahoo Finance source from: {url}")
@@ -2088,10 +2041,7 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                                 not '/api/' in candidate_url.lower() and
                                 not 'yimg.com' in candidate_url.lower() and
                                 not '/author/' in candidate_url.lower() and
-                                not 'yahoo-finance-video' in candidate_url.lower() and
-                                not '/video/' in candidate_url.lower() and
-                                not '/videos/' in candidate_url.lower() and
-                                not '/live/' in candidate_url.lower()):
+                                not 'yahoo-finance-video' in candidate_url.lower()):
                                 
                                 LOG.info(f"Successfully extracted Yahoo source: {candidate_url}")
                                 return candidate_url
@@ -2106,7 +2056,7 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
         # Enhanced fallback patterns that exclude author pages and videos
         fallback_patterns = [
             # Only match URLs that are likely to be news articles (not author pages)
-            r'https://(?!finance\.yahoo\.com|ca\.finance\.yahoo\.com|s\.yimg\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/(?!author/|video/|videos/|live/)[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
+            r'https://(?!finance\.yahoo\.com|ca\.finance\.yahoo\.com|s\.yimg\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/(?!author/)[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
             r'https://stockstory\.org/[^\s"<>]*',
         ]
         
@@ -2122,9 +2072,6 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                         not '/api/' in candidate_url.lower() and
                         not '/author/' in candidate_url.lower() and
                         not 'yahoo-finance-video' in candidate_url.lower() and
-                        not '/video/' in candidate_url.lower() and
-                        not '/videos/' in candidate_url.lower() and
-                        not '/live/' in candidate_url.lower() and
                         len(candidate_url) > 30):  # Minimum reasonable URL length
                         LOG.info(f"Fallback extraction successful: {candidate_url}")
                         return candidate_url
@@ -2376,10 +2323,9 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     
     return selected_results
 
-def _apply_quality_domain_selection_only(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str]) -> List[Dict]:
+def _apply_quality_domain_and_smart_fill(articles: List[Dict], ai_selected: List[Dict], category: str, limit: int, low_quality_domains: Set[str]) -> List[Dict]:
     """
-    Apply quality domain selection to AI triage results - NO BACKFILL, NO REDUCTION
-    Only adds quality domains, never reduces the count below AI selection + quality domains
+    Apply quality domain selection and smart limit filling to AI triage results
     """
     # Step 1: Quality Domain Selection with Filtering
     quality_selected = []
@@ -2411,26 +2357,75 @@ def _apply_quality_domain_selection_only(articles: List[Dict], ai_selected: List
                 "confidence": 0.8
             })
     
-    # Step 2: Combine AI + Quality Domains (NO BACKFILL, NO LIMITS)
+    # Step 2: Smart Limit Filling with Domain Tier Consideration
     combined_selected = ai_selected + quality_selected
     
-    # Sort by priority (lower number = higher priority)
+    if len(combined_selected) < limit:
+        remaining_slots = limit - len(combined_selected)
+        selected_indices = {item["id"] for item in combined_selected}
+        
+        # Get remaining articles with enhanced filtering and domain tier scoring
+        remaining_articles = []
+        for idx, article in enumerate(articles):
+            if idx in selected_indices:
+                continue
+                
+            domain = normalize_domain(article.get("domain", ""))
+            title = article.get("title", "").lower()
+            
+            # Apply enhanced filtering
+            if domain in low_quality_domains:
+                continue
+                
+            if is_insider_trading_article(title):
+                continue
+            
+            # Calculate domain tier score for prioritization
+            domain_tier = DOMAIN_TIERS.get(domain, 0.3)
+            pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+            
+            # Prioritize by domain tier first, then recency
+            priority_score = (domain_tier * 1000) + (pub_time.timestamp() / 1000)
+            
+            remaining_articles.append((idx, priority_score, pub_time, domain_tier))
+        
+        # Sort by priority score (higher = better)
+        remaining_articles.sort(key=lambda x: x[1], reverse=True)
+        
+        # Add best remaining articles to fill slots
+        for idx, priority_score, pub_time, domain_tier in remaining_articles[:remaining_slots]:
+            combined_selected.append({
+                "id": idx,
+                "scrape_priority": 4,
+                "likely_repeat": False,
+                "repeat_key": "",
+                "why": f"High-tier domain fill (tier: {domain_tier:.1f})",
+                "confidence": 0.6
+            })
+    
+    # Limit to the maximum allowed and sort by priority
     combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
+    final_selected = combined_selected[:limit]
     
-    # Enhanced logging
+    # Enhanced logging with proper counts
     ai_count = len(ai_selected)
-    quality_count = len(quality_selected)
+    quality_count_before_limit = len(quality_selected)
+    quality_count_actual = len([item for item in final_selected if item.get("why", "").startswith("Quality domain")])
+    fill_count = len(final_selected) - ai_count - quality_count_actual
     
-    LOG.info(f"No-limit triage {category}: {ai_count} AI + {quality_count} Quality = {len(combined_selected)} total (no reduction applied)")
+    if quality_count_before_limit > quality_count_actual:
+        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count_actual} Quality ({quality_count_before_limit} found, limited) + {fill_count} Smart-fill = {len(final_selected)} total")
+    else:
+        LOG.info(f"Enhanced triage {category}: {ai_count} AI + {quality_count_actual} Quality + {fill_count} Smart-fill = {len(final_selected)} total")
     
-    return combined_selected
+    return final_selected
 
 def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage - FIXED: No backfill limits, no reductions, fix index errors
+    Enhanced triage with PER-KEYWORD limits: Company=20, Industry=5 per keyword, Competitor=5 per competitor
     """
     if not OPENAI_API_KEY:
-        LOG.warning("OpenAI API key not configured - using quality domains only")
+        LOG.warning("OpenAI API key not configured - using quality domains and domain tiers only")
         return {"company": [], "industry": [], "competitor": []}
     
     selected_results = {"company": [], "industry": [], "competitor": []}
@@ -2458,10 +2453,10 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
         except:
             pass
     
-    # COMPANY: Process as single batch (no limits applied)
+    # COMPANY: Process as single batch with limit 20
     if "company" in articles_by_category and articles_by_category["company"]:
         articles = articles_by_category["company"]
-        LOG.info(f"Starting triage for company: {len(articles)} articles (no limit)")
+        LOG.info(f"Starting triage for company: {len(articles)} articles (limit: 20)")
         
         try:
             ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
@@ -2469,15 +2464,15 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
             LOG.error(f"AI triage failed for company: {e}")
             ai_selected = []
         
-        # Apply quality domain selection only (no limits)
-        selected_results["company"] = _apply_quality_domain_selection_only(
-            articles, ai_selected, "company", LOW_QUALITY_DOMAINS
+        # Apply quality domain and smart fill logic with limit 20
+        selected_results["company"] = _apply_quality_domain_and_smart_fill(
+            articles, ai_selected, "company", 20, LOW_QUALITY_DOMAINS
         )
     
-    # INDUSTRY: Process by keyword batches (no limits applied)
+    # INDUSTRY: Process by keyword batches with 5 per keyword limit
     if "industry" in articles_by_category and articles_by_category["industry"]:
         articles = articles_by_category["industry"]
-        LOG.info(f"Starting triage for industry: {len(articles)} articles (no limit per keyword)")
+        LOG.info(f"Starting triage for industry: {len(articles)} articles (limit: 5 per keyword)")
         
         # Group articles by search_keyword
         articles_by_keyword = {}
@@ -2487,13 +2482,13 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 articles_by_keyword[keyword] = []
             articles_by_keyword[keyword].append((idx, article))
         
-        # Process each keyword separately (no limits)
+        # Process each keyword separately with 5 article limit each
         all_industry_selected = []
         for keyword, keyword_articles in articles_by_keyword.items():
             if not keyword_articles:
                 continue
                 
-            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles (no limit)")
+            LOG.info(f"  Processing industry keyword '{keyword}': {len(keyword_articles)} articles (limit: 5)")
             
             # Create mini-article list for this keyword
             keyword_article_list = [article for idx, article in keyword_articles]
@@ -2504,23 +2499,22 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 
                 # Convert mini-indices back to full indices
                 for item in keyword_selected:
-                    if item["id"] < len(keyword_articles):  # FIX INDEX ERROR
-                        original_idx = keyword_articles[item["id"]][0]
-                        item["id"] = original_idx
-                        item["why"] = f"[{keyword}] {item['why']}"
+                    original_idx = keyword_articles[item["id"]][0]  # Get original index
+                    item["id"] = original_idx  # Update to original index
+                    item["why"] = f"[{keyword}] {item['why']}"  # Tag with keyword
                 
-                # Apply quality domain selection (no limits)
-                limited_keyword_selected = _apply_quality_domain_selection_only(
-                    keyword_article_list, keyword_selected, "industry", LOW_QUALITY_DOMAINS
+                # Apply per-keyword limit of 5 with quality domains and backfill
+                keyword_articles_full = [keyword_articles[i][1] for i in range(len(keyword_articles))]
+                limited_keyword_selected = _apply_quality_domain_and_smart_fill(
+                    keyword_articles_full, keyword_selected, "industry", 5, LOW_QUALITY_DOMAINS
                 )
                 
                 # Convert back to full article indices for final results
                 for item in limited_keyword_selected:
-                    if item["id"] < len(keyword_articles):  # FIX INDEX ERROR
-                        original_idx = keyword_articles[item["id"]][0]
-                        item["id"] = original_idx
-                        if not item["why"].startswith(f"[{keyword}]"):
-                            item["why"] = f"[{keyword}] {item['why']}"
+                    original_idx = keyword_articles[item["id"]][0]
+                    item["id"] = original_idx
+                    if not item["why"].startswith(f"[{keyword}]"):
+                        item["why"] = f"[{keyword}] {item['why']}"
                 
                 all_industry_selected.extend(limited_keyword_selected)
                 LOG.info(f"    Keyword '{keyword}' final selection: {len(limited_keyword_selected)} articles")
@@ -2530,43 +2524,26 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
         
         selected_results["industry"] = all_industry_selected
     
-    # COMPETITOR: Process by competitor batches (no limits applied) 
+    # COMPETITOR: Process by competitor batches with 5 per competitor limit
     if "competitor" in articles_by_category and articles_by_category["competitor"]:
         articles = articles_by_category["competitor"]
-        LOG.info(f"Starting triage for competitor: {len(articles)} articles (no limit per competitor)")
+        LOG.info(f"Starting triage for competitor: {len(articles)} articles (limit: 5 per competitor)")
         
-        # Group articles by competitor_ticker (not search_keyword) to consolidate
+        # Group articles by search_keyword (competitor name or ticker)
         articles_by_competitor = {}
         for idx, article in enumerate(articles):
-            # Try to get competitor_ticker from database for this article
-            search_keyword = article.get("search_keyword", "unknown")
-            
-            try:
-                with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT DISTINCT competitor_ticker 
-                        FROM source_feed 
-                        WHERE search_keyword = %s AND category = 'competitor' AND active = TRUE 
-                        AND competitor_ticker IS NOT NULL
-                        LIMIT 1
-                    """, (search_keyword,))
-                    result = cur.fetchone()
-                    
-                    consolidation_key = result["competitor_ticker"] if result else search_keyword
-            except Exception:
-                consolidation_key = search_keyword
-            
-            if consolidation_key not in articles_by_competitor:
-                articles_by_competitor[consolidation_key] = []
-            articles_by_competitor[consolidation_key].append((idx, article))
+            competitor = article.get("search_keyword", "unknown")
+            if competitor not in articles_by_competitor:
+                articles_by_competitor[competitor] = []
+            articles_by_competitor[competitor].append((idx, article))
         
-        # Process each competitor separately (no limits)
+        # Process each competitor separately with 5 article limit each
         all_competitor_selected = []
         for competitor, competitor_articles in articles_by_competitor.items():
             if not competitor_articles:
                 continue
                 
-            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles (no limit)")
+            LOG.info(f"  Processing competitor '{competitor}': {len(competitor_articles)} articles (limit: 5)")
             
             # Create mini-article list for this competitor
             competitor_article_list = [article for idx, article in competitor_articles]
@@ -2577,23 +2554,22 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
                 
                 # Convert mini-indices back to full indices
                 for item in competitor_selected:
-                    if item["id"] < len(competitor_articles):  # FIX INDEX ERROR
-                        original_idx = competitor_articles[item["id"]][0]
-                        item["id"] = original_idx
-                        item["why"] = f"[{competitor}] {item['why']}"
+                    original_idx = competitor_articles[item["id"]][0]  # Get original index
+                    item["id"] = original_idx  # Update to original index
+                    item["why"] = f"[{competitor}] {item['why']}"  # Tag with competitor name
                 
-                # Apply quality domain selection (no limits)
-                limited_competitor_selected = _apply_quality_domain_selection_only(
-                    competitor_article_list, competitor_selected, "competitor", LOW_QUALITY_DOMAINS
+                # Apply per-competitor limit of 5 with quality domains and backfill
+                competitor_articles_full = [competitor_articles[i][1] for i in range(len(competitor_articles))]
+                limited_competitor_selected = _apply_quality_domain_and_smart_fill(
+                    competitor_articles_full, competitor_selected, "competitor", 5, LOW_QUALITY_DOMAINS
                 )
                 
                 # Convert back to full article indices for final results
                 for item in limited_competitor_selected:
-                    if item["id"] < len(competitor_articles):  # FIX INDEX ERROR
-                        original_idx = competitor_articles[item["id"]][0]
-                        item["id"] = original_idx
-                        if not item["why"].startswith(f"[{competitor}]"):
-                            item["why"] = f"[{competitor}] {item['why']}"
+                    original_idx = competitor_articles[item["id"]][0]
+                    item["id"] = original_idx
+                    if not item["why"].startswith(f"[{competitor}]"):
+                        item["why"] = f"[{competitor}] {item['why']}"
                 
                 all_competitor_selected.extend(limited_competitor_selected)
                 LOG.info(f"    Competitor '{competitor}' final selection: {len(limited_competitor_selected)} articles")
@@ -2605,7 +2581,7 @@ def perform_ai_triage_batch_with_quality_domains(articles_by_category: Dict[str,
     
     # Final summary
     total_selected = sum(len(items) for items in selected_results.values())
-    LOG.info(f"=== TRIAGE COMPLETE: {total_selected} articles selected (no limits applied) ===")
+    LOG.info(f"=== TRIAGE COMPLETE: {total_selected} articles selected across all categories ===")
     
     return selected_results
 
@@ -4221,118 +4197,95 @@ domain_resolver = DomainResolver()
 
 class FeedManager:
     @staticmethod
-    def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
-        """Create feeds only if under the limits - FIXED competitor counting logic"""
-        feeds = []
-        company_name = metadata.get("company_name", ticker)
+def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
+    """Create feeds only if under the limits - FIXED competitor counting logic"""
+    feeds = []
+    company_name = metadata.get("company_name", ticker)
+    
+    LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
+    
+    # Check existing feed counts by unique competitor (not by feed count)
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT category, COUNT(*) as count,
+                   COUNT(DISTINCT COALESCE(competitor_ticker, search_keyword)) as unique_competitors
+            FROM source_feed 
+            WHERE ticker = %s AND active = TRUE
+            GROUP BY category
+        """, (ticker,))
         
-        LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
+        existing_data = {row["category"]: row for row in cur.fetchall()}
         
-        # Check existing feed counts by category and unique competitors
+        # Extract counts
+        existing_company_count = existing_data.get('company', {}).get('count', 0)
+        existing_industry_count = existing_data.get('industry', {}).get('count', 0)
+        existing_competitor_entities = existing_data.get('competitor', {}).get('unique_competitors', 0)  # Count unique competitors, not feeds
+        
+        LOG.info(f"  EXISTING FEEDS: Company={existing_company_count}, Industry={existing_industry_count}, Competitors={existing_competitor_entities} unique entities")
+    
+    # Company feeds - always ensure we have the core 2
+    if existing_company_count < 2:
+        company_feeds = [
+            {
+                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Google News: {company_name}",
+                "category": "company",
+                "search_keyword": company_name
+            },
+            {
+                "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+                "name": f"Yahoo Finance: {ticker}",
+                "category": "company",
+                "search_keyword": ticker
+            }
+        ]
+        feeds.extend(company_feeds)
+        LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
+    else:
+        LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
+    
+    # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
+    if existing_industry_count < 3:
+        available_slots = 3 - existing_industry_count
+        industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
+        
+        LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
+        
+        for keyword in industry_keywords:
+            feed = {
+                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+                "name": f"Industry: {keyword}",
+                "category": "industry",
+                "search_keyword": keyword
+            }
+            feeds.append(feed)
+            LOG.info(f"    INDUSTRY: {keyword}")
+    else:
+        LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
+    
+    # Competitor feeds - MAX 3 UNIQUE COMPETITORS (each competitor can have multiple feeds but counts as 1 entity)
+    if existing_competitor_entities < 3:
+        available_competitor_slots = 3 - existing_competitor_entities
+        competitors = metadata.get("competitors", [])[:available_competitor_slots]
+        
+        LOG.info(f"  COMPETITOR ENTITIES: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(metadata.get('competitors', []))})")
+        
+        # Get existing competitor tickers to avoid duplicates
         with db() as conn, conn.cursor() as cur:
-            # Get basic category counts
             cur.execute("""
-                SELECT category, COUNT(*) as count
+                SELECT DISTINCT competitor_ticker 
                 FROM source_feed 
-                WHERE ticker = %s AND active = TRUE
-                GROUP BY category
-            """, (ticker,))
-            
-            existing_data = {row["category"]: row for row in cur.fetchall()}
-            
-            # For competitors, count unique entities (not total feeds)
-            cur.execute("""
-                SELECT COUNT(DISTINCT competitor_ticker) as unique_competitors
-                FROM source_feed 
-                WHERE ticker = %s AND category = 'competitor' AND active = TRUE 
+                WHERE ticker = %s AND category = 'competitor' AND active = TRUE
                 AND competitor_ticker IS NOT NULL
             """, (ticker,))
-            competitor_result = cur.fetchone()
-            existing_competitor_entities = competitor_result["unique_competitors"] if competitor_result else 0
-            
-            # Extract counts
-            existing_company_count = existing_data.get('company', {}).get('count', 0)
-            existing_industry_count = existing_data.get('industry', {}).get('count', 0)
-            
-            LOG.info(f"  EXISTING FEEDS: Company={existing_company_count}, Industry={existing_industry_count}, Competitors={existing_competitor_entities} unique entities")
+            existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
         
-        # Company feeds - always ensure we have the core 2
-        if existing_company_count < 2:
-            company_feeds = [
-                {
-                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    "name": f"Google News: {company_name}",
-                    "category": "company",
-                    "search_keyword": company_name
-                },
-                {
-                    "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
-                    "name": f"Yahoo Finance: {ticker}",
-                    "category": "company",
-                    "search_keyword": ticker
-                }
-            ]
-            feeds.extend(company_feeds)
-            LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
-        else:
-            LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
-        
-        # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
-        if existing_industry_count < 3:
-            available_slots = 3 - existing_industry_count
-            industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
-            
-            LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
-            
-            for keyword in industry_keywords:
-                feed = {
-                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(keyword)}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    "name": f"Industry: {keyword}",
-                    "category": "industry",
-                    "search_keyword": keyword
-                }
-                feeds.append(feed)
-                LOG.info(f"    INDUSTRY: {keyword}")
-        else:
-            LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
-        
-        # Competitor feeds - MAX 3 UNIQUE COMPETITORS (each competitor can have multiple feeds but counts as 1 entity)
-        if existing_competitor_entities < 3:
-            available_competitor_slots = 3 - existing_competitor_entities
-            competitors = metadata.get("competitors", [])
-            
-            LOG.info(f"  COMPETITOR ENTITIES: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(competitors)})")
-            
-            # Get existing competitor tickers to avoid duplicates
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT DISTINCT competitor_ticker 
-                    FROM source_feed 
-                    WHERE ticker = %s AND category = 'competitor' AND active = TRUE
-                    AND competitor_ticker IS NOT NULL
-                """, (ticker,))
-                existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
-            
-            added_competitors = 0
-            for comp in competitors:
-                # Stop if we've reached the limit
-                if added_competitors >= available_competitor_slots:
-                    break
-                    
-                if isinstance(comp, dict):
-                    comp_name = comp.get('name', '')
-                    comp_ticker = comp.get('ticker')
-                    
-                    # VALIDATION: Skip competitors without valid tickers or that are the same as main ticker
-                    if (not comp_ticker or 
-                        comp_ticker.upper() == ticker.upper() or 
-                        comp_ticker in existing_competitor_tickers or
-                        not comp_name or
-                        "not publicly traded" in comp_name.lower()):
-                        
-                        LOG.info(f"    SKIPPING COMPETITOR: {comp_name} - No valid ticker or not publicly traded")
-                        continue
-                    
+        for comp in competitors:
+            if isinstance(comp, dict):
+                comp_name = comp.get('name', '')
+                comp_ticker = comp.get('ticker')
+                
+                if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name and comp_ticker not in existing_competitor_tickers:
                     # Create 2 feeds per competitor (Google + Yahoo) but they count as 1 entity
                     comp_feeds = [
                         {
@@ -4351,48 +4304,12 @@ class FeedManager:
                         }
                     ]
                     feeds.extend(comp_feeds)
-                    added_competitors += 1
                     LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
-                    
-                else:
-                    # Handle old string format - skip if no ticker can be extracted
-                    comp_str = str(comp)
-                    ticker_match = re.search(r'\(([A-Z]{1,5})\)', comp_str)
-                    if not ticker_match:
-                        LOG.info(f"    SKIPPING COMPETITOR: {comp_str} - No ticker found")
-                        continue
-                        
-                    comp_ticker = ticker_match.group(1)
-                    comp_name = re.sub(r'\s*\([^)]*\)', '', comp_str).strip()
-                    
-                    if (comp_ticker.upper() == ticker.upper() or 
-                        comp_ticker in existing_competitor_tickers or
-                        not comp_name):
-                        LOG.info(f"    SKIPPING COMPETITOR: {comp_name} ({comp_ticker}) - Duplicate or invalid")
-                        continue
-                    
-                    # Create feeds for string format competitor
-                    comp_feeds = [
-                        {
-                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                            "name": f"Competitor: {comp_name}",
-                            "category": "competitor",
-                            "search_keyword": comp_name,
-                            "competitor_ticker": comp_ticker
-                        },
-                        {
-                            "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                            "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                            "category": "competitor",
-                            "search_keyword": comp_ticker,
-                            "competitor_ticker": comp_ticker
-                        }
-                    ]
-                    feeds.extend(comp_feeds)
-                    added_competitors += 1
-                    LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
-        else:
-            LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
+    else:
+        LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
+    
+    LOG.info(f"TOTAL NEW FEEDS for {ticker}: {len(feeds)}")
+    return feeds
     
     @staticmethod
     def store_feeds(ticker: str, feeds: List[Dict], retain_days: int = 90) -> List[int]:
@@ -5014,32 +4931,21 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
 
 # Updated email sending function with text attachment
 def send_email(subject: str, html_body: str, text_attachment: str = None, to: str = None):
-    """Send email with HTML body displayed properly and optional text attachment"""
+    """Send email with optional text attachment"""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
     
     try:
         recipient = to or DIGEST_TO
-        
-        # Create multipart message with HTML as primary content
-        msg = MIMEMultipart('mixed')  # Use 'mixed' for attachments
+        msg = MIMEMultipart()
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient
         
-        # Create multipart alternative for HTML/text content
-        msg_alternative = MIMEMultipart('alternative')
-        
-        # Add text version (fallback for very old email clients)
-        text_body = "This email contains HTML content. Please view in an HTML-capable email client."
-        msg_alternative.attach(MIMEText(text_body, "plain", "utf-8"))
-        
-        # Add HTML body (this will be displayed by modern email clients)
-        msg_alternative.attach(MIMEText(html_body, "html", "utf-8"))
-        
-        # Attach the alternative part to main message
-        msg.attach(msg_alternative)
+        # Add HTML body
+        msg.attach(MIMEText("Please view this email in HTML format.", "plain"))
+        msg.attach(MIMEText(html_body, "html"))
         
         # Add text attachment if provided and not empty
         if text_attachment and len(text_attachment.strip()) > 0:

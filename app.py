@@ -5014,21 +5014,32 @@ def build_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], peri
 
 # Updated email sending function with text attachment
 def send_email(subject: str, html_body: str, text_attachment: str = None, to: str = None):
-    """Send email with optional text attachment"""
+    """Send email with HTML body displayed properly and optional text attachment"""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
     
     try:
         recipient = to or DIGEST_TO
-        msg = MIMEMultipart()
+        
+        # Create multipart message with HTML as primary content
+        msg = MIMEMultipart('mixed')  # Use 'mixed' for attachments
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient
         
-        # Add HTML body
-        msg.attach(MIMEText("Please view this email in HTML format.", "plain"))
-        msg.attach(MIMEText(html_body, "html"))
+        # Create multipart alternative for HTML/text content
+        msg_alternative = MIMEMultipart('alternative')
+        
+        # Add text version (fallback for very old email clients)
+        text_body = "This email contains HTML content. Please view in an HTML-capable email client."
+        msg_alternative.attach(MIMEText(text_body, "plain", "utf-8"))
+        
+        # Add HTML body (this will be displayed by modern email clients)
+        msg_alternative.attach(MIMEText(html_body, "html", "utf-8"))
+        
+        # Attach the alternative part to main message
+        msg.attach(msg_alternative)
         
         # Add text attachment if provided and not empty
         if text_attachment and len(text_attachment.strip()) > 0:

@@ -1763,11 +1763,10 @@ def contains_non_latin_script(text: str) -> bool:
     return False
 
 def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
-    """
-    Fixed Yahoo Finance source extraction - properly handles HTML parsing
-    """
+    """Fixed Yahoo Finance source extraction - handles all Yahoo Finance domains"""
     try:
-        if "finance.yahoo.com" not in url:
+        # Expand the domain check to include regional Yahoo Finance
+        if not any(domain in url for domain in ["finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"]):
             return None
             
         LOG.info(f"Extracting Yahoo Finance source from: {url}")

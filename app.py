@@ -4558,9 +4558,12 @@ def send_email(subject: str, html_body: str, text_attachment: str, to: str = Non
         LOG.error("SMTP not fully configured")
         return False
     
+    # ADD THIS DEBUG LINE
+    LOG.info(f"Email text attachment length: {len(text_attachment) if text_attachment else 0}")
+    
     try:
         recipient = to or DIGEST_TO
-        msg = MIMEMultipart("alternative")  # Changed from "mixed"
+        msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient

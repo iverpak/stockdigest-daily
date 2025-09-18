@@ -224,10 +224,6 @@ scraping_stats = {
     }
 }
 
-# Global instances
-ticker_manager = TickerManager()
-feed_manager = FeedManager()
-
 def reset_scraping_stats():
     """Reset scraping stats for new run"""
     global scraping_stats
@@ -3010,6 +3006,10 @@ class TickerManager:
                 json.dumps(metadata.get("sector_profile", {})),
                 json.dumps(metadata.get("aliases_brands_assets", {}))
             ))
+
+# Global instances
+ticker_manager = TickerManager()
+feed_manager = FeedManager()
 
 def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, Any]:
     """Enhanced AI metadata generation with sector profile and aliases"""

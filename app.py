@@ -2232,8 +2232,8 @@ OUTPUT (STRICT JSON)
 
     return _make_triage_request_full(system_prompt, payload)
 
-def _triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[int]:
-    """Triage industry articles using optimized prompt"""
+def _triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[Dict]:
+    """Triage industry articles using optimized prompt - returns full results"""
     
     # Build items for API
     items = []
@@ -2283,8 +2283,8 @@ NUMERIC CUES (INDUSTRY)
 - Research/indices: month-over-month/YoY changes, diffusion index levels.
 
 SPECIAL CLAMPS
-- Remarks/op-eds without enacted dates or magnitudes ⇒ lower priority than enacted policy or benchmark prints.
-- Vendor marketing/TAM-CAGR fluff without sources ⇒ low priority unless it includes sector_profile benchmarks/inputs with numbers.
+- Remarks/op-eds without enacted dates or magnitudes → lower priority than enacted policy or benchmark prints.
+- Vendor marketing/TAM-CAGR fluff without sources → low priority unless it includes sector_profile benchmarks/inputs with numbers.
 - PR allowed; down-prioritize only if unnumbered or likely_repeat.
 
 PRIORITY BANDS
@@ -2307,8 +2307,8 @@ OUTPUT (STRICT JSON)
 
     return _make_triage_request_full(system_prompt, payload)
 
-def _triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[int]:
-    """Triage competitor articles using optimized prompt"""
+def _triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[Dict]:
+    """Triage competitor articles using optimized prompt - returns full results"""
     
     # Extract just ticker symbols from competitors for the whitelist
     peer_tickers = []
@@ -2366,7 +2366,7 @@ NUMERIC CUES (COMPETITOR)
 - Dates (commissioning/restart/effective).
 
 SPECIAL CLAMPS
-- Non-activist 13F/position stories about peers ⇒ low priority.
+- Non-activist 13F/position stories about peers → low priority.
 - PR allowed; down-prioritize if unnumbered or likely_repeat.
 
 PRIORITY BANDS
@@ -2389,8 +2389,8 @@ OUTPUT (STRICT JSON)
 
     return _make_triage_request_full(system_prompt, payload)
 
-def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[int]:
-    """Make API request to OpenAI for triage"""
+def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
+    """Make API request to OpenAI for triage and return full results"""
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -2419,12 +2419,12 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[int]:
         # Parse the JSON response
         triage_result = json.loads(content)
         
-        # Sort by priority (P1=1 is highest) then take up to our limits
+        # Sort by priority (P1=1 is highest) then return full data
         selected = triage_result.get("selected", [])
         selected.sort(key=lambda x: x.get("scrape_priority", 5))
         
-        # Return just the IDs
-        return [item["id"] for item in selected]
+        # Return full article data with triage info
+        return selected
         
     except Exception as e:
         LOG.error(f"Triage request failed: {e}")

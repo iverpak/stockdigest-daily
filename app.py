@@ -1569,14 +1569,14 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     return stats
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion with per-category limits during ingestion (50/25/25) - COUNT ALL URLs INCLUDING EXISTING - NO AI ANALYSIS"""
+    """Basic feed ingestion with per-category limits during ingestion (50/25/25) - COUNT ONLY UNIQUE URLs"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
     
     category = feed.get("category", "company")
     
-    # FIXED: Use competitor_ticker for competitor feeds, search_keyword for others
+    # Use competitor_ticker for competitor feeds, search_keyword for others
     if category == "competitor":
-        feed_keyword = feed.get("competitor_ticker", "unknown")  # Use competitor_ticker for consolidation
+        feed_keyword = feed.get("competitor_ticker", "unknown")
     else:
         feed_keyword = feed.get("search_keyword", "unknown")
     
@@ -1656,8 +1656,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
-                        # CRITICAL CHANGE: Still count duplicates toward limit
-                        _update_ingestion_stats(category, feed_keyword)
+                        # FIXED: DO NOT count duplicates toward limit - they are not unique URLs
+                        LOG.debug(f"DUPLICATE SKIPPED: {title[:50]}... (not counted toward limit)")
                         continue
                     
                     # Parse publish date
@@ -1665,9 +1665,9 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # FIXED: Use truly basic scoring - NO AI CALLS WHATSOEVER
+                    # Use truly basic scoring - NO AI CALLS WHATSOEVER
                     domain_tier = _get_domain_tier(final_domain, title, description)
-                    basic_quality_score = 50.0 + (domain_tier - 0.5) * 20  # Simple domain-based scoring
+                    basic_quality_score = 50.0 + (domain_tier - 0.5) * 20
                     
                     # Add ticker mention bonus
                     if feed["ticker"].upper() in title.upper():
@@ -1678,7 +1678,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     display_content = description
                     
-                    # Insert article with basic data only - NO AI FIELDS
+                    # Insert article with basic data only
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1696,8 +1696,9 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        # Update ingestion stats AFTER successful insertion
+                        # ONLY count UNIQUE URLs toward limit
                         _update_ingestion_stats(category, feed_keyword)
+                        LOG.debug(f"UNIQUE URL COUNTED: {title[:50]}...")
                         
             except Exception as e:
                 LOG.error(f"Database error for '{title[:50]}': {e}")

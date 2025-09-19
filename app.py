@@ -4511,122 +4511,223 @@ class TickerManager:
 ticker_manager = TickerManager()
 feed_manager = FeedManager()
 
-def generate_ticker_metadata_with_ai(ticker: str) -> Dict[str, Any]:
-    """Enhanced AI metadata generation with sector profile and aliases - LIMITED TO 3 KEYWORDS"""
-    if not OPENAI_API_KEY:
-        LOG.error("OpenAI API key not configured")
-        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
+def generate_ticker_metadata_with_ai(ticker, company_name):
+    """
+    Generate comprehensive ticker metadata using OpenAI with improved validation
+    """
+    system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
-    prompt = f"""You are a financial analyst. Return STRICT JSON ONLY.
+CRITICAL REQUIREMENTS:
+- All competitors must be currently publicly traded with valid ticker symbols
+- Industry keywords must be SPECIFIC enough to avoid false positives in news filtering
+- Benchmarks must be sector-specific, not generic market indices
+- All information must be factually accurate as of 2024
 
-For stock ticker "{ticker}":
+INDUSTRY KEYWORDS (exactly 3):
+- Must be SPECIFIC to the company's primary business
+- Avoid generic terms like "Technology", "Healthcare", "Energy", "Oil", "Services"
+- Use compound terms or specific product categories
+- Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
+- Test: Would this keyword appear in articles about direct competitors but NOT unrelated companies?
 
-1) Confirm the company and provide sector context and peers.
-2) Output fields exactly as below. Avoid generic terms. Prefer GICS-style naming.
-3) Peers MUST be public, primarily competing in the same core business.
-4) LIMIT industry_keywords to MAXIMUM 3 terms - only the most important ones.
-5) Add sector_profile so Industry routing can reason about inputs/channels/geos/benchmarks.
-6) Add aliases/brands/assets for better Company relevance.
+COMPETITORS (exactly 3):
+- Must be direct business competitors, not just same-sector companies
+- Must be currently publicly traded (check acquisition status)
+- Format: "Company Name (TICKER)" - verify ticker is correct and current
+- Exclude: Private companies, subsidiaries, companies acquired in last 2 years
+- Focus on companies competing for same customers/market share
 
-JSON schema to return:
+SECTOR PROFILE REQUIREMENTS:
+core_inputs: Specific materials/resources unique to this industry (not "raw materials", "capital", "labor")
+core_channels: Specific distribution/sales channels
+core_geos: Primary revenue geographic regions (3 max)
+benchmarks: Sector-specific indices/commodities, NOT S&P 500/NASDAQ unless no sector alternative exists
+
+ALIASES/BRANDS/ASSETS:
+- Include only well-known brand names that appear in financial news
+- Assets should be major facilities/operations mentioned in earnings calls
+- Avoid internal product codes or minor brands
+
+VALIDATION CHECKLIST:
+□ All competitor tickers are valid and current
+□ No industry keyword would match unrelated news
+□ Benchmarks are sector-specific
+□ Core inputs are materially specific to the business
+□ All information is factually accurate
+
+Generate response in valid JSON format with all required fields."""
+
+    user_prompt = f"""Generate metadata for hedge fund news monitoring. Focus on precision to avoid irrelevant news articles.
+
+Ticker: {ticker}
+Company: {company_name}
+Current date: September 2025
+
+Required JSON format:
 {{
-    "company_name": "Company Name",
     "ticker": "{ticker}",
-    "sector": "GICS Sector", 
+    "name": "{company_name}",
+    "sector": "GICS Sector",
     "industry": "GICS Industry",
     "sub_industry": "GICS Sub-Industry",
-    "industry_keywords": ["most important term", "second term", "third term"],
-    "competitors": [
-        {{"name": "Competitor 1", "ticker": "TICK1"}},
-        {{"name": "Competitor 2", "ticker": "TICK2"}},
-        {{"name": "Competitor 3", "ticker": "TICK3"}}
-    ],
+    "industry_keywords": ["keyword1", "keyword2", "keyword3"],
+    "competitors": ["Company Name (TICKER)", "Company Name (TICKER)", "Company Name (TICKER)"],
     "sector_profile": {{
-        "core_inputs": ["commodity/input", "key cost driver", "..."],
-        "core_channels": ["end-market channel 1", "end-market 2"],
-        "core_geos": ["primary region(s) of ops/sales"],
-        "benchmarks": ["index/benchmark used in pricing or regulation"]
+        "core_inputs": ["input1", "input2", "input3"],
+        "core_channels": ["channel1", "channel2"],
+        "core_geos": ["geo1", "geo2", "geo3"],
+        "benchmarks": ["benchmark1", "benchmark2"]
     }},
     "aliases_brands_assets": {{
-        "aliases": ["legal DBA", "common shortened names"],
-        "brands": ["notable product lines/brands"], 
-        "assets": ["plants/facilities/major projects if named"]
+        "aliases": ["alias1", "alias2"],
+        "brands": ["brand1", "brand2", "brand3"],
+        "assets": ["asset1", "asset2"]
     }}
 }}"""
 
     try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        
-        data = {
-            "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a financial analyst. Provide accurate stock information in valid JSON only. LIMIT industry keywords to 3 maximum."},
-                {"role": "user", "content": prompt}
+        # Call OpenAI API
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
-            "max_tokens": 400,
-            "response_format": {"type": "json_object"}
-        }
-
-        LOG.info(f"Generating enhanced metadata for {ticker} with single AI call")
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
+            temperature=0.3,
+            max_tokens=2000,
+            response_format={"type": "json_object"}
+        )
         
-        if response.status_code != 200:
-            LOG.error(f"OpenAI API error: {response.status_code}")
-            return {"industry_keywords": [], "competitors": [], "company_name": ticker}
-
-        result = response.json()
-        content = result["choices"][0]["message"]["content"]
-        metadata = json.loads(content)
+        # Parse response
+        metadata = json.loads(response.choices[0].message.content)
         
-        # Validate and clean data - ENFORCE 3 keyword limit and remove confidence
-        company_name = metadata.get("company_name", ticker)
-        industry_keywords = [kw.title() for kw in metadata.get("industry_keywords", [])[:3]]  # LIMIT TO 3
-        competitors = []
+        # Validation
+        validation_errors = validate_metadata(metadata)
+        if validation_errors:
+            print(f"⚠️ Validation warnings for {ticker}:")
+            for error in validation_errors:
+                print(f"  - {error}")
         
-        for comp in metadata.get("competitors", [])[:3]:
-            if isinstance(comp, dict) and comp.get("name") and comp.get("ticker"):
-                if comp["ticker"].upper() != ticker.upper():  # Prevent self-reference
-                    competitors.append({
-                        "name": comp["name"],
-                        "ticker": comp["ticker"]
-                        # Removed confidence field
-                    })
+        # Store in database
+        stored_successfully = store_ticker_metadata(
+            ticker=metadata['ticker'],
+            name=metadata['name'],
+            sector=metadata['sector'],
+            industry=metadata['industry'],
+            sub_industry=metadata['sub_industry'],
+            industry_keywords=metadata['industry_keywords'],
+            competitors=metadata['competitors'],
+            sector_profile=metadata['sector_profile'],
+            aliases_brands_assets=metadata['aliases_brands_assets']
+        )
         
-        # Store enhanced metadata in a way that's backward compatible
-        enhanced_metadata = {
-            "company_name": company_name,
-            "industry_keywords": industry_keywords,  # MAX 3
-            "competitors": competitors,
-            # New enhanced fields
-            "sector_profile": metadata.get("sector_profile", {}),
-            "aliases_brands_assets": metadata.get("aliases_brands_assets", {}),
-            "sector": metadata.get("sector", ""),
-            "industry": metadata.get("industry", ""),
-            "sub_industry": metadata.get("sub_industry", "")
-        }
-        
-        # ENHANCED LOGGING
-        LOG.info(f"=== ENHANCED AI METADATA GENERATED for {ticker} ===")
-        LOG.info(f"Company Name: {company_name}")
-        LOG.info(f"Sector: {metadata.get('sector', 'N/A')}")
-        LOG.info(f"Industry Keywords ({len(industry_keywords)}/3 max):")
-        for i, keyword in enumerate(industry_keywords, 1):
-            LOG.info(f"  {i}. {keyword}")
-        
-        LOG.info(f"Competitors ({len(competitors)}):")
-        for i, comp in enumerate(competitors, 1):
-            LOG.info(f"  {i}. {comp['name']} ({comp['ticker']})")
-        
-        LOG.info(f"=== ENHANCED METADATA COMPLETE for {ticker} ===")
-        
-        return enhanced_metadata
-
+        if stored_successfully:
+            print(f"✅ Generated and stored metadata for {ticker}")
+            return metadata
+        else:
+            print(f"❌ Failed to store metadata for {ticker}")
+            return None
+            
+    except json.JSONDecodeError as e:
+        print(f"❌ Invalid JSON response for {ticker}: {e}")
+        return None
     except Exception as e:
-        LOG.error(f"AI metadata generation failed for {ticker}: {e}")
-        return {"industry_keywords": [], "competitors": [], "company_name": ticker}
+        print(f"❌ Error generating metadata for {ticker}: {e}")
+        return None
+
+def validate_metadata(metadata):
+    """
+    Validate metadata quality and return warnings
+    """
+    warnings = []
+    
+    # Forbidden generic keywords
+    forbidden_keywords = [
+        'Technology', 'Healthcare', 'Energy', 'Oil', 'Services', 
+        'Software', 'Hardware', 'Consumer', 'Financial', 'Industrial'
+    ]
+    
+    for keyword in metadata.get('industry_keywords', []):
+        if keyword in forbidden_keywords:
+            warnings.append(f"Generic keyword detected: '{keyword}'")
+    
+    # Check competitor ticker format
+    ticker_pattern = r'^.+\([A-Z0-9]{1,6}(?:\.[A-Z]{1,3})?\)$'
+    for competitor in metadata.get('competitors', []):
+        if not re.match(ticker_pattern, competitor):
+            warnings.append(f"Invalid competitor format: '{competitor}'")
+    
+    # Check for generic benchmarks
+    generic_benchmarks = ['S&P 500', 'NASDAQ', 'Dow Jones', 'Russell 2000']
+    benchmarks = metadata.get('sector_profile', {}).get('benchmarks', [])
+    
+    generic_count = sum(1 for b in benchmarks if any(g in b for g in generic_benchmarks))
+    if generic_count == len(benchmarks) and len(benchmarks) > 0:
+        warnings.append("All benchmarks are generic market indices")
+    
+    # Check for generic core inputs
+    generic_inputs = ['raw materials', 'capital', 'labor', 'technology', 'supply chain']
+    core_inputs = metadata.get('sector_profile', {}).get('core_inputs', [])
+    
+    for inp in core_inputs:
+        if inp.lower() in generic_inputs:
+            warnings.append(f"Generic core input: '{inp}'")
+    
+    return warnings
+
+def store_ticker_metadata(ticker, name, sector, industry, sub_industry, 
+                         industry_keywords, competitors, sector_profile, aliases_brands_assets):
+    """
+    Store ticker metadata in database
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if ticker already exists
+                cur.execute("SELECT ticker FROM ticker_config WHERE ticker = %s", (ticker,))
+                exists = cur.fetchone()
+                
+                if exists:
+                    # Update existing
+                    cur.execute("""
+                        UPDATE ticker_config SET
+                            name = %s,
+                            sector = %s, 
+                            industry = %s,
+                            sub_industry = %s,
+                            industry_keywords = %s,
+                            competitors = %s,
+                            sector_profile = %s,
+                            aliases_brands_assets = %s,
+                            ai_generated = TRUE,
+                            updated_at = NOW()
+                        WHERE ticker = %s
+                    """, (
+                        name, sector, industry, sub_industry,
+                        industry_keywords, competitors,
+                        json.dumps(sector_profile), json.dumps(aliases_brands_assets),
+                        ticker
+                    ))
+                else:
+                    # Insert new
+                    cur.execute("""
+                        INSERT INTO ticker_config (
+                            ticker, name, sector, industry, sub_industry,
+                            industry_keywords, competitors, sector_profile, 
+                            aliases_brands_assets, ai_generated, active
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, TRUE)
+                    """, (
+                        ticker, name, sector, industry, sub_industry,
+                        industry_keywords, competitors,
+                        json.dumps(sector_profile), json.dumps(aliases_brands_assets)
+                    ))
+                
+                conn.commit()
+                return True
+                
+    except Exception as e:
+        print(f"Database error storing {ticker}: {e}")
+        return False
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Wrapper for backward compatibility"""

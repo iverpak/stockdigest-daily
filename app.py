@@ -6,6 +6,7 @@ import hashlib
 import re
 import pytz
 import json
+import openai
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set
 from contextlib import contextmanager

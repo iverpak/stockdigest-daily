@@ -9,3 +9,4 @@ pytz==2024.1
 newspaper3k>=0.2.8
 lxml_html_clean
 playwright==1.40.0
+openai>=1.0.0

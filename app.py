@@ -4437,7 +4437,7 @@ class FeedManager:
 feed_manager = FeedManager()
 
 class TickerManager:
-@staticmethod
+    @staticmethod
     def get_or_create_metadata(ticker: str, force_refresh: bool = False) -> Dict:
         """Unified ticker metadata management - ALWAYS returns a valid dict"""
         # Check database first

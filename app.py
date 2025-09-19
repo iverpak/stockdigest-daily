@@ -2706,8 +2706,10 @@ def _safe_json_loads(s: str) -> Dict:
     LOG.error("Failed to parse JSON. First 200 chars:\n" + s[:200])
     return {"selected_ids": [], "selected": [], "skipped": []}
 
-def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
-    """Make API request to OpenAI for triage and return full results with robust error handling"""
+def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
+    """
+    Make structured triage request to OpenAI with enhanced error handling and validation
+    """
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -2766,12 +2768,12 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
         data = {
             "model": OPENAI_MODEL,
             "temperature": 0,
-            "response_format": {"type": "json_schema", "json_schema": triage_schema},  # Force structured JSON
+            "response_format": {"type": "json_schema", "json_schema": triage_schema},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(payload, separators=(",", ":"))}
             ],
-            "max_completion_tokens": 5000,  # Use correct parameter name
+            "max_completion_tokens": 5000,
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
@@ -2791,14 +2793,50 @@ def _make_triage_request_full(system_prompt: str, payload: Dict) -> List[Dict]:
             LOG.error(f"Response content: {content[:500]}")
             return []
         
-        # Extract and sort selected items
-        selected = triage_result.get("selected", [])
-        selected.sort(key=lambda x: x.get("scrape_priority", 5))
+        # Validate response completeness
+        total_items = len(payload.get('items', []))
+        selected_count = len(triage_result.get("selected_ids", []))
+        accounted_items = len(triage_result.get("selected", [])) + len(triage_result.get("skipped", []))
+        target_cap = payload.get('target_cap', 0)
         
-        return selected
+        # Enhanced validation logging
+        if accounted_items != total_items:
+            LOG.warning(f"Triage accounting mismatch: {accounted_items} processed vs {total_items} total items")
+        
+        if selected_count != min(target_cap, total_items):
+            LOG.warning(f"Triage selection mismatch: {selected_count} selected vs {min(target_cap, total_items)} expected")
+        
+        # Validate all selected IDs are valid
+        invalid_ids = [id for id in triage_result.get("selected_ids", []) if id >= total_items]
+        if invalid_ids:
+            LOG.error(f"Invalid selected IDs: {invalid_ids} (max valid ID: {total_items-1})")
+            return []
+        
+        LOG.info(f"Triage completed - Bucket: {payload.get('bucket', 'unknown')}, "
+                f"Selected: {selected_count}/{target_cap}, Total processed: {total_items}")
+        
+        # Convert to expected format for existing code integration
+        selected_articles = []
+        original_articles = payload.get('items', [])
+        
+        for selected_item in triage_result.get("selected", []):
+            if selected_item["id"] < len(original_articles):
+                result_item = {
+                    "id": selected_item["id"],
+                    "scrape_priority": selected_item["scrape_priority"],
+                    "why": selected_item["why"],
+                    "confidence": selected_item["confidence"],
+                    "likely_repeat": selected_item["likely_repeat"],
+                    "repeat_key": selected_item["repeat_key"]
+                }
+                selected_articles.append(result_item)
+            else:
+                LOG.warning(f"Selected ID {selected_item['id']} out of range for {len(original_articles)} items")
+        
+        return selected_articles
         
     except Exception as e:
-        LOG.error(f"Triage request failed: {e}")
+        LOG.error(f"Triage request failed for {payload.get('bucket', 'unknown')} bucket: {str(e)}")
         return []
 
 # Update the individual triage functions to use the new _full suffix
@@ -4379,12 +4417,16 @@ class FeedManager:
                 """, (ticker,))
                 existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
             
-            for comp in competitors:
+            LOG.info(f"DEBUG: Processing {len(competitors)} competitors for {ticker}")
+            for i, comp in enumerate(competitors):
+                LOG.info(f"DEBUG: Competitor {i}: {comp} (type: {type(comp)})")
                 if isinstance(comp, dict):
                     comp_name = comp.get('name', '')
                     comp_ticker = comp.get('ticker')
+                    LOG.info(f"DEBUG: Competitor details - Name: '{comp_name}', Ticker: '{comp_ticker}'")
                     
                     if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
+                        LOG.info(f"DEBUG: Creating feeds for competitor {comp_name} ({comp_ticker})")
                         # BOTH feeds now use company name as search_keyword for consistency
                         comp_feeds = [
                             {
@@ -4404,11 +4446,45 @@ class FeedManager:
                         ]
                         feeds.extend(comp_feeds)
                         LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
+                    else:
+                        LOG.info(f"DEBUG: Skipping competitor - ticker:{comp_ticker}, name:'{comp_name}', ticker_check:{comp_ticker and comp_ticker.upper() != ticker.upper() if comp_ticker else 'No ticker'}")
+                elif isinstance(comp, str):
+                    LOG.info(f"DEBUG: Competitor is string format: {comp}")
+                    # Try to parse "Name (TICKER)" format
+                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp)
+                    if match:
+                        comp_name = match.group(1).strip()
+                        comp_ticker = match.group(2)
+                        LOG.info(f"DEBUG: Parsed competitor - Name: '{comp_name}', Ticker: '{comp_ticker}'")
+                        
+                        if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
+                            LOG.info(f"DEBUG: Creating feeds for parsed competitor {comp_name} ({comp_ticker})")
+                            comp_feeds = [
+                                {
+                                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                                    "name": f"Competitor: {comp_name}",
+                                    "category": "competitor",
+                                    "search_keyword": comp_name,
+                                    "competitor_ticker": comp_ticker
+                                },
+                                {
+                                    "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                                    "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                                    "category": "competitor",
+                                    "search_keyword": comp_name,
+                                    "competitor_ticker": comp_ticker
+                                }
+                            ]
+                            feeds.extend(comp_feeds)
+                            LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
+                        else:
+                            LOG.info(f"DEBUG: Skipping parsed competitor - ticker:{comp_ticker}, name:'{comp_name}'")
+                    else:
+                        LOG.info(f"DEBUG: Could not parse competitor string: {comp}")
+                else:
+                    LOG.info(f"DEBUG: Competitor not a dict or string: {comp}")
         else:
             LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
-        
-        LOG.info(f"TOTAL NEW FEEDS for {ticker}: {len(feeds)}")
-        return feeds
     
     @staticmethod
     def store_feeds(ticker: str, feeds: List[Dict], retain_days: int = 90) -> List[int]:

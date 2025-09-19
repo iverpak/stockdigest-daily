@@ -2841,7 +2841,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
 
 # Update the individual triage functions to use the new _full suffix
 
-def triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, limit: int = 30) -> List[Dict]:
+def triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, aliases_brands_assets: Dict, sector_profile: Dict) -> List[Dict]:
     """
     Enhanced company triage focusing solely on title relevance with mandatory fill-to-cap
     """
@@ -2860,7 +2860,7 @@ def triage_company_articles_full(articles: List[Dict], ticker: str, company_name
 
     payload = {
         "bucket": "company",
-        "target_cap": limit,
+        "target_cap": min(30, len(articles)),  # Cap at available articles
         "ticker": ticker,
         "company_name": company_name,
         "items": items
@@ -2920,8 +2920,7 @@ The response will be automatically formatted as structured JSON with selected_id
 
     return _make_triage_request_full(system_prompt, payload)
 
-
-def triage_industry_articles_full(articles: List[Dict], ticker: str, industry_keywords: List[str], sector_profile: Dict, limit: int = 30) -> List[Dict]:
+def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[Dict]:
     """
     Enhanced industry triage focusing on sector-specific relevance with mandatory fill-to-cap
     """
@@ -2938,9 +2937,12 @@ def triage_industry_articles_full(articles: List[Dict], ticker: str, industry_ke
             "published": article.get('published', '')
         })
 
+    # Extract industry keywords from the first article's search_keyword
+    industry_keywords = [articles[0].get('search_keyword', '')] if articles else []
+
     payload = {
         "bucket": "industry",
-        "target_cap": limit,
+        "target_cap": min(30, len(articles)),  # Cap at available articles
         "ticker": ticker,
         "industry_keywords": industry_keywords,
         "sector_profile": sector_profile,
@@ -3010,7 +3012,7 @@ The response will be automatically formatted as structured JSON with selected_id
 
     return _make_triage_request_full(system_prompt, payload)
 
-def triage_competitor_articles_full(articles: List[Dict], ticker: str, competitors: List[str], sector_profile: Dict, limit: int = 30) -> List[Dict]:
+def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[Dict]:
     """
     Enhanced competitor triage focusing on competitive dynamics with mandatory fill-to-cap
     """
@@ -3027,9 +3029,12 @@ def triage_competitor_articles_full(articles: List[Dict], ticker: str, competito
             "published": article.get('published', '')
         })
 
+    # Extract competitor names from peers
+    competitors = [peer.split(' (')[0] if ' (' in peer else peer for peer in peers]
+
     payload = {
         "bucket": "competitor",
-        "target_cap": limit,
+        "target_cap": min(30, len(articles)),  # Cap at available articles
         "ticker": ticker,
         "competitors": competitors,
         "sector_profile": sector_profile,
@@ -3101,74 +3106,6 @@ For repeat coverage: explain why each repeat adds different competitive intellig
 The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
 
     return _make_triage_request_full(system_prompt, payload)
-
-def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
-    """
-    Make structured triage request to OpenAI with enhanced error handling and validation
-    """
-    try:
-        response = openai.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload)}
-            ],
-            response_format=TriageResponse,
-            temperature=0
-        )
-        
-        if response.choices and response.choices[0].message.parsed:
-            triage_result = response.choices[0].message.parsed
-            
-            # Validate response completeness
-            total_items = len(payload.get('items', []))
-            selected_count = len(triage_result.selected_ids)
-            accounted_items = len(triage_result.selected) + len(triage_result.skipped)
-            target_cap = payload.get('target_cap', 0)
-            
-            # Enhanced validation logging
-            if accounted_items != total_items:
-                LOG.warning(f"Triage accounting mismatch: {accounted_items} processed vs {total_items} total items")
-            
-            if selected_count != min(target_cap, total_items):
-                LOG.warning(f"Triage selection mismatch: {selected_count} selected vs {min(target_cap, total_items)} expected")
-            
-            # Validate all selected IDs are valid
-            invalid_ids = [id for id in triage_result.selected_ids if id >= total_items]
-            if invalid_ids:
-                LOG.error(f"Invalid selected IDs: {invalid_ids} (max valid ID: {total_items-1})")
-                return []
-            
-            LOG.info(f"Triage completed - Bucket: {payload.get('bucket', 'unknown')}, "
-                    f"Selected: {selected_count}/{target_cap}, Total processed: {total_items}")
-            
-            # Convert to expected format for existing code integration
-            selected_articles = []
-            original_articles = payload.get('items', [])
-            
-            for selected_item in triage_result.selected:
-                if selected_item.id < len(original_articles):
-                    article_copy = original_articles[selected_item.id].copy()
-                    article_copy.update({
-                        'ai_triage_priority': selected_item.scrape_priority,
-                        'ai_triage_reason': selected_item.why,
-                        'ai_triage_confidence': selected_item.confidence,
-                        'likely_repeat': selected_item.likely_repeat,
-                        'repeat_key': selected_item.repeat_key or ''
-                    })
-                    selected_articles.append(article_copy)
-                else:
-                    LOG.warning(f"Selected ID {selected_item.id} out of range for {len(original_articles)} items")
-            
-            return selected_articles
-        
-        LOG.error("No valid parsed response from OpenAI triage")
-        return []
-        
-    except Exception as e:
-        LOG.error(f"Triage request failed for {payload.get('bucket', 'unknown')} bucket: {str(e)}")
-        return []
-
 
 # Pydantic models for structured response (keep existing)
 from pydantic import BaseModel
@@ -4420,71 +4357,82 @@ class FeedManager:
             LOG.info(f"DEBUG: Processing {len(competitors)} competitors for {ticker}")
             for i, comp in enumerate(competitors):
                 LOG.info(f"DEBUG: Competitor {i}: {comp} (type: {type(comp)})")
+                
+                comp_name = None
+                comp_ticker = None
+                
                 if isinstance(comp, dict):
                     comp_name = comp.get('name', '')
                     comp_ticker = comp.get('ticker')
-                    LOG.info(f"DEBUG: Competitor details - Name: '{comp_name}', Ticker: '{comp_ticker}'")
-                    
-                    if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
-                        LOG.info(f"DEBUG: Creating feeds for competitor {comp_name} ({comp_ticker})")
-                        # BOTH feeds now use company name as search_keyword for consistency
-                        comp_feeds = [
-                            {
-                                "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                                "name": f"Competitor: {comp_name}",
-                                "category": "competitor",
-                                "search_keyword": comp_name,  # Always use company name
-                                "competitor_ticker": comp_ticker
-                            },
-                            {
-                                "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                                "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                                "category": "competitor",
-                                "search_keyword": comp_name,  # Changed: use company name instead of ticker
-                                "competitor_ticker": comp_ticker
-                            }
-                        ]
-                        feeds.extend(comp_feeds)
-                        LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
-                    else:
-                        LOG.info(f"DEBUG: Skipping competitor - ticker:{comp_ticker}, name:'{comp_name}', ticker_check:{comp_ticker and comp_ticker.upper() != ticker.upper() if comp_ticker else 'No ticker'}")
+                    LOG.info(f"DEBUG: Dict competitor - Name: '{comp_name}', Ticker: '{comp_ticker}'")
                 elif isinstance(comp, str):
-                    LOG.info(f"DEBUG: Competitor is string format: {comp}")
+                    LOG.info(f"DEBUG: String competitor: {comp}")
                     # Try to parse "Name (TICKER)" format
                     match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp)
                     if match:
                         comp_name = match.group(1).strip()
                         comp_ticker = match.group(2)
                         LOG.info(f"DEBUG: Parsed competitor - Name: '{comp_name}', Ticker: '{comp_ticker}'")
-                        
-                        if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
-                            LOG.info(f"DEBUG: Creating feeds for parsed competitor {comp_name} ({comp_ticker})")
-                            comp_feeds = [
-                                {
-                                    "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                                    "name": f"Competitor: {comp_name}",
-                                    "category": "competitor",
-                                    "search_keyword": comp_name,
-                                    "competitor_ticker": comp_ticker
-                                },
-                                {
-                                    "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                                    "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                                    "category": "competitor",
-                                    "search_keyword": comp_name,
-                                    "competitor_ticker": comp_ticker
-                                }
-                            ]
-                            feeds.extend(comp_feeds)
-                            LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
-                        else:
-                            LOG.info(f"DEBUG: Skipping parsed competitor - ticker:{comp_ticker}, name:'{comp_name}'")
                     else:
-                        LOG.info(f"DEBUG: Could not parse competitor string: {comp}")
+                        # Treat as company name without ticker
+                        comp_name = comp.strip()
+                        comp_ticker = None
+                        LOG.info(f"DEBUG: Using as company name only: '{comp_name}'")
+                
+                # Validate competitor data
+                if not comp_name:
+                    LOG.info(f"DEBUG: Skipping competitor - no name: {comp}")
+                    continue
+                    
+                if comp_ticker:
+                    if comp_ticker.upper() == ticker.upper():
+                        LOG.info(f"DEBUG: Skipping competitor - same as main ticker: {comp_ticker}")
+                        continue
+                        
+                    if comp_ticker in existing_competitor_tickers:
+                        LOG.info(f"DEBUG: Skipping competitor - already exists: {comp_ticker}")
+                        continue
+                
+                # Create feeds for this competitor
+                LOG.info(f"DEBUG: Creating feeds for competitor {comp_name} ({comp_ticker or 'no ticker'})")
+                
+                if comp_ticker:
+                    # Both Google News and Yahoo Finance feeds
+                    comp_feeds = [
+                        {
+                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                            "name": f"Competitor: {comp_name}",
+                            "category": "competitor",
+                            "search_keyword": comp_name,  # Always use company name
+                            "competitor_ticker": comp_ticker
+                        },
+                        {
+                            "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                            "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                            "category": "competitor",
+                            "search_keyword": comp_name,  # Use company name instead of ticker
+                            "competitor_ticker": comp_ticker
+                        }
+                    ]
                 else:
-                    LOG.info(f"DEBUG: Competitor not a dict or string: {comp}")
+                    # Only Google News feed if no ticker
+                    comp_feeds = [
+                        {
+                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                            "name": f"Competitor: {comp_name}",
+                            "category": "competitor",
+                            "search_keyword": comp_name,
+                            "competitor_ticker": None
+                        }
+                    ]
+                
+                feeds.extend(comp_feeds)
+                LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker or 'no ticker'}) - {len(comp_feeds)} feeds (counts as 1 entity)")
         else:
             LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
+        
+        LOG.info(f"TOTAL FEEDS TO CREATE: {len(feeds)}")
+        return feeds
     
     @staticmethod
     def store_feeds(ticker: str, feeds: List[Dict], retain_days: int = 90) -> List[int]:

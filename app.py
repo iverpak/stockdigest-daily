@@ -2366,9 +2366,9 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     
     return selected_results
 
-def rule_based_triage_score(title: str, domain: str) -> Tuple[int, str, str]:
+def rule_based_triage_score_company(title: str, domain: str) -> Tuple[int, str, str]:
     """
-    Score articles 0-100 based on title content only
+    Company-specific rule-based scoring based on AI triage logic
     Returns (score, reasoning, qb_level)
     """
     score = 0
@@ -2376,53 +2376,90 @@ def rule_based_triage_score(title: str, domain: str) -> Tuple[int, str, str]:
     
     title_lower = title.lower()
     
-    # HIGH VALUE EVENTS (+40-60 points)
-    if re.search(r'\b(earnings|beats|misses|guidance|results|q[1-4])\b', title_lower):
-        score += 50
-        reasons.append("earnings/results")
+    # HIGH PRIORITY - Hard business events (50-70 points)
+    high_events = [
+        r'\b(acquires?|acquisition|merger|divests?|divestiture|spin-?off)\b',
+        r'\b(bankruptcy|chapter 11|delist|delisting|halt|halted)\b',
+        r'\b(guidance|preannounce|beats?|misses?|earnings)\b',
+        r'\b(margin|backlog|contract|long-?term agreement|supply deal)\b',
+        r'\b(price increase|price cut|capacity add|closure|curtailment)\b',
+        r'\b(buyback|tender|equity offering|convertible|refinanc)\b',
+        r'\b(rating change|approval|license)\b',
+        r'\b(tariff|quota|sanction|fine|settlement)\b',
+        r'\b(doj|ftc|sec|fda|usda|epa|osha|nhtsa|faa|fcc)\b'
+    ]
     
-    if re.search(r'\b(acquires?|acquisition|merger|partnership|agreement|deal|signs)\b', title_lower):
-        score += 45
-        reasons.append("corporate action")
-        
-    if re.search(r'\b(raises?|upgrades?|initiates?|target|rating)\b', title_lower):
-        score += 40
-        reasons.append("analyst action")
+    for pattern in high_events:
+        if re.search(pattern, title_lower):
+            score += 60
+            reasons.append("hard business event")
+            break
     
-    # FINANCIAL SPECIFICITY (+10-25 points)
+    # MEDIUM PRIORITY - Strategic developments (30-45 points)
+    medium_events = [
+        r'\b(investment|expansion)\b.*\$[\d,]+',  # Investment with $ amount
+        r'\b(technology|product)\b.*\b(launch|deployment|ship)\b',
+        r'\b(ceo|cfo|president|director)\b.*\b(change|resign|appoint|hire)\b',
+        r'\b(partnership|joint venture|collaboration)\b',
+        r'\b(facility|plant|factory)\b.*\b(opening|closing)\b'
+    ]
+    
+    if score == 0:  # Only if no high-priority event found
+        for pattern in medium_events:
+            if re.search(pattern, title_lower):
+                score += 40
+                reasons.append("strategic development")
+                break
+    
+    # LOW PRIORITY - Routine coverage (20-30 points)
+    low_events = [
+        r'\b(analyst|rating|target|upgrade|downgrade)\b',
+        r'\b(corporate announcement|operational)\b'
+    ]
+    
+    if score == 0:  # Only if no higher priority found
+        for pattern in low_events:
+            if re.search(pattern, title_lower):
+                score += 25
+                reasons.append("routine coverage")
+                break
+    
+    # FINANCIAL SPECIFICITY BOOSTERS (+10-25 points)
     if re.search(r'\$[\d,]+\.?\d*\s*(million|billion|m|b)\b', title_lower):
-        score += 25
+        score += 20
         reasons.append("dollar amount")
         
     if re.search(r'\b\d+\.?\d*%\b', title):
         score += 15
         reasons.append("percentage")
     
-    if re.search(r'\b(rises?|jumps?|gains?|surges?|up\s+\d+)', title_lower):
-        score += 20
-        reasons.append("positive movement")
+    if re.search(r'\b(q[1-4]|\d{4}|\d+\s*(year|month|day)s?)\b', title_lower):
+        score += 10
+        reasons.append("timeline specificity")
     
-    # NEGATIVE PATTERNS (-20 to -40 points)
-    if re.search(r'\b(top\s+\d+|best|should you|how to|why|what to know|facts to know)\b', title_lower):
-        score -= 30
-        reasons.append("listicle/opinion")
-        
-    if re.search(r'\b(trending stock|what you need|here is what|analysis report|market talk)\b', title_lower):
-        score -= 25
-        reasons.append("generic content")
-        
-    if re.search(r'\b(roundup|overview|highlights|blog)\b', title_lower):
-        score -= 20
-        reasons.append("aggregated content")
+    # EXCLUDE/PENALIZE PATTERNS (-30 to -50 points)
+    exclude_patterns = [
+        r'\b(top\s+\d+|best|should you|right now|reasons|prediction)\b',
+        r'\b(if you.d invested|what to know|how to|why|analysis|outlook)\b',
+        r'\b(announces)\b(?!.*\$)(?!.*\d+%)',  # "Announces" without concrete numbers
+        r'\b(market size|cagr|forecast 20\d{2}|to reach \$.*by 20\d{2})\b',
+        r'\b(market report|press release)\b(?!.*\$)(?!.*\d+%)'
+    ]
     
-    # DOMAIN BONUS (use existing tier system)
+    for pattern in exclude_patterns:
+        if re.search(pattern, title_lower):
+            score -= 40
+            reasons.append("excluded pattern")
+            break
+    
+    # DOMAIN BONUS
     domain_tier = DOMAIN_TIERS.get(normalize_domain(domain), 0.3)
-    score += int(domain_tier * 30)  # Convert 0.3-1.0 to 9-30 points
+    score += int(domain_tier * 25)
     reasons.append(f"domain tier {domain_tier}")
     
     final_score = max(0, min(100, score))
     
-    # Determine QB level
+    # Determine QB level for company
     if final_score >= 70:
         qb_level = "QB: High"
     elif final_score >= 40:
@@ -2432,10 +2469,253 @@ def rule_based_triage_score(title: str, domain: str) -> Tuple[int, str, str]:
     
     return final_score, " + ".join(reasons), qb_level
 
+def rule_based_triage_score_industry(title: str, domain: str, industry_keywords: List[str] = None) -> Tuple[int, str, str]:
+    """
+    Industry-specific rule-based scoring based on AI triage logic
+    Returns (score, reasoning, qb_level)
+    """
+    score = 0
+    reasons = []
+    
+    title_lower = title.lower()
+    keywords = industry_keywords or []
+    
+    # HIGH PRIORITY - Policy/regulatory shocks with quantified impact (50-70 points)
+    high_events = [
+        r'\b(tariff|ban|quota|price control|regulatory change)\b.*\b\d+',
+        r'\b(supply shock|inventory)\b.*\b(draw|build)\b.*\b\d+',
+        r'\b(price cap|price floor|standard adopted)\b',
+        r'\b(subsidy|credit|reimbursement change)\b.*\$',
+        r'\b(safety requirement|environmental standard)\b.*\b(effective|deadline)\b',
+        r'\b(trade agreement|export control|import restriction)\b'
+    ]
+    
+    for pattern in high_events:
+        if re.search(pattern, title_lower):
+            score += 65
+            reasons.append("policy/regulatory shock")
+            break
+    
+    # MEDIUM PRIORITY - Sector developments (30-45 points)
+    medium_events = [
+        r'\b(infrastructure investment)\b.*\$[\d,]+',
+        r'\b(industry consolidation)\b.*\$[\d,]+',
+        r'\b(technology standards adoption)\b.*\b(implementation|schedule)\b',
+        r'\b(labor agreement)\b.*\b(wage|benefit|cost)\b',
+        r'\b(supply chain)\b.*\b(volume|pricing)\b',
+        r'\b(capacity)\b.*\b(addition|reduction)\b.*\b(production|impact)\b'
+    ]
+    
+    if score == 0:
+        for pattern in medium_events:
+            if re.search(pattern, title_lower):
+                score += 42
+                reasons.append("sector development")
+                break
+    
+    # LOW PRIORITY - Broad trends (20-30 points)
+    low_events = [
+        r'\b(government initiative)\b.*\b(budget|implementation)\b',
+        r'\b(economic indicator)\b.*\b(sector|industry)\b',
+        r'\b(research finding)\b.*\b(quantified|impact)\b'
+    ]
+    
+    if score == 0:
+        for pattern in low_events:
+            if re.search(pattern, title_lower):
+                score += 25
+                reasons.append("broad trend")
+                break
+    
+    # INDUSTRY KEYWORD RELEVANCE BOOST (+15-25 points)
+    if keywords:
+        keyword_matches = 0
+        for keyword in keywords:
+            if keyword.lower() in title_lower:
+                keyword_matches += 1
+        
+        if keyword_matches > 0:
+            boost = min(keyword_matches * 8, 25)
+            score += boost
+            reasons.append(f"{keyword_matches} keyword matches")
+    
+    # SPECIFICITY BOOSTERS
+    if re.search(r'\b\d+\.?\d*%\b.*\b(up|down|increase|decrease)\b', title_lower):
+        score += 20
+        reasons.append("percentage change")
+        
+    if re.search(r'\b(effective|deadline|implementation)\b.*\b20\d{2}\b', title_lower):
+        score += 15
+        reasons.append("implementation date")
+    
+    # EXCLUDE PATTERNS - Industry specific
+    exclude_patterns = [
+        r'\b(market size|cagr|forecast 20\d{2}|analysis report)\b',
+        r'\b(industry outlook|future of|trends|sustainability)\b(?!.*\b(regulation|compliance)\b)',
+        r'\b(academic research|consumer preference)\b(?!.*\b(policy|demand shift)\b)'
+    ]
+    
+    for pattern in exclude_patterns:
+        if re.search(pattern, title_lower):
+            score -= 35
+            reasons.append("excluded industry pattern")
+            break
+    
+    # DOMAIN BONUS
+    domain_tier = DOMAIN_TIERS.get(normalize_domain(domain), 0.3)
+    score += int(domain_tier * 20)
+    reasons.append(f"domain tier {domain_tier}")
+    
+    final_score = max(0, min(100, score))
+    
+    # Industry-specific QB levels (slightly different thresholds)
+    if final_score >= 75:
+        qb_level = "QB: High"
+    elif final_score >= 45:
+        qb_level = "QB: Medium"
+    else:
+        qb_level = "QB: Low"
+    
+    return final_score, " + ".join(reasons), qb_level
+
+def rule_based_triage_score_competitor(title: str, domain: str, competitors: List[str] = None) -> Tuple[int, str, str]:
+    """
+    Competitor-specific rule-based scoring based on AI triage logic
+    Returns (score, reasoning, qb_level)
+    """
+    score = 0
+    reasons = []
+    
+    title_lower = title.lower()
+    competitor_names = []
+    
+    # Extract competitor names from list
+    if competitors:
+        for comp in competitors:
+            if isinstance(comp, dict):
+                competitor_names.append(comp.get('name', '').lower())
+            else:
+                # Handle "Name (TICKER)" format
+                name = comp.split('(')[0].strip().lower()
+                competitor_names.append(name)
+    
+    # Check if any competitor is mentioned
+    competitor_mentioned = False
+    mentioned_competitor = ""
+    for comp_name in competitor_names:
+        if comp_name and comp_name in title_lower:
+            competitor_mentioned = True
+            mentioned_competitor = comp_name
+            break
+    
+    if not competitor_mentioned:
+        # If no competitor mentioned, default to low score
+        score = 15
+        reasons.append("no competitor match")
+    else:
+        # HIGH PRIORITY - Hard competitive events (50-70 points)
+        high_events = [
+            r'\b(capacity expansion|capacity reduction)\b.*\b\d+',
+            r'\b(pricing action|price increase|price cut)\b.*\b\d+%',
+            r'\b(customer win|customer loss|major customer)\b',
+            r'\b(plant opening|plant closing)\b.*\b(output|capacity)\b',
+            r'\b(asset sale|acquisition)\b.*\$[\d,]+',
+            r'\b(restructuring|bankruptcy|chapter 11)\b',
+            r'\b(breakthrough|launch)\b.*\b(ship date|deployment)\b',
+            r'\b(supply agreement)\b.*\b(volume|capacity)\b',
+            r'\b(market entry|market exit)\b.*\$[\d,]+'
+        ]
+        
+        for pattern in high_events:
+            if re.search(pattern, title_lower):
+                score += 65
+                reasons.append(f"hard competitive event ({mentioned_competitor})")
+                break
+        
+        # MEDIUM PRIORITY - Strategic moves (30-45 points)
+        if score == 0:
+            medium_events = [
+                r'\b(acquisition|partnership)\b.*\b(deal value|strategic)\b',
+                r'\b(technology)\b.*\b(deployment|timeline)\b.*\b(competitive)\b',
+                r'\b(ceo|cfo|division head)\b.*\b(change|succession)\b',
+                r'\b(geographic expansion)\b.*\b(investment|market entry)\b',
+                r'\b(regulatory approval)\b.*\b(timeline|capability)\b',
+                r'\b(supply chain)\b.*\b(cost|availability|contract)\b'
+            ]
+            
+            for pattern in medium_events:
+                if re.search(pattern, title_lower):
+                    score += 42
+                    reasons.append(f"strategic move ({mentioned_competitor})")
+                    break
+        
+        # LOW PRIORITY - Routine competitive intel (20-30 points)
+        if score == 0:
+            low_events = [
+                r'\b(earnings)\b.*\b(guidance|beat|miss)\b',
+                r'\b(analyst)\b.*\b(rating change|target)\b',
+                r'\b(product announcement)\b.*\b(launch|timeline)\b'
+            ]
+            
+            for pattern in low_events:
+                if re.search(pattern, title_lower):
+                    score += 28
+                    reasons.append(f"routine intel ({mentioned_competitor})")
+                    break
+    
+    # COMPETITIVE IMPACT BOOSTERS
+    if re.search(r'\b(market share|losing ground|gaining share)\b', title_lower):
+        score += 20
+        reasons.append("market share impact")
+        
+    if re.search(r'\b(pricing power|cost structure|competitive advantage)\b', title_lower):
+        score += 15
+        reasons.append("competitive positioning")
+    
+    # FINANCIAL SPECIFICITY
+    if re.search(r'\$[\d,]+\.?\d*\s*(million|billion)\b', title_lower):
+        score += 18
+        reasons.append("deal value")
+        
+    if re.search(r'\b\d+\.?\d*%\b.*\b(capacity|price|margin)\b', title_lower):
+        score += 15
+        reasons.append("quantified impact")
+    
+    # EXCLUDE PATTERNS - Competitor specific
+    exclude_patterns = [
+        r'\b(generic analyst commentary|stock performance)\b(?!.*\b(operational|guidance)\b)',
+        r'\b(historical retrospective)\b(?!.*\b(competitive|forward)\b)',
+        r'\b(technical analysis|trading analysis)\b',
+        r'\b(market commentary)\b(?!.*\b(competitive|share)\b)'
+    ]
+    
+    for pattern in exclude_patterns:
+        if re.search(pattern, title_lower):
+            score -= 30
+            reasons.append("excluded competitor pattern")
+            break
+    
+    # DOMAIN BONUS
+    domain_tier = DOMAIN_TIERS.get(normalize_domain(domain), 0.3)
+    score += int(domain_tier * 20)
+    reasons.append(f"domain tier {domain_tier}")
+    
+    final_score = max(0, min(100, score))
+    
+    # Competitor-specific QB levels
+    if final_score >= 70:
+        qb_level = "QB: High"
+    elif final_score >= 40:
+        qb_level = "QB: Medium"
+    else:
+        qb_level = "QB: Low"
+    
+    return final_score, " + ".join(reasons), qb_level
+
+
 def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str], target_limit: int) -> List[Dict]:
     """
-    Apply backfill using AI → Quality → Score-based descending order (100→0)
-    Score ALL articles for comparison analysis
+    Apply backfill using AI → Quality → Category-specific QB scoring (100→0)
     """
     # Step 1: Start with AI selections
     combined_selected = list(ai_selected)
@@ -2450,7 +2730,6 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
         domain = normalize_domain(article.get("domain", ""))
         title = article.get("title", "").lower()
         
-        # Skip low-quality domains and insider trading
         if domain in low_quality_domains or is_insider_trading_article(title):
             continue
             
@@ -2468,14 +2747,14 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
     
     combined_selected.extend(quality_selected)
     
-    # Step 3: Score ALL remaining articles and fill by descending score
+    # Step 3: Category-specific QB scoring and selection
     current_count = len(combined_selected)
     backfill_selected = []
     
     if current_count < target_limit:
         remaining_slots = target_limit - current_count
         
-        # Score ALL remaining articles (not already selected by AI or Quality)
+        # Score ALL remaining articles using category-specific logic
         scored_candidates = []
         for idx, article in enumerate(articles):
             if idx in selected_indices:
@@ -2484,12 +2763,22 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
             domain = normalize_domain(article.get("domain", ""))
             title = article.get("title", "")
             
-            # Skip low-quality domains and insider trading
             if domain in low_quality_domains or is_insider_trading_article(title.lower()):
                 continue
             
-            # Calculate QB score for ALL remaining articles
-            qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
+            # Category-specific scoring
+            if category == "company":
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_company(title, domain)
+            elif category == "industry":
+                # Get industry keywords from first article
+                keywords = [article.get('search_keyword')] if article.get('search_keyword') else []
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_industry(title, domain, keywords)
+            elif category == "competitor":
+                # Would need competitor list - for now use generic
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_competitor(title, domain, [])
+            else:
+                # Fallback to original generic scoring
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
             
             scored_candidates.append({
                 "id": idx,
@@ -2501,10 +2790,10 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
                 "published_at": article.get("published_at")
             })
         
-        # Sort by QB score descending (100 → 0), then by publication time (newest first)
+        # Sort by QB score descending (100 → 0), then by publication time
         scored_candidates.sort(key=lambda x: (
-            -x["qb_score"],  # Higher scores first
-            -(x["published_at"].timestamp() if x["published_at"] else 0)  # Newer articles first
+            -x["qb_score"],
+            -(x["published_at"].timestamp() if x["published_at"] else 0)
         ))
         
         # Take top candidates up to remaining slots
@@ -2516,27 +2805,34 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
                 "repeat_key": "",
                 "why": f"{candidate['qb_level']}: {candidate['qb_reasoning']} (score: {candidate['qb_score']})",
                 "confidence": 0.6,
-                "selection_method": "qb_score",
+                "selection_method": f"qb_score_{category}",
                 "qb_score": candidate["qb_score"],
                 "qb_level": candidate["qb_level"]
             })
         
         combined_selected.extend(backfill_selected)
     
-    # Store QB scores for ALL articles for comparison analysis
+    # Store QB scores for ALL articles
     for idx, article in enumerate(articles):
         domain = normalize_domain(article.get("domain", ""))
         title = article.get("title", "")
         
         if not (domain in low_quality_domains or is_insider_trading_article(title.lower())):
-            qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
+            if category == "company":
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_company(title, domain)
+            elif category == "industry":
+                keywords = [article.get('search_keyword')] if article.get('search_keyword') else []
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_industry(title, domain, keywords)
+            elif category == "competitor":
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_competitor(title, domain, [])
+            else:
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
             
-            # Add QB scoring data to article for later database update
             article['qb_score'] = qb_score
             article['qb_level'] = qb_level
             article['qb_reasoning'] = qb_reasoning
     
-    # Final sort by priority (lower number = higher priority)
+    # Final sort by priority
     combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
     
     # Enhanced logging
@@ -2544,12 +2840,7 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
     quality_count = len(quality_selected)
     qb_count = len(backfill_selected)
     
-    if qb_count > 0:
-        min_score = min(x.get("qb_score", 0) for x in backfill_selected)
-        max_score = max(x.get("qb_score", 0) for x in backfill_selected)
-        LOG.info(f"QB backfill {category}: {ai_count} AI + {quality_count} Quality + {qb_count} QB-scored (range: {min_score}-{max_score}) = {len(combined_selected)}/{target_limit}")
-    else:
-        LOG.info(f"QB backfill {category}: {ai_count} AI + {quality_count} Quality + {qb_count} QB-scored = {len(combined_selected)}/{target_limit}")
+    LOG.info(f"Category-specific QB backfill {category}: {ai_count} AI + {quality_count} Quality + {qb_count} QB-{category} = {len(combined_selected)}/{target_limit}")
     
     return combined_selected
 

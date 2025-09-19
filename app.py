@@ -3415,7 +3415,7 @@ def create_triage_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[D
 
 def get_competitor_display_name(search_keyword: str, competitor_ticker: str = None) -> str:
     """
-    Get standardized competitor display name using database lookup
+    Get standardized competitor display name using database lookup with proper fallback
     Priority: competitor_ticker -> search_keyword -> fallback
     """
     
@@ -3435,11 +3435,27 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
         except Exception as e:
             LOG.debug(f"Database lookup failed for competitor {competitor_ticker}: {e}")
     
+    # Try to get competitor name from source_feed table using competitor_ticker
+    if competitor_ticker:
+        try:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT search_keyword FROM source_feed 
+                    WHERE competitor_ticker = %s AND category = 'competitor' AND active = TRUE
+                    LIMIT 1
+                """, (competitor_ticker,))
+                result = cur.fetchone()
+                
+                if result and result["search_keyword"]:
+                    return result["search_keyword"]
+        except Exception as e:
+            LOG.debug(f"Source feed lookup failed for competitor {competitor_ticker}: {e}")
+    
     # Fallback to search_keyword (should be company name for Google feeds)
     if search_keyword and not search_keyword.isupper():  # Likely a company name, not ticker
         return search_keyword
         
-    # Final fallback
+    # Final fallback - use ticker if that's all we have
     return competitor_ticker or search_keyword or "Unknown Competitor"
 
 def _ai_quality_score_company_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
@@ -4281,8 +4297,7 @@ class FeedManager:
         # Check existing feed counts by unique competitor (not by feed count)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT category, COUNT(*) as count,
-                       COUNT(DISTINCT COALESCE(competitor_ticker, search_keyword)) as unique_competitors
+                SELECT category, COUNT(*) as count
                 FROM source_feed 
                 WHERE ticker = %s AND active = TRUE
                 GROUP BY category
@@ -4293,7 +4308,16 @@ class FeedManager:
             # Extract counts
             existing_company_count = existing_data.get('company', {}).get('count', 0)
             existing_industry_count = existing_data.get('industry', {}).get('count', 0)
-            existing_competitor_entities = existing_data.get('competitor', {}).get('unique_competitors', 0)  # Count unique competitors, not feeds
+            
+            # Count unique competitors separately
+            cur.execute("""
+                SELECT COUNT(DISTINCT competitor_ticker) as unique_competitors
+                FROM source_feed 
+                WHERE ticker = %s AND category = 'competitor' AND active = TRUE
+                AND competitor_ticker IS NOT NULL
+            """, (ticker,))
+            result = cur.fetchone()
+            existing_competitor_entities = result["unique_competitors"] if result else 0
             
             LOG.info(f"  EXISTING FEEDS: Company={existing_company_count}, Industry={existing_industry_count}, Competitors={existing_competitor_entities} unique entities")
         
@@ -5941,7 +5965,7 @@ def admin_init(request: Request, body: InitRequest):
         
         LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created ===")
     
-    # Final summary logging
+    # Final summary logging with FIXED competitor entity counting
     LOG.info("=== INITIALIZATION COMPLETE ===")
     LOG.info("SUMMARY:")
     
@@ -5957,12 +5981,25 @@ def admin_init(request: Request, body: InitRequest):
     for ticker in body.tickers:
         if ticker in feeds_by_ticker:
             ticker_feeds = feeds_by_ticker[ticker]
-            LOG.info(f"  {ticker}: {sum(ticker_feeds.values())} new feeds created")
-            LOG.info(f"    Company: {ticker_feeds['company']}, Industry: {ticker_feeds['industry']}, Competitor: {ticker_feeds['competitor']}")
+            total_feeds = sum(ticker_feeds.values())
+            # FIXED: Count competitor entities (divide by 2 since each competitor creates 2 feeds)
+            competitor_entities = ticker_feeds['competitor'] // 2
+            LOG.info(f"  {ticker}: {total_feeds} new feeds created")
+            LOG.info(f"    Company: {ticker_feeds['company']}, Industry: {ticker_feeds['industry']}, Competitor: {competitor_entities} entities ({ticker_feeds['competitor']} feeds)")
         else:
             LOG.info(f"  {ticker}: 0 new feeds created (already at limits)")
     
     total_feeds_created = len([r for r in results if "feed" in r])
+    
+    # FIXED: Calculate competitor entities for return value
+    competitor_entities_by_ticker = {}
+    for ticker, feeds in feeds_by_ticker.items():
+        competitor_entities_by_ticker[ticker] = {
+            "company": feeds["company"],
+            "industry": feeds["industry"], 
+            "competitor_entities": feeds["competitor"] // 2,
+            "competitor_feeds": feeds["competitor"]
+        }
     
     return {
         "status": "initialized",
@@ -5970,7 +6007,7 @@ def admin_init(request: Request, body: InitRequest):
         "feeds": [r for r in results if "feed" in r],  # Only return actual feed creations
         "summary": {
             "total_feeds_created": total_feeds_created,
-            "feeds_by_ticker": feeds_by_ticker,
+            "feeds_by_ticker": competitor_entities_by_ticker,  # Use the fixed version
             "tickers_at_limit": [r["ticker"] for r in results if "message" in r]
         },
         "message": f"Generated {total_feeds_created} new feeds using AI-powered keyword analysis (respecting limits: max 5 industry, max 3 competitors)"

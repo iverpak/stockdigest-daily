@@ -490,6 +490,35 @@ def update_schema_for_triage():
             ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
         """)
 
+def store_competitor_metadata(ticker: str, competitors: List[Dict]) -> None:
+    """Store competitor metadata in a dedicated table for better normalization"""
+    with db() as conn, conn.cursor() as cur:
+        # Create competitor metadata table if it doesn't exist
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS competitor_metadata (
+                id SERIAL PRIMARY KEY,
+                ticker VARCHAR(10) NOT NULL,
+                company_name VARCHAR(255) NOT NULL,
+                parent_ticker VARCHAR(10) NOT NULL,  -- The ticker this competitor relates to
+                active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(ticker, parent_ticker)
+            );
+        """)
+        
+        # Store each competitor
+        for comp in competitors:
+            if isinstance(comp, dict) and comp.get('ticker') and comp.get('name'):
+                cur.execute("""
+                    INSERT INTO competitor_metadata (ticker, company_name, parent_ticker)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (ticker, parent_ticker) 
+                    DO UPDATE SET 
+                        company_name = EXCLUDED.company_name,
+                        updated_at = NOW()
+                """, (comp['ticker'], comp['name'], ticker))
+
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Enhanced article extraction with intelligent delay management
@@ -1142,9 +1171,12 @@ def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, tic
         domain = article.get("domain", "unknown")
         title = article.get("title", "")
         
-        # Get the keyword for limit checking
+        # FIXED:
         if category == "company":
             keyword = ticker
+        elif category == "competitor":
+            # Use competitor_ticker for limit consolidation
+            keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
         else:
             keyword = article.get("search_keyword", "unknown")
         
@@ -1235,29 +1267,23 @@ def _update_scraping_stats(category: str, keyword: str, success: bool):
     if success:
         scraping_stats["successful_scrapes"] += 1
         
-        # Calculate overall success rate
-        total_attempts = scraping_stats["successful_scrapes"] + scraping_stats["failed_scrapes"]
-        success_rate = (scraping_stats["successful_scrapes"] / total_attempts) * 100 if total_attempts > 0 else 0
-        
         if category == "company":
             scraping_stats["company_scraped"] += 1
-            LOG.info(f"SCRAPING SUCCESS: Company {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% success)")
+            # ... existing logging
         
         elif category == "industry":
             if keyword not in scraping_stats["industry_scraped_by_keyword"]:
                 scraping_stats["industry_scraped_by_keyword"][keyword] = 0
             scraping_stats["industry_scraped_by_keyword"][keyword] += 1
-            keyword_count = scraping_stats["industry_scraped_by_keyword"][keyword]
-            LOG.info(f"SCRAPING SUCCESS: Industry '{keyword}' {keyword_count}/{scraping_stats['limits']['industry_per_keyword']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% success)")
+            # ... existing logging
         
         elif category == "competitor":
+            # Use competitor_ticker as consolidation key
             if keyword not in scraping_stats["competitor_scraped_by_keyword"]:
                 scraping_stats["competitor_scraped_by_keyword"][keyword] = 0
             scraping_stats["competitor_scraped_by_keyword"][keyword] += 1
             keyword_count = scraping_stats["competitor_scraped_by_keyword"][keyword]
-            LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']} ({success_rate:.0f}% success)")
-    else:
-        scraping_stats["failed_scrapes"] += 1
+            LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']}")
 
 def _check_scraping_limit(category: str, keyword: str) -> bool:
     """Check if we can scrape more articles for this category/keyword"""
@@ -1271,6 +1297,7 @@ def _check_scraping_limit(category: str, keyword: str) -> bool:
         return keyword_count < scraping_stats["limits"]["industry_per_keyword"]
     
     elif category == "competitor":
+        # Use competitor_ticker as consolidation key
         keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
         return keyword_count < scraping_stats["limits"]["competitor_per_keyword"]
     
@@ -3399,26 +3426,34 @@ def create_triage_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[D
     
     return "\n".join(text_lines)
 
-def get_competitor_display_name(search_keyword: str, competitor_ticker: str, ticker_metadata_cache: Dict = None) -> str:
-    """Get full company name for competitor display - USE DATABASE DIRECTLY"""
+def get_competitor_display_name(search_keyword: str, competitor_ticker: str = None) -> str:
+    """
+    Get standardized competitor display name using database lookup
+    Priority: competitor_ticker -> search_keyword -> fallback
+    """
     
-    # If we have the competitor_ticker, look it up in ticker_config table
+    # Try database lookup by ticker first (most reliable)
     if competitor_ticker:
         try:
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT name FROM ticker_config 
+                    SELECT company_name FROM competitor_metadata 
                     WHERE ticker = %s AND active = TRUE
+                    LIMIT 1
                 """, (competitor_ticker,))
                 result = cur.fetchone()
                 
-                if result and result["name"]:
-                    return result["name"]
+                if result and result["company_name"]:
+                    return result["company_name"]
         except Exception as e:
             LOG.debug(f"Database lookup failed for competitor {competitor_ticker}: {e}")
     
-    # Fallback: return the search_keyword (which should be the company name for Google feeds)
-    return search_keyword or competitor_ticker or "Unknown Competitor"
+    # Fallback to search_keyword (should be company name for Google feeds)
+    if search_keyword and not search_keyword.isupper():  # Likely a company name, not ticker
+        return search_keyword
+        
+    # Final fallback
+    return competitor_ticker or search_keyword or "Unknown Competitor"
 
 def _ai_quality_score_company_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
     """Enhanced AI-powered component extraction for company articles"""
@@ -4337,21 +4372,21 @@ class FeedManager:
                     comp_name = comp.get('name', '')
                     comp_ticker = comp.get('ticker')
                     
-                    if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name and comp_ticker not in existing_competitor_tickers:
-                        # Create 2 feeds per competitor (Google + Yahoo) but they count as 1 entity
+                    if comp_ticker and comp_ticker.upper() != ticker.upper() and comp_name:
+                        # BOTH feeds now use company name as search_keyword for consistency
                         comp_feeds = [
                             {
                                 "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
                                 "name": f"Competitor: {comp_name}",
                                 "category": "competitor",
-                                "search_keyword": comp_name,
+                                "search_keyword": comp_name,  # Always use company name
                                 "competitor_ticker": comp_ticker
                             },
                             {
                                 "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
                                 "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
                                 "category": "competitor",
-                                "search_keyword": comp_ticker,
+                                "search_keyword": comp_name,  # Changed: use company name instead of ticker
                                 "competitor_ticker": comp_ticker
                             }
                         ]
@@ -4428,8 +4463,11 @@ class TickerManager:
         """Store enhanced ticker metadata in database"""
         # Convert competitors to storage format
         competitors_for_db = []
+        structured_competitors = []  # Keep structured format for competitor_metadata table
+        
         for comp in metadata.get("competitors", []):
             if isinstance(comp, dict):
+                structured_competitors.append(comp)  # For new table
                 if comp.get('ticker'):
                     competitors_for_db.append(f"{comp['name']} ({comp['ticker']})")
                 else:
@@ -4464,6 +4502,10 @@ class TickerManager:
                 json.dumps(metadata.get("sector_profile", {})),
                 json.dumps(metadata.get("aliases_brands_assets", {}))
             ))
+        
+        # Store competitor metadata in dedicated table
+        if structured_competitors:
+            store_competitor_metadata(ticker, structured_competitors)
 
 # Global instances
 ticker_manager = TickerManager()

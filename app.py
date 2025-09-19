@@ -93,13 +93,12 @@ SPAM_DOMAINS = {
 }
 
 QUALITY_DOMAINS = {
-#    "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
-#    "barrons.com", "cnbc.com", "marketwatch.com",
-#    "businesswire.com", "prnewswire.com", "globenewswire.com",
-#    "insidermonkey.com", "seekingalpha.com",
-#    "theglobeandmail.com",
-#    "apnews.com",
-#    "reuters.com",
+    "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
+    "barrons.com", "cnbc.com", "marketwatch.com",
+    "seekingalpha.com",
+    "theglobeandmail.com",
+    "apnews.com",
+    "reuters.com",
 }
 
 # Known paywall domains to skip during content scraping

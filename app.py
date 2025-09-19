@@ -4437,9 +4437,9 @@ class FeedManager:
 feed_manager = FeedManager()
 
 class TickerManager:
-    @staticmethod
+@staticmethod
     def get_or_create_metadata(ticker: str, force_refresh: bool = False) -> Dict:
-        """Unified ticker metadata management"""
+        """Unified ticker metadata management - ALWAYS returns a valid dict"""
         # Check database first
         if not force_refresh:
             with db() as conn, conn.cursor() as cur:
@@ -4467,8 +4467,20 @@ class TickerManager:
         
         # Generate with AI
         ai_metadata = generate_ticker_metadata_with_ai(ticker)
-        TickerManager.store_metadata(ticker, ai_metadata)
-        return ai_metadata
+        
+        # ALWAYS store something, even if AI failed
+        if ai_metadata:
+            TickerManager.store_metadata(ticker, ai_metadata)
+            return ai_metadata
+        else:
+            # Create and store fallback metadata
+            fallback_metadata = {
+                "company_name": ticker,
+                "industry_keywords": [],
+                "competitors": []
+            }
+            TickerManager.store_metadata(ticker, fallback_metadata)
+            return fallback_metadata
     
     @staticmethod
     def store_metadata(ticker: str, metadata: Dict):
@@ -4738,7 +4750,7 @@ def store_ticker_metadata(ticker, name, sector, industry, sub_industry,
     Store ticker metadata in database
     """
     try:
-        with get_db_connection() as conn:
+        with db() as conn:
             with conn.cursor() as cur:
                 # Check if ticker already exists
                 cur.execute("SELECT ticker FROM ticker_config WHERE ticker = %s", (ticker,))

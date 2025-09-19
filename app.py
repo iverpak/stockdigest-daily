@@ -2366,10 +2366,76 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     
     return selected_results
 
+def rule_based_triage_score(title: str, domain: str) -> Tuple[int, str, str]:
+    """
+    Score articles 0-100 based on title content only
+    Returns (score, reasoning, qb_level)
+    """
+    score = 0
+    reasons = []
+    
+    title_lower = title.lower()
+    
+    # HIGH VALUE EVENTS (+40-60 points)
+    if re.search(r'\b(earnings|beats|misses|guidance|results|q[1-4])\b', title_lower):
+        score += 50
+        reasons.append("earnings/results")
+    
+    if re.search(r'\b(acquires?|acquisition|merger|partnership|agreement|deal|signs)\b', title_lower):
+        score += 45
+        reasons.append("corporate action")
+        
+    if re.search(r'\b(raises?|upgrades?|initiates?|target|rating)\b', title_lower):
+        score += 40
+        reasons.append("analyst action")
+    
+    # FINANCIAL SPECIFICITY (+10-25 points)
+    if re.search(r'\$[\d,]+\.?\d*\s*(million|billion|m|b)\b', title_lower):
+        score += 25
+        reasons.append("dollar amount")
+        
+    if re.search(r'\b\d+\.?\d*%\b', title):
+        score += 15
+        reasons.append("percentage")
+    
+    if re.search(r'\b(rises?|jumps?|gains?|surges?|up\s+\d+)', title_lower):
+        score += 20
+        reasons.append("positive movement")
+    
+    # NEGATIVE PATTERNS (-20 to -40 points)
+    if re.search(r'\b(top\s+\d+|best|should you|how to|why|what to know|facts to know)\b', title_lower):
+        score -= 30
+        reasons.append("listicle/opinion")
+        
+    if re.search(r'\b(trending stock|what you need|here is what|analysis report|market talk)\b', title_lower):
+        score -= 25
+        reasons.append("generic content")
+        
+    if re.search(r'\b(roundup|overview|highlights|blog)\b', title_lower):
+        score -= 20
+        reasons.append("aggregated content")
+    
+    # DOMAIN BONUS (use existing tier system)
+    domain_tier = DOMAIN_TIERS.get(normalize_domain(domain), 0.3)
+    score += int(domain_tier * 30)  # Convert 0.3-1.0 to 9-30 points
+    reasons.append(f"domain tier {domain_tier}")
+    
+    final_score = max(0, min(100, score))
+    
+    # Determine QB level
+    if final_score >= 70:
+        qb_level = "QB: High"
+    elif final_score >= 40:
+        qb_level = "QB: Medium"
+    else:
+        qb_level = "QB: Low"
+    
+    return final_score, " + ".join(reasons), qb_level
+
 def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str], target_limit: int) -> List[Dict]:
     """
-    Apply tiered backfill to reach target limits using domain rankings
-    NEVER reduce AI + Quality selections, only backfill UP TO limit
+    Apply backfill using AI → Quality → Score-based descending order (100→0)
+    Score ALL articles for comparison analysis
     """
     # Step 1: Start with AI selections
     combined_selected = list(ai_selected)
@@ -2395,83 +2461,97 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
                 "likely_repeat": False,
                 "repeat_key": "",
                 "why": f"Quality domain: {domain}",
-                "confidence": 0.8
+                "confidence": 0.8,
+                "selection_method": "quality_domain"
             })
             selected_indices.add(idx)
     
     combined_selected.extend(quality_selected)
     
-    # Step 3: Tiered backfill ONLY if under target (never reduce)
+    # Step 3: Score ALL remaining articles and fill by descending score
     current_count = len(combined_selected)
     backfill_selected = []
     
     if current_count < target_limit:
         remaining_slots = target_limit - current_count
         
-        # Group remaining articles by domain tier
-        tier_groups = {}
+        # Score ALL remaining articles (not already selected by AI or Quality)
+        scored_candidates = []
         for idx, article in enumerate(articles):
             if idx in selected_indices:
                 continue
                 
             domain = normalize_domain(article.get("domain", ""))
-            title = article.get("title", "").lower()
+            title = article.get("title", "")
             
             # Skip low-quality domains and insider trading
-            if domain in low_quality_domains or is_insider_trading_article(title):
+            if domain in low_quality_domains or is_insider_trading_article(title.lower()):
                 continue
             
-            tier = DOMAIN_TIERS.get(domain, 0.3)  # Default tier for unknown domains
+            # Calculate QB score for ALL remaining articles
+            qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
             
-            if tier not in tier_groups:
-                tier_groups[tier] = []
-            tier_groups[tier].append({
+            scored_candidates.append({
                 "id": idx,
                 "article": article,
-                "tier": tier,
-                "domain": domain
+                "qb_score": qb_score,
+                "qb_reasoning": qb_reasoning,
+                "qb_level": qb_level,
+                "domain": domain,
+                "published_at": article.get("published_at")
             })
         
-        # Fill remaining slots starting from highest tier
-        for tier in sorted(tier_groups.keys(), reverse=True):  # High to low (1.0 → 0.1)
-            if len(backfill_selected) >= remaining_slots:
-                break
-                
-            tier_articles = tier_groups[tier]
-            
-            # Sort by publication time within tier (newest first)
-            tier_articles.sort(
-                key=lambda x: x["article"].get("published_at") or datetime.min.replace(tzinfo=timezone.utc), 
-                reverse=True
-            )
-            
-            slots_available = remaining_slots - len(backfill_selected)
-            for article_data in tier_articles[:slots_available]:
-                backfill_selected.append({
-                    "id": article_data["id"],
-                    "scrape_priority": 3,
-                    "likely_repeat": False,
-                    "repeat_key": "",
-                    "why": f"Tier {article_data['tier']} backfill from {article_data['domain']}",
-                    "confidence": 0.4
-                })
+        # Sort by QB score descending (100 → 0), then by publication time (newest first)
+        scored_candidates.sort(key=lambda x: (
+            -x["qb_score"],  # Higher scores first
+            -(x["published_at"].timestamp() if x["published_at"] else 0)  # Newer articles first
+        ))
+        
+        # Take top candidates up to remaining slots
+        for candidate in scored_candidates[:remaining_slots]:
+            backfill_selected.append({
+                "id": candidate["id"],
+                "scrape_priority": 3,
+                "likely_repeat": False,
+                "repeat_key": "",
+                "why": f"{candidate['qb_level']}: {candidate['qb_reasoning']} (score: {candidate['qb_score']})",
+                "confidence": 0.6,
+                "selection_method": "qb_score",
+                "qb_score": candidate["qb_score"],
+                "qb_level": candidate["qb_level"]
+            })
         
         combined_selected.extend(backfill_selected)
+    
+    # Store QB scores for ALL articles for comparison analysis
+    for idx, article in enumerate(articles):
+        domain = normalize_domain(article.get("domain", ""))
+        title = article.get("title", "")
+        
+        if not (domain in low_quality_domains or is_insider_trading_article(title.lower())):
+            qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
+            
+            # Add QB scoring data to article for later database update
+            article['qb_score'] = qb_score
+            article['qb_level'] = qb_level
+            article['qb_reasoning'] = qb_reasoning
     
     # Final sort by priority (lower number = higher priority)
     combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
     
-    # NEVER REDUCE - return all AI + Quality + Backfill selections
-    final_selected = combined_selected  # REMOVED the [:target_limit] slice
-    
     # Enhanced logging
     ai_count = len(ai_selected)
     quality_count = len(quality_selected)
-    backfill_count = len(backfill_selected)
+    qb_count = len(backfill_selected)
     
-    LOG.info(f"Tiered backfill {category}: {ai_count} AI + {quality_count} Quality + {backfill_count} Backfill = {len(final_selected)}/{target_limit}")
+    if qb_count > 0:
+        min_score = min(x.get("qb_score", 0) for x in backfill_selected)
+        max_score = max(x.get("qb_score", 0) for x in backfill_selected)
+        LOG.info(f"QB backfill {category}: {ai_count} AI + {quality_count} Quality + {qb_count} QB-scored (range: {min_score}-{max_score}) = {len(combined_selected)}/{target_limit}")
+    else:
+        LOG.info(f"QB backfill {category}: {ai_count} AI + {quality_count} Quality + {qb_count} QB-scored = {len(combined_selected)}/{target_limit}")
     
-    return final_selected
+    return combined_selected
 
 def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str, List[Dict]], ticker: str, target_limits: Dict[str, int] = None) -> Dict[str, List[Dict]]:
     """
@@ -5343,6 +5423,11 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
             ".triage-quality { background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
             ".selected-for-scrape { background-color: #e8f5e8 !important; }",
             ".quality-domain-selected { background-color: #e3f2fd !important; }",
+            ".qb-score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            ".qb-high { background-color: #c8e6c9; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".qb-medium { background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
+            ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
+            ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
             ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
             ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
             ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
@@ -5649,11 +5734,13 @@ def fetch_digest_articles_with_content(hours: int = 24, tickers: List[str] = Non
         "recipient": DIGEST_TO
     }
 
-def _format_article_html(article: Dict, category: str) -> str:
-    """Format article HTML with AI analysis display"""
+def _format_article_html(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
+    """
+    Enhanced article HTML formatting with AI scores, Quality badges, and QB scores
+    """
     import html
     
-    # Format timestamp for individual articles
+    # Format timestamp
     if article["published_at"]:
         eastern = pytz.timezone('US/Eastern')
         pub_dt = article["published_at"]
@@ -5670,15 +5757,12 @@ def _format_article_html(article: Dict, category: str) -> str:
     original_title = article["title"] or "No Title"
     resolved_domain = article["domain"] or "unknown"
     
-    # Determine source and clean title based on domain type
+    # Determine source and clean title
     if "news.google.com" in resolved_domain or resolved_domain == "google-news-unresolved":
         title_result = extract_source_from_title_smart(original_title)
-        
         if title_result[0] is None:
             return ""
-        
         title, extracted_source = title_result
-        
         if extracted_source:
             display_source = get_or_create_formal_domain_name(extracted_source)
         else:
@@ -5687,30 +5771,51 @@ def _format_article_html(article: Dict, category: str) -> str:
         title = original_title
         display_source = get_or_create_formal_domain_name(resolved_domain)
     
-    # Additional title cleanup
+    # Clean title
     title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     
-    # Determine the actual link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # Quality score styling
-    score = article["quality_score"]
-    score_class = "high-score" if score >= 70 else "med-score" if score >= 40 else "low-score"
+    # AI Score display
+    ai_score_html = ""
+    ai_impact_html = ""
+    quality_score = article.get("quality_score")
+    ai_impact = article.get("ai_impact")
     
-    # Impact styling - FIXED: Handle None values
-    ai_impact = (article.get("ai_impact") or "").lower()
-    impact_class = f"impact-{ai_impact}" if ai_impact in ["positive", "negative", "mixed", "unclear"] else "impact-unclear"
-    impact_display = ai_impact.title() if ai_impact else "N/A"
+    if ai_impact is not None and quality_score is not None:
+        score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
+        ai_score_html = f'<span class="score {score_class}">AI: {quality_score:.0f}</span>'
+        
+        impact_class = {
+            "positive": "impact-positive", 
+            "negative": "impact-negative", 
+            "mixed": "impact-mixed", 
+            "neutral": "impact-neutral"
+        }.get(ai_impact.lower(), "impact-neutral")
+        ai_impact_html = f'<span class="impact {impact_class}">{ai_impact}</span>'
     
-    # AI reasoning - FIXED: Handle None values
-    ai_reasoning = (article.get("ai_reasoning") or "").strip()
+    # Quality Domain badge
+    quality_badge_html = ""
+    if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
+        quality_badge_html = '<span class="quality-badge">Quality</span>'
     
-    # Build metadata badges for category-specific information
+    # QB Score display
+    qb_score_html = ""
+    qb_level = article.get("qb_level")
+    qb_score = article.get("qb_score")
+    
+    if qb_level and qb_score is not None:
+        qb_class = "qb-high" if qb_score >= 70 else "qb-medium" if qb_score >= 40 else "qb-low"
+        qb_score_html = f'<span class="qb-score {qb_class}">{qb_level}</span>'
+    
+    # Category-specific metadata badges
     metadata_badges = []
-    
-    if category == "competitor" and article.get('search_keyword'):
-        competitor_name = article['search_keyword']
+    if category == "competitor" and article.get('competitor_ticker'):
+        competitor_name = get_competitor_display_name(
+            article.get('search_keyword'), 
+            article.get('competitor_ticker')
+        )
         metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
     elif category == "industry" and article.get('search_keyword'):
         industry_keyword = article['search_keyword']
@@ -5718,10 +5823,16 @@ def _format_article_html(article: Dict, category: str) -> str:
     
     enhanced_metadata = "".join(metadata_badges)
     
-    # Get description and format it
-    description = article.get("description", "").strip()
+    # AI Summary section
+    ai_summary_html = ""
+    if article.get("ai_summary"):
+        clean_summary = html.escape(article["ai_summary"].strip())
+        ai_summary_html = f"<br><div class='ai-summary'><strong>📊 Analysis:</strong> {clean_summary}</div>"
+    
+    # Description (only if no AI summary)
     description_html = ""
-    if description:
+    if not article.get("ai_summary") and article.get("description"):
+        description = article["description"].strip()
         description = html.unescape(description)
         description = re.sub(r'<[^>]+>', '', description)
         description = re.sub(r'\s+', ' ', description).strip()
@@ -5732,30 +5843,21 @@ def _format_article_html(article: Dict, category: str) -> str:
         description = html.escape(description)
         description_html = f"<br><div class='description'>{description}</div>"
     
-    # Build analysis section for company articles with AI data
-    analysis_html = ""
-    if category == "company" and (ai_impact or ai_reasoning):
-        analysis_html = f"""
-        <div class='article-analysis'>
-            <strong>🤖 AI Analysis:</strong>
-            {f'<span class="impact {impact_class}">{impact_display}</span>' if ai_impact else ''}
-            {f'<div class="ai-reasoning">{html.escape(ai_reasoning)}</div>' if ai_reasoning else ''}
-        </div>
-        """
-    
     return f"""
     <div class='article {category}'>
         <div class='article-header'>
             <span class='source-badge'>{display_source}</span>
             {enhanced_metadata}
-            <span class='score {score_class}'>Score: {score:.0f}</span>
-            {f'<span class="impact {impact_class}">{impact_display}</span>' if ai_impact and category == "company" else ''}
+            {ai_score_html}
+            {ai_impact_html}
+            {quality_badge_html}
+            {qb_score_html}
         </div>
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
             <span class='meta'> | {pub_date}</span>
+            {ai_summary_html}
             {description_html}
-            {analysis_html}
         </div>
     </div>
     """

@@ -2347,13 +2347,13 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
         
         try:
             if category == "company":
-                selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
+                selected = triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
             elif category == "industry":
                 peers = config.get("competitors", []) if config else []
-                selected = _triage_industry_articles_full(articles, ticker, sector_profile, peers)
+                selected = triage_industry_articles_full(articles, ticker, sector_profile, peers)
             elif category == "competitor":
                 peers = config.get("competitors", []) if config else []
-                selected = _triage_competitor_articles_full(articles, ticker, peers, sector_profile)
+                selected = triage_competitor_articles_full(articles, ticker, peers, sector_profile)
             else:
                 selected = []
                 
@@ -2517,7 +2517,7 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
         LOG.info(f"Starting triage for company: {len(articles)} articles (target: {target})")
         
         try:
-            ai_selected = _triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
+            ai_selected = triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
         except Exception as e:
             LOG.error(f"AI triage failed for company: {e}")
             ai_selected = []
@@ -2558,7 +2558,7 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
             
             try:
                 peers = config.get("competitors", []) if config else []
-                keyword_selected = _triage_industry_articles_full(keyword_article_list, ticker, sector_profile, peers)
+                keyword_selected = triage_industry_articles_full(keyword_article_list, ticker, sector_profile, peers)
                 
                 # Convert mini-indices back to full indices
                 for item in keyword_selected:
@@ -2635,7 +2635,7 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
             
             try:
                 peers = config.get("competitors", []) if config else []
-                competitor_selected = _triage_competitor_articles_full(competitor_article_list, ticker, peers, sector_profile)
+                competitor_selected = triage_competitor_articles_full(competitor_article_list, ticker, peers, sector_profile)
                 
                 # Convert mini-indices back to full indices
                 for item in competitor_selected:

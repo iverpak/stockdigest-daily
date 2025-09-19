@@ -4272,7 +4272,7 @@ domain_resolver = DomainResolver()
 class FeedManager:
     @staticmethod
     def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
-        """Create feeds only if under the limits - FIXED competitor counting logic"""
+        """Create feeds only if under the limits - FIXED competitor counting logic with strict ticker requirement"""
         feeds = []
         company_name = metadata.get("company_name", ticker)
         
@@ -4374,60 +4374,48 @@ class FeedManager:
                         comp_ticker = match.group(2)
                         LOG.info(f"DEBUG: Parsed competitor - Name: '{comp_name}', Ticker: '{comp_ticker}'")
                     else:
-                        # Treat as company name without ticker
-                        comp_name = comp.strip()
-                        comp_ticker = None
-                        LOG.info(f"DEBUG: Using as company name only: '{comp_name}'")
+                        LOG.info(f"DEBUG: Skipping competitor - no ticker found in string: {comp}")
+                        continue
                 
-                # Validate competitor data
-                if not comp_name:
-                    LOG.info(f"DEBUG: Skipping competitor - no name: {comp}")
+                # Strict validation - REQUIRE both name and ticker
+                if not comp_name or not comp_ticker:
+                    LOG.info(f"DEBUG: Skipping competitor - missing name or ticker: name='{comp_name}', ticker='{comp_ticker}'")
                     continue
                     
-                if comp_ticker:
-                    if comp_ticker.upper() == ticker.upper():
-                        LOG.info(f"DEBUG: Skipping competitor - same as main ticker: {comp_ticker}")
-                        continue
-                        
-                    if comp_ticker in existing_competitor_tickers:
-                        LOG.info(f"DEBUG: Skipping competitor - already exists: {comp_ticker}")
-                        continue
+                if comp_ticker.upper() == ticker.upper():
+                    LOG.info(f"DEBUG: Skipping competitor - same as main ticker: {comp_ticker}")
+                    continue
+                    
+                if comp_ticker in existing_competitor_tickers:
+                    LOG.info(f"DEBUG: Skipping competitor - already exists: {comp_ticker}")
+                    continue
                 
-                # Create feeds for this competitor
-                LOG.info(f"DEBUG: Creating feeds for competitor {comp_name} ({comp_ticker or 'no ticker'})")
+                # Validate ticker format (1-5 uppercase letters)
+                if not re.match(r'^[A-Z]{1,5}$', comp_ticker):
+                    LOG.info(f"DEBUG: Skipping competitor - invalid ticker format: '{comp_ticker}'")
+                    continue
                 
-                if comp_ticker:
-                    # Both Google News and Yahoo Finance feeds
-                    comp_feeds = [
-                        {
-                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                            "name": f"Competitor: {comp_name}",
-                            "category": "competitor",
-                            "search_keyword": comp_name,  # Always use company name
-                            "competitor_ticker": comp_ticker
-                        },
-                        {
-                            "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                            "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                            "category": "competitor",
-                            "search_keyword": comp_name,  # Use company name instead of ticker
-                            "competitor_ticker": comp_ticker
-                        }
-                    ]
-                else:
-                    # Only Google News feed if no ticker
-                    comp_feeds = [
-                        {
-                            "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                            "name": f"Competitor: {comp_name}",
-                            "category": "competitor",
-                            "search_keyword": comp_name,
-                            "competitor_ticker": None
-                        }
-                    ]
+                # Create feeds for this competitor (BOTH Google News and Yahoo Finance)
+                LOG.info(f"DEBUG: Creating feeds for competitor {comp_name} ({comp_ticker})")
+                comp_feeds = [
+                    {
+                        "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                        "name": f"Competitor: {comp_name}",
+                        "category": "competitor",
+                        "search_keyword": comp_name,
+                        "competitor_ticker": comp_ticker
+                    },
+                    {
+                        "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                        "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                        "category": "competitor",
+                        "search_keyword": comp_name,
+                        "competitor_ticker": comp_ticker
+                    }
+                ]
                 
                 feeds.extend(comp_feeds)
-                LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker or 'no ticker'}) - {len(comp_feeds)} feeds (counts as 1 entity)")
+                LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
         else:
             LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
         

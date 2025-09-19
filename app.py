@@ -4472,52 +4472,95 @@ class TickerManager:
     
     @staticmethod
     def store_metadata(ticker: str, metadata: Dict):
-        """Store enhanced ticker metadata in database"""
+        """Store enhanced ticker metadata in database with robust error handling"""
+        
+        # Handle None or invalid metadata
+        if not metadata or not isinstance(metadata, dict):
+            LOG.warning(f"Invalid or missing metadata for {ticker}, creating fallback")
+            metadata = {
+                "company_name": ticker,
+                "industry_keywords": [],
+                "competitors": [],
+                "sector": "",
+                "industry": "",
+                "sub_industry": "",
+                "sector_profile": {},
+                "aliases_brands_assets": {}
+            }
+        
+        # Ensure required fields exist with defaults
+        metadata.setdefault("company_name", ticker)
+        metadata.setdefault("industry_keywords", [])
+        metadata.setdefault("competitors", [])
+        metadata.setdefault("sector", "")
+        metadata.setdefault("industry", "")
+        metadata.setdefault("sub_industry", "")
+        metadata.setdefault("sector_profile", {})
+        metadata.setdefault("aliases_brands_assets", {})
+        
         # Convert competitors to storage format
         competitors_for_db = []
         structured_competitors = []  # Keep structured format for competitor_metadata table
         
-        for comp in metadata.get("competitors", []):
-            if isinstance(comp, dict):
-                structured_competitors.append(comp)  # For new table
-                if comp.get('ticker'):
-                    competitors_for_db.append(f"{comp['name']} ({comp['ticker']})")
+        try:
+            for comp in metadata.get("competitors", []):
+                if isinstance(comp, dict):
+                    structured_competitors.append(comp)  # For new table
+                    if comp.get('ticker'):
+                        competitors_for_db.append(f"{comp['name']} ({comp['ticker']})")
+                    else:
+                        competitors_for_db.append(comp.get('name', 'Unknown'))
                 else:
-                    competitors_for_db.append(comp['name'])
-            else:
-                competitors_for_db.append(str(comp))
+                    competitors_for_db.append(str(comp))
+        except Exception as e:
+            LOG.warning(f"Error processing competitors for {ticker}: {e}")
+            competitors_for_db = []
+            structured_competitors = []
         
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO ticker_config (
-                    ticker, name, industry_keywords, competitors, ai_generated,
-                    sector, industry, sub_industry, sector_profile, aliases_brands_assets
-                ) VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker) DO UPDATE
-                SET name = EXCLUDED.name, 
-                    industry_keywords = EXCLUDED.industry_keywords,
-                    competitors = EXCLUDED.competitors, 
-                    sector = EXCLUDED.sector,
-                    industry = EXCLUDED.industry,
-                    sub_industry = EXCLUDED.sub_industry,
-                    sector_profile = EXCLUDED.sector_profile,
-                    aliases_brands_assets = EXCLUDED.aliases_brands_assets,
-                    updated_at = NOW()
-            """, (
-                ticker, 
-                metadata.get("company_name", ticker),
-                metadata.get("industry_keywords", []), 
-                competitors_for_db,
-                metadata.get("sector", ""),
-                metadata.get("industry", ""),
-                metadata.get("sub_industry", ""),
-                json.dumps(metadata.get("sector_profile", {})),
-                json.dumps(metadata.get("aliases_brands_assets", {}))
-            ))
+        try:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO ticker_config (
+                        ticker, name, industry_keywords, competitors, ai_generated,
+                        sector, industry, sub_industry, sector_profile, aliases_brands_assets
+                    ) VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker) DO UPDATE
+                    SET name = EXCLUDED.name, 
+                        industry_keywords = EXCLUDED.industry_keywords,
+                        competitors = EXCLUDED.competitors, 
+                        sector = EXCLUDED.sector,
+                        industry = EXCLUDED.industry,
+                        sub_industry = EXCLUDED.sub_industry,
+                        sector_profile = EXCLUDED.sector_profile,
+                        aliases_brands_assets = EXCLUDED.aliases_brands_assets,
+                        updated_at = NOW()
+                """, (
+                    ticker, 
+                    metadata.get("company_name", ticker),
+                    metadata.get("industry_keywords", []), 
+                    competitors_for_db,
+                    metadata.get("sector", ""),
+                    metadata.get("industry", ""),
+                    metadata.get("sub_industry", ""),
+                    json.dumps(metadata.get("sector_profile", {})),
+                    json.dumps(metadata.get("aliases_brands_assets", {}))
+                ))
+                
+                LOG.info(f"Successfully stored metadata for {ticker}")
+                
+        except Exception as e:
+            LOG.error(f"Database error storing metadata for {ticker}: {e}")
+            # Don't raise - we want the system to continue with fallback data
+            return
         
-        # Store competitor metadata in dedicated table
+        # Store competitor metadata in dedicated table (with error handling)
         if structured_competitors:
-            store_competitor_metadata(ticker, structured_competitors)
+            try:
+                store_competitor_metadata(ticker, structured_competitors)
+            except Exception as e:
+                LOG.warning(f"Failed to store competitor metadata for {ticker}: {e}")
+                # Continue - this is not critical
+
 
 # Global instances
 ticker_manager = TickerManager()
@@ -4602,7 +4645,7 @@ Required JSON format:
     try:
         # Call OpenAI API
         response = openai.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}

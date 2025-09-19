@@ -4522,10 +4522,12 @@ class TickerManager:
 ticker_manager = TickerManager()
 feed_manager = FeedManager()
 
-def generate_ticker_metadata_with_ai(ticker, company_name):
+def generate_ticker_metadata_with_ai(ticker, company_name=None):
     """
     Generate comprehensive ticker metadata using OpenAI with improved validation
     """
+    if company_name is None:
+        company_name = ticker  # Use ticker as fallback
     system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:

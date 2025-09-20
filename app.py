@@ -183,7 +183,7 @@ PROBLEMATIC_SCRAPE_DOMAINS = {
     "zacks.com", "thefly.com", "accesswire.com", "streetinsider.com",
     "msn.com", "templates.cds.yahoo", "sharewise.com", "news.stocktradersdaily.com",
     "247wallst.com", "barchart.com", "newstrail.com", "telecompaper.com",
-    "video.media.yql.yahoo.com"
+    "video.media.yql.yahoo.com", "fool.com"
 }
 
 # Known paywall domains to skip during content scraping
@@ -5830,7 +5830,7 @@ def is_description_valuable(title: str, description: str) -> bool:
     return True
 
 def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries for company articles - titles for triage, AI summaries for final email"""
+    """Generate AI summaries for company articles from scraped content analysis with enhanced financial focus"""
     if not OPENAI_API_KEY:
         return {}
     
@@ -5838,37 +5838,73 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
     
     for ticker, categories in articles_by_ticker.items():
         company_articles = categories.get("company", [])
+        competitor_articles = categories.get("competitor", [])
+        
         if not company_articles:
             continue
         
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
         
+        # Get competitor context
+        competitor_names = []
+        if config and config.get("competitors"):
+            for comp_str in config["competitors"]:
+                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                if match:
+                    competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
+                else:
+                    competitor_names.append(comp_str)
+        
         # Generate summary from AI analysis (for final email)
         ai_analysis_summary = ""
         ai_summaries = [article.get("ai_summary", "") for article in company_articles if article.get("ai_summary")]
+        competitor_summaries = [article.get("ai_summary", "") for article in competitor_articles if article.get("ai_summary")]
         
         if ai_summaries:
             ai_text = "\n".join(f"• {summary}" for summary in ai_summaries[:15])  # Limit to first 15
+            competitor_analysis = ""
+            if competitor_summaries:
+                competitor_analysis = "\n\nCOMPETITOR ANALYSIS:\n" + "\n".join(f"• {summary}" for summary in competitor_summaries[:8])
             
             try:
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                 
-                prompt = f"""As a hedge fund analyst, synthesize these individual article analyses into a cohesive investment thesis for {company_name} ({ticker}). Provide a 3-4 sentence executive summary that:
-1. Identifies the most significant business developments
-2. Assesses overall momentum and trajectory
-3. Highlights key risks or catalysts for the stock
+                prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
 
-Individual Analyses:
-{ai_text}
+SYNTHESIS FRAMEWORK:
+1. FINANCIAL TRAJECTORY: Consolidate revenue, margin, cash flow, and growth indicators
+2. COMPETITIVE POSITION: Assess market share dynamics and competitive threats from analysis
+3. STRATEGIC EXECUTION: Evaluate management actions, capital allocation, operational efficiency
+4. RISK/CATALYST ASSESSMENT: Identify key upside drivers and downside risks
 
-Provide a strategic summary suitable for portfolio management decisions."""
+ENHANCED REQUIREMENTS:
+- Synthesize quantitative metrics when available with domain citations [domain.com]
+- Distinguish between reported facts and analytical conclusions using [SYNTHESIS] tags
+- Assess competitive moves that may impact {company_name}'s financial performance
+- Focus on investment implications for next 2-4 quarters
+- Highlight any consensus themes or conflicting signals in the analysis
+- Maximum 4-5 sentences with clear financial focus
+
+CITATION RULES FOR SYNTHESIS:
+- Quantitative data: "EBITDA margins under pressure [multiple sources]"
+- Trends: "Consistent theme of market share gains [SYNTHESIS from reuters.com, wsj.com]"
+- Competitive impact: "Rival capacity additions signal pricing pressure ahead [SYNTHESIS]"
+- Strategic assessment: "Digital transformation accelerating revenue mix shift [SYNTHESIS from seeking alpha analysis]"
+
+TARGET: {company_name} ({ticker})
+COMPETITIVE CONTEXT: {', '.join(competitor_names) if competitor_names else 'Limited competitor coverage'}
+
+INDIVIDUAL ARTICLE ANALYSES:
+{ai_text}{competitor_analysis}
+
+Provide a strategic investment thesis synthesizing the deep content analysis."""
 
                 data = {
                     "model": OPENAI_MODEL,
                     "input": prompt,
-                    "max_output_tokens": 1000,
-                    "reasoning": {"effort": "medium"},
+                    "max_output_tokens": 3000,
+                    "reasoning": {"effort": "high"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }
@@ -5890,7 +5926,7 @@ Provide a strategic summary suitable for portfolio management decisions."""
     return summaries
 
 def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries from company article titles (for triage email)"""
+    """Generate AI summaries from company article titles with enhanced financial focus and competitor analysis"""
     if not OPENAI_API_KEY:
         return {}
     
@@ -5898,38 +5934,74 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
     
     for ticker, categories in articles_by_ticker.items():
         company_articles = categories.get("company", [])
+        competitor_articles = categories.get("competitor", [])
+        
         if not company_articles:
             continue
         
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
         
+        # Get competitor names for context
+        competitor_names = []
+        if config and config.get("competitors"):
+            for comp_str in config["competitors"]:
+                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                if match:
+                    competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
+                else:
+                    competitor_names.append(comp_str)
+        
         # Generate summary from titles
         titles = [article.get("title", "") for article in company_articles if article.get("title")]
+        competitor_titles = [article.get("title", "") for article in competitor_articles if article.get("title")]
+        
         titles_summary = ""
         
         if titles:
             titles_text = "\n".join(f"• {title}" for title in titles[:20])  # Limit to first 20
+            competitor_text = ""
+            if competitor_titles:
+                competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(f"• {title}" for title in competitor_titles[:10])
             
             try:
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                 
-                prompt = f"""As a hedge fund analyst, summarize the key themes and developments for {company_name} ({ticker}) based on these recent news headlines. Provide a concise 3-4 sentence summary focusing on:
-1. Major business developments or events
-2. Financial performance indicators
-3. Market positioning or competitive dynamics
-4. Any significant risks or opportunities
+                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent news headlines to assess near-term financial impact and competitive positioning.
 
-Headlines:
-{titles_text}
+ANALYSIS FRAMEWORK:
+1. FINANCIAL IMPACT ASSESSMENT: Identify developments that may affect sales, margins, EBITDA, FCF, or growth trajectory
+2. COMPETITIVE DYNAMICS: Assess how competitor actions might impact {company_name}'s market share or financial prospects
+3. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts
+4. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships
 
-Provide a professional, analytical summary suitable for a hedge fund report."""
+CRITICAL REQUIREMENTS:
+- Focus on NEAR-TERM (next 1-3 quarters) financial implications
+- Include specific numbers when available and cite source domain in brackets [domain.com]
+- Clearly distinguish facts from analytical inference using [INFERENCE] tags
+- Flag potential impact on key metrics: revenue growth, margin pressure, market share shifts
+- Assess competitor moves that could affect {company_name}'s performance
+- Keep to 4-5 sentences maximum
+
+CITATION & INFERENCE RULES:
+- Factual claims: "Company reported X% growth [reuters.com]"
+- Numbers: "Sales declined 15% [wsj.com]" 
+- Inference: "This suggests margin pressure ahead [INFERENCE]"
+- Competitive analysis: "Rival's capacity expansion may pressure pricing [INFERENCE from benzinga.com]"
+
+TARGET COMPANY: {company_name} ({ticker})
+KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
+
+COMPANY HEADLINES:
+{titles_text}{competitor_text}
+
+Provide a concise executive summary focusing on financial prospects and competitive threats."""
 
                 data = {
                     "model": OPENAI_MODEL,
                     "input": prompt,
-                    "max_output_tokens": 1000,
-                    "reasoning": {"effort": "medium"},
+                    "max_output_tokens": 3000,
+                    "reasoning": {"effort": "high"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }
@@ -5941,7 +6013,7 @@ Provide a professional, analytical summary suitable for a hedge fund report."""
                     titles_summary = extract_text_from_responses(result)
                     
             except Exception as e:
-                LOG.warning(f"Failed to generate titles summary for {ticker}: {e}")
+                LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
         
         summaries[ticker] = {
             "titles_summary": titles_summary,
@@ -6272,8 +6344,9 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
             ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
             ".company-name-badge { display: inline-block; padding: 3px 8px; margin-right: 8px; border-radius: 4px; font-weight: bold; font-size: 11px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+            ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 0px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
             ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+            ".flagged-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
             ".ai-triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
             ".ai-high { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
             ".ai-medium { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
@@ -6284,7 +6357,6 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
             ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
             ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
-            ".selected-for-scrape { background-color: #e8f5e8 !important; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
             ".meta { color: #95a5a6; font-size: 11px; }",
@@ -6382,8 +6454,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     domain = article.get("domain", "unknown")
                     title = article.get("title", "No Title")
                     
-                    # HEADER ORDER: For INDUSTRY -> Industry Keyword, Domain, Quality, AI Triage, QB Score
-                    # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, AI Triage, QB Score
+                    # HEADER ORDER: For INDUSTRY -> Industry Keyword, Domain, Quality, Flagged, AI Triage, QB Score
+                    # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, Flagged, AI Triage, QB Score
                     header_badges = []
                     
                     # 1. First badge depends on category
@@ -6402,27 +6474,28 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if enhanced_article["is_quality_domain"]:
                         header_badges.append('<span class="quality-badge">Quality</span>')
                     
-                    # 4. AI Triage fourth (AI: High/Medium/Low format)
+                    # 4. Flagged badge if AI selected or quality selected
+                    if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
+                        header_badges.append('<span class="flagged-badge">Flagged</span>')
+                    
+                    # 5. AI Triage fifth (AI: High/Medium/Low format) - only if AI selected
                     if enhanced_article["is_ai_selected"]:
                         ai_priority = enhanced_article["ai_priority"]
                         badge_class = f"ai-{ai_priority.lower()}"
                         header_badges.append(f'<span class="ai-triage {badge_class}">AI: {ai_priority}</span>')
                     
-                    # 5. QB Score last (QB: High/Medium/Low format)
+                    # 6. QB Score last (QB: High/Medium/Low format)
                     qb_score = article.get('qb_score', 0)
-                    qb_level = article.get('qb_level', 'QB: Low')
                     if qb_score >= 70:
                         qb_class = "qb-high"
+                        qb_level = "QB: High"
                     elif qb_score >= 40:
                         qb_class = "qb-medium"
+                        qb_level = "QB: Medium"
                     else:
                         qb_class = "qb-low"
+                        qb_level = "QB: Low"
                     header_badges.append(f'<span class="qb-score {qb_class}">{qb_level}</span>')
-                    
-                    # Article class
-                    article_class = f"article {category}"
-                    if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
-                        article_class += " selected-for-scrape"
                     
                     # Publication time
                     pub_time = ""
@@ -6430,7 +6503,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         pub_time = format_timestamp_est(article["published_at"])
                     
                     html.append(f"""
-                    <div class='{article_class}'>
+                    <div class='article {category}'>
                         <div class='article-header'>
                             {' '.join(header_badges)}
                         </div>

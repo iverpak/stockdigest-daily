@@ -5928,6 +5928,7 @@ Provide a strategic investment thesis synthesizing the deep content analysis."""
 def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
     """Generate AI summaries from company article titles with enhanced financial focus and competitor analysis"""
     if not OPENAI_API_KEY:
+        LOG.warning("No OpenAI API key configured for titles summary generation")
         return {}
     
     summaries = {}
@@ -5936,11 +5937,15 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
         company_articles = categories.get("company", [])
         competitor_articles = categories.get("competitor", [])
         
+        LOG.info(f"TITLES SUMMARY DEBUG for {ticker}: Company articles: {len(company_articles)}, Competitor articles: {len(competitor_articles)}")
+        
         if not company_articles:
+            LOG.info(f"Skipping {ticker} - no company articles found")
             continue
         
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
+        LOG.info(f"TITLES SUMMARY: Processing {ticker} ({company_name})")
         
         # Get competitor names for context
         competitor_names = []
@@ -5952,9 +5957,19 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
                 else:
                     competitor_names.append(comp_str)
         
+        LOG.info(f"TITLES SUMMARY: {ticker} has {len(competitor_names)} competitors configured")
+        
         # Generate summary from titles
         titles = [article.get("title", "") for article in company_articles if article.get("title")]
         competitor_titles = [article.get("title", "") for article in competitor_articles if article.get("title")]
+        
+        LOG.info(f"TITLES SUMMARY: {ticker} - {len(titles)} company titles, {len(competitor_titles)} competitor titles")
+        
+        # Log sample titles for debugging
+        if titles:
+            LOG.info(f"TITLES SUMMARY: {ticker} sample titles (first 3):")
+            for i, title in enumerate(titles[:3]):
+                LOG.info(f"  {i+1}. {title}")
         
         titles_summary = ""
         
@@ -5964,9 +5979,35 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
             if competitor_titles:
                 competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(f"• {title}" for title in competitor_titles[:10])
             
+            LOG.info(f"TITLES SUMMARY: {ticker} - Prepared text for AI (company: {len(titles_text)} chars, competitor: {len(competitor_text)} chars)")
+            
+            # Test OpenAI connectivity first
             try:
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                 
+                LOG.info(f"TITLES SUMMARY: {ticker} - Testing OpenAI connectivity...")
+                test_data = {
+                    "model": OPENAI_MODEL,
+                    "input": "Test connectivity",
+                    "max_output_tokens": 50,
+                    "reasoning": {"effort": "low"},
+                    "text": {"verbosity": "low"}
+                }
+                test_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=test_data, timeout=(10, 30))
+                LOG.info(f"TITLES SUMMARY: {ticker} - OpenAI test call status: {test_response.status_code}")
+                
+                if test_response.status_code != 200:
+                    LOG.error(f"TITLES SUMMARY: {ticker} - OpenAI test failed: {test_response.text}")
+                    summaries[ticker] = {"titles_summary": "", "company_name": company_name}
+                    continue
+                
+            except Exception as e:
+                LOG.error(f"TITLES SUMMARY: {ticker} - OpenAI connectivity test failed: {e}")
+                summaries[ticker] = {"titles_summary": "", "company_name": company_name}
+                continue
+            
+            # Now make the actual API call
+            try:
                 prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent news headlines to assess near-term financial impact and competitive positioning.
 
 ANALYSIS FRAMEWORK:
@@ -5997,29 +6038,77 @@ COMPANY HEADLINES:
 
 Provide a concise executive summary focusing on financial prospects and competitive threats."""
 
+                LOG.info(f"TITLES SUMMARY: {ticker} - Prompt length: {len(prompt)} chars")
+                LOG.info(f"TITLES SUMMARY: {ticker} - Making OpenAI API call with model: {OPENAI_MODEL}")
+
                 data = {
                     "model": OPENAI_MODEL,
                     "input": prompt,
                     "max_output_tokens": 3000,
-                    "reasoning": {"effort": "high"},
+                    "reasoning": {"effort": "medium"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }
                 
                 response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
                 
+                LOG.info(f"TITLES SUMMARY: {ticker} - API response status: {response.status_code}")
+                
                 if response.status_code == 200:
                     result = response.json()
+                    LOG.info(f"TITLES SUMMARY: {ticker} - API success, response keys: {list(result.keys())}")
+                    
+                    # Log usage details
+                    u = result.get("usage", {}) or {}
+                    LOG.info(f"TITLES SUMMARY: {ticker} - OpenAI usage - input:{u.get('input_tokens')} output:{u.get('output_tokens')} status:{result.get('status')}")
+                    
+                    # Check for incomplete response
+                    status = result.get("status")
+                    if status == "incomplete":
+                        incomplete_reason = (result.get("incomplete_details") or {}).get("reason")
+                        LOG.warning(f"TITLES SUMMARY: {ticker} - Response incomplete (reason: {incomplete_reason})")
+                    
                     titles_summary = extract_text_from_responses(result)
                     
+                    if titles_summary:
+                        LOG.info(f"TITLES SUMMARY: {ticker} - Generated summary: {len(titles_summary)} chars")
+                        LOG.info(f"TITLES SUMMARY: {ticker} - Summary preview: {titles_summary[:200]}...")
+                    else:
+                        LOG.warning(f"TITLES SUMMARY: {ticker} - Empty summary from extract_text_from_responses")
+                        LOG.warning(f"TITLES SUMMARY: {ticker} - Raw result structure: {json.dumps(result, indent=2)[:500]}")
+                        
+                        # Try alternative extraction
+                        if result.get("output"):
+                            LOG.info(f"TITLES SUMMARY: {ticker} - Attempting alternative extraction from output blocks")
+                            for i, block in enumerate(result.get("output", [])):
+                                LOG.info(f"TITLES SUMMARY: {ticker} - Block {i}: {list(block.keys())}")
+                                if block.get("content"):
+                                    for j, content in enumerate(block.get("content", [])):
+                                        LOG.info(f"TITLES SUMMARY: {ticker} - Content {j}: type={content.get('type')}, text_length={len(content.get('text', ''))}")
+                
+                else:
+                    LOG.error(f"TITLES SUMMARY: {ticker} - API failed with status {response.status_code}")
+                    LOG.error(f"TITLES SUMMARY: {ticker} - Error response: {response.text}")
+                    
+            except requests.exceptions.Timeout as e:
+                LOG.error(f"TITLES SUMMARY: {ticker} - API timeout: {e}")
+            except requests.exceptions.RequestException as e:
+                LOG.error(f"TITLES SUMMARY: {ticker} - API request failed: {e}")
+            except json.JSONDecodeError as e:
+                LOG.error(f"TITLES SUMMARY: {ticker} - JSON decode error: {e}")
             except Exception as e:
-                LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
+                LOG.error(f"TITLES SUMMARY: {ticker} - Unexpected error: {e}")
+                import traceback
+                LOG.error(f"TITLES SUMMARY: {ticker} - Traceback: {traceback.format_exc()}")
         
         summaries[ticker] = {
             "titles_summary": titles_summary,
             "company_name": company_name
         }
+        
+        LOG.info(f"TITLES SUMMARY: {ticker} - Final summary length: {len(titles_summary)} chars")
     
+    LOG.info(f"TITLES SUMMARY COMPLETE: Generated summaries for {len([s for s in summaries.values() if s.get('titles_summary')])} out of {len(summaries)} tickers")
     return summaries
 
 # ------------------------------------------------------------------------------
@@ -6119,7 +6208,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
     
     for ticker, categories in articles_by_ticker.items():
         total_articles = sum(len(articles) for articles in categories.values())
-        company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
+        company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)  # FIXED: Get full company name
         
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>{ticker} ({company_name}) - {total_articles} Total Articles</h2>")
@@ -6201,7 +6290,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                     
                     if alias_data.get("assets"):
                         asset_badges = [f'<span class="asset-badge">{asset}</span>' for asset in alias_data["assets"][:5]]
-                        html.append(f"<strong>Key Assets:</strong> {' '.join(asset_badges)}")
+                        html.append(f"<strong>Key Assets:</strong> {' '.join(asset_badges)}')
                         
                 except Exception as e:
                     LOG.warning(f"Error parsing aliases/brands for {ticker}: {e}")
@@ -6227,6 +6316,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 
                 html.append(f"<h3>{category.title()} News ({len(articles)} articles)</h3>")
                 for article in sorted_articles[:100]:  # Show up to 100 articles
+                    # FIXED: Pass the full company name to the formatting function
                     html.append(_format_enhanced_article_html(article, category, ticker_metadata_cache, company_name))
         
         html.append("</div>")
@@ -6377,8 +6467,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ticker_count = sum(len(articles) for articles in categories.values())
             total_articles += ticker_count
             
-            # Get company name
-            company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
+            # Get company name from metadata cache
+            full_company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
             
             # Count selected articles for this ticker
             ticker_selected = 0
@@ -6389,7 +6479,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             total_selected += ticker_selected
             
             html.append(f"<div class='ticker-section'>")
-            html.append(f"<h2>{ticker} ({company_name}) - {ticker_count} Total Articles</h2>")
+            html.append(f"<h2>{ticker} ({full_company_name}) - {ticker_count} Total Articles</h2>")
             
             # Add AI-generated titles summary at the top (triage email)
             if ticker in company_summaries and company_summaries[ticker].get("titles_summary"):
@@ -6458,9 +6548,9 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, Flagged, AI Triage, QB Score
                     header_badges = []
                     
-                    # 1. First badge depends on category
+                    # 1. First badge depends on category - FIXED to use full company name
                     if category == "company":
-                        header_badges.append(f'<span class="company-name-badge">{company_name}</span>')
+                        header_badges.append(f'<span class="company-name-badge">{full_company_name}</span>')
                     elif category == "competitor":
                         comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
                         header_badges.append(f'<span class="competitor-badge">{comp_name}</span>')
@@ -6699,7 +6789,7 @@ def _format_enhanced_article_html(article: Dict, category: str, ticker_metadata_
     # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, Score, Impact, Analyzed
     header_badges = []
     
-    # 1. First badge depends on category
+    # 1. First badge depends on category - FIXED to use company_name parameter (which should be the full name)
     if category == "company" and company_name:
         header_badges.append(f'<span class="company-name-badge">{company_name}</span>')
     elif category == "competitor":

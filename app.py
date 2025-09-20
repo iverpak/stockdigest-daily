@@ -2615,7 +2615,7 @@ scraped_content: {scraped_content[:2000]}"""
             
             # Log usage details
             u = result.get("usage", {}) or {}
-            LOG.info("AI Summary usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+            LOG.info("AI  usage — input:%s output:%s (cap:%s) status:%s reason:%s",
                      u.get("input_tokens"), u.get("output_tokens"),
                      result.get("max_output_tokens"),
                      result.get("status"),
@@ -2632,8 +2632,8 @@ scraped_content: {scraped_content[:2000]}"""
                 fallback_data = {
                     "model": OPENAI_MODEL,
                     "input": f"Summarize this {ticker} article in 2-3 sentences:\n\n{title}\n\n{scraped_content[:800]}",
-                    "max_output_tokens": 500,
-                    "reasoning": {"effort": "low"},
+                    "max_output_tokens": 1500,
+                    "reasoning": {"effort": "medium"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }

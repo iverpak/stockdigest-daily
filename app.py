@@ -5901,9 +5901,10 @@ ANALYSIS FRAMEWORK:
 4. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships
 
 CRITICAL REQUIREMENTS:
-- Focus on NEAR-TERM (next 1-3 quarters) financial implications
-- Include specific numbers when available and cite source using the format already provided in parentheses
+- Focus on NEAR-TERM (next 1-3 quarters) financial implications with confidence, if unsure do not inference
+- Include specific numbers when available and cite formal domain using the format already provided in parentheses
 - Do NOT prefix statements with "Facts:" - assume everything is factual unless marked as inference
+- Do NOT include the article title when citing sources, just the domain name in parantheses
 - Only use (Inference) tags when making analytical conclusions beyond reported facts
 - Flag potential impact on key metrics: revenue growth, margin pressure, market share shifts
 - Ignore immaterial purchase/sale of share transactions

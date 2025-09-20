@@ -3275,7 +3275,7 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
         
         # Calculate per-keyword target (distribute total target across keywords)
         num_keywords = len(articles_by_keyword)
-        per_keyword_target = max(1, target // num_keywords) if num_keywords > 0 else target
+        per_keyword_target = 5
         
         # Process each keyword separately
         all_industry_selected = []
@@ -3365,7 +3365,7 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
         
         # Calculate per-competitor target
         num_competitors = len(articles_by_competitor)
-        per_competitor_target = max(1, target // num_competitors) if num_competitors > 0 else target
+        per_competitor_target = 5
         
         # Process each competitor separately
         all_competitor_selected = []

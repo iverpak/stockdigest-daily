@@ -389,6 +389,13 @@ def ensure_schema():
                     numeric_bonus DECIMAL(3,2),
                     penalty_multiplier DECIMAL(3,2),
                     penalty_reason TEXT,
+                    ai_triage_selected BOOLEAN DEFAULT FALSE,
+                    triage_priority VARCHAR(10),
+                    triage_reasoning TEXT,
+                    qb_score INTEGER,
+                    qb_level VARCHAR(20),
+                    qb_reasoning TEXT,
+                    competitor_ticker VARCHAR(10),
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
@@ -442,8 +449,14 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS content_scraped_at TIMESTAMP;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
-                ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_triage_selected BOOLEAN DEFAULT FALSE;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority VARCHAR(10);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_score INTEGER;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_level VARCHAR(20);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_reasoning TEXT;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS competitor_ticker VARCHAR(10);
+                ALTER TABLE source_feed ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'company';
                 
                 -- Essential indexes
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);

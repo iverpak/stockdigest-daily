@@ -2516,11 +2516,10 @@ scraped_content: {scraped_content[:2000]}"""
             "Content-Type": "application/json"
         }
         
-        # UPDATED: Using Responses API format
         data = {
             "model": OPENAI_MODEL,
-            "input": prompt,  # CHANGED: single prompt string instead of messages array
-            "max_completion_tokens": 150,  # CHANGED: max_tokens -> max_completion_tokens
+            "input": prompt,
+            "max_output_tokens": 150,  # CHANGED: max_completion_tokens -> max_output_tokens
             "temperature": 0.3
         }
         
@@ -2528,7 +2527,6 @@ scraped_content: {scraped_content[:2000]}"""
         
         if response.status_code == 200:
             result = response.json()
-            # CHANGED: Parse from Responses API format
             summary = result["output"][0]["content"][0]["text"].strip()
             LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
             return summary
@@ -3408,15 +3406,14 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             }
         }
         
-        # UPDATED: Using Responses API format with correct text.format structure
         data = {
             "model": OPENAI_MODEL,
             "temperature": 0,
             "text": {
-                "format": {"type": "json_schema", "json_schema": triage_schema}  # CHANGED: moved under text.format
+                "format": {"type": "json_schema", "json_schema": triage_schema}
             },
             "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_completion_tokens": 5000,
+            "max_output_tokens": 5000,  # CHANGED: max_completion_tokens -> max_output_tokens
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
@@ -4417,15 +4414,14 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         "Content-Type": "application/json"
     }
     
-    # UPDATED: Using Responses API format with correct text.format structure
     data = {
         "model": OPENAI_MODEL,
         "temperature": 0,
         "input": f"{system_prompt}\n\n{json.dumps(user_payload)}",
         "text": {
-            "format": {"type": "json_schema", "json_schema": schema}  # CHANGED: moved under text.format
+            "format": {"type": "json_schema", "json_schema": schema}
         },
-        "max_completion_tokens": 300
+        "max_output_tokens": 300  # CHANGED: max_completion_tokens -> max_output_tokens
     }
     
     response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -4438,7 +4434,7 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
     content = result["output"][0]["content"][0]["text"]
     parsed = json.loads(content)
     
-    # Rest of function remains the same...
+    # Extract components with reasons
     components = {
         'source_tier': source_tier,
         'event_multiplier': parsed.get('event_multiplier', 1.0),
@@ -4648,16 +4644,18 @@ class DomainResolver:
             
             prompt = f'What is the primary domain name for the publication "{publication_name}"? Respond with just the domain (e.g., "reuters.com").'
             
+            # CHANGED: Full Responses API format
             data = {
                 "model": OPENAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 20
+                "input": prompt,  # CHANGED: messages -> input
+                "max_output_tokens": 20  # CHANGED: max_tokens -> max_output_tokens
             }
             
             response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
             if response.status_code == 200:
                 result = response.json()
-                domain = result["choices"][0]["message"]["content"].strip().lower()
+                # CHANGED: Parse from Responses API format
+                domain = result["output"][0]["content"][0]["text"].strip().lower()
                 
                 # Clean up common AI response patterns
                 domain = domain.replace('"', '').replace("'", "").replace("www.", "")
@@ -4890,16 +4888,18 @@ class DomainResolver:
             
             prompt = f'What is the formal publication name for "{domain}"? Respond with just the name.'
             
+            # CHANGED: Full Responses API format
             data = {
                 "model": OPENAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 30
+                "input": prompt,  # CHANGED: messages -> input
+                "max_output_tokens": 30  # CHANGED: max_tokens -> max_output_tokens
             }
             
             response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
             if response.status_code == 200:
                 result = response.json()
-                name = result["choices"][0]["message"]["content"].strip()
+                # CHANGED: Parse from Responses API format
+                name = result["output"][0]["content"][0]["text"].strip()
                 return name if 2 < len(name) < 100 else None
         except:
             pass
@@ -5320,14 +5320,13 @@ Required JSON format:
             "Content-Type": "application/json"
         }
         
-        # UPDATED: Using Responses API format with correct text.format structure
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
             "temperature": 0.3,
-            "max_completion_tokens": 2000,
+            "max_output_tokens": 2000,  # CHANGED: max_completion_tokens -> max_output_tokens
             "text": {
-                "format": {"type": "json_object"}  # CHANGED: moved under text.format
+                "format": {"type": "json_object"}
             }
         }
         
@@ -5340,7 +5339,6 @@ Required JSON format:
         result = response.json()
         content = result["output"][0]["content"][0]["text"]
         
-        # Rest of function remains the same...
         metadata = json.loads(content)
         
         validation_errors = validate_metadata(metadata)

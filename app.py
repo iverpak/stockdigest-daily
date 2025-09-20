@@ -64,8 +64,8 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
 # OpenAI Configuration - FIXED: Remove temperature parameter for gpt-4o-mini
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 
 # Email configuration
@@ -2516,13 +2516,11 @@ scraped_content: {scraped_content[:2000]}"""
             "Content-Type": "application/json"
         }
         
+        # UPDATED: Using Responses API format
         data = {
             "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a hedge fund analyst. Provide concise, analytical summaries focusing on financial implications."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 150,
+            "input": prompt,  # CHANGED: single prompt string instead of messages array
+            "max_completion_tokens": 150,  # CHANGED: max_tokens -> max_completion_tokens
             "temperature": 0.3
         }
         
@@ -2530,7 +2528,8 @@ scraped_content: {scraped_content[:2000]}"""
         
         if response.status_code == 200:
             result = response.json()
-            summary = result["choices"][0]["message"]["content"].strip()
+            # CHANGED: Parse from Responses API format
+            summary = result["output"][0]["content"][0]["text"].strip()
             LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
             return summary
         else:
@@ -3378,7 +3377,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                             "type": "object",
                             "properties": {
                                 "id": {"type": "integer"},
-                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},  # CHANGED
+                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
                                 "likely_repeat": {"type": "boolean"},
                                 "repeat_key": {"type": "string"},
                                 "why": {"type": "string"},
@@ -3394,7 +3393,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                             "type": "object",
                             "properties": {
                                 "id": {"type": "integer"},
-                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},  # CHANGED
+                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
                                 "likely_repeat": {"type": "boolean"},
                                 "repeat_key": {"type": "string"},
                                 "why": {"type": "string"},
@@ -3410,15 +3409,13 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             }
         }
         
+        # UPDATED: Using Responses API format
         data = {
             "model": OPENAI_MODEL,
             "temperature": 0,
             "response_format": {"type": "json_schema", "json_schema": triage_schema},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload, separators=(",", ":"))}
-            ],
-            "max_completion_tokens": 5000,
+            "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",  # CHANGED: combined system + user into single input
+            "max_completion_tokens": 5000,  # CHANGED: max_tokens -> max_completion_tokens
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
@@ -3428,7 +3425,8 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             return []
         
         result = response.json()
-        content = result["choices"][0]["message"]["content"] or ""
+        # CHANGED: Parse from Responses API format
+        content = result["output"][0]["content"][0]["text"] or ""
         
         # Parse JSON - should be clean with structured output
         try:
@@ -3468,7 +3466,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             if selected_item["id"] < len(original_articles):
                 result_item = {
                     "id": selected_item["id"],
-                    "scrape_priority": selected_item["scrape_priority"],  # Now HIGH/MEDIUM/LOW
+                    "scrape_priority": selected_item["scrape_priority"],
                     "why": selected_item["why"],
                     "confidence": selected_item["confidence"],
                     "likely_repeat": selected_item["likely_repeat"],
@@ -4434,15 +4432,13 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         "Content-Type": "application/json"
     }
     
+    # UPDATED: Using Responses API format
     data = {
         "model": OPENAI_MODEL,
         "temperature": 0,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_payload)}
-        ],
+        "input": f"{system_prompt}\n\n{json.dumps(user_payload)}",  # CHANGED: combined system + user into single input
         "response_format": {"type": "json_schema", "json_schema": schema},
-        "max_completion_tokens": 300
+        "max_completion_tokens": 300  # CHANGED: max_tokens -> max_completion_tokens
     }
     
     response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -4452,7 +4448,8 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         raise Exception(f"API error: {response.status_code}")
     
     result = response.json()
-    content = result["choices"][0]["message"]["content"]
+    # CHANGED: Parse from Responses API format
+    content = result["output"][0]["content"][0]["text"]
     parsed = json.loads(content)
     
     # Extract components with reasons
@@ -5334,20 +5331,32 @@ Required JSON format:
 }}"""
 
     try:
-        # Call OpenAI API
-        response = openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.3,
-            max_tokens=2000,
-            response_format={"type": "json_object"}
-        )
+        # UPDATED: Using Responses API
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "input": f"{system_prompt}\n\n{user_prompt}",  # CHANGED: combined system + user into single input
+            "temperature": 0.3,
+            "max_completion_tokens": 2000,  # CHANGED: max_tokens -> max_completion_tokens
+            "response_format": {"type": "json_object"}
+        }
+        
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
+        
+        if response.status_code != 200:
+            print(f"API error {response.status_code}: {response.text}")
+            return None
+        
+        result = response.json()
+        # CHANGED: Parse from Responses API format
+        content = result["output"][0]["content"][0]["text"]
         
         # Parse response
-        metadata = json.loads(response.choices[0].message.content)
+        metadata = json.loads(content)
         
         # Validation
         validation_errors = validate_metadata(metadata)

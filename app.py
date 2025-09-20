@@ -916,9 +916,6 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
             if normalize_domain(domain) in PAYWALL_DOMAINS:
                 return None, f"Paywall domain: {domain}"
             
-            if normalize_domain(domain) in SCRAPINGBEE_PROBLEMATIC_DOMAINS:
-                return None, f"Domain known problematic with ScrapingBee: {domain}"
-            
             if attempt > 0:
                 # Exponential backoff: 2s, 4s, 8s
                 delay = 2 ** attempt
@@ -974,9 +971,7 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
                 if attempt < max_retries:
                     continue  # Retry on 500 errors
                 else:
-                    # Add to problematic domains after max retries
-                    SCRAPINGBEE_PROBLEMATIC_DOMAINS.add(normalize_domain(domain))
-                    LOG.warning(f"Added {domain} to ScrapingBee problematic domains after repeated 500 errors")
+                    LOG.warning(f"SCRAPINGBEE: Max retries reached for {domain} after repeated 500 errors")
             
             elif response.status_code == 422:
                 LOG.warning(f"SCRAPINGBEE: Invalid parameters for {domain}")
@@ -1068,18 +1063,23 @@ def calculate_intelligent_delay(domain):
     return delay, reason
 
 def scrape_with_backoff(url, max_retries=3):
-    """Enhanced scraping with exponential backoff"""
+    """Enhanced scraping with exponential backoff for 500, 429, 503 errors"""
     for attempt in range(max_retries):
         try:
             response = scraping_session.get(url, timeout=15)
             if response.status_code == 200:
                 return response
-            elif response.status_code in [429, 503]:
-                # Rate limited - wait longer
+            elif response.status_code in [429, 500, 503]:  # Added 500
+                # Server error or rate limited - wait with exponential backoff
                 delay = (2 ** attempt) + random.uniform(0, 1)
-                LOG.info(f"Rate limited, waiting {delay:.1f}s")
+                LOG.info(f"HTTP {response.status_code} error, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})")
                 time.sleep(delay)
+                if attempt == max_retries - 1:
+                    LOG.warning(f"Max retries reached for {url} after {response.status_code} errors")
+                    return None
             else:
+                # For other errors (404, 403, etc.), don't retry
+                LOG.warning(f"HTTP {response.status_code} for {url}, not retrying")
                 return None
         except requests.RequestException as e:
             delay = (2 ** attempt) + random.uniform(0, 1)
@@ -1087,6 +1087,46 @@ def scrape_with_backoff(url, max_retries=3):
             time.sleep(delay)
     
     return None
+
+def log_scraping_success_rates():
+    """Log success rates for all scraping methods in a prominent format"""
+    total_attempts = enhanced_scraping_stats["total_attempts"]
+    if total_attempts == 0:
+        LOG.info("SCRAPING SUCCESS RATES: No attempts made")
+        return
+    
+    # Calculate overall success rate
+    total_success = (enhanced_scraping_stats["requests_success"] + 
+                    enhanced_scraping_stats["playwright_success"] + 
+                    enhanced_scraping_stats["scrapingbee_success"])
+    overall_rate = (total_success / total_attempts) * 100
+    
+    # Calculate individual success rates
+    requests_attempts = enhanced_scraping_stats["by_method"]["requests"]["attempts"]
+    requests_success = enhanced_scraping_stats["by_method"]["requests"]["successes"]
+    requests_rate = (requests_success / requests_attempts * 100) if requests_attempts > 0 else 0
+    
+    playwright_attempts = enhanced_scraping_stats["by_method"]["playwright"]["attempts"]
+    playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
+    playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
+    
+    scrapingbee_attempts = enhanced_scraping_stats["by_method"]["scrapingbee"]["attempts"]
+    scrapingbee_success = enhanced_scraping_stats["by_method"]["scrapingbee"]["successes"]
+    scrapingbee_rate = (scrapingbee_success / scrapingbee_attempts * 100) if scrapingbee_attempts > 0 else 0
+    
+    # Log prominent success rate summary
+    LOG.info("=" * 60)
+    LOG.info("SCRAPING SUCCESS RATES")
+    LOG.info("=" * 60)
+    LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
+    LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
+    LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
+    LOG.info(f"TIER 3 (ScrapingBee): {scrapingbee_rate:.1f}% ({scrapingbee_success}/{scrapingbee_attempts})")
+    
+    if scrapingbee_attempts > 0:
+        LOG.info(f"ScrapingBee Cost: ${scrapingbee_stats['cost_estimate']:.3f}")
+    
+    LOG.info("=" * 60)
 
 def validate_scraped_content(content, url, domain):
     """Multi-step content validation"""
@@ -6840,7 +6880,9 @@ def cron_ingest(
                     scraping_final_stats["failed"] += 1
     
     LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} articles scraped with 3-tier system ===")
-    
+
+    log_scraping_success_rates()
+
     # Log comprehensive scraping statistics
     LOG.info("=== COMPREHENSIVE SCRAPING STATISTICS ===")
     log_enhanced_scraping_stats()

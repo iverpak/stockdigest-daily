@@ -2593,8 +2593,8 @@ scraped_content: {scraped_content[:2000]}"""
         data = {
             "model": OPENAI_MODEL,
             "input": prompt,
-            "max_output_tokens": 200,
-            "reasoning": {"effort": "low"},
+            "max_output_tokens": 1000,
+            "reasoning": {"effort": "medium"},
             "text": {"verbosity": "low"},
             "truncation": "auto"
         }
@@ -2623,7 +2623,7 @@ scraped_content: {scraped_content[:2000]}"""
                 fallback_data = {
                     "model": OPENAI_MODEL,
                     "input": f"Summarize this {ticker} article in 2-3 sentences:\n\n{title}\n\n{scraped_content[:800]}",
-                    "max_output_tokens": 150,
+                    "max_output_tokens": 500,
                     "reasoning": {"effort": "low"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
@@ -3541,7 +3541,7 @@ Be ruthless in your selection - quality over quantity."""
         
         data = {
             "model": OPENAI_MODEL,
-            "reasoning": {"effort": "medium"},  # Changed from low to medium
+            "reasoning": {"effort": "high"},  # Changed from low to medium
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -3552,7 +3552,7 @@ Be ruthless in your selection - quality over quantity."""
                 "verbosity": "low"
             },
             "input": f"{constrained_system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_output_tokens": 8000,
+            "max_output_tokens": 10000,
             "truncation": "auto"
         }
         
@@ -4526,8 +4526,8 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
             },
             "verbosity": "low"
         },
-        "reasoning": {"effort": "low"},
-        "max_output_tokens": 3000,  # Increased for component scoring
+        "reasoning": {"effort": "medium"},
+        "max_output_tokens": 5000,  # Increased for component scoring
         "truncation": "auto"
     }
     
@@ -5462,7 +5462,7 @@ Use exactly 3 items per list. Be brief and specific."""
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
             "max_output_tokens": 2500,  # Increased from 2000
-            "reasoning": {"effort": "low"},  # Reduce reasoning overhead
+            "reasoning": {"effort": "medium"},  # Reduce reasoning overhead
             "text": {
                 "format": {"type": "json_object"},
                 "verbosity": "low"  # Make output more concise

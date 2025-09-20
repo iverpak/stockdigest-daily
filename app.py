@@ -2593,29 +2593,53 @@ scraped_content: {scraped_content[:2000]}"""
         data = {
             "model": OPENAI_MODEL,
             "input": prompt,
-            "max_output_tokens": 150
+            "max_output_tokens": 200,
+            "reasoning": {"effort": "low"},
+            "text": {"verbosity": "low"},
+            "truncation": "auto"
         }
         
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
         
         if response.status_code == 200:
             result = response.json()
+            
+            # Log usage details
+            u = result.get("usage", {}) or {}
+            LOG.info("AI Summary usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+                     u.get("input_tokens"), u.get("output_tokens"),
+                     result.get("max_output_tokens"),
+                     result.get("status"),
+                     (result.get("incomplete_details") or {}).get("reason"))
+            
             summary = extract_text_from_responses(result)
             if summary:
-                LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
+                LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars")
                 return summary
             else:
-                LOG.warning(f"AI summary empty for {ticker}")
-                # Try fallback without any constraints
+                LOG.warning(f"AI summary empty for {ticker}, trying fallback")
+                
+                # Fallback: much simpler prompt
                 fallback_data = {
                     "model": OPENAI_MODEL,
-                    "input": f"Summarize this article about {ticker} in 2-3 sentences:\n\n{title}\n\n{scraped_content[:1000]}",
-                    "max_output_tokens": 100
+                    "input": f"Summarize this {ticker} article in 2-3 sentences:\n\n{title}\n\n{scraped_content[:800]}",
+                    "max_output_tokens": 150,
+                    "reasoning": {"effort": "low"},
+                    "text": {"verbosity": "low"},
+                    "truncation": "auto"
                 }
                 
                 fallback_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=fallback_data, timeout=(10, 180))
                 if fallback_response.status_code == 200:
                     fallback_result = fallback_response.json()
+                    
+                    # Log fallback usage
+                    fallback_u = fallback_result.get("usage", {}) or {}
+                    LOG.info("AI Summary fallback usage — input:%s output:%s (cap:%s) status:%s",
+                             fallback_u.get("input_tokens"), fallback_u.get("output_tokens"),
+                             fallback_result.get("max_output_tokens"),
+                             fallback_result.get("status"))
+                    
                     fallback_summary = extract_text_from_responses(fallback_result)
                     if fallback_summary:
                         LOG.info(f"Fallback summary generated for {ticker}")
@@ -3496,16 +3520,19 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         
         data = {
             "model": OPENAI_MODEL,
+            "reasoning": {"effort": "low"},  # Reduce reasoning overhead
             "text": {
                 "format": {
                     "type": "json_schema",
                     "name": "triage_results",
                     "schema": triage_schema,
                     "strict": True
-                }
+                },
+                "verbosity": "low"  # Make output more concise
             },
             "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_output_tokens": 5000,
+            "max_output_tokens": 8000,  # Increased from 5000
+            "truncation": "auto"  # Let server truncate instead of erroring
         }
         
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
@@ -3515,18 +3542,60 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             return []
         
         result = response.json()
+        
+        # Log usage details for debugging
+        u = result.get("usage", {}) or {}
+        LOG.info("OpenAI triage usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+                 u.get("input_tokens"), u.get("output_tokens"),
+                 result.get("max_output_tokens"),
+                 result.get("status"),
+                 (result.get("incomplete_details") or {}).get("reason"))
+        
         content = extract_text_from_responses(result)
         
         if not content:
             LOG.error("OpenAI returned no text content for triage")
             return []
         
+        # Check for incomplete response and log if truncated
+        status = result.get("status")
+        if status == "incomplete":
+            incomplete_reason = (result.get("incomplete_details") or {}).get("reason")
+            LOG.warning(f"Triage response incomplete (reason: {incomplete_reason})")
+            LOG.warning(f"Content length: {len(content)} chars")
+            # Try to proceed with partial JSON if possible
+        
         try:
             triage_result = json.loads(content)
         except json.JSONDecodeError as e:
             LOG.error(f"JSON parsing failed for triage: {e}")
             LOG.error(f"Response content: {content[:500]}")
-            return []
+            
+            # Try to salvage partial JSON by finding the last complete object
+            try:
+                # Find last complete "selected" or "skipped" entry
+                last_complete = content.rfind('"}')
+                if last_complete != -1:
+                    # Try to close the JSON properly
+                    partial_content = content[:last_complete + 2]
+                    
+                    # Add missing closing brackets if needed
+                    open_brackets = partial_content.count('[') - partial_content.count(']')
+                    open_braces = partial_content.count('{') - partial_content.count('}')
+                    
+                    for _ in range(open_brackets):
+                        partial_content += ']'
+                    for _ in range(open_braces):
+                        partial_content += '}'
+                    
+                    LOG.info("Attempting to parse salvaged JSON")
+                    triage_result = json.loads(partial_content)
+                    LOG.info("Successfully parsed salvaged JSON")
+                else:
+                    return []
+            except Exception as salvage_error:
+                LOG.error(f"Failed to salvage partial JSON: {salvage_error}")
+                return []
         
         total_items = len(payload.get('items', []))
         selected_count = len(triage_result.get("selected_ids", []))
@@ -4500,9 +4569,12 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
                 "name": schema.get("name", "components"),
                 "schema": schema["schema"],
                 "strict": schema.get("strict", True)
-            }
+            },
+            "verbosity": "low"
         },
-        "max_output_tokens": 300
+        "reasoning": {"effort": "low"},
+        "max_output_tokens": 500,  # Increased for component scoring
+        "truncation": "auto"
     }
     
     response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
@@ -4512,10 +4584,24 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         raise Exception(f"API error: {response.status_code}")
     
     result = response.json()
+    
+    # Log usage details
+    u = result.get("usage", {}) or {}
+    LOG.info("AI Component usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+             u.get("input_tokens"), u.get("output_tokens"),
+             result.get("max_output_tokens"),
+             result.get("status"),
+             (result.get("incomplete_details") or {}).get("reason"))
+    
     content = extract_text_from_responses(result)
     
     if not content:
         LOG.error("Structured output missing text payload")
+        LOG.error(f"Raw result keys: {list(result.keys())}")
+        if result.get("output"):
+            LOG.error(f"Output blocks: {len(result['output'])}")
+            for i, block in enumerate(result.get("output", [])):
+                LOG.error(f"Block {i}: {list(block.keys())}")
         raise Exception("No content returned from API")
     
     try:
@@ -4728,12 +4814,23 @@ class DomainResolver:
             data = {
                 "model": OPENAI_MODEL,
                 "input": prompt,
-                "max_output_tokens": 20
+                "max_output_tokens": 30,
+                "reasoning": {"effort": "low"},
+                "text": {"verbosity": "low"},
+                "truncation": "auto"
             }
             
             response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
             if response.status_code == 200:
                 result = response.json()
+                
+                # Log usage details
+                u = result.get("usage", {}) or {}
+                LOG.debug("Domain resolution usage — input:%s output:%s (cap:%s) status:%s",
+                          u.get("input_tokens"), u.get("output_tokens"),
+                          result.get("max_output_tokens"),
+                          result.get("status"))
+                
                 domain = extract_text_from_responses(result).strip().lower()
                 
                 # Clean up common AI response patterns
@@ -4970,12 +5067,23 @@ class DomainResolver:
             data = {
                 "model": OPENAI_MODEL,
                 "input": prompt,
-                "max_output_tokens": 30
+                "max_output_tokens": 50,
+                "reasoning": {"effort": "low"},
+                "text": {"verbosity": "low"},
+                "truncation": "auto"
             }
             
             response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
             if response.status_code == 200:
                 result = response.json()
+                
+                # Log usage details
+                u = result.get("usage", {}) or {}
+                LOG.debug("Formal name lookup usage — input:%s output:%s (cap:%s) status:%s",
+                          u.get("input_tokens"), u.get("output_tokens"),
+                          result.get("max_output_tokens"),
+                          result.get("status"))
+                
                 name = extract_text_from_responses(result).strip()
                 return name if 2 < len(name) < 100 else None
         except Exception as e:

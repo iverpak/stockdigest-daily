@@ -57,6 +57,28 @@ def get_openai_session():
         _openai_session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
     return _openai_session
 
+def extract_text_from_responses(result: dict) -> str:
+    """
+    Robustly extract text from OpenAI Responses API payload.
+    Returns empty string if no text found.
+    """
+    try:
+        outputs = result.get("output", [])
+        if not outputs:
+            return ""
+        
+        content_items = outputs[0].get("content", [])
+        text_chunks = []
+        
+        for item in content_items:
+            # Responses API uses "output_text" or "text" as type
+            if item.get("type") in ("output_text", "text") and "text" in item:
+                text_chunks.append(item["text"])
+        
+        return "".join(text_chunks).strip()
+    except Exception:
+        return ""
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -2536,18 +2558,20 @@ scraped_content: {scraped_content[:2000]}"""
         data = {
             "model": OPENAI_MODEL,
             "input": prompt,
-            "max_output_tokens": 150,  # CHANGED: max_completion_tokens -> max_output_tokens
+            "max_output_tokens": 150
         }
         
-        response = get_openai_session().post(
-            OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
-        )
+        response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
         
         if response.status_code == 200:
             result = response.json()
-            summary = result["output"][0]["content"][0]["text"].strip()
-            LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
-            return summary
+            summary = extract_text_from_responses(result)
+            if summary:
+                LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
+                return summary
+            else:
+                LOG.warning("AI summary empty or unparsable from Responses payload")
+                return None
         else:
             LOG.warning(f"AI summary failed: {response.status_code}")
             return None
@@ -3427,24 +3451,30 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         data = {
             "model": OPENAI_MODEL,
             "text": {
-                "format": {"type": "json_schema", "json_schema": triage_schema}
+                "format": {
+                    "type": "json_schema",
+                    "name": triage_schema["name"],
+                    "schema": triage_schema["schema"],
+                    "strict": triage_schema["strict"]
+                }
             },
             "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_output_tokens": 5000,  # CHANGED: max_completion_tokens -> max_output_tokens
+            "max_output_tokens": 5000,
         }
-
-        response = get_openai_session().post(
-            OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
-        )
+        
+        response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
         
         if response.status_code != 200:
             LOG.error(f"OpenAI triage API error {response.status_code}: {response.text}")
             return []
         
         result = response.json()
-        content = result["output"][0]["content"][0]["text"] or ""
+        content = extract_text_from_responses(result)
         
-        # Rest of function remains the same...
+        if not content:
+            LOG.error("OpenAI returned no text content for triage")
+            return []
+        
         try:
             triage_result = json.loads(content)
         except json.JSONDecodeError as e:
@@ -4437,22 +4467,34 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         "model": OPENAI_MODEL,
         "input": f"{system_prompt}\n\n{json.dumps(user_payload)}",
         "text": {
-            "format": {"type": "json_schema", "json_schema": schema}
+            "format": {
+                "type": "json_schema",
+                "name": schema.get("name", "components"),
+                "schema": schema["schema"],
+                "strict": schema.get("strict", True)
+            }
         },
-        "max_output_tokens": 300  # CHANGED: max_completion_tokens -> max_output_tokens
+        "max_output_tokens": 300
     }
     
-    response = get_openai_session().post(
-        OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
-    )
-
+    response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
+    
     if response.status_code != 200:
         LOG.warning(f"OpenAI API error {response.status_code}: {response.text[:200]}")
         raise Exception(f"API error: {response.status_code}")
     
     result = response.json()
-    content = result["output"][0]["content"][0]["text"]
-    parsed = json.loads(content)
+    content = extract_text_from_responses(result)
+    
+    if not content:
+        LOG.error("Structured output missing text payload")
+        raise Exception("No content returned from API")
+    
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as e:
+        LOG.error(f"Failed to parse component JSON: {e}; raw: {content[:500]}")
+        raise Exception(f"JSON parsing failed: {e}")
     
     # Extract components with reasons
     components = {
@@ -4479,7 +4521,7 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
     LOG.info(f"  OUR CALCULATED SCORE: {calculated_score:.1f}")
     LOG.info(f"  Impact: {impact} | Reason: {reason}")
     
-    return calculated_score, impact, reason, components
+    return max(0.0, min(100.0, calculated_score)), impact, reason, components
 
 def get_url_hash(url: str, resolved_url: str = None) -> str:
     """Generate hash for URL deduplication, using resolved URL if available"""
@@ -4664,21 +4706,16 @@ class DomainResolver:
             
             prompt = f'What is the primary domain name for the publication "{publication_name}"? Respond with just the domain (e.g., "reuters.com").'
             
-            # CHANGED: Full Responses API format
             data = {
                 "model": OPENAI_MODEL,
-                "input": prompt,  # CHANGED: messages -> input
-                "max_output_tokens": 20  # CHANGED: max_tokens -> max_output_tokens
+                "input": prompt,
+                "max_output_tokens": 20
             }
             
-            response = get_openai_session().post(
-                OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
-            )
-
+            response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
             if response.status_code == 200:
                 result = response.json()
-                # CHANGED: Parse from Responses API format
-                domain = result["output"][0]["content"][0]["text"].strip().lower()
+                domain = extract_text_from_responses(result).strip().lower()
                 
                 # Clean up common AI response patterns
                 domain = domain.replace('"', '').replace("'", "").replace("www.", "")
@@ -4911,21 +4948,16 @@ class DomainResolver:
             
             prompt = f'What is the formal publication name for "{domain}"? Respond with just the name.'
             
-            # CHANGED: Full Responses API format
             data = {
                 "model": OPENAI_MODEL,
-                "input": prompt,  # CHANGED: messages -> input
-                "max_output_tokens": 30  # CHANGED: max_tokens -> max_output_tokens
+                "input": prompt,
+                "max_output_tokens": 30
             }
             
-            response = get_openai_session().post(
-                OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
-            )
-
+            response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
             if response.status_code == 200:
                 result = response.json()
-                # CHANGED: Parse from Responses API format
-                name = result["output"][0]["content"][0]["text"].strip()
+                name = extract_text_from_responses(result).strip()
                 return name if 2 < len(name) < 100 else None
         except:
             pass
@@ -5349,22 +5381,24 @@ Required JSON format:
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
-            "max_output_tokens": 2000,  # CHANGED: max_completion_tokens -> max_output_tokens
+            "max_output_tokens": 2000,
             "text": {
                 "format": {"type": "json_object"}
             }
         }
         
-        response = get_openai_session().post(
-            OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
-        )
+        response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
         
         if response.status_code != 200:
             print(f"API error {response.status_code}: {response.text}")
             return None
         
         result = response.json()
-        content = result["output"][0]["content"][0]["text"]
+        content = extract_text_from_responses(result)
+        
+        if not content:
+            print(f"❌ No content returned for {ticker}")
+            return None
         
         metadata = json.loads(content)
         

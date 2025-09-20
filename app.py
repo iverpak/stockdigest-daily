@@ -6274,7 +6274,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".company-name-badge { display: inline-block; padding: 3px 8px; margin-right: 8px; border-radius: 4px; font-weight: bold; font-size: 11px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
             ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
             ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
-            ".ai-triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 8px; }",
+            ".ai-triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
             ".ai-high { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
             ".ai-medium { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
             ".ai-low { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
@@ -6282,8 +6282,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".qb-high { background-color: #c8e6c9; color: #2e7d32; border: 1px solid #a5d6a7; }",
             ".qb-medium { background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
             ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
-            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
-            ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
+            ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
             ".selected-for-scrape { background-color: #e8f5e8 !important; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
@@ -6382,15 +6382,18 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     domain = article.get("domain", "unknown")
                     title = article.get("title", "No Title")
                     
-                    # CORRECTED HEADER ORDER: Company Name, Domain, Quality, AI Triage, QB Score
+                    # HEADER ORDER: For INDUSTRY -> Industry Keyword, Domain, Quality, AI Triage, QB Score
+                    # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, AI Triage, QB Score
                     header_badges = []
                     
-                    # 1. Company name first (for company and competitor articles)
+                    # 1. First badge depends on category
                     if category == "company":
                         header_badges.append(f'<span class="company-name-badge">{company_name}</span>')
                     elif category == "competitor":
                         comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
                         header_badges.append(f'<span class="competitor-badge">{comp_name}</span>')
+                    elif category == "industry" and article.get('search_keyword'):
+                        header_badges.append(f'<span class="industry-badge">{article["search_keyword"]}</span>')
                     
                     # 2. Domain name second
                     header_badges.append(f'<span class="source-badge">{get_or_create_formal_domain_name(domain)}</span>')
@@ -6415,10 +6418,6 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     else:
                         qb_class = "qb-low"
                     header_badges.append(f'<span class="qb-score {qb_class}">{qb_level}</span>')
-                    
-                    # Industry badge for industry category
-                    if category == "industry" and article.get('search_keyword'):
-                        header_badges.insert(-1, f'<span class="industry-badge">{article["search_keyword"]}</span>')
                     
                     # Article class
                     article_class = f"article {category}"
@@ -6623,10 +6622,11 @@ def _format_enhanced_article_html(article: Dict, category: str, ticker_metadata_
     
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # CORRECTED HEADER ORDER: Company Name, Domain, Quality, Score, Impact, Analyzed
+    # HEADER ORDER: For INDUSTRY -> Industry Keyword, Domain, Quality, Score, Impact, Analyzed
+    # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, Score, Impact, Analyzed
     header_badges = []
     
-    # 1. Company name first (for company and competitor articles)
+    # 1. First badge depends on category
     if category == "company" and company_name:
         header_badges.append(f'<span class="company-name-badge">{company_name}</span>')
     elif category == "competitor":
@@ -6635,6 +6635,9 @@ def _format_enhanced_article_html(article: Dict, category: str, ticker_metadata_
             article.get('competitor_ticker')
         )
         header_badges.append(f'<span class="competitor-badge">{competitor_name}</span>')
+    elif category == "industry" and article.get('search_keyword'):
+        industry_keyword = article['search_keyword']
+        header_badges.append(f'<span class="industry-badge">{industry_keyword}</span>')
     
     # 2. Domain name second
     header_badges.append(f'<span class="source-badge">{display_source}</span>')
@@ -6663,11 +6666,6 @@ def _format_enhanced_article_html(article: Dict, category: str, ticker_metadata_
     # 6. Analyzed badge last (instead of QB score in final email)
     if article.get('scraped_content') and article.get('ai_summary'):
         header_badges.append('<span class="analyzed-badge">Analyzed</span>')
-    
-    # Industry badge for industry category (insert before analyzed badge)
-    if category == "industry" and article.get('search_keyword'):
-        industry_keyword = article['search_keyword']
-        header_badges.insert(-1, f'<span class="industry-badge">{industry_keyword}</span>')
     
     # AI Summary section
     ai_summary_html = ""

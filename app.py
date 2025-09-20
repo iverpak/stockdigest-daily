@@ -37,9 +37,6 @@ from urllib3.util.retry import Retry
 
 from collections import defaultdict
 
-from playwright.sync_api import sync_playwright
-import asyncio
-
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -66,6 +63,7 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 
 # Email configuration
 def _first(*vals) -> Optional[str]:
@@ -665,6 +663,95 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         LOG.warning(f"Failed to extract content from {url}: {error_msg}")
         return None, error_msg
 
+def scrape_with_scrapingbee(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Enhanced article extraction using ScrapingBee for JavaScript-heavy sites
+    """
+    try:
+        if not SCRAPINGBEE_API_KEY:
+            return None, "ScrapingBee API key not configured"
+        
+        # Check for known paywall domains first
+        if normalize_domain(domain) in PAYWALL_DOMAINS:
+            return None, f"Paywall domain: {domain}"
+        
+        LOG.info(f"SCRAPINGBEE: Starting scrape for {domain}")
+        
+        # ScrapingBee request parameters
+        params = {
+            'api_key': SCRAPINGBEE_API_KEY,
+            'url': url,
+            'render_js': 'true',  # Enable JavaScript rendering
+            'premium_proxy': 'true',  # Use premium proxy pool for better success
+            'country_code': 'us',  # Use US-based proxies
+            'wait': 1000,  # Wait 1 second for page load
+            'wait_for': 'networkidle',  # Wait for network to be idle
+            'block_ads': 'true',  # Block ads to speed up loading
+            'block_resources': 'true',  # Block images/videos to speed up
+            'timeout': 15000  # 15 second timeout
+        }
+        
+        response = requests.get(
+            'https://app.scrapingbee.com/api/v1/',
+            params=params,
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            error_msg = f"ScrapingBee HTTP {response.status_code}"
+            LOG.warning(f"SCRAPINGBEE FAILED: {domain} -> {error_msg}")
+            return None, error_msg
+        
+        html_content = response.text
+        
+        if not html_content or len(html_content) < 100:
+            return None, "Empty or too short response from ScrapingBee"
+        
+        # Use newspaper3k to parse the HTML (same as before)
+        config = newspaper.Config()
+        config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        config.request_timeout = 15
+        config.fetch_images = False
+        config.memoize_articles = False
+        
+        article = newspaper.Article(url, config=config)
+        article.set_html(html_content)
+        article.parse()
+        
+        content = article.text.strip()
+        
+        if not content:
+            return None, "No content extracted from ScrapingBee response"
+        
+        # Enhanced content validation (reuse existing logic)
+        is_valid, validation_msg = validate_scraped_content(content, url, domain)
+        if not is_valid:
+            return None, validation_msg
+        
+        # Check for common error pages or blocking messages
+        content_lower = content.lower()
+        error_indicators = [
+            "403 forbidden", "access denied", "captcha", "robot", "bot detection",
+            "please verify you are human", "cloudflare", "rate limit", "blocked",
+            "security check", "unusual traffic"
+        ]
+        
+        if any(indicator in content_lower for indicator in error_indicators):
+            LOG.warning(f"SCRAPINGBEE BLOCKED: {domain} -> Error page detected")
+            return None, "Error page or blocking detected"
+        
+        LOG.info(f"SCRAPINGBEE SUCCESS: {domain} -> {len(content)} chars extracted")
+        return content.strip(), None
+        
+    except requests.exceptions.Timeout:
+        return None, "ScrapingBee request timeout"
+    except requests.exceptions.RequestException as e:
+        return None, f"ScrapingBee request failed: {str(e)}"
+    except Exception as e:
+        error_msg = f"ScrapingBee extraction failed: {str(e)}"
+        LOG.error(f"SCRAPINGBEE ERROR: {domain} -> {error_msg}")
+        return None, error_msg
+
 def create_scraping_session():
     session = requests.Session()
     
@@ -694,185 +781,6 @@ def create_scraping_session():
     })
     
     return session
-
-# Add this function after your existing extract_article_content function
-def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Memory-optimized article extraction using Playwright for JavaScript-heavy sites
-    """
-    try:
-        # Check for known paywall domains first
-        if normalize_domain(domain) in PAYWALL_DOMAINS:
-            return None, f"Paywall domain: {domain}"
-        
-        LOG.info(f"PLAYWRIGHT: Starting browser for {domain}")
-        
-        with sync_playwright() as p:
-            # Launch browser with memory optimization
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',  # Use /tmp instead of /dev/shm for lower memory
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor',
-                    '--memory-pressure-off',
-                    '--disable-background-timer-throttling',
-                    '--disable-renderer-backgrounding',
-                    '--disable-extensions',
-                    '--disable-plugins',
-                    '--disable-images',  # Don't load images to save memory
-                    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                ]
-            )
-            
-            LOG.info(f"PLAYWRIGHT: Browser launched, navigating to {url}")
-            
-            # Create new page with smaller viewport to save memory
-            page = browser.new_page(
-                viewport={'width': 1280, 'height': 720},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
-            
-            # Set additional headers to look more human
-            page.set_extra_http_headers({
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            })
-            
-            try:
-                # REDUCED TIMEOUT - 15 seconds instead of 30
-                page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
-                
-                # Shorter wait for dynamic content
-                page.wait_for_timeout(1000)
-                
-                # Try multiple content extraction methods
-                content = None
-                extraction_method = None
-                
-                # Method 1: Try article tag first
-                try:
-                    article_element = page.query_selector('article')
-                    if article_element:
-                        content = article_element.inner_text()
-                        extraction_method = "article tag"
-                except Exception:
-                    pass
-                
-                # Method 2: Try main content selectors
-                if not content or len(content.strip()) < 200:
-                    selectors = [
-                        '[role="main"]',
-                        'main',
-                        '.article-content',
-                        '.story-content',
-                        '.entry-content',
-                        '.post-content',
-                        '.content',
-                        '[data-module="ArticleBody"]'
-                    ]
-                    for selector in selectors:
-                        try:
-                            element = page.query_selector(selector)
-                            if element:
-                                temp_content = element.inner_text()
-                                if temp_content and len(temp_content.strip()) > 200:
-                                    content = temp_content
-                                    extraction_method = f"selector: {selector}"
-                                    break
-                        except Exception:
-                            continue
-                
-                # Method 3: Smart body text extraction (removes navigation/ads)
-                if not content or len(content.strip()) < 200:
-                    try:
-                        content = page.evaluate("""
-                            () => {
-                                // Remove unwanted elements
-                                const unwanted = document.querySelectorAll(`
-                                    script, style, nav, header, footer, aside,
-                                    .advertisement, .ads, .ad, .sidebar,
-                                    .navigation, .nav, .menu, .social,
-                                    [class*="ad"], [class*="sidebar"], [class*="nav"]
-                                `);
-                                unwanted.forEach(el => el.remove());
-                                
-                                // Try to find main content area
-                                const candidates = [
-                                    document.querySelector('main'),
-                                    document.querySelector('[role="main"]'),
-                                    document.querySelector('.main-content'),
-                                    document.querySelector('.content'),
-                                    document.body
-                                ];
-                                
-                                for (let candidate of candidates) {
-                                    if (candidate && candidate.innerText && candidate.innerText.length > 200) {
-                                        return candidate.innerText;
-                                    }
-                                }
-                                
-                                return document.body ? document.body.innerText : '';
-                            }
-                        """)
-                        extraction_method = "smart body extraction"
-                    except Exception:
-                        try:
-                            content = page.evaluate("() => document.body ? document.body.innerText : ''")
-                            extraction_method = "fallback body text"
-                        except Exception:
-                            content = None
-                
-            except Exception as e:
-                LOG.warning(f"PLAYWRIGHT: Navigation/extraction failed for {domain}: {str(e)}")
-                content = None
-            finally:
-                # Always close browser to free memory
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-            
-            if not content or len(content.strip()) < 100:
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient content extracted")
-                return None, "Insufficient content extracted"
-            
-            # Enhanced content validation
-            is_valid, validation_msg = validate_scraped_content(content, url, domain)
-            if not is_valid:
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> {validation_msg}")
-                return None, validation_msg
-            
-            # Check for common error pages or blocking messages
-            content_lower = content.lower()
-            error_indicators = [
-                "403 forbidden", "access denied", "captcha", "robot", "bot detection",
-                "please verify you are human", "cloudflare", "rate limit", "blocked",
-                "security check", "unusual traffic"
-            ]
-            
-            if any(indicator in content_lower for indicator in error_indicators):
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Error page detected")
-                return None, "Error page or blocking detected"
-            
-            LOG.info(f"PLAYWRIGHT SUCCESS: {domain} -> {len(content)} chars extracted via {extraction_method}")
-            return content.strip(), None
-            
-    except Exception as e:
-        error_msg = f"Playwright extraction failed: {str(e)}"
-        LOG.error(f"PLAYWRIGHT ERROR: {domain} -> {error_msg}")
-        return None, error_msg
-    finally:
-        # Add this cleanup
-        import gc
-        gc.collect()
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
@@ -1058,133 +966,6 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
     except Exception as e:
         return None, f"Scraping error: {str(e)}"
 
-def safe_content_scraper_with_playwright(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
-    """
-    Enhanced scraper with per-keyword limits - only successful scrapes count toward limit
-    Updated for new scraping logic: 20 company + 5×keywords + 5×competitors
-    """
-    global scraping_stats
-    
-    # Check limits based on category
-    if not _check_scraping_limit(category, keyword):
-        if category == "company":
-            return None, f"Company limit reached ({scraping_stats['company_scraped']}/{scraping_stats['limits']['company']})"
-        elif category == "industry":
-            keyword_count = scraping_stats["industry_scraped_by_keyword"].get(keyword, 0)
-            return None, f"Industry keyword '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['industry_per_keyword']})"
-        elif category == "competitor":
-            keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
-            return None, f"Competitor '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['competitor_per_keyword']})"
-    
-    # First try standard method
-    content, error = safe_content_scraper(url, domain, scraped_domains)
-    
-    # If successful with requests, count it and return
-    if content:
-        _update_scraping_stats(category, keyword, True)
-        return content, f"Successfully scraped {len(content)} chars with requests"
-    
-    # Log failed attempt but don't count toward limit
-    scraping_stats["failed_scrapes"] += 1
-    
-    # Try Playwright fallback for ANY domain (not just high-value ones)
-    LOG.info(f"Trying Playwright fallback for: {domain} (failed attempts don't count toward limit)")
-    
-    # Update Playwright stats (for monitoring, not limits)
-    playwright_stats["attempted"] += 1
-    normalized_domain = normalize_domain(domain)
-    playwright_stats["by_domain"][normalized_domain]["attempts"] += 1
-    
-    playwright_content, playwright_error = extract_article_content_with_playwright(url, domain)
-    
-    if playwright_content:
-        # SUCCESS - count toward limit
-        playwright_stats["successful"] += 1
-        playwright_stats["by_domain"][normalized_domain]["successes"] += 1
-        
-        _update_scraping_stats(category, keyword, True)
-        
-        # Log stats every 10 attempts
-        if playwright_stats["attempted"] % 10 == 0:
-            log_playwright_stats()
-            
-        return playwright_content, f"Playwright success: {len(playwright_content)} chars"
-    else:
-        # FAILURE - don't count toward limit
-        playwright_stats["failed"] += 1
-        scraping_stats["failed_scrapes"] += 1
-        
-        # Log stats every 10 attempts
-        if playwright_stats["attempted"] % 10 == 0:
-            log_playwright_stats()
-            
-        return None, f"Both methods failed - Requests: {error}, Playwright: {playwright_error} (not counted toward limit)"
-
-def safe_content_scraper_with_playwright_limited(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
-    """
-    Enhanced scraper with per-keyword limits - only successful scrapes count toward limit
-    """
-    global scraping_stats
-    
-    # Check limits based on category
-    if category == "company":
-        if scraping_stats["company_scraped"] >= scraping_stats["limits"]["company"]:
-            return None, f"Company limit reached ({scraping_stats['company_scraped']}/{scraping_stats['limits']['company']})"
-    
-    elif category == "industry":
-        keyword_count = scraping_stats["industry_scraped_by_keyword"].get(keyword, 0)
-        if keyword_count >= scraping_stats["limits"]["industry_per_keyword"]:
-            return None, f"Industry keyword '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['industry_per_keyword']})"
-    
-    elif category == "competitor":
-        keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
-        if keyword_count >= scraping_stats["limits"]["competitor_per_keyword"]:
-            return None, f"Competitor '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['competitor_per_keyword']})"
-    
-    # First try your existing method
-    content, error = safe_content_scraper(url, domain, scraped_domains)
-    
-    # If successful with requests, count it and return
-    if content:
-        _update_scraping_stats(category, keyword, True)
-        return content, f"Successfully scraped {len(content)} chars with requests"
-    
-    # Log failed attempt but don't count toward limit
-    scraping_stats["failed_scrapes"] += 1
-    
-    # Try Playwright fallback for ANY domain (not just high-value ones)
-    LOG.info(f"Trying Playwright fallback for: {domain} (failed attempts don't count toward limit)")
-    
-    # Update Playwright stats (for monitoring, not limits)
-    playwright_stats["attempted"] += 1
-    normalized_domain = normalize_domain(domain)
-    playwright_stats["by_domain"][normalized_domain]["attempts"] += 1
-    
-    playwright_content, playwright_error = extract_article_content_with_playwright(url, domain)
-    
-    if playwright_content:
-        # SUCCESS - count toward limit
-        playwright_stats["successful"] += 1
-        playwright_stats["by_domain"][normalized_domain]["successes"] += 1
-        
-        _update_scraping_stats(category, keyword, True)
-        
-        # Log stats every 10 attempts
-        if playwright_stats["attempted"] % 10 == 0:
-            log_playwright_stats()
-            
-        return playwright_content, f"Playwright success: {len(playwright_content)} chars"
-    else:
-        # FAILURE - don't count toward limit
-        playwright_stats["failed"] += 1
-        scraping_stats["failed_scrapes"] += 1
-        
-        # Log stats every 10 attempts
-        if playwright_stats["attempted"] % 10 == 0:
-            log_playwright_stats()
-            
-        return None, f"Both methods failed - Requests: {error}, Playwright: {playwright_error} (not counted toward limit)"
-
 def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, ticker: str) -> bool:
     """Scrape content and run AI analysis for a single article with dynamic limits"""
     try:
@@ -1214,7 +995,7 @@ def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, tic
             
             if scrape_domain not in PAYWALL_DOMAINS:
                 # Use the enhanced scraper with limits
-                content, status = safe_content_scraper_with_playwright_limited(
+                content, status = safe_content_scraper_with_scrapingbee_limited(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
                 
@@ -1522,7 +1303,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             LOG.info(f"Skipping paywall domain: {scrape_domain}")
                         else:
                             # Check scraping limits and attempt scraping
-                            content, status = safe_content_scraper_with_playwright_limited(
+                            content, status = safe_content_scraper_with_scrapingbee_limited(
                                 final_resolved_url, scrape_domain, category, feed_keyword, scraped_domains
                             )
                             

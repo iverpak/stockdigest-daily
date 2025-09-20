@@ -3360,7 +3360,6 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             "Content-Type": "application/json"
         }
         
-        # Updated JSON schema to use HIGH/MEDIUM/LOW instead of P1-P5
         triage_schema = {
             "name": "triage_results",
             "strict": True,
@@ -3409,13 +3408,15 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             }
         }
         
-        # UPDATED: Using Responses API format
+        # UPDATED: Using Responses API format with correct text.format structure
         data = {
             "model": OPENAI_MODEL,
             "temperature": 0,
-            "response_format": {"type": "json_schema", "json_schema": triage_schema},
-            "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",  # CHANGED: combined system + user into single input
-            "max_completion_tokens": 5000,  # CHANGED: max_tokens -> max_completion_tokens
+            "text": {
+                "format": {"type": "json_schema", "json_schema": triage_schema}  # CHANGED: moved under text.format
+            },
+            "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
+            "max_completion_tokens": 5000,
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
@@ -3425,10 +3426,9 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             return []
         
         result = response.json()
-        # CHANGED: Parse from Responses API format
         content = result["output"][0]["content"][0]["text"] or ""
         
-        # Parse JSON - should be clean with structured output
+        # Rest of function remains the same...
         try:
             triage_result = json.loads(content)
         except json.JSONDecodeError as e:
@@ -3436,20 +3436,17 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             LOG.error(f"Response content: {content[:500]}")
             return []
         
-        # Validate response completeness
         total_items = len(payload.get('items', []))
         selected_count = len(triage_result.get("selected_ids", []))
         accounted_items = len(triage_result.get("selected", [])) + len(triage_result.get("skipped", []))
         target_cap = payload.get('target_cap', 0)
         
-        # Enhanced validation logging
         if accounted_items != total_items:
             LOG.warning(f"Triage accounting mismatch: {accounted_items} processed vs {total_items} total items")
         
         if selected_count != min(target_cap, total_items):
             LOG.warning(f"Triage selection mismatch: {selected_count} selected vs {min(target_cap, total_items)} expected")
         
-        # Validate all selected IDs are valid
         invalid_ids = [id for id in triage_result.get("selected_ids", []) if id >= total_items]
         if invalid_ids:
             LOG.error(f"Invalid selected IDs: {invalid_ids} (max valid ID: {total_items-1})")
@@ -3458,7 +3455,6 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         LOG.info(f"Triage completed - Bucket: {payload.get('bucket', 'unknown')}, "
                 f"Selected: {selected_count}/{target_cap}, Total processed: {total_items}")
         
-        # Convert to expected format for existing code integration
         selected_articles = []
         original_articles = payload.get('items', [])
         
@@ -4105,13 +4101,8 @@ def _ai_quality_score_company_components(title: str, domain: str, ticker: str, d
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
     
-    # Get enhanced metadata for this ticker if available
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
-    
-    # Build brand alias regex if we have enhanced metadata stored
-    brand_alias_regex = ""
-    # This would be populated from the enhanced metadata if stored
     
     schema = {
         "name": "company_news_components",
@@ -4204,13 +4195,10 @@ def _ai_quality_score_industry_components(title: str, domain: str, ticker: str, 
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
     
-    # Get enhanced metadata for this ticker if available
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
     
-    # Build sector profile if we have enhanced metadata
     sector_profile = {}
-    # This would be populated from enhanced metadata if stored
     
     schema = {
         "name": "industry_market_components",
@@ -4298,15 +4286,12 @@ def _ai_quality_score_competitor_components(title: str, domain: str, ticker: str
     source_tier = _get_domain_tier(domain, title, description)
     desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
     
-    # Get enhanced metadata for this ticker if available
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
     
-    # Build competitor whitelist from stored metadata
     competitor_whitelist = []
     if config and config.get("competitors"):
         for comp_str in config["competitors"]:
-            # Extract ticker from "Name (TICKER)" format
             match = re.search(r'\(([A-Z]{1,5})\)', comp_str)
             if match:
                 competitor_whitelist.append(match.group(1))
@@ -4432,13 +4417,15 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         "Content-Type": "application/json"
     }
     
-    # UPDATED: Using Responses API format
+    # UPDATED: Using Responses API format with correct text.format structure
     data = {
         "model": OPENAI_MODEL,
         "temperature": 0,
-        "input": f"{system_prompt}\n\n{json.dumps(user_payload)}",  # CHANGED: combined system + user into single input
-        "response_format": {"type": "json_schema", "json_schema": schema},
-        "max_completion_tokens": 300  # CHANGED: max_tokens -> max_completion_tokens
+        "input": f"{system_prompt}\n\n{json.dumps(user_payload)}",
+        "text": {
+            "format": {"type": "json_schema", "json_schema": schema}  # CHANGED: moved under text.format
+        },
+        "max_completion_tokens": 300
     }
     
     response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -4448,13 +4435,12 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         raise Exception(f"API error: {response.status_code}")
     
     result = response.json()
-    # CHANGED: Parse from Responses API format
     content = result["output"][0]["content"][0]["text"]
     parsed = json.loads(content)
     
-    # Extract components with reasons
+    # Rest of function remains the same...
     components = {
-        'source_tier': source_tier,  # Use our calculated source tier
+        'source_tier': source_tier,
         'event_multiplier': parsed.get('event_multiplier', 1.0),
         'event_multiplier_reason': parsed.get('event_multiplier_reason', ''),
         'relevance_boost': parsed.get('relevance_boost', 1.0),
@@ -4464,13 +4450,10 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         'penalty_reason': parsed.get('penalty_reason', '')
     }
     
-    # Calculate score using our own formula
     calculated_score = calculate_score_from_components(components)
-    
     impact = parsed.get("impact_on_main", "Unclear")
     reason = parsed.get("reason_short", "")
     
-    # Log the components for transparency
     LOG.info(f"AI COMPONENTS:")
     LOG.info(f"  Source tier: {source_tier} (calculated)")
     LOG.info(f"  Event multiplier: {components['event_multiplier']} - {components['event_multiplier_reason']}")
@@ -5259,7 +5242,8 @@ def generate_ticker_metadata_with_ai(ticker, company_name=None):
     Generate comprehensive ticker metadata using OpenAI with improved validation
     """
     if company_name is None:
-        company_name = ticker  # Use ticker as fallback
+        company_name = ticker
+    
     system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
@@ -5331,18 +5315,20 @@ Required JSON format:
 }}"""
 
     try:
-        # UPDATED: Using Responses API
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json"
         }
         
+        # UPDATED: Using Responses API format with correct text.format structure
         data = {
             "model": OPENAI_MODEL,
-            "input": f"{system_prompt}\n\n{user_prompt}",  # CHANGED: combined system + user into single input
+            "input": f"{system_prompt}\n\n{user_prompt}",
             "temperature": 0.3,
-            "max_completion_tokens": 2000,  # CHANGED: max_tokens -> max_completion_tokens
-            "response_format": {"type": "json_object"}
+            "max_completion_tokens": 2000,
+            "text": {
+                "format": {"type": "json_object"}  # CHANGED: moved under text.format
+            }
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
@@ -5352,20 +5338,17 @@ Required JSON format:
             return None
         
         result = response.json()
-        # CHANGED: Parse from Responses API format
         content = result["output"][0]["content"][0]["text"]
         
-        # Parse response
+        # Rest of function remains the same...
         metadata = json.loads(content)
         
-        # Validation
         validation_errors = validate_metadata(metadata)
         if validation_errors:
             print(f"⚠️ Validation warnings for {ticker}:")
             for error in validation_errors:
                 print(f"  - {error}")
         
-        # Store in database
         stored_successfully = store_ticker_metadata(
             ticker=metadata['ticker'],
             name=metadata['name'],

@@ -491,11 +491,11 @@ def update_schema_for_qb_scores():
         """)
 
 def update_schema_for_triage():
-    """Add triage fields to found_url table"""
+    """Add triage fields to found_url table - FIXED for HIGH/MEDIUM/LOW"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_triage_selected BOOLEAN DEFAULT FALSE;
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority INTEGER;
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority VARCHAR(10);
             ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
         """)
 
@@ -1278,13 +1278,14 @@ def _update_scraping_stats(category: str, keyword: str, success: bool):
         
         if category == "company":
             scraping_stats["company_scraped"] += 1
-            # ... existing logging
+            LOG.info(f"SCRAPING SUCCESS: Company {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']} | Total: {scraping_stats['successful_scrapes']}")
         
         elif category == "industry":
             if keyword not in scraping_stats["industry_scraped_by_keyword"]:
                 scraping_stats["industry_scraped_by_keyword"][keyword] = 0
             scraping_stats["industry_scraped_by_keyword"][keyword] += 1
-            # ... existing logging
+            keyword_count = scraping_stats["industry_scraped_by_keyword"][keyword]
+            LOG.info(f"SCRAPING SUCCESS: Industry '{keyword}' {keyword_count}/{scraping_stats['limits']['industry_per_keyword']} | Total: {scraping_stats['successful_scrapes']}")
         
         elif category == "competitor":
             # Use competitor_ticker as consolidation key
@@ -1293,7 +1294,7 @@ def _update_scraping_stats(category: str, keyword: str, success: bool):
             scraping_stats["competitor_scraped_by_keyword"][keyword] += 1
             keyword_count = scraping_stats["competitor_scraped_by_keyword"][keyword]
             LOG.info(f"SCRAPING SUCCESS: Competitor '{keyword}' {keyword_count}/{scraping_stats['limits']['competitor_per_keyword']} | Total: {scraping_stats['successful_scrapes']}")
-
+    
 def _check_scraping_limit(category: str, keyword: str) -> bool:
     """Check if we can scrape more articles for this category/keyword"""
     global scraping_stats
@@ -2830,7 +2831,7 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
                 
             backfill_selected.append({
                 "id": candidate["id"],
-                "scrape_priority": scrape_priority,
+                "scrape_priority": scrape_priority,  # Now using HIGH/MEDIUM/LOW strings
                 "likely_repeat": False,
                 "repeat_key": "",
                 "why": f"{candidate['qb_level']}: {candidate['qb_reasoning']} (score: {candidate['qb_score']})",
@@ -2841,10 +2842,10 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
             })
         
         combined_selected.extend(backfill_selected)
-    
-    # Final sort by priority (HIGH=1, MEDIUM=2, LOW=3)
-    priority_map = {"HIGH": 1, "MEDIUM": 2, "LOW": 3}
-    combined_selected.sort(key=lambda x: priority_map.get(x.get("scrape_priority", "LOW"), 3))
+        
+        # Final sort by priority (HIGH=1, MEDIUM=2, LOW=3)
+        priority_map = {"HIGH": 1, "MEDIUM": 2, "LOW": 3}
+        combined_selected.sort(key=lambda x: priority_map.get(x.get("scrape_priority", "LOW"), 3))
     
     # Enhanced logging
     ai_count = len(ai_selected)
@@ -5917,7 +5918,7 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                         ai_priority = enhanced_article["ai_priority"]
                         badge_class = f"triage-{ai_priority.lower()}"
                         triage_badges.append(f'<span class="triage {badge_class}" title="{enhanced_article["triage_reason"]}">AI {ai_priority}</span>')
-                    
+                                        
                     # Quality Domain badge
                     if enhanced_article["is_quality_domain"]:
                         if not enhanced_article["is_ai_selected"]:
@@ -6606,7 +6607,7 @@ def cron_ingest(
         )
         triage_results[ticker] = selected_results
         
-        # Update database with triage results
+        # Update database with triage results - FIXED to handle HIGH/MEDIUM/LOW
         for category, selected_items in selected_results.items():
             articles = articles_by_ticker[ticker][category]
             for item in selected_items:
@@ -6618,7 +6619,7 @@ def cron_ingest(
                             UPDATE found_url 
                             SET ai_triage_selected = TRUE, triage_priority = %s, triage_reasoning = %s
                             WHERE id = %s
-                        """, (item.get("scrape_priority", 5), item.get("why", ""), article_id))
+                        """, (item.get("scrape_priority", "LOW"), item.get("why", ""), article_id))
     
     # PHASE 3: Send enhanced quick email with triage results
     LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")

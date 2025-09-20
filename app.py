@@ -37,6 +37,9 @@ from urllib3.util.retry import Retry
 
 from collections import defaultdict
 
+from playwright.sync_api import sync_playwright
+import asyncio
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -230,6 +233,33 @@ scraping_stats = {
     }
 }
 
+# Global ScrapingBee statistics tracking
+scrapingbee_stats = {
+    "requests_made": 0,
+    "successful": 0,
+    "failed": 0,
+    "cost_estimate": 0.0,
+    "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
+}
+
+# Domains known to be problematic with ScrapingBee
+SCRAPINGBEE_PROBLEMATIC_DOMAINS = {
+}
+
+# Enhanced scraping statistics to track all methods
+enhanced_scraping_stats = {
+    "total_attempts": 0,
+    "requests_success": 0,
+    "playwright_success": 0,
+    "scrapingbee_success": 0,
+    "total_failures": 0,
+    "by_method": {
+        "requests": {"attempts": 0, "successes": 0},
+        "playwright": {"attempts": 0, "successes": 0},
+        "scrapingbee": {"attempts": 0, "successes": 0}
+    }
+}
+
 def reset_ingestion_stats():
     """Reset ingestion stats for new run"""
     global ingestion_stats
@@ -305,23 +335,32 @@ def _check_ingestion_limit(category: str, keyword: str) -> bool:
 domain_last_accessed = {}
 last_scraped_domain = None
 
-# Global ScrapingBee statistics tracking
-scrapingbee_stats = {
-    "requests_made": 0,
+# Global Playwright statistics tracking
+playwright_stats = {
+    "attempted": 0,
     "successful": 0,
     "failed": 0,
-    "cost_estimate": 0.0,
     "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
 }
 
-def log_scrapingbee_stats():
-    """Log current ScrapingBee performance statistics"""
-    if scrapingbee_stats["requests_made"] == 0:
+def log_playwright_stats():
+    """Log current Playwright performance statistics"""
+    if playwright_stats["attempted"] == 0:
         return
     
-    success_rate = (scrapingbee_stats["successful"] / scrapingbee_stats["requests_made"]) * 100
-    LOG.info(f"SCRAPINGBEE STATS: {success_rate:.1f}% success rate ({scrapingbee_stats['successful']}/{scrapingbee_stats['requests_made']})")
-    LOG.info(f"SCRAPINGBEE COST: Estimated ${scrapingbee_stats['cost_estimate']:.3f}")
+    success_rate = (playwright_stats["successful"] / playwright_stats["attempted"]) * 100
+    LOG.info(f"PLAYWRIGHT STATS: {success_rate:.1f}% success rate ({playwright_stats['successful']}/{playwright_stats['attempted']})")
+    
+    # Log top performing and failing domains
+    domain_stats = playwright_stats["by_domain"]
+    if domain_stats:
+        successful_domains = [(domain, stats) for domain, stats in domain_stats.items() if stats["successes"] > 0]
+        failed_domains = [(domain, stats) for domain, stats in domain_stats.items() if stats["successes"] == 0 and stats["attempts"] > 0]
+        
+        if successful_domains:
+            LOG.info(f"PLAYWRIGHT SUCCESS DOMAINS: {len(successful_domains)} domains working")
+        if failed_domains:
+            LOG.info(f"PLAYWRIGHT FAILED DOMAINS: {len(failed_domains)} domains still blocked")
 
 # ------------------------------------------------------------------------------
 # Database helpers
@@ -654,155 +693,6 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         LOG.warning(f"Failed to extract content from {url}: {error_msg}")
         return None, error_msg
 
-def scrape_with_scrapingbee(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Enhanced article extraction using ScrapingBee for JavaScript-heavy sites
-    """
-    global scrapingbee_stats
-    
-    try:
-        if not SCRAPINGBEE_API_KEY:
-            return None, "ScrapingBee API key not configured"
-        
-        # Check for known paywall domains first
-        if normalize_domain(domain) in PAYWALL_DOMAINS:
-            return None, f"Paywall domain: {domain}"
-        
-        LOG.info(f"SCRAPINGBEE: Starting scrape for {domain}")
-        
-        # Update usage stats
-        scrapingbee_stats["requests_made"] += 1
-        scrapingbee_stats["cost_estimate"] += 0.001  # Assuming $0.001 per request
-        
-        # ScrapingBee request parameters - optimized for news sites
-        params = {
-            'api_key': SCRAPINGBEE_API_KEY,
-            'url': url,
-            'render_js': 'true',  # Enable JavaScript rendering
-            'premium_proxy': 'true',  # Use premium proxy pool for better success
-            'country_code': 'us',  # Use US-based proxies
-            'wait': 2000,  # Wait 2 seconds for page load
-            'wait_for': 'networkidle',  # Wait for network to be idle
-            'block_ads': 'true',  # Block ads to speed up loading
-            'block_resources': 'true',  # Block images/videos to speed up
-            'timeout': 20000,  # 20 second timeout
-            'screenshot': 'false',  # Don't take screenshots to save credits
-            'extract_rules': json.dumps({
-                'title': 'title, h1',
-                'content': 'article, .article-content, .post-content, .entry-content, main, .main-content'
-            })
-        }
-        
-        response = requests.get(
-            'https://app.scrapingbee.com/api/v1/',
-            params=params,
-            timeout=30
-        )
-        
-        # Enhanced error handling
-        if response.status_code == 422:
-            scrapingbee_stats["failed"] += 1
-            return None, "ScrapingBee: Invalid parameters or blocked site"
-        elif response.status_code == 429:
-            scrapingbee_stats["failed"] += 1
-            return None, "ScrapingBee: Rate limit exceeded"
-        elif response.status_code == 403:
-            scrapingbee_stats["failed"] += 1
-            return None, "ScrapingBee: Access forbidden"
-        elif response.status_code != 200:
-            scrapingbee_stats["failed"] += 1
-            error_msg = f"ScrapingBee HTTP {response.status_code}"
-            LOG.warning(f"SCRAPINGBEE FAILED: {domain} -> {error_msg}")
-            return None, error_msg
-        
-        # Check API usage headers
-        remaining_calls = response.headers.get('spb-credits-remaining')
-        if remaining_calls:
-            try:
-                remaining = int(remaining_calls)
-                if remaining < 100:
-                    LOG.warning(f"ScrapingBee credits running low: {remaining} remaining")
-                elif remaining < 10:
-                    LOG.error(f"ScrapingBee credits critically low: {remaining} remaining")
-            except ValueError:
-                pass
-        
-        html_content = response.text
-        
-        if not html_content or len(html_content) < 100:
-            scrapingbee_stats["failed"] += 1
-            return None, "Empty or too short response from ScrapingBee"
-        
-        # Use newspaper3k to parse the HTML (same as your existing method)
-        config = newspaper.Config()
-        config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        config.request_timeout = 15
-        config.fetch_images = False
-        config.memoize_articles = False
-        
-        article = newspaper.Article(url, config=config)
-        article.set_html(html_content)
-        article.parse()
-        
-        content = article.text.strip()
-        
-        if not content:
-            scrapingbee_stats["failed"] += 1
-            return None, "No content extracted from ScrapingBee response"
-        
-        # Enhanced content validation (reuse your existing logic)
-        is_valid, validation_msg = validate_scraped_content(content, url, domain)
-        if not is_valid:
-            scrapingbee_stats["failed"] += 1
-            return None, validation_msg
-        
-        # Check for common error pages or blocking messages
-        content_lower = content.lower()
-        error_indicators = [
-            "403 forbidden", "access denied", "captcha", "robot", "bot detection",
-            "please verify you are human", "cloudflare", "rate limit", "blocked",
-            "security check", "unusual traffic", "please enable javascript",
-            "this site is protected", "checking your browser"
-        ]
-        
-        if any(indicator in content_lower for indicator in error_indicators):
-            scrapingbee_stats["failed"] += 1
-            LOG.warning(f"SCRAPINGBEE BLOCKED: {domain} -> Error page detected")
-            return None, "Error page or blocking detected"
-        
-        # Enhanced cookie banner detection (reuse your existing logic)
-        cookie_indicators = [
-            "we use cookies", "accept all cookies", "cookie policy",
-            "privacy policy and terms of service", "consent to the use",
-            "personalizing content and advertising", "marketing cookies",
-            "essential cookies", "functional cookies", "deny optional",
-            "accept all or closing out of this banner", "revised from time to time"
-        ]
-        
-        cookie_count = sum(1 for indicator in cookie_indicators if indicator in content_lower)
-        
-        # If multiple cookie indicators and content is short, likely a cookie page
-        if cookie_count >= 3 and len(content) < 800:
-            scrapingbee_stats["failed"] += 1
-            return None, "Cookie consent page detected"
-        
-        # Success!
-        scrapingbee_stats["successful"] += 1
-        LOG.info(f"SCRAPINGBEE SUCCESS: {domain} -> {len(content)} chars extracted")
-        return content.strip(), None
-        
-    except requests.exceptions.Timeout:
-        scrapingbee_stats["failed"] += 1
-        return None, "ScrapingBee request timeout"
-    except requests.exceptions.RequestException as e:
-        scrapingbee_stats["failed"] += 1
-        return None, f"ScrapingBee request failed: {str(e)}"
-    except Exception as e:
-        scrapingbee_stats["failed"] += 1
-        error_msg = f"ScrapingBee extraction failed: {str(e)}"
-        LOG.error(f"SCRAPINGBEE ERROR: {domain} -> {error_msg}")
-        return None, error_msg
-
 def create_scraping_session():
     session = requests.Session()
     
@@ -832,6 +722,281 @@ def create_scraping_session():
     })
     
     return session
+
+# Add this function after your existing extract_article_content function
+def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Memory-optimized article extraction using Playwright for JavaScript-heavy sites
+    """
+    try:
+        # Check for known paywall domains first
+        if normalize_domain(domain) in PAYWALL_DOMAINS:
+            return None, f"Paywall domain: {domain}"
+        
+        LOG.info(f"PLAYWRIGHT: Starting browser for {domain}")
+        
+        with sync_playwright() as p:
+            # Launch browser with memory optimization
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',  # Use /tmp instead of /dev/shm for lower memory
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
+                    '--memory-pressure-off',
+                    '--disable-background-timer-throttling',
+                    '--disable-renderer-backgrounding',
+                    '--disable-extensions',
+                    '--disable-plugins',
+                    '--disable-images',  # Don't load images to save memory
+                    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                ]
+            )
+            
+            LOG.info(f"PLAYWRIGHT: Browser launched, navigating to {url}")
+            
+            # Create new page with smaller viewport to save memory
+            page = browser.new_page(
+                viewport={'width': 1280, 'height': 720},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            
+            # Set additional headers to look more human
+            page.set_extra_http_headers({
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            
+            try:
+                # REDUCED TIMEOUT - 15 seconds instead of 30
+                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
+                
+                # Shorter wait for dynamic content
+                page.wait_for_timeout(1000)
+                
+                # Try multiple content extraction methods
+                content = None
+                extraction_method = None
+                
+                # Method 1: Try article tag first
+                try:
+                    article_element = page.query_selector('article')
+                    if article_element:
+                        content = article_element.inner_text()
+                        extraction_method = "article tag"
+                except Exception:
+                    pass
+                
+                # Method 2: Try main content selectors
+                if not content or len(content.strip()) < 200:
+                    selectors = [
+                        '[role="main"]',
+                        'main',
+                        '.article-content',
+                        '.story-content',
+                        '.entry-content',
+                        '.post-content',
+                        '.content',
+                        '[data-module="ArticleBody"]'
+                    ]
+                    for selector in selectors:
+                        try:
+                            element = page.query_selector(selector)
+                            if element:
+                                temp_content = element.inner_text()
+                                if temp_content and len(temp_content.strip()) > 200:
+                                    content = temp_content
+                                    extraction_method = f"selector: {selector}"
+                                    break
+                        except Exception:
+                            continue
+                
+                # Method 3: Smart body text extraction (removes navigation/ads)
+                if not content or len(content.strip()) < 200:
+                    try:
+                        content = page.evaluate("""
+                            () => {
+                                // Remove unwanted elements
+                                const unwanted = document.querySelectorAll(`
+                                    script, style, nav, header, footer, aside,
+                                    .advertisement, .ads, .ad, .sidebar,
+                                    .navigation, .nav, .menu, .social,
+                                    [class*="ad"], [class*="sidebar"], [class*="nav"]
+                                `);
+                                unwanted.forEach(el => el.remove());
+                                
+                                // Try to find main content area
+                                const candidates = [
+                                    document.querySelector('main'),
+                                    document.querySelector('[role="main"]'),
+                                    document.querySelector('.main-content'),
+                                    document.querySelector('.content'),
+                                    document.body
+                                ];
+                                
+                                for (let candidate of candidates) {
+                                    if (candidate && candidate.innerText && candidate.innerText.length > 200) {
+                                        return candidate.innerText;
+                                    }
+                                }
+                                
+                                return document.body ? document.body.innerText : '';
+                            }
+                        """)
+                        extraction_method = "smart body extraction"
+                    except Exception:
+                        try:
+                            content = page.evaluate("() => document.body ? document.body.innerText : ''")
+                            extraction_method = "fallback body text"
+                        except Exception:
+                            content = None
+                
+            except Exception as e:
+                LOG.warning(f"PLAYWRIGHT: Navigation/extraction failed for {domain}: {str(e)}")
+                content = None
+            finally:
+                # Always close browser to free memory
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            
+            if not content or len(content.strip()) < 100:
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient content extracted")
+                return None, "Insufficient content extracted"
+            
+            # Enhanced content validation
+            is_valid, validation_msg = validate_scraped_content(content, url, domain)
+            if not is_valid:
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> {validation_msg}")
+                return None, validation_msg
+            
+            # Check for common error pages or blocking messages
+            content_lower = content.lower()
+            error_indicators = [
+                "403 forbidden", "access denied", "captcha", "robot", "bot detection",
+                "please verify you are human", "cloudflare", "rate limit", "blocked",
+                "security check", "unusual traffic"
+            ]
+            
+            if any(indicator in content_lower for indicator in error_indicators):
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Error page detected")
+                return None, "Error page or blocking detected"
+            
+            LOG.info(f"PLAYWRIGHT SUCCESS: {domain} -> {len(content)} chars extracted via {extraction_method}")
+            return content.strip(), None
+            
+    except Exception as e:
+        error_msg = f"Playwright extraction failed: {str(e)}"
+        LOG.error(f"PLAYWRIGHT ERROR: {domain} -> {error_msg}")
+        return None, error_msg
+    finally:
+        # Add this cleanup
+        import gc
+        gc.collect()
+
+def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Enhanced ScrapingBee with retry logic for 500 errors and comprehensive stats
+    """
+    global scrapingbee_stats, enhanced_scraping_stats
+    
+    for attempt in range(max_retries + 1):
+        try:
+            if not SCRAPINGBEE_API_KEY:
+                return None, "ScrapingBee API key not configured"
+            
+            if normalize_domain(domain) in PAYWALL_DOMAINS:
+                return None, f"Paywall domain: {domain}"
+            
+            if normalize_domain(domain) in SCRAPINGBEE_PROBLEMATIC_DOMAINS:
+                return None, f"Domain known problematic with ScrapingBee: {domain}"
+            
+            if attempt > 0:
+                # Exponential backoff: 2s, 4s, 8s
+                delay = 2 ** attempt
+                LOG.info(f"SCRAPINGBEE RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
+                time.sleep(delay)
+            
+            LOG.info(f"SCRAPINGBEE: Starting scrape for {domain} (attempt {attempt + 1})")
+            
+            # Update usage stats
+            scrapingbee_stats["requests_made"] += 1
+            scrapingbee_stats["cost_estimate"] += 0.001
+            scrapingbee_stats["by_domain"][domain]["attempts"] += 1
+            enhanced_scraping_stats["by_method"]["scrapingbee"]["attempts"] += 1
+            
+            # Optimized parameters for reliability
+            params = {
+                'api_key': SCRAPINGBEE_API_KEY,
+                'url': url,
+                'render_js': 'false',  # Disable JS for speed/reliability
+                'premium_proxy': 'true',
+                'country_code': 'us',
+                'timeout': 15000,
+                'wait_for': 'networkidle2',
+                'block_ads': 'true',
+                'block_resources': 'true'
+            }
+            
+            response = requests.get('https://app.scrapingbee.com/api/v1/', 
+                                   params=params, 
+                                   timeout=30)
+            
+            if response.status_code == 200:
+                content = response.text.strip()
+                
+                if content and len(content) > 100:
+                    # Validate content quality
+                    is_valid, validation_msg = validate_scraped_content(content, url, domain)
+                    if is_valid:
+                        scrapingbee_stats["successful"] += 1
+                        scrapingbee_stats["by_domain"][domain]["successes"] += 1
+                        enhanced_scraping_stats["by_method"]["scrapingbee"]["successes"] += 1
+                        LOG.info(f"SCRAPINGBEE SUCCESS: {domain} -> {len(content)} chars")
+                        return content, None
+                    else:
+                        LOG.warning(f"SCRAPINGBEE: Content validation failed for {domain}: {validation_msg}")
+                        # Don't retry validation failures
+                        break
+                else:
+                    LOG.warning(f"SCRAPINGBEE: Insufficient content for {domain} (attempt {attempt + 1})")
+            
+            elif response.status_code == 500:
+                LOG.warning(f"SCRAPINGBEE: Server error 500 for {domain} (attempt {attempt + 1})")
+                if attempt < max_retries:
+                    continue  # Retry on 500 errors
+                else:
+                    # Add to problematic domains after max retries
+                    SCRAPINGBEE_PROBLEMATIC_DOMAINS.add(normalize_domain(domain))
+                    LOG.warning(f"Added {domain} to ScrapingBee problematic domains after repeated 500 errors")
+            
+            elif response.status_code == 422:
+                LOG.warning(f"SCRAPINGBEE: Invalid parameters for {domain}")
+                break  # Don't retry parameter errors
+            
+            else:
+                LOG.warning(f"SCRAPINGBEE: HTTP {response.status_code} for {domain}")
+                if attempt < max_retries:
+                    continue
+                    
+        except requests.RequestException as e:
+            LOG.warning(f"SCRAPINGBEE: Request error for {domain} (attempt {attempt + 1}): {e}")
+            if attempt < max_retries:
+                continue
+        except Exception as e:
+            LOG.error(f"SCRAPINGBEE: Unexpected error for {domain}: {e}")
+            break
+    
+    scrapingbee_stats["failed"] += 1
+    return None, f"ScrapingBee failed after {max_retries + 1} attempts"
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
@@ -1017,54 +1182,160 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
     except Exception as e:
         return None, f"Scraping error: {str(e)}"
 
-def safe_content_scraper_with_scrapingbee_limited(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
-    Enhanced content scraper with ScrapingBee fallback and limits
+    3-tier content scraper: requests → Playwright → ScrapingBee with comprehensive tracking
     """
-    try:
-        # Check scraping limits first
-        if not _check_scraping_limit(category, keyword):
-            return None, f"Scraping limit reached for {category} '{keyword}'"
+    global enhanced_scraping_stats
+    
+    # Check limits first
+    if not _check_scraping_limit(category, keyword):
+        if category == "company":
+            return None, f"Company limit reached ({scraping_stats['company_scraped']}/{scraping_stats['limits']['company']})"
+        elif category == "industry":
+            keyword_count = scraping_stats["industry_scraped_by_keyword"].get(keyword, 0)
+            return None, f"Industry keyword '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['industry_per_keyword']})"
+        elif category == "competitor":
+            keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
+            return None, f"Competitor '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['competitor_per_keyword']})"
+    
+    enhanced_scraping_stats["total_attempts"] += 1
+    
+    # TIER 1: Try standard requests-based scraping
+    LOG.info(f"TIER 1 (Requests): Attempting {domain}")
+    enhanced_scraping_stats["by_method"]["requests"]["attempts"] += 1
+    
+    content, error = safe_content_scraper(url, domain, scraped_domains)
+    
+    if content:
+        enhanced_scraping_stats["requests_success"] += 1
+        enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
+        _update_scraping_stats(category, keyword, True)
+        return content, f"TIER 1 SUCCESS: {len(content)} chars via requests"
+    
+    LOG.info(f"TIER 1 FAILED: {domain} - {error}")
+    
+    # TIER 2: Try Playwright fallback
+    LOG.info(f"TIER 2 (Playwright): Attempting {domain}")
+    enhanced_scraping_stats["by_method"]["playwright"]["attempts"] += 1
+    
+    playwright_content, playwright_error = extract_article_content_with_playwright(url, domain)
+    
+    if playwright_content:
+        enhanced_scraping_stats["playwright_success"] += 1
+        enhanced_scraping_stats["by_method"]["playwright"]["successes"] += 1
+        _update_scraping_stats(category, keyword, True)
+        return playwright_content, f"TIER 2 SUCCESS: {len(playwright_content)} chars via Playwright"
+    
+    LOG.info(f"TIER 2 FAILED: {domain} - {playwright_error}")
+    
+    # TIER 3: Try ScrapingBee fallback
+    if SCRAPINGBEE_API_KEY:
+        LOG.info(f"TIER 3 (ScrapingBee): Attempting {domain}")
         
-        # Try regular scraping first
-        content, error = extract_article_content(url, domain)
+        scrapingbee_content, scrapingbee_error = scrape_with_scrapingbee(url, domain)
         
-        if content:
+        if scrapingbee_content:
+            enhanced_scraping_stats["scrapingbee_success"] += 1
             _update_scraping_stats(category, keyword, True)
-            return content, f"Successfully scraped {len(content)} chars"
+            return scrapingbee_content, f"TIER 3 SUCCESS: {len(scrapingbee_content)} chars via ScrapingBee"
         
-        # Fallback to ScrapingBee for difficult sites
-        if SCRAPINGBEE_API_KEY:
-            LOG.info(f"Falling back to ScrapingBee for {domain}")
-            scrapingbee_content, scrapingbee_error = scrape_with_scrapingbee(url, domain)
-            
-            if scrapingbee_content:
-                _update_scraping_stats(category, keyword, True)
-                return scrapingbee_content, f"ScrapingBee success: {len(scrapingbee_content)} chars"
-        
-        return None, error or "Both regular and ScrapingBee scraping failed"
-        
-    except Exception as e:
-        return None, f"Scraping error: {str(e)}"
+        LOG.info(f"TIER 3 FAILED: {domain} - {scrapingbee_error}")
+    else:
+        LOG.info(f"TIER 3 SKIPPED: ScrapingBee API key not configured")
+    
+    # All tiers failed
+    enhanced_scraping_stats["total_failures"] += 1
+    return None, f"ALL TIERS FAILED - Requests: {error}, Playwright: {playwright_error}, ScrapingBee: {scrapingbee_error if SCRAPINGBEE_API_KEY else 'not configured'}"
+
+def log_enhanced_scraping_stats():
+    """Log comprehensive scraping statistics across all methods"""
+    total = enhanced_scraping_stats["total_attempts"]
+    if total == 0:
+        LOG.info("ENHANCED SCRAPING: No attempts made")
+        return
+    
+    requests_success = enhanced_scraping_stats["requests_success"]
+    playwright_success = enhanced_scraping_stats["playwright_success"]
+    scrapingbee_success = enhanced_scraping_stats["scrapingbee_success"]
+    total_success = requests_success + playwright_success + scrapingbee_success
+    
+    overall_rate = (total_success / total) * 100
+    
+    LOG.info("=== ENHANCED SCRAPING FINAL STATS ===")
+    LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total})")
+    LOG.info(f"  TIER 1 (Requests): {requests_success} successes / {enhanced_scraping_stats['by_method']['requests']['attempts']} attempts")
+    LOG.info(f"  TIER 2 (Playwright): {playwright_success} successes / {enhanced_scraping_stats['by_method']['playwright']['attempts']} attempts")
+    LOG.info(f"  TIER 3 (ScrapingBee): {scrapingbee_success} successes / {enhanced_scraping_stats['by_method']['scrapingbee']['attempts']} attempts")
+    
+    # Calculate tier-specific success rates
+    for method, stats in enhanced_scraping_stats["by_method"].items():
+        if stats["attempts"] > 0:
+            rate = (stats["successes"] / stats["attempts"]) * 100
+            LOG.info(f"  {method.upper()} RATE: {rate:.1f}%")
+
+def log_scrapingbee_stats():
+    """Enhanced ScrapingBee statistics logging"""
+    if scrapingbee_stats["requests_made"] == 0:
+        LOG.info("SCRAPINGBEE: No requests made this run")
+        return
+    
+    success_rate = (scrapingbee_stats["successful"] / scrapingbee_stats["requests_made"]) * 100
+    LOG.info(f"SCRAPINGBEE FINAL: {success_rate:.1f}% success rate ({scrapingbee_stats['successful']}/{scrapingbee_stats['requests_made']})")
+    LOG.info(f"SCRAPINGBEE COST: ${scrapingbee_stats['cost_estimate']:.3f} estimated")
+    
+    if scrapingbee_stats["failed"] > 0:
+        LOG.warning(f"SCRAPINGBEE: {scrapingbee_stats['failed']} requests failed")
+    
+    # Log top performing and failing domains
+    successful_domains = [(domain, stats) for domain, stats in scrapingbee_stats["by_domain"].items() if stats["successes"] > 0]
+    failed_domains = [(domain, stats) for domain, stats in scrapingbee_stats["by_domain"].items() if stats["successes"] == 0 and stats["attempts"] > 0]
+    
+    if successful_domains:
+        LOG.info(f"SCRAPINGBEE SUCCESS DOMAINS: {len(successful_domains)} domains working")
+    if failed_domains:
+        LOG.info(f"SCRAPINGBEE FAILED DOMAINS: {len(failed_domains)} domains blocked/failed")
+
+def reset_enhanced_scraping_stats():
+    """Reset enhanced scraping stats for new run"""
+    global enhanced_scraping_stats, scrapingbee_stats
+    enhanced_scraping_stats = {
+        "total_attempts": 0,
+        "requests_success": 0,
+        "playwright_success": 0,
+        "scrapingbee_success": 0,
+        "total_failures": 0,
+        "by_method": {
+            "requests": {"attempts": 0, "successes": 0},
+            "playwright": {"attempts": 0, "successes": 0},
+            "scrapingbee": {"attempts": 0, "successes": 0}
+        }
+    }
+    scrapingbee_stats = {
+        "requests_made": 0,
+        "successful": 0,
+        "failed": 0,
+        "cost_estimate": 0.0,
+        "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
+    }
 
 def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, ticker: str) -> bool:
-    """Scrape content and run AI analysis for a single article with dynamic limits"""
+    """Scrape content and run AI analysis for a single article with 3-tier scraping"""
     try:
         article_id = article["id"]
         resolved_url = article.get("resolved_url") or article.get("url")
         domain = article.get("domain", "unknown")
         title = article.get("title", "")
         
-        # FIXED:
+        # Get keyword for limit tracking
         if category == "company":
             keyword = ticker
         elif category == "competitor":
-            # Use competitor_ticker for limit consolidation
             keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
         else:
             keyword = article.get("search_keyword", "unknown")
         
-        # Attempt content scraping with limits
+        # Initialize content variables
         scraped_content = None
         scraping_error = None
         content_scraped_at = None
@@ -1075,24 +1346,21 @@ def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, tic
             scrape_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
             
             if scrape_domain not in PAYWALL_DOMAINS:
-                # Use the enhanced scraper with limits
-                content, status = safe_content_scraper_with_scrapingbee_limited(
+                # Use the new 3-tier scraping system
+                content, status = safe_content_scraper_with_3tier_fallback(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
                 
                 if content:
-                    # Scraping successful
                     scraped_content = content
                     content_scraped_at = datetime.now(timezone.utc)
-                    
-                    # Generate AI summary from scraped content
                     ai_summary = generate_ai_summary(scraped_content, title, ticker)
                 else:
                     scraping_failed = True
                     scraping_error = status
-                    return False  # Failed scraping doesn't count as success
+                    return False
         
-        # Run AI quality scoring
+        # Continue with existing AI quality scoring...
         keywords = []
         if category == "industry":
             keywords = metadata.get("industry_keywords", [])
@@ -1137,11 +1405,11 @@ def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, tic
                 article_id
             ))
         
-        LOG.info(f"Scraped and analyzed with limits: {title[:50]}... (Score: {quality_score:.1f}, Content: {'Yes' if scraped_content else 'No'})")
-        return scraped_content is not None  # Only return True if we actually got content
+        LOG.info(f"3-TIER SCRAPED: {title[:50]}... (Score: {quality_score:.1f}, Content: {'Yes' if scraped_content else 'No'})")
+        return scraped_content is not None
         
     except Exception as e:
-        LOG.error(f"Failed to scrape and analyze article {article.get('id')} with limits: {e}")
+        LOG.error(f"Failed to scrape and analyze article {article.get('id')} with 3-tier system: {e}")
         return False
 
 def _update_scraping_stats(category: str, keyword: str, success: bool):
@@ -1384,7 +1652,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                             LOG.info(f"Skipping paywall domain: {scrape_domain}")
                         else:
                             # Check scraping limits and attempt scraping
-                            content, status = safe_content_scraper_with_scrapingbee_limited(
+                            content, status = safe_content_scraper_with_3tier_fallback(
                                 final_resolved_url, scrape_domain, category, feed_keyword, scraped_domains
                             )
                             
@@ -6360,11 +6628,11 @@ def cron_ingest(
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """
-    Enhanced ingest with separate ingestion (50/25/25) and dynamic scraping limits:
+    Enhanced ingest with 3-tier scraping: requests → Playwright → ScrapingBee
     1. Ingest URLs from feeds with strict limits (50 company, 25 per industry keyword, 25 per competitor)
     2. Perform AI triage + quality domain selection
     3. Send enhanced quick email with triage results
-    4. Scrape selected articles with dynamic limits (20 + 5×keywords + 5×competitors)
+    4. Scrape selected articles with 3-tier fallback and dynamic limits (20 + 5×keywords + 5×competitors)
     5. Send final email with full analysis
     """
     require_admin(request)
@@ -6373,13 +6641,14 @@ def cron_ingest(
     update_schema_for_triage()
     update_schema_for_qb_scores()
     
-    LOG.info("=== CRON INGEST STARTING (INGESTION 50/25/25 + DYNAMIC SCRAPING) ===")
+    LOG.info("=== CRON INGEST STARTING (3-TIER SCRAPING: REQUESTS → PLAYWRIGHT → SCRAPINGBEE) ===")
     LOG.info(f"Processing window: {minutes} minutes")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
-    # Reset both ingestion and scraping stats
+    # Reset all statistics
     reset_ingestion_stats()
     reset_scraping_stats()
+    reset_enhanced_scraping_stats()
     
     # Calculate dynamic scraping limits for each ticker
     dynamic_limits = {}
@@ -6428,7 +6697,7 @@ def cron_ingest(
             # Get recently inserted articles for this feed
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT id, url, resolved_url, title, domain, published_at, category, search_keyword
+                    SELECT id, url, resolved_url, title, domain, published_at, category, search_keyword, competitor_ticker
                     FROM found_url 
                     WHERE feed_id = %s AND found_at >= %s
                     ORDER BY found_at DESC
@@ -6482,7 +6751,7 @@ def cron_ingest(
         )
         triage_results[ticker] = selected_results
         
-        # Update database with triage results - FIXED to handle HIGH/MEDIUM/LOW
+        # Update database with triage results
         for category, selected_items in selected_results.items():
             articles = articles_by_ticker[ticker][category]
             for item in selected_items:
@@ -6501,8 +6770,8 @@ def cron_ingest(
     quick_email_sent = send_quick_ingest_email_with_triage(articles_by_ticker, triage_results)
     LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
     
-    # PHASE 4: Scrape selected articles with DYNAMIC limits (20 + 5×keywords + 5×competitors)
-    LOG.info("=== PHASE 4: SCRAPING SELECTED ARTICLES WITH DYNAMIC LIMITS ===")
+    # PHASE 4: Scrape selected articles with 3-TIER FALLBACK and DYNAMIC limits
+    LOG.info("=== PHASE 4: 3-TIER SCRAPING WITH DYNAMIC LIMITS (REQUESTS → PLAYWRIGHT → SCRAPINGBEE) ===")
     scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0}
     
     for ticker in articles_by_ticker.keys():
@@ -6516,7 +6785,7 @@ def cron_ingest(
         
         # Company articles (limit 20)
         company_selected = selected.get("company", [])
-        LOG.info(f"SCRAPING {ticker} Company: {len(company_selected)} articles selected")
+        LOG.info(f"3-TIER SCRAPING {ticker} Company: {len(company_selected)} articles selected")
         for item in company_selected:
             if not _check_scraping_limit("company", ticker):
                 LOG.info(f"Company scraping limit reached for {ticker}")
@@ -6525,7 +6794,7 @@ def cron_ingest(
             article_idx = item["id"]
             if article_idx < len(articles_by_ticker[ticker]["company"]):
                 article = articles_by_ticker[ticker]["company"][article_idx]
-                success = scrape_and_analyze_article(article, "company", metadata, ticker)
+                success = scrape_and_analyze_article_3tier(article, "company", metadata, ticker)
                 if success:
                     scraping_final_stats["scraped"] += 1
                     scraping_final_stats["ai_analyzed"] += 1
@@ -6534,7 +6803,7 @@ def cron_ingest(
         
         # Industry articles (5 per keyword)
         industry_selected = selected.get("industry", [])
-        LOG.info(f"SCRAPING {ticker} Industry: {len(industry_selected)} articles selected")
+        LOG.info(f"3-TIER SCRAPING {ticker} Industry: {len(industry_selected)} articles selected")
         for item in industry_selected:
             article_idx = item["id"]
             if article_idx < len(articles_by_ticker[ticker]["industry"]):
@@ -6544,7 +6813,7 @@ def cron_ingest(
                 if not _check_scraping_limit("industry", keyword):
                     continue  # Skip this article, try next
                 
-                success = scrape_and_analyze_article(article, "industry", metadata, ticker)
+                success = scrape_and_analyze_article_3tier(article, "industry", metadata, ticker)
                 if success:
                     scraping_final_stats["scraped"] += 1
                     scraping_final_stats["ai_analyzed"] += 1
@@ -6553,26 +6822,31 @@ def cron_ingest(
         
         # Competitor articles (5 per competitor)
         competitor_selected = selected.get("competitor", [])
-        LOG.info(f"SCRAPING {ticker} Competitor: {len(competitor_selected)} articles selected")
+        LOG.info(f"3-TIER SCRAPING {ticker} Competitor: {len(competitor_selected)} articles selected")
         for item in competitor_selected:
             article_idx = item["id"]
             if article_idx < len(articles_by_ticker[ticker]["competitor"]):
                 article = articles_by_ticker[ticker]["competitor"][article_idx]
-                keyword = article.get("search_keyword", "unknown")
+                keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
                 
                 if not _check_scraping_limit("competitor", keyword):
                     continue  # Skip this article, try next
                 
-                success = scrape_and_analyze_article(article, "competitor", metadata, ticker)
+                success = scrape_and_analyze_article_3tier(article, "competitor", metadata, ticker)
                 if success:
                     scraping_final_stats["scraped"] += 1
                     scraping_final_stats["ai_analyzed"] += 1
                 else:
                     scraping_final_stats["failed"] += 1
     
-    LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} articles scraped and analyzed ===")
+    LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} articles scraped with 3-tier system ===")
     
-    # Log final scraping statistics
+    # Log comprehensive scraping statistics
+    LOG.info("=== COMPREHENSIVE SCRAPING STATISTICS ===")
+    log_enhanced_scraping_stats()
+    log_scrapingbee_stats()
+    
+    # Log traditional scraping limits status
     LOG.info("=== SCRAPING LIMITS FINAL STATUS ===")
     LOG.info(f"Company: {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}")
     for keyword, count in scraping_stats["industry_scraped_by_keyword"].items():
@@ -6594,11 +6868,18 @@ def cron_ingest(
             cur.execute("DELETE FROM found_url WHERE found_at < %s", (cutoff,))
         deleted = cur.rowcount
     
-    LOG.info("=== CRON INGEST COMPLETE ===")
+    LOG.info("=== CRON INGEST COMPLETE WITH 3-TIER SCRAPING ===")
+    
+    # Enhanced return with 3-tier stats
+    total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
+    total_scraping_success = (enhanced_scraping_stats["requests_success"] + 
+                             enhanced_scraping_stats["playwright_success"] + 
+                             enhanced_scraping_stats["scrapingbee_success"])
+    overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
     
     return {
         "status": "completed",
-        "workflow": "5_phase_ingestion_50_25_25_dynamic_scraping",
+        "workflow": "5_phase_3tier_scraping",
         "phase_1_ingest": {
             **ingest_stats,
             "ingestion_limits_status": {
@@ -6612,8 +6893,16 @@ def cron_ingest(
             "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()}
         },
         "phase_3_quick_email": {"sent": quick_email_sent},
-        "phase_4_scraping": {
+        "phase_4_3tier_scraping": {
             **scraping_final_stats,
+            "overall_success_rate": f"{overall_scraping_rate:.1f}%",
+            "tier_breakdown": {
+                "requests_success": enhanced_scraping_stats["requests_success"],
+                "playwright_success": enhanced_scraping_stats["playwright_success"],
+                "scrapingbee_success": enhanced_scraping_stats["scrapingbee_success"],
+                "total_attempts": total_scraping_attempts
+            },
+            "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
             "scraping_limits_status": {
                 "company": f"{scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}",
                 "industry_by_keyword": {k: f"{v}/{scraping_stats['limits']['industry_per_keyword']}" for k, v in scraping_stats["industry_scraped_by_keyword"].items()},
@@ -6623,7 +6912,7 @@ def cron_ingest(
         },
         "phase_5_final_email": final_digest_result,
         "cleanup": {"old_articles_deleted": deleted},
-        "message": f"Ingested {ingest_stats['total_inserted']} articles (50/25/25 limits), scraped {scraping_final_stats['scraped']} articles (dynamic limits: 20 + 5×keywords + 5×competitors)"
+        "message": f"3-TIER SCRAPING: {overall_scraping_rate:.1f}% success rate ({total_scraping_success}/{total_scraping_attempts}) | Cost: ${scrapingbee_stats['cost_estimate']:.3f}"
     }
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):

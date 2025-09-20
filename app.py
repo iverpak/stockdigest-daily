@@ -1319,7 +1319,7 @@ def reset_enhanced_scraping_stats():
         "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
     }
 
-def scrape_and_analyze_article(article: Dict, category: str, metadata: Dict, ticker: str) -> bool:
+def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dict, ticker: str) -> bool:
     """Scrape content and run AI analysis for a single article with 3-tier scraping"""
     try:
         article_id = article["id"]

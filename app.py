@@ -3474,12 +3474,31 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             "Content-Type": "application/json"
         }
         
+        # Extract target info for constraint enforcement
+        target_cap = payload.get('target_cap', 10)
+        total_items = len(payload.get('items', []))
+        effective_cap = min(target_cap, total_items)
+        
+        # Add explicit selection constraint to system prompt
+        constrained_system_prompt = f"""{system_prompt}
+
+CRITICAL SELECTION CONSTRAINT:
+You MUST select EXACTLY {effective_cap} articles from the {total_items} provided.
+Be highly selective. Choose only the {effective_cap} BEST articles based on the criteria above.
+DO NOT exceed {effective_cap} articles under any circumstances.
+
+Your selected_ids array must contain exactly {effective_cap} integers.
+Your selected array must contain exactly {effective_cap} objects.
+Be ruthless in your selection - quality over quantity."""
+        
         triage_schema = {
             "type": "object",
             "properties": {
                 "selected_ids": {
                     "type": "array",
-                    "items": {"type": "integer"}
+                    "items": {"type": "integer"},
+                    "maxItems": effective_cap,
+                    "minItems": effective_cap
                 },
                 "selected": {
                     "type": "array",
@@ -3495,7 +3514,9 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                         },
                         "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
                         "additionalProperties": False
-                    }
+                    },
+                    "maxItems": effective_cap,
+                    "minItems": effective_cap
                 },
                 "skipped": {
                     "type": "array",
@@ -3520,7 +3541,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         
         data = {
             "model": OPENAI_MODEL,
-            "reasoning": {"effort": "low"},  # Reduce reasoning overhead
+            "reasoning": {"effort": "medium"},  # Changed from low to medium
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -3528,11 +3549,11 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                     "schema": triage_schema,
                     "strict": True
                 },
-                "verbosity": "low"  # Make output more concise
+                "verbosity": "low"
             },
-            "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_output_tokens": 8000,  # Increased from 5000
-            "truncation": "auto"  # Let server truncate instead of erroring
+            "input": f"{constrained_system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
+            "max_output_tokens": 8000,
+            "truncation": "auto"
         }
         
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
@@ -3545,11 +3566,13 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         
         # Log usage details for debugging
         u = result.get("usage", {}) or {}
-        LOG.info("OpenAI triage usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+        LOG.info("OpenAI triage usage — input:%s output:%s (cap:%s) status:%s reason:%s target:%s actual_selected:%s",
                  u.get("input_tokens"), u.get("output_tokens"),
                  result.get("max_output_tokens"),
                  result.get("status"),
-                 (result.get("incomplete_details") or {}).get("reason"))
+                 (result.get("incomplete_details") or {}).get("reason"),
+                 effective_cap,
+                 "parsing...")
         
         content = extract_text_from_responses(result)
         
@@ -3563,7 +3586,6 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             incomplete_reason = (result.get("incomplete_details") or {}).get("reason")
             LOG.warning(f"Triage response incomplete (reason: {incomplete_reason})")
             LOG.warning(f"Content length: {len(content)} chars")
-            # Try to proceed with partial JSON if possible
         
         try:
             triage_result = json.loads(content)
@@ -3571,15 +3593,12 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             LOG.error(f"JSON parsing failed for triage: {e}")
             LOG.error(f"Response content: {content[:500]}")
             
-            # Try to salvage partial JSON by finding the last complete object
+            # Try to salvage partial JSON
             try:
-                # Find last complete "selected" or "skipped" entry
                 last_complete = content.rfind('"}')
                 if last_complete != -1:
-                    # Try to close the JSON properly
                     partial_content = content[:last_complete + 2]
                     
-                    # Add missing closing brackets if needed
                     open_brackets = partial_content.count('[') - partial_content.count(']')
                     open_braces = partial_content.count('{') - partial_content.count('}')
                     
@@ -3597,10 +3616,16 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                 LOG.error(f"Failed to salvage partial JSON: {salvage_error}")
                 return []
         
-        total_items = len(payload.get('items', []))
         selected_count = len(triage_result.get("selected_ids", []))
+        selected_articles_count = len(triage_result.get("selected", []))
         
-        LOG.info(f"Triage completed - Selected: {selected_count}, Total: {total_items}")
+        # Log constraint compliance
+        if selected_count != effective_cap:
+            LOG.warning(f"CONSTRAINT VIOLATION: Expected {effective_cap} selections, got {selected_count}")
+        if selected_articles_count != effective_cap:
+            LOG.warning(f"CONSTRAINT VIOLATION: Expected {effective_cap} selected objects, got {selected_articles_count}")
+        
+        LOG.info(f"Triage completed - Target: {effective_cap}, Selected IDs: {selected_count}, Selected Objects: {selected_articles_count}, Total: {total_items}")
         
         selected_articles = []
         for selected_item in triage_result.get("selected", []):
@@ -3615,6 +3640,11 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                 }
                 selected_articles.append(result_item)
         
+        # Enforce the cap at the code level as final safeguard
+        if len(selected_articles) > effective_cap:
+            LOG.warning(f"Code-level cap enforcement: Trimming {len(selected_articles)} to {effective_cap}")
+            selected_articles = selected_articles[:effective_cap]
+        
         return selected_articles
         
     except Exception as e:
@@ -3623,7 +3653,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
 
 def triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, aliases_brands_assets: Dict, sector_profile: Dict) -> List[Dict]:
     """
-    Enhanced company triage focusing solely on title relevance with HIGH/MEDIUM/LOW priorities
+    Enhanced company triage with explicit selection constraints
     """
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -3638,19 +3668,22 @@ def triage_company_articles_full(articles: List[Dict], ticker: str, company_name
             "published": article.get('published', '')
         })
 
+    target_cap = min(20, len(articles))  # Explicit cap for company articles
+    
     payload = {
         "bucket": "company",
-        "target_cap": min(30, len(articles)),
+        "target_cap": target_cap,
         "ticker": ticker,
         "company_name": company_name,
         "items": items
     }
 
-    system_prompt = """You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPANY articles.
+    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPANY articles about {company_name} ({ticker}).
 
+You MUST select EXACTLY {target_cap} articles from {len(articles)} total articles.
 Focus SOLELY on title content. Ignore domain/source quality. Do not infer from outlet names embedded in titles.
 
-COMPANY RELEVANCE (Title-Only Assessment):
+SELECTION PRIORITY (choose the {target_cap} BEST):
 
 HIGH PRIORITY - Hard business events with company as primary subject:
 Event verbs: acquires, merger, divests, spin-off, bankruptcy, Chapter 11, delist, recall, halt, guidance, preannounce, beats, misses, earnings, margin, backlog, contract, long-term agreement, supply deal, price increase, price cut, capacity add, closure, curtailment, buyback, tender, equity offering, convertible, refinance, rating change, approval, license, tariff, quota, sanction, fine, settlement, DOJ, FTC, SEC, FDA, USDA, EPA, OSHA, NHTSA, FAA, FCC
@@ -3671,30 +3704,8 @@ LOW PRIORITY - Routine coverage requiring backfill:
 EXCLUDE COMPLETELY:
 * Listicles/opinion titles: "Top", "Best", "Should you", "Right now", "Reasons", "Prediction", "If you'd invested", "What to know", "How to", "Why", "Analysis", "Outlook"
 * PR/TAM phrasing: "Announces" (without hard event verb), "Reports Market Size", "CAGR", "Forecast 20XX-20YY", "to reach $X by 2030", "Market Report", "Press Release" (unless paired with hard event verb AND concrete numbers)
-* Articles primarily about other companies with target company mentioned in passing
-* Historical retrospectives without forward-looking implications
-* Generic trading/technical analysis without business fundamentals
-* Promotional content or vendor announcements
 
-TITLE SPECIFICITY BOOSTERS (within priority band):
-* $ figures, percentages, unit magnitudes, dates/timelines, capacity numbers
-* Company name appears close to event verb (same clause)
-* Concrete operational details (facility names, product specifics, customer names)
-* Geographic specificity (plant locations, market regions, regulatory jurisdictions)
-* Quantified business metrics (revenue guidance, margin targets, headcount changes)
-
-FILL POLICY:
-* Select exactly target_cap items unless there are fewer than target_cap total items
-* Backfill ladder if insufficient High items: HIGH → MEDIUM → LOW → (last resort) items matching ticker + relevant business terms
-* When backfilling from lower categories, mark reason as "backfill" and cite qualifying title tokens
-* Maintain consistent scoring for identical titles regardless of source
-
-REQUIRED RESPONSE FIELDS:
-selected_ids: int[]
-selected: [{id: int, scrape_priority: string ("HIGH"|"MEDIUM"|"LOW"), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
-skipped: [same structure]
-
-For repeat coverage: explain why each repeat adds value based on title content differences, not source.
+CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. If fewer than {target_cap} articles meet the criteria, select the best available but never exceed {target_cap}.
 
 The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
 
@@ -3702,7 +3713,7 @@ The response will be automatically formatted as structured JSON with selected_id
 
 def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[Dict]:
     """
-    Enhanced industry triage focusing on sector-specific relevance with HIGH/MEDIUM/LOW priorities
+    Enhanced industry triage with explicit selection constraints
     """
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -3719,21 +3730,23 @@ def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_prof
 
     # Extract industry keywords from the first article's search_keyword
     industry_keywords = [articles[0].get('search_keyword', '')] if articles else []
+    target_cap = min(5, len(articles))  # 5 per keyword, not 15
 
     payload = {
         "bucket": "industry",
-        "target_cap": min(30, len(articles)),
+        "target_cap": target_cap,
         "ticker": ticker,
         "industry_keywords": industry_keywords,
         "sector_profile": sector_profile,
         "items": items
     }
 
-    system_prompt = """You are a financial analyst doing PRE-SCRAPE TRIAGE for INDUSTRY articles.
+    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for INDUSTRY articles.
 
+You MUST select EXACTLY {target_cap} articles from {len(articles)} total articles.
 Focus SOLELY on title content. Ignore domain/source quality. Do not infer from outlet names embedded in titles.
 
-INDUSTRY RELEVANCE (Title-Only Assessment):
+SELECTION PRIORITY (choose the {target_cap} BEST):
 
 HIGH PRIORITY - Policy/regulatory/benchmark shocks with quantified impact:
 Event verbs: tariff, ban, quota, price control, regulatory change with date, supply shock, inventory draw/build with numbers, price cap/floor, standard adopted, subsidy/credit, reimbursement change, safety requirement, environmental standard, trade agreement, export control, import restriction
@@ -3755,38 +3768,8 @@ LOW PRIORITY - Broad trends requiring backfill:
 EXCLUDE COMPLETELY:
 * Market research/TAM reports: "Market Size", "CAGR", "Forecast 20XX-20YY", "to reach $X by 2030", "Market Report", "Analysis Report", "Industry Outlook" (unless tied to specific regulatory change with implementation dates)
 * Listicles/generic content: "Top", "Best", "Trends", "Future of", "Analysis", "Outlook", "How to", "Why", "What to know"
-* Local project news without broader sector implications
-* Generic sustainability/ESG discussions without regulatory requirements or compliance costs
-* Academic research without immediate commercial application or policy relevance
-* Vendor announcements without material market impact or adoption timeline
-* Consumer preference studies without regulatory or demand shift implications
 
-TITLE SPECIFICITY BOOSTERS (within priority band):
-* Percentage changes in key inputs (steel prices up 15%, oil supply down 8%)
-* Dollar amounts for industry investments, penalties, or compliance costs
-* Effective dates for regulations, policy changes, or standard implementations
-* Capacity numbers for new facilities, closures, or production changes
-* Geographic scope with specific markets, regions, or jurisdictions mentioned
-* Commodity/input price levels with historical context (highest since, lowest in X years)
-
-FILL POLICY:
-* Select exactly target_cap items unless there are fewer than target_cap total items
-* Backfill ladder if insufficient High items: HIGH → MEDIUM → LOW → (last resort) items matching industry_keywords + concrete business terms
-* When backfilling, mark reason as "backfill" and cite qualifying title tokens (e.g., "healthcare + regulation", "energy + infrastructure")
-* Maintain consistent scoring for identical titles regardless of source
-
-REQUIRED RESPONSE FIELDS:
-selected_ids: int[]
-selected: [{id: int, scrape_priority: string ("HIGH"|"MEDIUM"|"LOW"), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
-skipped: [same structure]
-
-SECTOR CONTEXT PRIORITY:
-* core_inputs: Raw materials/components critical to operations (prioritize price/supply/regulatory changes)
-* core_channels: Primary markets/customer segments (prioritize demand/access/regulatory changes)  
-* core_geos: Key geographic markets (prioritize policy changes, trade issues, regulatory shifts)
-* benchmarks: Industry indices/pricing mechanisms (prioritize methodology changes, significant moves)
-
-For repeat coverage: explain why each repeat adds value based on different regulatory/policy aspects mentioned in title.
+CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. Never exceed {target_cap} selections.
 
 The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
 
@@ -3794,7 +3777,7 @@ The response will be automatically formatted as structured JSON with selected_id
 
 def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[Dict]:
     """
-    Enhanced competitor triage focusing on competitive dynamics with HIGH/MEDIUM/LOW priorities
+    Enhanced competitor triage with explicit selection constraints
     """
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -3811,21 +3794,23 @@ def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: Li
 
     # Extract competitor names from peers
     competitors = [peer.split(' (')[0] if ' (' in peer else peer for peer in peers]
+    target_cap = min(5, len(articles))  # 5 per competitor, not 15
 
     payload = {
         "bucket": "competitor",
-        "target_cap": min(30, len(articles)),
+        "target_cap": target_cap,
         "ticker": ticker,
         "competitors": competitors,
         "sector_profile": sector_profile,
         "items": items
     }
 
-    system_prompt = """You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPETITOR articles.
+    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPETITOR articles.
 
+You MUST select EXACTLY {target_cap} articles from {len(articles)} total articles.
 Focus SOLELY on title content. Ignore domain/source quality. Do not infer from outlet names embedded in titles.
 
-COMPETITOR RELEVANCE (Title-Only Assessment):
+SELECTION PRIORITY (choose the {target_cap} BEST):
 
 HIGH PRIORITY - Hard competitive events with quantified market impact:
 Event verbs: capacity expansion/reduction with numbers, pricing actions with %, major customer win/loss, plant opening/closing with output figures, asset sale/acquisition with values, restructuring/bankruptcy, breakthrough/launch with ship dates, supply agreement with volumes, market entry/exit with investment amounts
@@ -3849,39 +3834,8 @@ EXCLUDE COMPLETELY:
 * Generic analyst commentary without specific guidance/target changes
 * Stock performance discussions without underlying operational drivers
 * Listicles: "Top", "Best", "Should you", "Reasons", "Analysis", "Outlook", "How to", "Why"
-* Historical retrospectives without forward-looking competitive implications
-* Technical/trading analysis focused on stock price movements without business fundamentals
-* Market commentary mentioning competitors in passing without competitive focus
-* PR/TAM phrasing: "Announces" (without hard event), "Market Report", "Press Release", "Analysis Report" (unless with hard event verb + quantified impact)
-* Articles about non-competing companies or companies outside direct competitive scope
 
-TITLE SPECIFICITY BOOSTERS (within priority band):
-* Competitor name positioned close to event verb in title structure
-* Percentage changes (pricing actions, capacity changes, market share shifts, margin impacts)
-* Dollar amounts (investments, deal values, cost savings, revenue impacts)
-* Timelines and effective dates (plant openings, product launches, agreement terms)
-* Specific customer, facility, product, or market segment names
-* Competitive positioning language (market leader, gaining share, losing ground)
-
-COMPETITIVE IMPACT ASSESSMENT CRITERIA:
-* Will this change market share dynamics or competitive positioning?
-* Could this affect industry pricing power or cost structures?
-* Does this represent a capacity, capability, or geographic advantage/disadvantage?
-* Are there specific numbers indicating competitive advantage shifts?
-* Would this information influence strategic competitive responses?
-
-FILL POLICY:
-* Select exactly target_cap items unless there are fewer than target_cap total items  
-* Backfill ladder if insufficient High items: HIGH → MEDIUM → LOW → (last resort) items matching competitor names + relevant business terms
-* When backfilling, mark reason as "backfill" and cite qualifying elements (e.g., "competitor name + earnings beat", "competitor name + expansion")
-* Maintain consistent scoring for identical titles regardless of source
-
-REQUIRED RESPONSE FIELDS:
-selected_ids: int[]
-selected: [{id: int, scrape_priority: string ("HIGH"|"MEDIUM"|"LOW"), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
-skipped: [same structure]
-
-For repeat coverage: explain why each repeat adds different competitive intelligence value based on distinct aspects mentioned in title content.
+CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. Never exceed {target_cap} selections.
 
 The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
 

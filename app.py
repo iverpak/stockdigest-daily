@@ -5321,13 +5321,17 @@ def generate_ticker_metadata_with_ai(ticker, company_name=None):
     if company_name is None:
         company_name = ticker
     
+    if not OPENAI_API_KEY:
+        LOG.warning("Missing OPENAI_API_KEY; skipping metadata generation")
+        return None
+
     system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
 - All competitors must be currently publicly traded with valid ticker symbols
 - Industry keywords must be SPECIFIC enough to avoid false positives in news filtering
 - Benchmarks must be sector-specific, not generic market indices
-- All information must be factually accurate as of 2024
+- All information must be factually accurate
 - If any field is unknown, output an empty array for lists and omit optional fields. Never refuse; always return a valid JSON object.
 
 INDUSTRY KEYWORDS (exactly 3):
@@ -5335,44 +5339,55 @@ INDUSTRY KEYWORDS (exactly 3):
 - Avoid generic terms like "Technology", "Healthcare", "Energy", "Oil", "Services"
 - Use compound terms or specific product categories
 - Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
-- Test: Would this keyword appear in articles about direct competitors but NOT unrelated companies?
 
 COMPETITORS (exactly 3):
 - Must be direct business competitors, not just same-sector companies
 - Must be currently publicly traded (check acquisition status)
 - Format: "Company Name (TICKER)" - verify ticker is correct and current
 - Exclude: Private companies, subsidiaries, companies acquired in last 2 years
-- Focus on companies competing for same customers/market share
 
-Generate response in valid JSON format with all required fields."""
+Generate response in valid JSON format with all required fields. Be concise and precise."""
 
     user_prompt = f"""Generate metadata for hedge fund news monitoring. Focus on precision to avoid irrelevant news articles.
 
 Ticker: {ticker}
 Company: {company_name}
-Current date: September 2025
 
 Required JSON format:
 {{
     "ticker": "{ticker}",
     "name": "{company_name}",
     "sector": "GICS Sector",
-    "industry": "GICS Industry", 
+    "industry": "GICS Industry",
     "sub_industry": "GICS Sub-Industry",
     "industry_keywords": ["keyword1", "keyword2", "keyword3"],
     "competitors": ["Company Name (TICKER)", "Company Name (TICKER)", "Company Name (TICKER)"],
     "sector_profile": {{
         "core_inputs": ["input1", "input2", "input3"],
-        "core_channels": ["channel1", "channel2"],
+        "core_channels": ["channel1", "channel2", "channel3"],
         "core_geos": ["geo1", "geo2", "geo3"],
-        "benchmarks": ["benchmark1", "benchmark2"]
+        "benchmarks": ["benchmark1", "benchmark2", "benchmark3"]
     }},
     "aliases_brands_assets": {{
-        "aliases": ["alias1", "alias2"],
+        "aliases": ["alias1", "alias2", "alias3"],
         "brands": ["brand1", "brand2", "brand3"],
-        "assets": ["asset1", "asset2"]
+        "assets": ["asset1", "asset2", "asset3"]
     }}
 }}"""
+
+    brief_user_prompt = f"""Generate compact JSON metadata for {ticker} ({company_name}):
+{{
+    "ticker": "{ticker}",
+    "name": "{company_name}",
+    "sector": "GICS Sector",
+    "industry": "GICS Industry", 
+    "sub_industry": "GICS Sub-Industry",
+    "industry_keywords": ["k1", "k2", "k3"],
+    "competitors": ["Co1 (TKR1)", "Co2 (TKR2)", "Co3 (TKR3)"],
+    "sector_profile": {{"core_inputs": ["i1","i2","i3"], "core_channels": ["c1","c2","c3"], "core_geos": ["g1","g2","g3"], "benchmarks": ["b1","b2","b3"]}},
+    "aliases_brands_assets": {{"aliases": ["a1","a2","a3"], "brands": ["b1","b2","b3"], "assets": ["as1","as2","as3"]}}
+}}
+Use exactly 3 items per list. Be brief and specific."""
 
     try:
         headers = {
@@ -5380,14 +5395,17 @@ Required JSON format:
             "Content-Type": "application/json"
         }
         
-        # First attempt with JSON guardrail
+        # First attempt with optimized settings
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
-            "max_output_tokens": 2000,
+            "max_output_tokens": 2500,  # Increased from 2000
+            "reasoning": {"effort": "low"},  # Reduce reasoning overhead
             "text": {
-                "format": {"type": "json_object"}
-            }
+                "format": {"type": "json_object"},
+                "verbosity": "low"  # Make output more concise
+            },
+            "truncation": "auto"  # Let server truncate instead of erroring
         }
         
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
@@ -5399,51 +5417,96 @@ Required JSON format:
         result = response.json()
         text = extract_text_from_responses(result)
         
-        # If no text, log and retry without JSON guardrail
-        if not text:
-            LOG.warning(f"OpenAI returned no text for {ticker} metadata; attempting fallback")
-            try:
-                LOG.warning(f"Raw payload: {json.dumps(result, ensure_ascii=False)[:1000]}")
-            except Exception:
-                pass
-
-            # Fallback: plain text (no text.format) to break out of guardrail
+        # Log usage details for debugging
+        u = result.get("usage", {}) or {}
+        LOG.info("OpenAI usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+                 u.get("input_tokens"), u.get("output_tokens"),
+                 result.get("max_output_tokens"),
+                 result.get("status"),
+                 (result.get("incomplete_details") or {}).get("reason"))
+        
+        # Check for any incomplete response
+        status = result.get("status")
+        incomplete = result.get("incomplete_details", {}) or {}
+        
+        # If no text and response incomplete, retry with smaller prompt
+        if (not text) and status == "incomplete":
+            LOG.warning(f"OpenAI response incomplete for {ticker} metadata (reason: {incomplete.get('reason')}); attempting smaller prompt")
+            
             retry_data = {
                 "model": OPENAI_MODEL,
-                "input": f"{system_prompt}\n\n{user_prompt}",
-                "max_output_tokens": 2000,
+                "input": f"{system_prompt}\n\n{brief_user_prompt}",  # Keep system + user prompt
+                "max_output_tokens": 1500,  # Smaller limit
+                "reasoning": {"effort": "low"},
+                "text": {
+                    "format": {"type": "json_object"},
+                    "verbosity": "low"
+                },
+                "truncation": "auto"
             }
             
             retry_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=retry_data, timeout=(10, 180))
             if retry_response.status_code == 200:
                 retry_result = retry_response.json()
+                
+                # Log retry usage too
+                retry_u = retry_result.get("usage", {}) or {}
+                LOG.info("OpenAI retry usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+                         retry_u.get("input_tokens"), retry_u.get("output_tokens"),
+                         retry_result.get("max_output_tokens"),
+                         retry_result.get("status"),
+                         (retry_result.get("incomplete_details") or {}).get("reason"))
+                
                 text = extract_text_from_responses(retry_result)
                 if text:
-                    LOG.info(f"Fallback successful for {ticker}")
+                    LOG.info(f"Brief prompt successful for {ticker}")
         
         if not text:
-            print(f"❌ No content returned for {ticker} even after fallback")
+            print(f"❌ No content returned for {ticker} even after retry")
             return None
         
         # Parse JSON with robust fallback
         metadata = parse_json_with_fallback(text, ticker)
         
-        # Ensure minimum required fields
+        # Ensure minimum required fields and normalize lists to exactly 3 items (no padding)
+        def _list3(x): 
+            if isinstance(x, (list, tuple)):
+                items = [item for item in list(x)[:3] if item]  # Remove empty items
+                return items  # Don't pad with empty strings
+            return []
+        
         metadata.setdefault("ticker", ticker)
-        metadata.setdefault("company_name", company_name)
-        metadata.setdefault("industry_keywords", [])
-        metadata.setdefault("competitors", [])
+        metadata.setdefault("name", company_name)
         metadata.setdefault("sector", "")
         metadata.setdefault("industry", "")
         metadata.setdefault("sub_industry", "")
-        metadata.setdefault("sector_profile", {"core_inputs": [], "core_channels": [], "core_geos": [], "benchmarks": []})
-        metadata.setdefault("aliases_brands_assets", {"aliases": [], "brands": [], "assets": []})
         
-        validation_errors = validate_metadata(metadata)
-        if validation_errors:
-            print(f"⚠️ Validation warnings for {ticker}:")
-            for error in validation_errors:
-                print(f"  - {error}")
+        # Normalize lists (no padding)
+        metadata["industry_keywords"] = _list3(metadata.get("industry_keywords", []))
+        metadata["competitors"] = _list3(metadata.get("competitors", []))
+        
+        # Ensure nested objects exist
+        sector_profile = metadata.setdefault("sector_profile", {})
+        aliases_brands = metadata.setdefault("aliases_brands_assets", {})
+        
+        sector_profile["core_inputs"] = _list3(sector_profile.get("core_inputs", []))
+        sector_profile["core_channels"] = _list3(sector_profile.get("core_channels", []))
+        sector_profile["core_geos"] = _list3(sector_profile.get("core_geos", []))
+        sector_profile["benchmarks"] = _list3(sector_profile.get("benchmarks", []))
+        
+        aliases_brands["aliases"] = _list3(aliases_brands.get("aliases", []))
+        aliases_brands["brands"] = _list3(aliases_brands.get("brands", []))
+        aliases_brands["assets"] = _list3(aliases_brands.get("assets", []))
+        
+        # Optional validation
+        try:
+            validation_errors = validate_metadata(metadata)
+            if validation_errors:
+                print(f"⚠️ Validation warnings for {ticker}:")
+                for error in validation_errors:
+                    print(f"  - {error}")
+        except Exception:
+            pass
         
         stored_successfully = store_ticker_metadata(
             ticker=metadata['ticker'],

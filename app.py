@@ -6290,7 +6290,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                     
                     if alias_data.get("assets"):
                         asset_badges = [f'<span class="asset-badge">{asset}</span>' for asset in alias_data["assets"][:5]]
-                        html.append(f"<strong>Key Assets:</strong> {' '.join(asset_badges)}')
+                        html.append(f"<strong>Key Assets:</strong> {' '.join(asset_badges)}")
                         
                 except Exception as e:
                     LOG.warning(f"Error parsing aliases/brands for {ticker}: {e}")

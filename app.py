@@ -305,32 +305,23 @@ def _check_ingestion_limit(category: str, keyword: str) -> bool:
 domain_last_accessed = {}
 last_scraped_domain = None
 
-# Global Playwright statistics tracking
-playwright_stats = {
-    "attempted": 0,
+# Global ScrapingBee statistics tracking
+scrapingbee_stats = {
+    "requests_made": 0,
     "successful": 0,
     "failed": 0,
+    "cost_estimate": 0.0,
     "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
 }
 
-def log_playwright_stats():
-    """Log current Playwright performance statistics"""
-    if playwright_stats["attempted"] == 0:
+def log_scrapingbee_stats():
+    """Log current ScrapingBee performance statistics"""
+    if scrapingbee_stats["requests_made"] == 0:
         return
     
-    success_rate = (playwright_stats["successful"] / playwright_stats["attempted"]) * 100
-    LOG.info(f"PLAYWRIGHT STATS: {success_rate:.1f}% success rate ({playwright_stats['successful']}/{playwright_stats['attempted']})")
-    
-    # Log top performing and failing domains
-    domain_stats = playwright_stats["by_domain"]
-    if domain_stats:
-        successful_domains = [(domain, stats) for domain, stats in domain_stats.items() if stats["successes"] > 0]
-        failed_domains = [(domain, stats) for domain, stats in domain_stats.items() if stats["successes"] == 0 and stats["attempts"] > 0]
-        
-        if successful_domains:
-            LOG.info(f"PLAYWRIGHT SUCCESS DOMAINS: {len(successful_domains)} domains working")
-        if failed_domains:
-            LOG.info(f"PLAYWRIGHT FAILED DOMAINS: {len(failed_domains)} domains still blocked")
+    success_rate = (scrapingbee_stats["successful"] / scrapingbee_stats["requests_made"]) * 100
+    LOG.info(f"SCRAPINGBEE STATS: {success_rate:.1f}% success rate ({scrapingbee_stats['successful']}/{scrapingbee_stats['requests_made']})")
+    LOG.info(f"SCRAPINGBEE COST: Estimated ${scrapingbee_stats['cost_estimate']:.3f}")
 
 # ------------------------------------------------------------------------------
 # Database helpers
@@ -667,6 +658,8 @@ def scrape_with_scrapingbee(url: str, domain: str) -> Tuple[Optional[str], Optio
     """
     Enhanced article extraction using ScrapingBee for JavaScript-heavy sites
     """
+    global scrapingbee_stats
+    
     try:
         if not SCRAPINGBEE_API_KEY:
             return None, "ScrapingBee API key not configured"
@@ -677,18 +670,27 @@ def scrape_with_scrapingbee(url: str, domain: str) -> Tuple[Optional[str], Optio
         
         LOG.info(f"SCRAPINGBEE: Starting scrape for {domain}")
         
-        # ScrapingBee request parameters
+        # Update usage stats
+        scrapingbee_stats["requests_made"] += 1
+        scrapingbee_stats["cost_estimate"] += 0.001  # Assuming $0.001 per request
+        
+        # ScrapingBee request parameters - optimized for news sites
         params = {
             'api_key': SCRAPINGBEE_API_KEY,
             'url': url,
             'render_js': 'true',  # Enable JavaScript rendering
             'premium_proxy': 'true',  # Use premium proxy pool for better success
             'country_code': 'us',  # Use US-based proxies
-            'wait': 1000,  # Wait 1 second for page load
+            'wait': 2000,  # Wait 2 seconds for page load
             'wait_for': 'networkidle',  # Wait for network to be idle
             'block_ads': 'true',  # Block ads to speed up loading
             'block_resources': 'true',  # Block images/videos to speed up
-            'timeout': 15000  # 15 second timeout
+            'timeout': 20000,  # 20 second timeout
+            'screenshot': 'false',  # Don't take screenshots to save credits
+            'extract_rules': json.dumps({
+                'title': 'title, h1',
+                'content': 'article, .article-content, .post-content, .entry-content, main, .main-content'
+            })
         }
         
         response = requests.get(
@@ -697,17 +699,41 @@ def scrape_with_scrapingbee(url: str, domain: str) -> Tuple[Optional[str], Optio
             timeout=30
         )
         
-        if response.status_code != 200:
+        # Enhanced error handling
+        if response.status_code == 422:
+            scrapingbee_stats["failed"] += 1
+            return None, "ScrapingBee: Invalid parameters or blocked site"
+        elif response.status_code == 429:
+            scrapingbee_stats["failed"] += 1
+            return None, "ScrapingBee: Rate limit exceeded"
+        elif response.status_code == 403:
+            scrapingbee_stats["failed"] += 1
+            return None, "ScrapingBee: Access forbidden"
+        elif response.status_code != 200:
+            scrapingbee_stats["failed"] += 1
             error_msg = f"ScrapingBee HTTP {response.status_code}"
             LOG.warning(f"SCRAPINGBEE FAILED: {domain} -> {error_msg}")
             return None, error_msg
         
+        # Check API usage headers
+        remaining_calls = response.headers.get('spb-credits-remaining')
+        if remaining_calls:
+            try:
+                remaining = int(remaining_calls)
+                if remaining < 100:
+                    LOG.warning(f"ScrapingBee credits running low: {remaining} remaining")
+                elif remaining < 10:
+                    LOG.error(f"ScrapingBee credits critically low: {remaining} remaining")
+            except ValueError:
+                pass
+        
         html_content = response.text
         
         if not html_content or len(html_content) < 100:
+            scrapingbee_stats["failed"] += 1
             return None, "Empty or too short response from ScrapingBee"
         
-        # Use newspaper3k to parse the HTML (same as before)
+        # Use newspaper3k to parse the HTML (same as your existing method)
         config = newspaper.Config()
         config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         config.request_timeout = 15
@@ -721,11 +747,13 @@ def scrape_with_scrapingbee(url: str, domain: str) -> Tuple[Optional[str], Optio
         content = article.text.strip()
         
         if not content:
+            scrapingbee_stats["failed"] += 1
             return None, "No content extracted from ScrapingBee response"
         
-        # Enhanced content validation (reuse existing logic)
+        # Enhanced content validation (reuse your existing logic)
         is_valid, validation_msg = validate_scraped_content(content, url, domain)
         if not is_valid:
+            scrapingbee_stats["failed"] += 1
             return None, validation_msg
         
         # Check for common error pages or blocking messages
@@ -733,21 +761,44 @@ def scrape_with_scrapingbee(url: str, domain: str) -> Tuple[Optional[str], Optio
         error_indicators = [
             "403 forbidden", "access denied", "captcha", "robot", "bot detection",
             "please verify you are human", "cloudflare", "rate limit", "blocked",
-            "security check", "unusual traffic"
+            "security check", "unusual traffic", "please enable javascript",
+            "this site is protected", "checking your browser"
         ]
         
         if any(indicator in content_lower for indicator in error_indicators):
+            scrapingbee_stats["failed"] += 1
             LOG.warning(f"SCRAPINGBEE BLOCKED: {domain} -> Error page detected")
             return None, "Error page or blocking detected"
         
+        # Enhanced cookie banner detection (reuse your existing logic)
+        cookie_indicators = [
+            "we use cookies", "accept all cookies", "cookie policy",
+            "privacy policy and terms of service", "consent to the use",
+            "personalizing content and advertising", "marketing cookies",
+            "essential cookies", "functional cookies", "deny optional",
+            "accept all or closing out of this banner", "revised from time to time"
+        ]
+        
+        cookie_count = sum(1 for indicator in cookie_indicators if indicator in content_lower)
+        
+        # If multiple cookie indicators and content is short, likely a cookie page
+        if cookie_count >= 3 and len(content) < 800:
+            scrapingbee_stats["failed"] += 1
+            return None, "Cookie consent page detected"
+        
+        # Success!
+        scrapingbee_stats["successful"] += 1
         LOG.info(f"SCRAPINGBEE SUCCESS: {domain} -> {len(content)} chars extracted")
         return content.strip(), None
         
     except requests.exceptions.Timeout:
+        scrapingbee_stats["failed"] += 1
         return None, "ScrapingBee request timeout"
     except requests.exceptions.RequestException as e:
+        scrapingbee_stats["failed"] += 1
         return None, f"ScrapingBee request failed: {str(e)}"
     except Exception as e:
+        scrapingbee_stats["failed"] += 1
         error_msg = f"ScrapingBee extraction failed: {str(e)}"
         LOG.error(f"SCRAPINGBEE ERROR: {domain} -> {error_msg}")
         return None, error_msg
@@ -963,6 +1014,36 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
         else:
             return None, error or "Failed to extract content"
             
+    except Exception as e:
+        return None, f"Scraping error: {str(e)}"
+
+def safe_content_scraper_with_scrapingbee_limited(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+    """
+    Enhanced content scraper with ScrapingBee fallback and limits
+    """
+    try:
+        # Check scraping limits first
+        if not _check_scraping_limit(category, keyword):
+            return None, f"Scraping limit reached for {category} '{keyword}'"
+        
+        # Try regular scraping first
+        content, error = extract_article_content(url, domain)
+        
+        if content:
+            _update_scraping_stats(category, keyword, True)
+            return content, f"Successfully scraped {len(content)} chars"
+        
+        # Fallback to ScrapingBee for difficult sites
+        if SCRAPINGBEE_API_KEY:
+            LOG.info(f"Falling back to ScrapingBee for {domain}")
+            scrapingbee_content, scrapingbee_error = scrape_with_scrapingbee(url, domain)
+            
+            if scrapingbee_content:
+                _update_scraping_stats(category, keyword, True)
+                return scrapingbee_content, f"ScrapingBee success: {len(scrapingbee_content)} chars"
+        
+        return None, error or "Both regular and ScrapingBee scraping failed"
+        
     except Exception as e:
         return None, f"Scraping error: {str(e)}"
 

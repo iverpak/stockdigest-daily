@@ -3192,186 +3192,103 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
 
 def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[str, List[Dict]], ticker: str, target_limits: Dict[str, int] = None) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage: AI selection → Add quality domains → Remove problematic domains → Backfill with QB scores
-    ENSURES NO OVERLAP between categories and excludes problematic scrape domains
+    Enhanced triage: Process EACH keyword/competitor separately for proper 5-per-item limits
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - using quality domains and QB backfill only")
         return {"company": [], "industry": [], "competitor": []}
     
-    # Default limits if not provided
-    if not target_limits:
-        target_limits = {"company": 20, "industry": 15, "competitor": 15}
-    
     selected_results = {"company": [], "industry": [], "competitor": []}
     
-    # Get ticker metadata for enhanced prompts
+    # Get ticker metadata
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
     
-    # Process each category with enhanced selection logic
-    for category in ["company", "industry", "competitor"]:
-        articles = articles_by_category.get(category, [])
-        if not articles:
-            continue
-            
-        target = target_limits.get(category, 20)
-        LOG.info(f"Enhanced selection for {category}: {len(articles)} articles (target: {target})")
-        
-        # STEP 1: AI Triage Selection
+    # COMPANY: Process as normal (20 total)
+    company_articles = articles_by_category.get("company", [])
+    if company_articles:
         try:
-            if category == "company":
-                ai_selected = triage_company_articles_full(articles, ticker, company_name, {}, {})
-            elif category == "industry":
-                peers = config.get("competitors", []) if config else []
-                ai_selected = triage_industry_articles_full(articles, ticker, {}, peers)
-            elif category == "competitor":
-                peers = config.get("competitors", []) if config else []
-                ai_selected = triage_competitor_articles_full(articles, ticker, peers, {})
-            else:
-                ai_selected = []
+            company_selected = triage_company_articles_full(company_articles, ticker, company_name, {}, {})
+            selected_results["company"] = company_selected
+            LOG.info(f"Company triage: selected {len(company_selected)} articles")
         except Exception as e:
-            LOG.error(f"AI triage failed for {category}: {e}")
-            ai_selected = []
+            LOG.error(f"Company triage failed: {e}")
+    
+    # INDUSTRY: Process EACH keyword separately (5 per keyword)
+    industry_articles = articles_by_category.get("industry", [])
+    if industry_articles:
+        # Group by search_keyword
+        industry_by_keyword = {}
+        for idx, article in enumerate(industry_articles):
+            keyword = article.get("search_keyword", "unknown")
+            if keyword not in industry_by_keyword:
+                industry_by_keyword[keyword] = []
+            industry_by_keyword[keyword].append({"article": article, "original_idx": idx})
         
-        # STEP 2: Add Quality Domains (not in AI selection, not problematic)
-        ai_selected_indices = {item["id"] for item in ai_selected}
-        quality_selected = []
-        
-        for idx, article in enumerate(articles):
-            if idx in ai_selected_indices:
-                continue  # Skip already AI-selected
-                
-            domain = normalize_domain(article.get("domain", ""))
-            
-            # Skip problematic domains
-            if domain in PROBLEMATIC_SCRAPE_DOMAINS:
+        industry_selected = []
+        for keyword, keyword_articles in industry_by_keyword.items():
+            if len(keyword_articles) == 0:
                 continue
                 
-            # Add quality domains
-            if domain in QUALITY_DOMAINS:
-                quality_selected.append({
-                    "id": idx,
-                    "scrape_priority": "MEDIUM",
-                    "likely_repeat": False,
-                    "repeat_key": "",
-                    "why": f"Quality domain: {domain}",
-                    "confidence": 0.8,
-                    "selection_method": "quality_domain"
-                })
-        
-        # STEP 3: Remove Problematic Domains from AI Selection
-        filtered_ai_selected = []
-        for item in ai_selected:
-            article_idx = item["id"]
-            if article_idx < len(articles):
-                domain = normalize_domain(articles[article_idx].get("domain", ""))
-                if domain not in PROBLEMATIC_SCRAPE_DOMAINS:
-                    filtered_ai_selected.append(item)
-                else:
-                    LOG.info(f"Removed problematic domain from AI selection: {domain}")
-        
-        # STEP 4: Combine and check if we need backfill
-        combined_selected = filtered_ai_selected + quality_selected
-        selected_indices = {item["id"] for item in combined_selected}
-        
-        # STEP 5: QB Score Backfill (if needed)
-        if len(combined_selected) < target:
-            remaining_slots = target - len(combined_selected)
+            LOG.info(f"Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
             
-            # Score remaining articles for backfill
-            scored_candidates = []
-            for idx, article in enumerate(articles):
-                if idx in selected_indices:
-                    continue  # Skip already selected
-                    
-                domain = normalize_domain(article.get("domain", ""))
-                title = article.get("title", "")
+            # Create articles list for this keyword only
+            keyword_article_list = [item["article"] for item in keyword_articles]
+            
+            try:
+                # Run triage for this specific keyword (target: 5)
+                keyword_selected = triage_industry_articles_full(keyword_article_list, ticker, {}, [])
                 
-                # Skip problematic domains and insider trading
-                if domain in PROBLEMATIC_SCRAPE_DOMAINS or is_insider_trading_article(title.lower()):
-                    continue
+                # Map back to original indices
+                for selected_item in keyword_selected:
+                    original_idx = keyword_articles[selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx  # Update to original index
                 
-                # Calculate QB score
-                if category == "company":
-                    qb_score, qb_reasoning, qb_level = rule_based_triage_score_company(title, domain)
-                elif category == "industry":
-                    keywords = [article.get('search_keyword')] if article.get('search_keyword') else []
-                    qb_score, qb_reasoning, qb_level = rule_based_triage_score_industry(title, domain, keywords)
-                elif category == "competitor":
-                    qb_score, qb_reasoning, qb_level = rule_based_triage_score_competitor(title, domain, [])
+                industry_selected.extend(keyword_selected)
+                LOG.info(f"Industry keyword '{keyword}': selected {len(keyword_selected)} articles")
                 
-                # Store QB scores in article for database update
-                article['qb_score'] = qb_score
-                article['qb_level'] = qb_level
-                article['qb_reasoning'] = qb_reasoning
+            except Exception as e:
+                LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
+        
+        selected_results["industry"] = industry_selected
+    
+    # COMPETITOR: Process EACH competitor separately (5 per competitor)
+    competitor_articles = articles_by_category.get("competitor", [])
+    if competitor_articles:
+        # Group by competitor_ticker (primary) or search_keyword (fallback)
+        competitor_by_entity = {}
+        for idx, article in enumerate(competitor_articles):
+            entity_key = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+            if entity_key not in competitor_by_entity:
+                competitor_by_entity[entity_key] = []
+            competitor_by_entity[entity_key].append({"article": article, "original_idx": idx})
+        
+        competitor_selected = []
+        for entity_key, entity_articles in competitor_by_entity.items():
+            if len(entity_articles) == 0:
+                continue
                 
-                scored_candidates.append({
-                    "id": idx,
-                    "article": article,
-                    "qb_score": qb_score,
-                    "qb_reasoning": qb_reasoning,
-                    "qb_level": qb_level,
-                    "published_at": article.get("published_at")
-                })
+            LOG.info(f"Processing competitor '{entity_key}': {len(entity_articles)} articles")
             
-            # Sort by QB score descending, then by publication time
-            scored_candidates.sort(key=lambda x: (
-                -x["qb_score"],
-                -(x["published_at"].timestamp() if x["published_at"] else 0)
-            ))
+            # Create articles list for this competitor only
+            entity_article_list = [item["article"] for item in entity_articles]
             
-            # Take top candidates up to remaining slots
-            backfill_selected = []
-            for candidate in scored_candidates[:remaining_slots]:
-                # Convert QB level to scrape priority
-                if candidate['qb_score'] >= 70:
-                    scrape_priority = "HIGH"
-                elif candidate['qb_score'] >= 40:
-                    scrape_priority = "MEDIUM"
-                else:
-                    scrape_priority = "LOW"
-                    
-                backfill_selected.append({
-                    "id": candidate["id"],
-                    "scrape_priority": scrape_priority,
-                    "likely_repeat": False,
-                    "repeat_key": "",
-                    "why": f"{candidate['qb_level']}: {candidate['qb_reasoning']} (score: {candidate['qb_score']})",
-                    "confidence": 0.6,
-                    "selection_method": f"qb_score_{category}",
-                    "qb_score": candidate["qb_score"],
-                    "qb_level": candidate["qb_level"]
-                })
-            
-            combined_selected.extend(backfill_selected)
-            
-        # Store QB scores in database for ALL articles in this category
-        with db() as conn, conn.cursor() as cur:
-            for idx, article in enumerate(articles):
-                if article.get('qb_score') is not None:
-                    article_db_id = article.get('id')
-                    if article_db_id:
-                        cur.execute("""
-                            UPDATE found_url 
-                            SET qb_score = %s, qb_level = %s, qb_reasoning = %s
-                            WHERE id = %s
-                        """, (article['qb_score'], article['qb_level'], 
-                              article['qb_reasoning'], article_db_id))
+            try:
+                # Run triage for this specific competitor (target: 5)
+                entity_selected = triage_competitor_articles_full(entity_article_list, ticker, [], {})
+                
+                # Map back to original indices
+                for selected_item in entity_selected:
+                    original_idx = entity_articles[selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx  # Update to original index
+                
+                competitor_selected.extend(entity_selected)
+                LOG.info(f"Competitor '{entity_key}': selected {len(entity_selected)} articles")
+                
+            except Exception as e:
+                LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
         
-        # Sort final selection by priority
-        priority_map = {"HIGH": 1, "MEDIUM": 2, "LOW": 3}
-        combined_selected.sort(key=lambda x: priority_map.get(x.get("scrape_priority", "LOW"), 3))
-        
-        selected_results[category] = combined_selected
-        
-        # Enhanced logging
-        ai_count = len(filtered_ai_selected)
-        quality_count = len(quality_selected)
-        backfill_count = len(combined_selected) - ai_count - quality_count
-        removed_count = len(ai_selected) - len(filtered_ai_selected)
-        
-        LOG.info(f"{category.title()} selection: {ai_count} AI + {quality_count} Quality + {backfill_count} QB = {len(combined_selected)}/{target} (removed {removed_count} problematic)")
+        selected_results["competitor"] = competitor_selected
     
     return selected_results
 
@@ -3675,7 +3592,7 @@ def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_prof
 
     # Extract industry keywords from the first article's search_keyword
     industry_keywords = [articles[0].get('search_keyword', '')] if articles else []
-    target_cap = min(5, len(articles))  # 5 per keyword, not 15
+    target_cap = min(5, len(articles))
 
     payload = {
         "bucket": "industry",
@@ -3739,7 +3656,7 @@ def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: Li
 
     # Extract competitor names from peers
     competitors = [peer.split(' (')[0] if ' (' in peer else peer for peer in peers]
-    target_cap = min(5, len(articles))  # 5 per competitor, not 15
+    target_cap = min(5, len(articles))
 
     payload = {
         "bucket": "competitor",
@@ -5987,8 +5904,9 @@ CRITICAL REQUIREMENTS:
 - Focus on NEAR-TERM (next 1-3 quarters) financial implications
 - Include specific numbers when available and cite source using the format already provided in parentheses
 - Do NOT prefix statements with "Facts:" - assume everything is factual unless marked as inference
-- Only use (INFERENCE) tags when making analytical conclusions beyond reported facts
+- Only use (Inference) tags when making analytical conclusions beyond reported facts
 - Flag potential impact on key metrics: revenue growth, margin pressure, market share shifts
+- Ignore immaterial purchase/sale of share transactions
 - Assess competitor moves that could affect {company_name}'s performance
 - Keep to 4-5 sentences maximum
 - When mentioning analyst changes, include the brokerage name and specific price targets/ratings
@@ -5997,8 +5915,8 @@ CRITICAL REQUIREMENTS:
 CITATION & INFERENCE RULES:
 - Factual claims: Use sources as provided: "Company reported X% growth (Reuters)" 
 - Numbers: "Sales declined 15% (Wall Street Journal)" 
-- Inference: "This suggests margin pressure ahead (INFERENCE)"
-- Competitive analysis: "Rival's capacity expansion may pressure pricing (INFERENCE)"
+- Inference: "This suggests margin pressure ahead (Inference)"
+- Competitive analysis: "Rival's capacity expansion may pressure pricing (Inference)"
 
 TARGET COMPANY: {company_name} ({ticker})
 KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}

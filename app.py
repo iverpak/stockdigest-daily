@@ -62,7 +62,7 @@ if not DATABASE_URL:
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
-# OpenAI Configuration - FIXED: Remove temperature parameter for gpt-4o-mini
+# OpenAI Configuration -
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
@@ -2520,7 +2520,6 @@ scraped_content: {scraped_content[:2000]}"""
             "model": OPENAI_MODEL,
             "input": prompt,
             "max_output_tokens": 150,  # CHANGED: max_completion_tokens -> max_output_tokens
-            "temperature": 0.3
         }
         
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
@@ -3408,7 +3407,6 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         
         data = {
             "model": OPENAI_MODEL,
-            "temperature": 0,
             "text": {
                 "format": {"type": "json_schema", "json_schema": triage_schema}
             },
@@ -4416,7 +4414,6 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
     
     data = {
         "model": OPENAI_MODEL,
-        "temperature": 0,
         "input": f"{system_prompt}\n\n{json.dumps(user_payload)}",
         "text": {
             "format": {"type": "json_schema", "json_schema": schema}
@@ -5323,7 +5320,6 @@ Required JSON format:
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
-            "temperature": 0.3,
             "max_output_tokens": 2000,  # CHANGED: max_completion_tokens -> max_output_tokens
             "text": {
                 "format": {"type": "json_object"}

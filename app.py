@@ -4527,7 +4527,7 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
             "verbosity": "low"
         },
         "reasoning": {"effort": "low"},
-        "max_output_tokens": 500,  # Increased for component scoring
+        "max_output_tokens": 3000,  # Increased for component scoring
         "truncation": "auto"
     }
     

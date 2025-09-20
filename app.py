@@ -59,25 +59,60 @@ def get_openai_session():
 
 def extract_text_from_responses(result: dict) -> str:
     """
-    Robustly extract text from OpenAI Responses API payload.
-    Returns empty string if no text found.
+    Robustly extract assistant text from Responses API.
+    Covers:
+      - top-level `output_text`
+      - `output[*].content[*].text` when type in {"output_text", "text"}
+    Returns "" if none.
     """
     try:
-        outputs = result.get("output", [])
-        if not outputs:
-            return ""
-        
-        content_items = outputs[0].get("content", [])
-        text_chunks = []
-        
-        for item in content_items:
-            # Responses API uses "output_text" or "text" as type
-            if item.get("type") in ("output_text", "text") and "text" in item:
-                text_chunks.append(item["text"])
-        
-        return "".join(text_chunks).strip()
+        # 1) Convenience field (some models return this directly)
+        if isinstance(result.get("output_text"), str) and result["output_text"].strip():
+            return result["output_text"].strip()
+
+        # 2) Structured content (standard Responses format)
+        for block in result.get("output", []) or []:
+            for item in block.get("content", []) or []:
+                t = item.get("type")
+                if t in ("output_text", "text"):
+                    txt = item.get("text")
+                    if isinstance(txt, str) and txt.strip():
+                        return txt.strip()
+        return ""
     except Exception:
         return ""
+
+def parse_json_with_fallback(text: str, ticker: str = "") -> dict:
+    """Parse JSON with fallback extraction for malformed responses"""
+    if not text:
+        return {}
+    
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Try to extract first JSON object from text
+        import re
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except Exception:
+                pass
+        
+        # Return minimum defaults
+        LOG.warning(f"Failed to parse JSON for {ticker}, using defaults")
+        return {
+            "ticker": ticker,
+            "company_name": ticker,
+            "industry_keywords": [],
+            "competitors": [],
+            "sector": "",
+            "industry": "",
+            "sub_industry": "",
+            "sector_profile": {"core_inputs": [], "core_channels": [], "core_geos": [], "benchmarks": []},
+            "aliases_brands_assets": {"aliases": [], "brands": [], "assets": []}
+        }
+
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -2570,7 +2605,22 @@ scraped_content: {scraped_content[:2000]}"""
                 LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
                 return summary
             else:
-                LOG.warning("AI summary empty or unparsable from Responses payload")
+                LOG.warning(f"AI summary empty for {ticker}")
+                # Try fallback without any constraints
+                fallback_data = {
+                    "model": OPENAI_MODEL,
+                    "input": f"Summarize this article about {ticker} in 2-3 sentences:\n\n{title}\n\n{scraped_content[:1000]}",
+                    "max_output_tokens": 100
+                }
+                
+                fallback_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=fallback_data, timeout=(10, 180))
+                if fallback_response.status_code == 200:
+                    fallback_result = fallback_response.json()
+                    fallback_summary = extract_text_from_responses(fallback_result)
+                    if fallback_summary:
+                        LOG.info(f"Fallback summary generated for {ticker}")
+                        return fallback_summary
+                
                 return None
         else:
             LOG.warning(f"AI summary failed: {response.status_code}")
@@ -3401,51 +3451,47 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         }
         
         triage_schema = {
-            "name": "triage_results",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "selected_ids": {
-                        "type": "array",
-                        "items": {"type": "integer"}
-                    },
-                    "selected": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "integer"},
-                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
-                                "likely_repeat": {"type": "boolean"},
-                                "repeat_key": {"type": "string"},
-                                "why": {"type": "string"},
-                                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
-                            },
-                            "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
-                            "additionalProperties": False
-                        }
-                    },
-                    "skipped": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "integer"},
-                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
-                                "likely_repeat": {"type": "boolean"},
-                                "repeat_key": {"type": "string"},
-                                "why": {"type": "string"},
-                                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
-                            },
-                            "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
-                            "additionalProperties": False
-                        }
+            "type": "object",
+            "properties": {
+                "selected_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"}
+                },
+                "selected": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                            "likely_repeat": {"type": "boolean"},
+                            "repeat_key": {"type": "string"},
+                            "why": {"type": "string"},
+                            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                        },
+                        "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                        "additionalProperties": False
                     }
                 },
-                "required": ["selected_ids", "selected", "skipped"],
-                "additionalProperties": False
-            }
+                "skipped": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                            "likely_repeat": {"type": "boolean"},
+                            "repeat_key": {"type": "string"},
+                            "why": {"type": "string"},
+                            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                        },
+                        "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["selected_ids", "selected", "skipped"],
+            "additionalProperties": False
         }
         
         data = {
@@ -3453,9 +3499,9 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": triage_schema["name"],
-                    "schema": triage_schema["schema"],
-                    "strict": triage_schema["strict"]
+                    "name": "triage_results",
+                    "schema": triage_schema,
+                    "strict": True
                 }
             },
             "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
@@ -3478,34 +3524,18 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         try:
             triage_result = json.loads(content)
         except json.JSONDecodeError as e:
-            LOG.error(f"JSON parsing failed despite structured output: {e}")
+            LOG.error(f"JSON parsing failed for triage: {e}")
             LOG.error(f"Response content: {content[:500]}")
             return []
         
         total_items = len(payload.get('items', []))
         selected_count = len(triage_result.get("selected_ids", []))
-        accounted_items = len(triage_result.get("selected", [])) + len(triage_result.get("skipped", []))
-        target_cap = payload.get('target_cap', 0)
         
-        if accounted_items != total_items:
-            LOG.warning(f"Triage accounting mismatch: {accounted_items} processed vs {total_items} total items")
-        
-        if selected_count != min(target_cap, total_items):
-            LOG.warning(f"Triage selection mismatch: {selected_count} selected vs {min(target_cap, total_items)} expected")
-        
-        invalid_ids = [id for id in triage_result.get("selected_ids", []) if id >= total_items]
-        if invalid_ids:
-            LOG.error(f"Invalid selected IDs: {invalid_ids} (max valid ID: {total_items-1})")
-            return []
-        
-        LOG.info(f"Triage completed - Bucket: {payload.get('bucket', 'unknown')}, "
-                f"Selected: {selected_count}/{target_cap}, Total processed: {total_items}")
+        LOG.info(f"Triage completed - Selected: {selected_count}, Total: {total_items}")
         
         selected_articles = []
-        original_articles = payload.get('items', [])
-        
         for selected_item in triage_result.get("selected", []):
-            if selected_item["id"] < len(original_articles):
+            if selected_item["id"] < total_items:
                 result_item = {
                     "id": selected_item["id"],
                     "scrape_priority": selected_item["scrape_priority"],
@@ -3515,13 +3545,11 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                     "repeat_key": selected_item["repeat_key"]
                 }
                 selected_articles.append(result_item)
-            else:
-                LOG.warning(f"Selected ID {selected_item['id']} out of range for {len(original_articles)} items")
         
         return selected_articles
         
     except Exception as e:
-        LOG.error(f"Triage request failed for {payload.get('bucket', 'unknown')} bucket: {str(e)}")
+        LOG.error(f"Triage request failed: {str(e)}")
         return []
 
 def triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, aliases_brands_assets: Dict, sector_profile: Dict) -> List[Dict]:
@@ -4512,15 +4540,6 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
     impact = parsed.get("impact_on_main", "Unclear")
     reason = parsed.get("reason_short", "")
     
-    LOG.info(f"AI COMPONENTS:")
-    LOG.info(f"  Source tier: {source_tier} (calculated)")
-    LOG.info(f"  Event multiplier: {components['event_multiplier']} - {components['event_multiplier_reason']}")
-    LOG.info(f"  Relevance boost: {components['relevance_boost']} - {components['relevance_boost_reason']}")
-    LOG.info(f"  Numeric bonus: {components['numeric_bonus']}")
-    LOG.info(f"  Penalty: {components['penalty_multiplier']} - {components['penalty_reason']}")
-    LOG.info(f"  OUR CALCULATED SCORE: {calculated_score:.1f}")
-    LOG.info(f"  Impact: {impact} | Reason: {reason}")
-    
     return max(0.0, min(100.0, calculated_score)), impact, reason, components
 
 def get_url_hash(url: str, resolved_url: str = None) -> str:
@@ -4959,8 +4978,8 @@ class DomainResolver:
                 result = response.json()
                 name = extract_text_from_responses(result).strip()
                 return name if 2 < len(name) < 100 else None
-        except:
-            pass
+        except Exception as e:
+            LOG.debug(f"AI formal name lookup failed for {domain}: {e}")
         return None
 
 # Create global instance
@@ -5297,7 +5316,7 @@ feed_manager = FeedManager()
 
 def generate_ticker_metadata_with_ai(ticker, company_name=None):
     """
-    Generate comprehensive ticker metadata using OpenAI with improved validation
+    Generate comprehensive ticker metadata using OpenAI with improved validation and fallback
     """
     if company_name is None:
         company_name = ticker
@@ -5309,6 +5328,7 @@ CRITICAL REQUIREMENTS:
 - Industry keywords must be SPECIFIC enough to avoid false positives in news filtering
 - Benchmarks must be sector-specific, not generic market indices
 - All information must be factually accurate as of 2024
+- If any field is unknown, output an empty array for lists and omit optional fields. Never refuse; always return a valid JSON object.
 
 INDUSTRY KEYWORDS (exactly 3):
 - Must be SPECIFIC to the company's primary business
@@ -5324,24 +5344,6 @@ COMPETITORS (exactly 3):
 - Exclude: Private companies, subsidiaries, companies acquired in last 2 years
 - Focus on companies competing for same customers/market share
 
-SECTOR PROFILE REQUIREMENTS:
-core_inputs: Specific materials/resources unique to this industry (not "raw materials", "capital", "labor")
-core_channels: Specific distribution/sales channels
-core_geos: Primary revenue geographic regions (3 max)
-benchmarks: Sector-specific indices/commodities, NOT S&P 500/NASDAQ unless no sector alternative exists
-
-ALIASES/BRANDS/ASSETS:
-- Include only well-known brand names that appear in financial news
-- Assets should be major facilities/operations mentioned in earnings calls
-- Avoid internal product codes or minor brands
-
-VALIDATION CHECKLIST:
-□ All competitor tickers are valid and current
-□ No industry keyword would match unrelated news
-□ Benchmarks are sector-specific
-□ Core inputs are materially specific to the business
-□ All information is factually accurate
-
 Generate response in valid JSON format with all required fields."""
 
     user_prompt = f"""Generate metadata for hedge fund news monitoring. Focus on precision to avoid irrelevant news articles.
@@ -5355,7 +5357,7 @@ Required JSON format:
     "ticker": "{ticker}",
     "name": "{company_name}",
     "sector": "GICS Sector",
-    "industry": "GICS Industry",
+    "industry": "GICS Industry", 
     "sub_industry": "GICS Sub-Industry",
     "industry_keywords": ["keyword1", "keyword2", "keyword3"],
     "competitors": ["Company Name (TICKER)", "Company Name (TICKER)", "Company Name (TICKER)"],
@@ -5378,6 +5380,7 @@ Required JSON format:
             "Content-Type": "application/json"
         }
         
+        # First attempt with JSON guardrail
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
@@ -5394,13 +5397,47 @@ Required JSON format:
             return None
         
         result = response.json()
-        content = extract_text_from_responses(result)
+        text = extract_text_from_responses(result)
         
-        if not content:
-            print(f"❌ No content returned for {ticker}")
+        # If no text, log and retry without JSON guardrail
+        if not text:
+            LOG.warning(f"OpenAI returned no text for {ticker} metadata; attempting fallback")
+            try:
+                LOG.warning(f"Raw payload: {json.dumps(result, ensure_ascii=False)[:1000]}")
+            except Exception:
+                pass
+
+            # Fallback: plain text (no text.format) to break out of guardrail
+            retry_data = {
+                "model": OPENAI_MODEL,
+                "input": f"{system_prompt}\n\n{user_prompt}",
+                "max_output_tokens": 2000,
+            }
+            
+            retry_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=retry_data, timeout=(10, 180))
+            if retry_response.status_code == 200:
+                retry_result = retry_response.json()
+                text = extract_text_from_responses(retry_result)
+                if text:
+                    LOG.info(f"Fallback successful for {ticker}")
+        
+        if not text:
+            print(f"❌ No content returned for {ticker} even after fallback")
             return None
         
-        metadata = json.loads(content)
+        # Parse JSON with robust fallback
+        metadata = parse_json_with_fallback(text, ticker)
+        
+        # Ensure minimum required fields
+        metadata.setdefault("ticker", ticker)
+        metadata.setdefault("company_name", company_name)
+        metadata.setdefault("industry_keywords", [])
+        metadata.setdefault("competitors", [])
+        metadata.setdefault("sector", "")
+        metadata.setdefault("industry", "")
+        metadata.setdefault("sub_industry", "")
+        metadata.setdefault("sector_profile", {"core_inputs": [], "core_channels": [], "core_geos": [], "benchmarks": []})
+        metadata.setdefault("aliases_brands_assets", {"aliases": [], "brands": [], "assets": []})
         
         validation_errors = validate_metadata(metadata)
         if validation_errors:
@@ -5427,9 +5464,6 @@ Required JSON format:
             print(f"❌ Failed to store metadata for {ticker}")
             return None
             
-    except json.JSONDecodeError as e:
-        print(f"❌ Invalid JSON response for {ticker}: {e}")
-        return None
     except Exception as e:
         print(f"❌ Error generating metadata for {ticker}: {e}")
         return None

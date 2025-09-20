@@ -1527,7 +1527,7 @@ def calculate_dynamic_scraping_limits(ticker: str) -> Dict[str, int]:
 def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", keywords: List[str] = None, 
                                        enable_ai_scoring: bool = True, max_ai_articles: int = None) -> Dict[str, int]:
     """
-    Enhanced feed processing with AI summaries for scraped content
+    Enhanced feed processing with AI summaries for scraped content and comprehensive Yahoo Finance resolution
     Flow: Check scraping limits -> Scrape resolved URLs -> AI analysis only on successful scrapes
     """
     global scraping_stats
@@ -1588,34 +1588,47 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 stats["blocked_spam"] += 1
                 continue
             
-            # URL resolution
+            # COMPREHENSIVE URL RESOLUTION
+            final_resolved_url = None
+            final_domain = None
+            final_source_url = None
+            
+            # Step 1: Basic resolution using domain resolver
             resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+            
             if not resolved_url or not domain:
                 stats["blocked_spam"] += 1
                 continue
             
-            # Handle Google->Yahoo redirects
-            is_google_to_yahoo = (
-                "news.google.com" in url and 
-                "finance.yahoo.com" in url and 
-                resolved_url != url
-            )
+            # Step 2: Check if this is a Yahoo Finance URL (direct or redirected)
+            is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
+                "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
+            ])
             
-            if is_google_to_yahoo:
-                original_source = extract_yahoo_finance_source_optimized(resolved_url)
-                if original_source:
-                    final_resolved_url = original_source
-                    final_domain = normalize_domain(urlparse(original_source).netloc.lower())
-                    final_source_url = resolved_url
+            # Step 3: Handle Yahoo Finance resolution
+            if is_yahoo_finance:
+                LOG.info(f"YAHOO RESOLUTION: Attempting to resolve {resolved_url}")
+                yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
+                
+                if yahoo_original:
+                    # Successfully resolved Yahoo Finance to original source
+                    final_resolved_url = yahoo_original
+                    final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
+                    final_source_url = resolved_url  # Yahoo URL becomes the source
+                    LOG.info(f"YAHOO SUCCESS: {resolved_url} → {yahoo_original}")
                 else:
+                    # Couldn't resolve Yahoo Finance, use Yahoo URL
                     final_resolved_url = resolved_url
                     final_domain = domain
                     final_source_url = source_url
+                    LOG.warning(f"YAHOO FAILED: Could not resolve {resolved_url}")
             else:
+                # Not a Yahoo Finance URL, use standard resolution
                 final_resolved_url = resolved_url
                 final_domain = domain
                 final_source_url = source_url
             
+            # Step 4: Generate hash for deduplication based on FINAL resolved URL
             url_hash = get_url_hash(url, final_resolved_url)
             
             try:
@@ -1748,7 +1761,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article with AI summary
+                    # Insert article with AI summary and comprehensive resolution data
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1776,8 +1789,15 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         stats["inserted"] += 1
                         processing_type = "AI analysis" if should_use_ai else "basic processing"
                         content_info = f"with content + summary" if scraped_content and ai_summary else f"with content" if scraped_content else "no content"
-                        source_info = "via Google→Yahoo" if is_google_to_yahoo else "direct"
-                        LOG.info(f"Inserted [{category}] from {domain_resolver.get_formal_name(final_domain)}: {title[:60]}... ({processing_type}, {content_info}) ({source_info})")
+                        
+                        # Enhanced logging
+                        resolution_info = ""
+                        if is_yahoo_finance and yahoo_original:
+                            resolution_info = f" (Yahoo→{get_or_create_formal_domain_name(final_domain)})"
+                        elif final_source_url:
+                            resolution_info = f" (via {get_or_create_formal_domain_name(normalize_domain(urlparse(final_source_url).netloc))})"
+                        
+                        LOG.info(f"Inserted [{category}] from {get_or_create_formal_domain_name(final_domain)}: {title[:60]}... ({processing_type}, {content_info}){resolution_info}")
                         
             except Exception as e:
                 LOG.error(f"Database error for '{title[:50]}': {e}")
@@ -1789,7 +1809,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     return stats
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion with per-category limits during ingestion (50/25/25) - COUNT ONLY UNIQUE URLs"""
+    """Basic feed ingestion with comprehensive Yahoo Finance resolution and proper deduplication"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
     
     category = feed.get("category", "company")
@@ -1816,7 +1836,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
         for entry, _ in entries_with_dates:
             stats["processed"] += 1
             
-            # Check limit BEFORE processing - this now includes ALL URLs
+            # Check limit BEFORE processing
             if not _check_ingestion_limit(category, feed_keyword):
                 stats["limit_reached"] += 1
                 LOG.info(f"INGESTION LIMIT REACHED: Stopping ingestion for {category} '{feed_keyword}'")
@@ -1840,44 +1860,56 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 stats["blocked_spam"] += 1
                 continue
             
-            # URL resolution
+            # COMPREHENSIVE URL RESOLUTION
+            final_resolved_url = None
+            final_domain = None
+            final_source_url = None
+            
+            # Step 1: Basic resolution using domain resolver
             resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+            
             if not resolved_url or not domain:
                 stats["blocked_spam"] += 1
                 continue
             
-            # Handle Google->Yahoo redirects
-            is_google_to_yahoo = (
-                "news.google.com" in url and 
-                "finance.yahoo.com" in url and 
-                resolved_url != url
-            )
+            # Step 2: Check if this is a Yahoo Finance URL (direct or redirected)
+            is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
+                "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
+            ])
             
-            if is_google_to_yahoo:
-                original_source = extract_yahoo_finance_source_optimized(resolved_url)
-                if original_source:
-                    final_resolved_url = original_source
-                    final_domain = normalize_domain(urlparse(original_source).netloc.lower())
-                    final_source_url = resolved_url
+            # Step 3: Handle Yahoo Finance resolution
+            if is_yahoo_finance:
+                LOG.info(f"YAHOO RESOLUTION: Attempting to resolve {resolved_url}")
+                yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
+                
+                if yahoo_original:
+                    # Successfully resolved Yahoo Finance to original source
+                    final_resolved_url = yahoo_original
+                    final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
+                    final_source_url = resolved_url  # Yahoo URL becomes the source
+                    LOG.info(f"YAHOO SUCCESS: {resolved_url} → {yahoo_original}")
                 else:
+                    # Couldn't resolve Yahoo Finance, use Yahoo URL
                     final_resolved_url = resolved_url
                     final_domain = domain
                     final_source_url = source_url
+                    LOG.warning(f"YAHOO FAILED: Could not resolve {resolved_url}")
             else:
+                # Not a Yahoo Finance URL, use standard resolution
                 final_resolved_url = resolved_url
                 final_domain = domain
                 final_source_url = source_url
             
+            # Step 4: Generate hash for deduplication based on FINAL resolved URL
             url_hash = get_url_hash(url, final_resolved_url)
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Check for duplicates
+                    # Check for duplicates using the hash
                     cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
                     if cur.fetchone():
                         stats["duplicates"] += 1
-                        # FIXED: DO NOT count duplicates toward limit - they are not unique URLs
-                        LOG.debug(f"DUPLICATE SKIPPED: {title[:50]}... (not counted toward limit)")
+                        LOG.debug(f"DUPLICATE SKIPPED: {title[:50]}... (resolved to same URL)")
                         continue
                     
                     # Parse publish date
@@ -1885,7 +1917,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     if hasattr(entry, "published_parsed"):
                         published_at = parse_datetime(entry.published_parsed)
                     
-                    # Use truly basic scoring - NO AI CALLS WHATSOEVER
+                    # Use basic scoring
                     domain_tier = _get_domain_tier(final_domain, title, description)
                     basic_quality_score = 50.0 + (domain_tier - 0.5) * 20
                     
@@ -1898,7 +1930,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     display_content = description
                     
-                    # Insert article with basic data only
+                    # Insert article with comprehensive resolution data
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -1916,9 +1948,16 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     if cur.fetchone():
                         stats["inserted"] += 1
-                        # ONLY count UNIQUE URLs toward limit
                         _update_ingestion_stats(category, feed_keyword)
-                        LOG.debug(f"UNIQUE URL COUNTED: {title[:50]}...")
+                        
+                        # Enhanced logging
+                        resolution_info = ""
+                        if is_yahoo_finance and yahoo_original:
+                            resolution_info = f" (Yahoo→{get_or_create_formal_domain_name(final_domain)})"
+                        elif final_source_url:
+                            resolution_info = f" (via {get_or_create_formal_domain_name(normalize_domain(urlparse(final_source_url).netloc))})"
+                        
+                        LOG.debug(f"INSERTED: {title[:50]}...{resolution_info}")
                         
             except Exception as e:
                 LOG.error(f"Database error for '{title[:50]}': {e}")
@@ -1928,7 +1967,6 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
     return stats
-
 # Update the database schema to include ai_summary field
 def update_schema_for_ai_summary():
     """Add AI summary field to found_url table"""

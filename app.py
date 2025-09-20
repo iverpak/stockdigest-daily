@@ -3541,7 +3541,7 @@ Be ruthless in your selection - quality over quantity."""
         
         data = {
             "model": OPENAI_MODEL,
-            "reasoning": {"effort": "high"},  # Changed from low to medium
+            "reasoning": {"effort": "medium"},  # Changed from low to medium
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -3552,7 +3552,7 @@ Be ruthless in your selection - quality over quantity."""
                 "verbosity": "low"
             },
             "input": f"{constrained_system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_output_tokens": 30000,
+            "max_output_tokens": 20000,
             "truncation": "auto"
         }
         

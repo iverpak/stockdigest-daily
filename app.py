@@ -5339,6 +5339,7 @@ CRITICAL REQUIREMENTS:
 - Industry keywords must be SPECIFIC enough to avoid false positives in news filtering
 - Benchmarks must be sector-specific, not generic market indices
 - All information must be factually accurate
+- The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
 - If any field is unknown, output an empty array for lists and omit optional fields. Never refuse; always return a valid JSON object.
 
 INDUSTRY KEYWORDS (exactly 3):
@@ -5360,10 +5361,12 @@ Generate response in valid JSON format with all required fields. Be concise and 
 Ticker: {ticker}
 Company: {company_name}
 
+CRITICAL: The "name" field MUST contain the full official company name, not just the ticker.
+
 Required JSON format:
 {{
     "ticker": "{ticker}",
-    "name": "{company_name}",
+    "company_name": "FULL OFFICIAL COMPANY NAME HERE",
     "sector": "GICS Sector",
     "industry": "GICS Industry",
     "sub_industry": "GICS Sub-Industry",
@@ -5382,10 +5385,10 @@ Required JSON format:
     }}
 }}"""
 
-    brief_user_prompt = f"""Generate compact JSON metadata for {ticker} ({company_name}):
+    brief_user_prompt = f"""Generate compact JSON metadata for {ticker}. ENSURE "company_name" is the FULL official company name:
 {{
     "ticker": "{ticker}",
-    "name": "{company_name}",
+    "company_name": "FULL OFFICIAL COMPANY NAME",
     "sector": "GICS Sector",
     "industry": "GICS Industry", 
     "sub_industry": "GICS Sub-Industry",
@@ -5406,13 +5409,13 @@ Use exactly 3 items per list. Be brief and specific."""
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
-            "max_output_tokens": 5000,  # Increased from 2000
-            "reasoning": {"effort": "medium"},  # Reduce reasoning overhead
+            "max_output_tokens": 5000,
+            "reasoning": {"effort": "medium"},
             "text": {
                 "format": {"type": "json_object"},
-                "verbosity": "low"  # Make output more concise
+                "verbosity": "low"
             },
-            "truncation": "auto"  # Let server truncate instead of erroring
+            "truncation": "auto"
         }
         
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
@@ -5442,8 +5445,8 @@ Use exactly 3 items per list. Be brief and specific."""
             
             retry_data = {
                 "model": OPENAI_MODEL,
-                "input": f"{system_prompt}\n\n{brief_user_prompt}",  # Keep system + user prompt
-                "max_output_tokens": 1500,  # Smaller limit
+                "input": f"{system_prompt}\n\n{brief_user_prompt}",
+                "max_output_tokens": 1500,
                 "reasoning": {"effort": "low"},
                 "text": {
                     "format": {"type": "json_object"},
@@ -5475,15 +5478,22 @@ Use exactly 3 items per list. Be brief and specific."""
         # Parse JSON with robust fallback
         metadata = parse_json_with_fallback(text, ticker)
         
-        # Ensure minimum required fields and normalize lists to exactly 3 items (no padding)
+        # CRITICAL FIX: Ensure company name is properly set
         def _list3(x): 
             if isinstance(x, (list, tuple)):
-                items = [item for item in list(x)[:3] if item]  # Remove empty items
-                return items  # Don't pad with empty strings
+                items = [item for item in list(x)[:3] if item]
+                return items
             return []
         
         metadata.setdefault("ticker", ticker)
-        metadata.setdefault("name", company_name)
+        
+        # FIX: Use company_name field, fallback to name, then ticker
+        if metadata.get("company_name"):
+            metadata["name"] = metadata["company_name"]
+        elif not metadata.get("name") or metadata.get("name") == ticker:
+            # If name is missing or just the ticker, try to use company_name
+            metadata["name"] = metadata.get("company_name", ticker)
+        
         metadata.setdefault("sector", "")
         metadata.setdefault("industry", "")
         metadata.setdefault("sub_industry", "")
@@ -5505,19 +5515,13 @@ Use exactly 3 items per list. Be brief and specific."""
         aliases_brands["brands"] = _list3(aliases_brands.get("brands", []))
         aliases_brands["assets"] = _list3(aliases_brands.get("assets", []))
         
-        # Optional validation
-        try:
-            validation_errors = validate_metadata(metadata)
-            if validation_errors:
-                print(f"⚠️ Validation warnings for {ticker}:")
-                for error in validation_errors:
-                    print(f"  - {error}")
-        except Exception:
-            pass
+        # Log what we got for company name
+        LOG.info(f"Metadata generated for {ticker}: name='{metadata.get('name')}', company_name='{metadata.get('company_name')}'")
         
+        # Store in database
         stored_successfully = store_ticker_metadata(
             ticker=metadata['ticker'],
-            name=metadata['name'],
+            name=metadata['name'],  # This should now be the full company name
             sector=metadata['sector'],
             industry=metadata['industry'],
             sub_industry=metadata['sub_industry'],
@@ -5528,7 +5532,7 @@ Use exactly 3 items per list. Be brief and specific."""
         )
         
         if stored_successfully:
-            print(f"✅ Generated and stored metadata for {ticker}")
+            print(f"✅ Generated and stored metadata for {ticker} with name: {metadata['name']}")
             return metadata
         else:
             print(f"❌ Failed to store metadata for {ticker}")
@@ -5919,7 +5923,6 @@ Provide a strategic investment thesis synthesizing the deep content analysis."""
 def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
     """Generate AI summaries from company article titles with enhanced financial focus and competitor analysis"""
     if not OPENAI_API_KEY:
-        LOG.warning("No OpenAI API key configured for titles summary generation")
         return {}
     
     summaries = {}
@@ -5928,15 +5931,11 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
         company_articles = categories.get("company", [])
         competitor_articles = categories.get("competitor", [])
         
-        LOG.info(f"TITLES SUMMARY DEBUG for {ticker}: Company articles: {len(company_articles)}, Competitor articles: {len(competitor_articles)}")
-        
         if not company_articles:
-            LOG.info(f"Skipping {ticker} - no company articles found")
             continue
         
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
-        LOG.info(f"TITLES SUMMARY: Processing {ticker} ({company_name})")
         
         # Get competitor names for context
         competitor_names = []
@@ -5948,57 +5947,34 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
                 else:
                     competitor_names.append(comp_str)
         
-        LOG.info(f"TITLES SUMMARY: {ticker} has {len(competitor_names)} competitors configured")
+        # Generate summary from titles WITH DOMAIN MAPPING
+        titles_with_sources = []
+        for article in company_articles[:20]:  # Limit to first 20
+            title = article.get("title", "")
+            if title:
+                domain = article.get("domain", "")
+                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                titles_with_sources.append(f"• {title} ({source_name})")
         
-        # Generate summary from titles
-        titles = [article.get("title", "") for article in company_articles if article.get("title")]
-        competitor_titles = [article.get("title", "") for article in competitor_articles if article.get("title")]
-        
-        LOG.info(f"TITLES SUMMARY: {ticker} - {len(titles)} company titles, {len(competitor_titles)} competitor titles")
-        
-        # Log sample titles for debugging
-        if titles:
-            LOG.info(f"TITLES SUMMARY: {ticker} sample titles (first 3):")
-            for i, title in enumerate(titles[:3]):
-                LOG.info(f"  {i+1}. {title}")
+        competitor_titles_with_sources = []
+        for article in competitor_articles[:10]:  # Limit to first 10
+            title = article.get("title", "")
+            if title:
+                domain = article.get("domain", "")
+                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                competitor_titles_with_sources.append(f"• {title} ({source_name})")
         
         titles_summary = ""
         
-        if titles:
-            titles_text = "\n".join(f"• {title}" for title in titles[:20])  # Limit to first 20
+        if titles_with_sources:
+            titles_text = "\n".join(titles_with_sources)
             competitor_text = ""
-            if competitor_titles:
-                competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(f"• {title}" for title in competitor_titles[:10])
+            if competitor_titles_with_sources:
+                competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(competitor_titles_with_sources)
             
-            LOG.info(f"TITLES SUMMARY: {ticker} - Prepared text for AI (company: {len(titles_text)} chars, competitor: {len(competitor_text)} chars)")
-            
-            # Test OpenAI connectivity first
             try:
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                 
-                LOG.info(f"TITLES SUMMARY: {ticker} - Testing OpenAI connectivity...")
-                test_data = {
-                    "model": OPENAI_MODEL,
-                    "input": "Test connectivity",
-                    "max_output_tokens": 50,
-                    "reasoning": {"effort": "low"},
-                    "text": {"verbosity": "low"}
-                }
-                test_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=test_data, timeout=(10, 30))
-                LOG.info(f"TITLES SUMMARY: {ticker} - OpenAI test call status: {test_response.status_code}")
-                
-                if test_response.status_code != 200:
-                    LOG.error(f"TITLES SUMMARY: {ticker} - OpenAI test failed: {test_response.text}")
-                    summaries[ticker] = {"titles_summary": "", "company_name": company_name}
-                    continue
-                
-            except Exception as e:
-                LOG.error(f"TITLES SUMMARY: {ticker} - OpenAI connectivity test failed: {e}")
-                summaries[ticker] = {"titles_summary": "", "company_name": company_name}
-                continue
-            
-            # Now make the actual API call
-            try:
                 prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent news headlines to assess near-term financial impact and competitive positioning.
 
 ANALYSIS FRAMEWORK:
@@ -6009,28 +5985,28 @@ ANALYSIS FRAMEWORK:
 
 CRITICAL REQUIREMENTS:
 - Focus on NEAR-TERM (next 1-3 quarters) financial implications
-- Include specific numbers when available and cite source domain in brackets [domain.com]
-- Clearly distinguish facts from analytical inference using [INFERENCE] tags
+- Include specific numbers when available and cite source using the format already provided in parentheses
+- Do NOT prefix statements with "Facts:" - assume everything is factual unless marked as inference
+- Only use (INFERENCE) tags when making analytical conclusions beyond reported facts
 - Flag potential impact on key metrics: revenue growth, margin pressure, market share shifts
 - Assess competitor moves that could affect {company_name}'s performance
 - Keep to 4-5 sentences maximum
+- When mentioning analyst changes, include the brokerage name and specific price targets/ratings
+- Use the source names exactly as provided in the parentheses - do NOT modify them
 
 CITATION & INFERENCE RULES:
-- Factual claims: "Company reported X% growth [reuters.com]"
-- Numbers: "Sales declined 15% [wsj.com]" 
-- Inference: "This suggests margin pressure ahead [INFERENCE]"
-- Competitive analysis: "Rival's capacity expansion may pressure pricing [INFERENCE from benzinga.com]"
+- Factual claims: Use sources as provided: "Company reported X% growth (Reuters)" 
+- Numbers: "Sales declined 15% (Wall Street Journal)" 
+- Inference: "This suggests margin pressure ahead (INFERENCE)"
+- Competitive analysis: "Rival's capacity expansion may pressure pricing (INFERENCE)"
 
 TARGET COMPANY: {company_name} ({ticker})
 KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
 
-COMPANY HEADLINES:
+COMPANY HEADLINES (with source names already formatted):
 {titles_text}{competitor_text}
 
-Provide a concise executive summary focusing on financial prospects and competitive threats."""
-
-                LOG.info(f"TITLES SUMMARY: {ticker} - Prompt length: {len(prompt)} chars")
-                LOG.info(f"TITLES SUMMARY: {ticker} - Making OpenAI API call with model: {OPENAI_MODEL}")
+Provide a concise executive summary focusing on financial prospects and competitive threats. Use the source names exactly as provided in parentheses."""
 
                 data = {
                     "model": OPENAI_MODEL,
@@ -6043,68 +6019,530 @@ Provide a concise executive summary focusing on financial prospects and competit
                 
                 response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
                 
-                LOG.info(f"TITLES SUMMARY: {ticker} - API response status: {response.status_code}")
-                
                 if response.status_code == 200:
                     result = response.json()
-                    LOG.info(f"TITLES SUMMARY: {ticker} - API success, response keys: {list(result.keys())}")
-                    
-                    # Log usage details
-                    u = result.get("usage", {}) or {}
-                    LOG.info(f"TITLES SUMMARY: {ticker} - OpenAI usage - input:{u.get('input_tokens')} output:{u.get('output_tokens')} status:{result.get('status')}")
-                    
-                    # Check for incomplete response
-                    status = result.get("status")
-                    if status == "incomplete":
-                        incomplete_reason = (result.get("incomplete_details") or {}).get("reason")
-                        LOG.warning(f"TITLES SUMMARY: {ticker} - Response incomplete (reason: {incomplete_reason})")
-                    
                     titles_summary = extract_text_from_responses(result)
                     
-                    if titles_summary:
-                        LOG.info(f"TITLES SUMMARY: {ticker} - Generated summary: {len(titles_summary)} chars")
-                        LOG.info(f"TITLES SUMMARY: {ticker} - Summary preview: {titles_summary[:200]}...")
-                    else:
-                        LOG.warning(f"TITLES SUMMARY: {ticker} - Empty summary from extract_text_from_responses")
-                        LOG.warning(f"TITLES SUMMARY: {ticker} - Raw result structure: {json.dumps(result, indent=2)[:500]}")
-                        
-                        # Try alternative extraction
-                        if result.get("output"):
-                            LOG.info(f"TITLES SUMMARY: {ticker} - Attempting alternative extraction from output blocks")
-                            for i, block in enumerate(result.get("output", [])):
-                                LOG.info(f"TITLES SUMMARY: {ticker} - Block {i}: {list(block.keys())}")
-                                if block.get("content"):
-                                    for j, content in enumerate(block.get("content", [])):
-                                        LOG.info(f"TITLES SUMMARY: {ticker} - Content {j}: type={content.get('type')}, text_length={len(content.get('text', ''))}")
-                
-                else:
-                    LOG.error(f"TITLES SUMMARY: {ticker} - API failed with status {response.status_code}")
-                    LOG.error(f"TITLES SUMMARY: {ticker} - Error response: {response.text}")
-                    
-            except requests.exceptions.Timeout as e:
-                LOG.error(f"TITLES SUMMARY: {ticker} - API timeout: {e}")
-            except requests.exceptions.RequestException as e:
-                LOG.error(f"TITLES SUMMARY: {ticker} - API request failed: {e}")
-            except json.JSONDecodeError as e:
-                LOG.error(f"TITLES SUMMARY: {ticker} - JSON decode error: {e}")
             except Exception as e:
-                LOG.error(f"TITLES SUMMARY: {ticker} - Unexpected error: {e}")
-                import traceback
-                LOG.error(f"TITLES SUMMARY: {ticker} - Traceback: {traceback.format_exc()}")
+                LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
         
         summaries[ticker] = {
             "titles_summary": titles_summary,
             "company_name": company_name
         }
-        
-        LOG.info(f"TITLES SUMMARY: {ticker} - Final summary length: {len(titles_summary)} chars")
     
-    LOG.info(f"TITLES SUMMARY COMPLETE: Generated summaries for {len([s for s in summaries.values() if s.get('titles_summary')])} out of {len(summaries)} tickers")
     return summaries
+
+def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
+    """Enhanced quick email with corrected header ordering for triage"""
+    try:
+        current_time_est = format_timestamp_est(datetime.now(timezone.utc))
+        
+        # Get ticker list for subject
+        ticker_list = ', '.join(articles_by_ticker.keys())
+        
+        # Generate AI summaries from titles (for triage email)
+        company_summaries = generate_company_titles_summary(articles_by_ticker)
+        
+        # Load ticker metadata for company names
+        ticker_metadata_cache = {}
+        for ticker in articles_by_ticker.keys():
+            config = get_ticker_config(ticker)
+            if config:
+                ticker_metadata_cache[ticker] = {
+                    "company_name": config.get("name", ticker),
+                    "industry_keywords": config.get("industry_keywords", []),
+                    "competitors": config.get("competitors", []),
+                    "sector": config.get("sector", "")
+                }
+        
+        html = [
+            "<html><head><style>",
+            "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+            "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+            "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+            ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+            ".company { border-left-color: #27ae60; }",
+            ".industry { border-left-color: #f39c12; }",
+            ".competitor { border-left-color: #e74c3c; }",
+            ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
+            ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
+            ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
+            ".company-name-badge { display: inline-block; padding: 3px 8px; margin-right: 8px; border-radius: 4px; font-weight: bold; font-size: 11px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 0px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+            ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+            ".flagged-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+            ".ai-triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            ".ai-high { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
+            ".ai-medium { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+            ".ai-low { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
+            ".qb-score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            ".qb-high { background-color: #c8e6c9; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".qb-medium { background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
+            ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
+            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
+            ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+            ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+            ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+            ".meta { color: #95a5a6; font-size: 11px; }",
+            "</style></head><body>",
+            f"<h1>Quick Intelligence Report: {ticker_list} - Triage Complete</h1>",
+            f"<div class='summary'>",
+            f"<strong>Generated:</strong> {current_time_est}<br>",
+            f"<strong>Status:</strong> Articles ingested and triaged, AI analysis and scraping in progress...<br>",
+            f"<strong>Tickers Covered:</strong> {ticker_list}<br>",
+            f"<strong>Selection Process:</strong> AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill",
+            "</div>"
+        ]
+        
+        total_articles = 0
+        total_selected = 0
+        
+        for ticker, categories in articles_by_ticker.items():
+            ticker_count = sum(len(articles) for articles in categories.values())
+            total_articles += ticker_count
+            
+            # FIXED: Get company name from metadata cache
+            full_company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
+            
+            # Count selected articles for this ticker
+            ticker_selected = 0
+            triage_data = triage_results.get(ticker, {})
+            for category in ["company", "industry", "competitor"]:
+                ticker_selected += len(triage_data.get(category, []))
+            
+            total_selected += ticker_selected
+            
+            html.append(f"<div class='ticker-section'>")
+            html.append(f"<h2>{ticker} ({full_company_name}) - {ticker_count} Total Articles</h2>")
+            
+            # Add AI-generated titles summary at the top (triage email)
+            if ticker in company_summaries and company_summaries[ticker].get("titles_summary"):
+                html.append("<div class='company-summary'>")
+                html.append("<div class='summary-title'>Executive Summary (Headlines Analysis)</div>")
+                html.append(f"<div class='summary-content'>{company_summaries[ticker]['titles_summary']}</div>")
+                html.append("</div>")
+            
+            html.append(f"<p><strong>Selected for Analysis:</strong> {ticker_selected} articles</p>")
+            
+            for category, articles in categories.items():
+                if not articles:
+                    continue
+                
+                category_triage = triage_data.get(category, [])
+                selected_article_data = {item["id"]: item for item in category_triage}
+                
+                # Enhanced article sorting and display
+                enhanced_articles = []
+                for idx, article in enumerate(articles):
+                    domain = normalize_domain(article.get("domain", ""))
+                    is_ai_selected = idx in selected_article_data
+                    is_quality_domain = domain in QUALITY_DOMAINS
+                    is_problematic = domain in PROBLEMATIC_SCRAPE_DOMAINS
+                    
+                    priority = 999
+                    triage_reason = ""
+                    ai_priority = "LOW"
+                    
+                    if is_ai_selected:
+                        ai_priority = selected_article_data[idx].get("scrape_priority", "LOW")
+                        triage_reason = selected_article_data[idx].get("why", "")
+                        priority_map = {"HIGH": 1, "MEDIUM": 2, "LOW": 3}
+                        priority = priority_map.get(ai_priority, 3)
+                    elif is_quality_domain and not is_problematic:
+                        priority = 2.5
+                        triage_reason = "Quality domain auto-selected"
+                    
+                    enhanced_articles.append({
+                        "article": article,
+                        "idx": idx,
+                        "priority": priority,
+                        "is_ai_selected": is_ai_selected,
+                        "is_quality_domain": is_quality_domain,
+                        "is_problematic": is_problematic,
+                        "triage_reason": triage_reason,
+                        "ai_priority": ai_priority,
+                        "published_at": article.get("published_at")
+                    })
+                
+                # Sort by priority and time
+                enhanced_articles.sort(key=lambda x: (
+                    x["priority"],
+                    -(x["published_at"].timestamp() if x["published_at"] else 0)
+                ))
+                
+                selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or (a["is_quality_domain"] and not a["is_problematic"])])
+                html.append(f"<h3>{category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
+                
+                for enhanced_article in enhanced_articles[:50]:  # Show top 50 per category
+                    article = enhanced_article["article"]
+                    domain = article.get("domain", "unknown")
+                    title = article.get("title", "No Title")
+                    
+                    # HEADER ORDER: For INDUSTRY -> Industry Keyword, Domain, Quality, Flagged, AI Triage, QB Score
+                    # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, Flagged, AI Triage, QB Score
+                    header_badges = []
+                    
+                    # 1. First badge depends on category - FIXED to use full company name
+                    if category == "company":
+                        header_badges.append(f'<span class="company-name-badge">🎯 {full_company_name}</span>')
+                    elif category == "competitor":
+                        comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
+                        header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
+                    elif category == "industry" and article.get('search_keyword'):
+                        header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
+                    
+                    # 2. Domain name second
+                    header_badges.append(f'<span class="source-badge">{get_or_create_formal_domain_name(domain)}</span>')
+                    
+                    # 3. Quality badge third (if applicable)
+                    if enhanced_article["is_quality_domain"]:
+                        header_badges.append('<span class="quality-badge">Quality</span>')
+                    
+                    # 4. Flagged badge if AI selected or quality selected
+                    if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
+                        header_badges.append('<span class="flagged-badge">Flagged</span>')
+                    
+                    # 5. AI Triage fifth (AI: High/Medium/Low format) - only if AI selected
+                    if enhanced_article["is_ai_selected"]:
+                        ai_priority = enhanced_article["ai_priority"]
+                        badge_class = f"ai-{ai_priority.lower()}"
+                        header_badges.append(f'<span class="ai-triage {badge_class}">AI: {ai_priority}</span>')
+                    
+                    # 6. QB Score last (QB: High/Medium/Low format)
+                    qb_score = article.get('qb_score', 0)
+                    if qb_score >= 70:
+                        qb_class = "qb-high"
+                        qb_level = "QB: High"
+                    elif qb_score >= 40:
+                        qb_class = "qb-medium"
+                        qb_level = "QB: Medium"
+                    else:
+                        qb_class = "qb-low"
+                        qb_level = "QB: Low"
+                    header_badges.append(f'<span class="qb-score {qb_class}">{qb_level}</span>')
+                    
+                    # Publication time
+                    pub_time = ""
+                    if article.get("published_at"):
+                        pub_time = format_timestamp_est(article["published_at"])
+                    
+                    html.append(f"""
+                    <div class='article {category}'>
+                        <div class='article-header'>
+                            {' '.join(header_badges)}
+                        </div>
+                        <div class='article-content'>
+                            <a href='{article.get("resolved_url") or article.get("url", "")}'>{title}</a>
+                            <span class='meta'> | {pub_time}</span>
+                        </div>
+                    </div>
+                    """)
+            
+            html.append("</div>")
+        
+        html.append(f"<div class='summary'>")
+        html.append(f"<strong>Total Articles:</strong> {total_articles}<br>")
+        html.append(f"<strong>Selected for Analysis:</strong> {total_selected}<br>")
+        html.append(f"<strong>Next:</strong> Full content analysis and hedge fund summaries in progress...")
+        html.append("</div>")
+        html.append("</body></html>")
+        
+        html_content = "".join(html)
+        subject = f"Quick Intelligence: {ticker_list} - {total_selected} articles selected"
+        
+        return send_email(subject, html_content, "")
+        
+    except Exception as e:
+        LOG.error(f"Enhanced quick intelligence email failed: {e}")
+        return False
 
 # ------------------------------------------------------------------------------
 # Email Digest
 # ------------------------------------------------------------------------------
+
+def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
+    """Enhanced digest with company AI summaries, reordered headers, and quality badges"""
+    
+    # Generate AI summaries from AI analysis (for final email)
+    company_summaries = generate_company_ai_summaries(articles_by_ticker)
+    
+    # Load ticker metadata
+    ticker_metadata_cache = {}
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        if config:
+            competitors = []
+            for comp_str in config.get("competitors", []):
+                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                if match:
+                    competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+                else:
+                    competitors.append({"name": comp_str, "ticker": None})
+            
+            ticker_metadata_cache[ticker] = {
+                "industry_keywords": config.get("industry_keywords", []),
+                "competitors": competitors,
+                "company_name": config.get("name", ticker),
+                "sector": config.get("sector", ""),
+                "industry": config.get("industry", ""),
+                "sub_industry": config.get("sub_industry", ""),
+                "sector_profile": config.get("sector_profile"),
+                "aliases_brands_assets": config.get("aliases_brands_assets")
+            }
+    
+    # Get ticker list for subject
+    ticker_list = ', '.join(articles_by_ticker.keys())
+    current_time_est = format_timestamp_est(datetime.now(timezone.utc))
+    
+    html = [
+        "<html><head><style>",
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+        ".article-header { margin-bottom: 5px; }",
+        ".article-content { }",
+        ".company { border-left-color: #27ae60; }",
+        ".industry { border-left-color: #f39c12; }",
+        ".competitor { border-left-color: #e74c3c; }",
+        ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
+        ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
+        ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
+        ".company-name-badge { display: inline-block; padding: 3px 8px; margin-right: 8px; border-radius: 4px; font-weight: bold; font-size: 11px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+        ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+        ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+        ".score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+        ".high-score { background-color: #d4edda; color: #155724; }",
+        ".med-score { background-color: #fff3cd; color: #856404; }",
+        ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+        ".impact-positive { background-color: #d4edda; color: #155724; }",
+        ".impact-negative { background-color: #f8d7da; color: #721c24; }",
+        ".impact-mixed { background-color: #fff3cd; color: #856404; }",
+        ".impact-neutral { background-color: #e2e3e5; color: #383d41; }",
+        ".analyzed-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
+        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
+        ".industry-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
+        ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+        ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
+        ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
+        ".brand-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fce4ec; color: #ad1457; border: 1px solid #f8bbd9; }",
+        ".asset-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #c5cae9; }",
+        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+        ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
+        ".meta { color: #95a5a6; font-size: 11px; }",
+        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+        ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
+        "a { color: #2980b9; text-decoration: none; }",
+        "a:hover { text-decoration: underline; }",
+        "</style></head><body>",
+        f"<h1>Stock Intelligence Report: {ticker_list}</h1>",
+        f"<div class='summary'>",
+        f"<strong>Report Period:</strong> Last {period_days} days<br>",
+        f"<strong>Generated:</strong> {current_time_est}<br>",
+        f"<strong>Tickers Covered:</strong> {ticker_list}<br>",
+        f"<strong>AI Features:</strong> Enhanced Content Analysis + Hedge Fund Summaries + Company Intelligence Synthesis",
+        "</div>"
+    ]
+    
+    # Generate text export for AI evaluation
+    text_export = create_ai_evaluation_text(articles_by_ticker)
+    
+    for ticker, categories in articles_by_ticker.items():
+        total_articles = sum(len(articles) for articles in categories.values())
+        company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)  # FIXED: Get full company name
+        
+        html.append(f"<div class='ticker-section'>")
+        html.append(f"<h2>{ticker} ({company_name}) - {total_articles} Total Articles</h2>")
+        
+        # Add AI-generated summaries from scraped content (final email)
+        if ticker in company_summaries and company_summaries[ticker].get("ai_analysis_summary"):
+            html.append("<div class='company-summary'>")
+            html.append("<div class='summary-title'>Investment Thesis (Deep Analysis Synthesis)</div>")
+            html.append(f"<div class='summary-content'>{company_summaries[ticker]['ai_analysis_summary']}</div>")
+            html.append("</div>")
+        
+        # Enhanced keyword information with full metadata
+        if ticker in ticker_metadata_cache:
+            metadata = ticker_metadata_cache[ticker]
+            html.append("<div class='keywords'>")
+            html.append(f"<strong>AI-Powered Monitoring Configuration:</strong><br><br>")
+            
+            # Company details
+            if metadata.get("company_name"):
+                html.append(f"<strong>Company:</strong> {metadata['company_name']}<br>")
+            
+            # Sector information
+            if metadata.get("sector"):
+                html.append(f"<strong>Sector:</strong> <span class='sector-badge'>{metadata['sector']}</span><br>")
+            if metadata.get("industry"):
+                html.append(f"<strong>Industry:</strong> {metadata['industry']}<br>")
+            if metadata.get("sub_industry"):
+                html.append(f"<strong>Sub-Industry:</strong> {metadata['sub_industry']}<br>")
+            
+            # Keywords and competitors
+            if metadata.get("industry_keywords"):
+                industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
+                html.append(f"<strong>Industry Keywords:</strong> {' '.join(industry_badges)}<br>")
+            
+            if metadata.get("competitors"):
+                competitor_badges = [f'<span class="competitor-badge">🏢 {comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
+                html.append(f"<strong>Competitors:</strong> {' '.join(competitor_badges)}<br>")
+            
+            # Enhanced metadata from sector profile
+            sector_profile = metadata.get("sector_profile")
+            if sector_profile:
+                try:
+                    if isinstance(sector_profile, str):
+                        sector_data = json.loads(sector_profile)
+                    else:
+                        sector_data = sector_profile
+                    
+                    if sector_data.get("core_geos"):
+                        geo_badges = [f'<span class="geography-badge">{geo}</span>' for geo in sector_data["core_geos"][:5]]
+                        html.append(f"<strong>Core Geographies:</strong> {' '.join(geo_badges)}<br>")
+                    
+                    if sector_data.get("core_inputs"):
+                        input_badges = [f'<span class="sector-badge">{inp}</span>' for inp in sector_data["core_inputs"][:5]]
+                        html.append(f"<strong>Core Inputs:</strong> {' '.join(input_badges)}<br>")
+                    
+                    if sector_data.get("core_channels"):
+                        channel_badges = [f'<span class="geography-badge">{ch}</span>' for ch in sector_data["core_channels"][:5]]
+                        html.append(f"<strong>Core Channels:</strong> {' '.join(channel_badges)}<br>")
+                        
+                except Exception as e:
+                    LOG.warning(f"Error parsing sector profile for {ticker}: {e}")
+            
+            # Aliases, brands, and assets
+            aliases_brands = metadata.get("aliases_brands_assets")
+            if aliases_brands:
+                try:
+                    if isinstance(aliases_brands, str):
+                        alias_data = json.loads(aliases_brands)
+                    else:
+                        alias_data = aliases_brands
+                    
+                    if alias_data.get("aliases"):
+                        alias_badges = [f'<span class="alias-badge">{alias}</span>' for alias in alias_data["aliases"][:5]]
+                        html.append(f"<strong>Aliases:</strong> {' '.join(alias_badges)}<br>")
+                    
+                    if alias_data.get("brands"):
+                        brand_badges = [f'<span class="brand-badge">{brand}</span>' for brand in alias_data["brands"][:5]]
+                        html.append(f"<strong>Brands:</strong> {' '.join(brand_badges)}<br>")
+                    
+                    if alias_data.get("assets"):
+                        asset_badges = [f'<span class="asset-badge">{asset}</span>' for asset in alias_data["assets"][:5]]
+                        html.append(f"<strong>Key Assets:</strong> {' '.join(asset_badges)}")
+                        
+                except Exception as e:
+                    LOG.warning(f"Error parsing aliases/brands for {ticker}: {e}")
+            
+            html.append("</div>")
+        
+        # Sort articles within each category - prioritize analyzed articles, then by time
+        for category in ["company", "industry", "competitor"]:
+            if category in categories and categories[category]:
+                articles = categories[category]
+                
+                # Sort: AI analyzed first, then quality domains, then by time
+                def sort_key(article):
+                    is_analyzed = bool(article.get('ai_summary') or article.get('ai_triage_selected'))
+                    has_quality_domain = normalize_domain(article.get("domain", "")) in QUALITY_DOMAINS
+                    pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+                    
+                    # Priority: 0 = analyzed, 1 = quality domain, 2 = other
+                    priority = 0 if is_analyzed else (1 if has_quality_domain else 2)
+                    return (priority, -pub_time.timestamp())
+                
+                sorted_articles = sorted(articles, key=sort_key)
+                
+                html.append(f"<h3>{category.title()} News ({len(articles)} articles)</h3>")
+                for article in sorted_articles[:100]:  # Show up to 100 articles
+                    # FIXED: Pass the full company name to the formatting function
+                    html.append(_format_enhanced_article_html(article, category, ticker_metadata_cache, company_name))
+        
+        html.append("</div>")
+    
+    html.append("""
+        <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
+            <strong>Enhanced AI Features:</strong><br>
+            • Investment Thesis: AI synthesis of all company deep analysis<br>
+            • Content Analysis: Full article scraping with intelligent extraction<br>
+            • Hedge Fund Summaries: AI-generated analytical summaries for scraped content<br>
+            • Enhanced Selection: AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill<br>
+            • "Analyzed" badge indicates articles with both scraped content and AI summary<br>
+            • "Quality" badge indicates high-authority news sources
+        </div>
+        </body></html>
+    """)
+    
+    html_content = "".join(html)
+    return html_content, text_export
+
+# Updated email sending function with text attachment
+def send_email(subject: str, html_body: str, text_attachment: str = None, to: str = None):
+    """Send email with HTML body displayed properly and optional text attachment"""
+    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
+        LOG.error("SMTP not fully configured")
+        return False
+    
+    try:
+        recipient = to or DIGEST_TO
+        
+        # Create multipart message with HTML as primary content
+        msg = MIMEMultipart('mixed')  # Use 'mixed' for attachments
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = recipient
+        
+        # Create multipart alternative for HTML/text content
+        msg_alternative = MIMEMultipart('alternative')
+        
+        # Add text version (fallback for very old email clients)
+        text_body = "This email contains HTML content. Please view in an HTML-capable email client."
+        msg_alternative.attach(MIMEText(text_body, "plain", "utf-8"))
+        
+        # Add HTML body (this will be displayed by modern email clients)
+        msg_alternative.attach(MIMEText(html_body, "html", "utf-8"))
+        
+        # Attach the alternative part to main message
+        msg.attach(msg_alternative)
+        
+        # Add text attachment if provided and not empty
+        if text_attachment and len(text_attachment.strip()) > 0:
+            try:
+                # Create text attachment
+                attachment = MIMEText(text_attachment, "plain", "utf-8")
+                attachment.add_header(
+                    "Content-Disposition", 
+                    "attachment", 
+                    filename="ai_evaluation_data.txt"
+                )
+                msg.attach(attachment)
+                LOG.info(f"Added text attachment: {len(text_attachment)} characters")
+            except Exception as e:
+                LOG.warning(f"Failed to add text attachment: {e}")
+                # Continue without attachment rather than failing
+        
+        # Send email
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            if SMTP_STARTTLS:
+                server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
+        
+        attachment_info = f" with attachment ({len(text_attachment)} chars)" if text_attachment else " (no attachment)"
+        LOG.info(f"Email sent{attachment_info} to {recipient}")
+        return True
+        
+    except Exception as e:
+        LOG.error(f"Email send failed: {e}")
+        return False
 
 def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
     """Enhanced digest with company AI summaries, reordered headers, and quality badges"""
@@ -6328,291 +6766,6 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
     html_content = "".join(html)
     return html_content, text_export
 
-# Updated email sending function with text attachment
-def send_email(subject: str, html_body: str, text_attachment: str = None, to: str = None):
-    """Send email with HTML body displayed properly and optional text attachment"""
-    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
-        LOG.error("SMTP not fully configured")
-        return False
-    
-    try:
-        recipient = to or DIGEST_TO
-        
-        # Create multipart message with HTML as primary content
-        msg = MIMEMultipart('mixed')  # Use 'mixed' for attachments
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = recipient
-        
-        # Create multipart alternative for HTML/text content
-        msg_alternative = MIMEMultipart('alternative')
-        
-        # Add text version (fallback for very old email clients)
-        text_body = "This email contains HTML content. Please view in an HTML-capable email client."
-        msg_alternative.attach(MIMEText(text_body, "plain", "utf-8"))
-        
-        # Add HTML body (this will be displayed by modern email clients)
-        msg_alternative.attach(MIMEText(html_body, "html", "utf-8"))
-        
-        # Attach the alternative part to main message
-        msg.attach(msg_alternative)
-        
-        # Add text attachment if provided and not empty
-        if text_attachment and len(text_attachment.strip()) > 0:
-            try:
-                # Create text attachment
-                attachment = MIMEText(text_attachment, "plain", "utf-8")
-                attachment.add_header(
-                    "Content-Disposition", 
-                    "attachment", 
-                    filename="ai_evaluation_data.txt"
-                )
-                msg.attach(attachment)
-                LOG.info(f"Added text attachment: {len(text_attachment)} characters")
-            except Exception as e:
-                LOG.warning(f"Failed to add text attachment: {e}")
-                # Continue without attachment rather than failing
-        
-        # Send email
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            if SMTP_STARTTLS:
-                server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
-        
-        attachment_info = f" with attachment ({len(text_attachment)} chars)" if text_attachment else " (no attachment)"
-        LOG.info(f"Email sent{attachment_info} to {recipient}")
-        return True
-        
-    except Exception as e:
-        LOG.error(f"Email send failed: {e}")
-        return False
-
-def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Enhanced quick email with corrected header ordering for triage"""
-    try:
-        current_time_est = format_timestamp_est(datetime.now(timezone.utc))
-        
-        # Get ticker list for subject
-        ticker_list = ', '.join(articles_by_ticker.keys())
-        
-        # Generate AI summaries from titles (for triage email)
-        company_summaries = generate_company_titles_summary(articles_by_ticker)
-        
-        # Load ticker metadata for company names
-        ticker_metadata_cache = {}
-        for ticker in articles_by_ticker.keys():
-            config = get_ticker_config(ticker)
-            if config:
-                ticker_metadata_cache[ticker] = {
-                    "company_name": config.get("name", ticker),
-                    "industry_keywords": config.get("industry_keywords", []),
-                    "competitors": config.get("competitors", []),
-                    "sector": config.get("sector", "")
-                }
-        
-        html = [
-            "<html><head><style>",
-            "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
-            "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
-            "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
-            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
-            ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
-            ".company { border-left-color: #27ae60; }",
-            ".industry { border-left-color: #f39c12; }",
-            ".competitor { border-left-color: #e74c3c; }",
-            ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
-            ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
-            ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
-            ".company-name-badge { display: inline-block; padding: 3px 8px; margin-right: 8px; border-radius: 4px; font-weight: bold; font-size: 11px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 0px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
-            ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
-            ".flagged-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
-            ".ai-triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            ".ai-high { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
-            ".ai-medium { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
-            ".ai-low { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
-            ".qb-score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            ".qb-high { background-color: #c8e6c9; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".qb-medium { background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
-            ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
-            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
-            ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
-            ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
-            ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-            ".meta { color: #95a5a6; font-size: 11px; }",
-            "</style></head><body>",
-            f"<h1>Quick Intelligence Report: {ticker_list} - Triage Complete</h1>",
-            f"<div class='summary'>",
-            f"<strong>Generated:</strong> {current_time_est}<br>",
-            f"<strong>Status:</strong> Articles ingested and triaged, AI analysis and scraping in progress...<br>",
-            f"<strong>Tickers Covered:</strong> {ticker_list}<br>",
-            f"<strong>Selection Process:</strong> AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill",
-            "</div>"
-        ]
-        
-        total_articles = 0
-        total_selected = 0
-        
-        for ticker, categories in articles_by_ticker.items():
-            ticker_count = sum(len(articles) for articles in categories.values())
-            total_articles += ticker_count
-            
-            # Get company name from metadata cache
-            full_company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
-            
-            # Count selected articles for this ticker
-            ticker_selected = 0
-            triage_data = triage_results.get(ticker, {})
-            for category in ["company", "industry", "competitor"]:
-                ticker_selected += len(triage_data.get(category, []))
-            
-            total_selected += ticker_selected
-            
-            html.append(f"<div class='ticker-section'>")
-            html.append(f"<h2>{ticker} ({full_company_name}) - {ticker_count} Total Articles</h2>")
-            
-            # Add AI-generated titles summary at the top (triage email)
-            if ticker in company_summaries and company_summaries[ticker].get("titles_summary"):
-                html.append("<div class='company-summary'>")
-                html.append("<div class='summary-title'>Executive Summary (Headlines Analysis)</div>")
-                html.append(f"<div class='summary-content'>{company_summaries[ticker]['titles_summary']}</div>")
-                html.append("</div>")
-            
-            html.append(f"<p><strong>Selected for Analysis:</strong> {ticker_selected} articles</p>")
-            
-            for category, articles in categories.items():
-                if not articles:
-                    continue
-                
-                category_triage = triage_data.get(category, [])
-                selected_article_data = {item["id"]: item for item in category_triage}
-                
-                # Enhanced article sorting and display
-                enhanced_articles = []
-                for idx, article in enumerate(articles):
-                    domain = normalize_domain(article.get("domain", ""))
-                    is_ai_selected = idx in selected_article_data
-                    is_quality_domain = domain in QUALITY_DOMAINS
-                    is_problematic = domain in PROBLEMATIC_SCRAPE_DOMAINS
-                    
-                    priority = 999
-                    triage_reason = ""
-                    ai_priority = "LOW"
-                    
-                    if is_ai_selected:
-                        ai_priority = selected_article_data[idx].get("scrape_priority", "LOW")
-                        triage_reason = selected_article_data[idx].get("why", "")
-                        priority_map = {"HIGH": 1, "MEDIUM": 2, "LOW": 3}
-                        priority = priority_map.get(ai_priority, 3)
-                    elif is_quality_domain and not is_problematic:
-                        priority = 2.5
-                        triage_reason = "Quality domain auto-selected"
-                    
-                    enhanced_articles.append({
-                        "article": article,
-                        "idx": idx,
-                        "priority": priority,
-                        "is_ai_selected": is_ai_selected,
-                        "is_quality_domain": is_quality_domain,
-                        "is_problematic": is_problematic,
-                        "triage_reason": triage_reason,
-                        "ai_priority": ai_priority,
-                        "published_at": article.get("published_at")
-                    })
-                
-                # Sort by priority and time
-                enhanced_articles.sort(key=lambda x: (
-                    x["priority"],
-                    -(x["published_at"].timestamp() if x["published_at"] else 0)
-                ))
-                
-                selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or (a["is_quality_domain"] and not a["is_problematic"])])
-                html.append(f"<h3>{category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
-                
-                for enhanced_article in enhanced_articles[:50]:  # Show top 50 per category
-                    article = enhanced_article["article"]
-                    domain = article.get("domain", "unknown")
-                    title = article.get("title", "No Title")
-                    
-                    # HEADER ORDER: For INDUSTRY -> Industry Keyword, Domain, Quality, Flagged, AI Triage, QB Score
-                    # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, Flagged, AI Triage, QB Score
-                    header_badges = []
-                    
-                    # 1. First badge depends on category - FIXED to use full company name
-                    if category == "company":
-                        header_badges.append(f'<span class="company-name-badge">{full_company_name}</span>')
-                    elif category == "competitor":
-                        comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
-                        header_badges.append(f'<span class="competitor-badge">{comp_name}</span>')
-                    elif category == "industry" and article.get('search_keyword'):
-                        header_badges.append(f'<span class="industry-badge">{article["search_keyword"]}</span>')
-                    
-                    # 2. Domain name second
-                    header_badges.append(f'<span class="source-badge">{get_or_create_formal_domain_name(domain)}</span>')
-                    
-                    # 3. Quality badge third (if applicable)
-                    if enhanced_article["is_quality_domain"]:
-                        header_badges.append('<span class="quality-badge">Quality</span>')
-                    
-                    # 4. Flagged badge if AI selected or quality selected
-                    if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
-                        header_badges.append('<span class="flagged-badge">Flagged</span>')
-                    
-                    # 5. AI Triage fifth (AI: High/Medium/Low format) - only if AI selected
-                    if enhanced_article["is_ai_selected"]:
-                        ai_priority = enhanced_article["ai_priority"]
-                        badge_class = f"ai-{ai_priority.lower()}"
-                        header_badges.append(f'<span class="ai-triage {badge_class}">AI: {ai_priority}</span>')
-                    
-                    # 6. QB Score last (QB: High/Medium/Low format)
-                    qb_score = article.get('qb_score', 0)
-                    if qb_score >= 70:
-                        qb_class = "qb-high"
-                        qb_level = "QB: High"
-                    elif qb_score >= 40:
-                        qb_class = "qb-medium"
-                        qb_level = "QB: Medium"
-                    else:
-                        qb_class = "qb-low"
-                        qb_level = "QB: Low"
-                    header_badges.append(f'<span class="qb-score {qb_class}">{qb_level}</span>')
-                    
-                    # Publication time
-                    pub_time = ""
-                    if article.get("published_at"):
-                        pub_time = format_timestamp_est(article["published_at"])
-                    
-                    html.append(f"""
-                    <div class='article {category}'>
-                        <div class='article-header'>
-                            {' '.join(header_badges)}
-                        </div>
-                        <div class='article-content'>
-                            <a href='{article.get("resolved_url") or article.get("url", "")}'>{title}</a>
-                            <span class='meta'> | {pub_time}</span>
-                        </div>
-                    </div>
-                    """)
-            
-            html.append("</div>")
-        
-        html.append(f"<div class='summary'>")
-        html.append(f"<strong>Total Articles:</strong> {total_articles}<br>")
-        html.append(f"<strong>Selected for Analysis:</strong> {total_selected}<br>")
-        html.append(f"<strong>Next:</strong> Full content analysis and hedge fund summaries in progress...")
-        html.append("</div>")
-        html.append("</body></html>")
-        
-        html_content = "".join(html)
-        subject = f"Quick Intelligence: {ticker_list} - {total_selected} articles selected"
-        
-        return send_email(subject, html_content, "")
-        
-    except Exception as e:
-        LOG.error(f"Enhanced quick intelligence email failed: {e}")
-        return False
-
 def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
     """Fetch categorized articles for digest with enhanced content scraping and AI summaries"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -6782,16 +6935,16 @@ def _format_enhanced_article_html(article: Dict, category: str, ticker_metadata_
     
     # 1. First badge depends on category - FIXED to use company_name parameter (which should be the full name)
     if category == "company" and company_name:
-        header_badges.append(f'<span class="company-name-badge">{company_name}</span>')
+        header_badges.append(f'<span class="company-name-badge">🎯 {company_name}</span>')
     elif category == "competitor":
         competitor_name = get_competitor_display_name(
             article.get('search_keyword'), 
             article.get('competitor_ticker')
         )
-        header_badges.append(f'<span class="competitor-badge">{competitor_name}</span>')
+        header_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
     elif category == "industry" and article.get('search_keyword'):
         industry_keyword = article['search_keyword']
-        header_badges.append(f'<span class="industry-badge">{industry_keyword}</span>')
+        header_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
     
     # 2. Domain name second
     header_badges.append(f'<span class="source-badge">{display_source}</span>')

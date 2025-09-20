@@ -40,6 +40,23 @@ from collections import defaultdict
 from playwright.sync_api import sync_playwright
 import asyncio
 
+# Global session for OpenAI API calls with retries
+_openai_session = None
+
+def get_openai_session():
+    """Get a requests session with retry logic for OpenAI API calls"""
+    global _openai_session
+    if _openai_session is None:
+        _openai_session = requests.Session()
+        retry_strategy = Retry(
+            total=3,                    # up to 3 retries
+            backoff_factor=0.8,         # 0.8s, 1.6s, 3.2s delays
+            status_forcelist=(429, 500, 502, 503, 504),  # retry on these HTTP codes
+            allowed_methods=frozenset(["POST"])
+        )
+        _openai_session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+    return _openai_session
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -2522,7 +2539,9 @@ scraped_content: {scraped_content[:2000]}"""
             "max_output_tokens": 150,  # CHANGED: max_completion_tokens -> max_output_tokens
         }
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
+        response = get_openai_session().post(
+            OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
+        )
         
         if response.status_code == 200:
             result = response.json()
@@ -3413,8 +3432,10 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
             "max_output_tokens": 5000,  # CHANGED: max_completion_tokens -> max_output_tokens
         }
-        
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=60)
+
+        response = get_openai_session().post(
+            OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
+        )
         
         if response.status_code != 200:
             LOG.error(f"OpenAI triage API error {response.status_code}: {response.text}")
@@ -4421,8 +4442,10 @@ def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: D
         "max_output_tokens": 300  # CHANGED: max_completion_tokens -> max_output_tokens
     }
     
-    response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=20)
-    
+    response = get_openai_session().post(
+        OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
+    )
+
     if response.status_code != 200:
         LOG.warning(f"OpenAI API error {response.status_code}: {response.text[:200]}")
         raise Exception(f"API error: {response.status_code}")
@@ -4648,7 +4671,10 @@ class DomainResolver:
                 "max_output_tokens": 20  # CHANGED: max_tokens -> max_output_tokens
             }
             
-            response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+            response = get_openai_session().post(
+                OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
+            )
+
             if response.status_code == 200:
                 result = response.json()
                 # CHANGED: Parse from Responses API format
@@ -4892,7 +4918,10 @@ class DomainResolver:
                 "max_output_tokens": 30  # CHANGED: max_tokens -> max_output_tokens
             }
             
-            response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=15)
+            response = get_openai_session().post(
+                OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
+            )
+
             if response.status_code == 200:
                 result = response.json()
                 # CHANGED: Parse from Responses API format
@@ -5326,7 +5355,9 @@ Required JSON format:
             }
         }
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=30)
+        response = get_openai_session().post(
+            OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180)  # 3 minutes read timeout
+        )
         
         if response.status_code != 200:
             print(f"API error {response.status_code}: {response.text}")

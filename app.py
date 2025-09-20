@@ -3552,7 +3552,7 @@ Be ruthless in your selection - quality over quantity."""
                 "verbosity": "low"
             },
             "input": f"{constrained_system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_output_tokens": 10000,
+            "max_output_tokens": 30000,
             "truncation": "auto"
         }
         
@@ -5461,7 +5461,7 @@ Use exactly 3 items per list. Be brief and specific."""
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
-            "max_output_tokens": 2500,  # Increased from 2000
+            "max_output_tokens": 5000,  # Increased from 2000
             "reasoning": {"effort": "medium"},  # Reduce reasoning overhead
             "text": {
                 "format": {"type": "json_object"},

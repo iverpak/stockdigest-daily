@@ -481,6 +481,15 @@ def update_schema_for_enhanced_metadata():
             ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS aliases_brands_assets JSONB;
         """)
 
+def update_schema_for_qb_scores():
+    """Add QB scoring fields to found_url table"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_score INTEGER;
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_level VARCHAR(20);
+            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_reasoning TEXT;
+        """)
+
 def update_schema_for_triage():
     """Add triage fields to found_url table"""
     with db() as conn, conn.cursor() as cur:
@@ -2376,11 +2385,11 @@ def rule_based_triage_score_company(title: str, domain: str) -> Tuple[int, str, 
     
     title_lower = title.lower()
     
-    # HIGH PRIORITY - Hard business events (50-70 points)
+    # HIGH PRIORITY - Hard business events (60-80 points)
     high_events = [
         r'\b(acquires?|acquisition|merger|divests?|divestiture|spin-?off)\b',
         r'\b(bankruptcy|chapter 11|delist|delisting|halt|halted)\b',
-        r'\b(guidance|preannounce|beats?|misses?|earnings)\b',
+        r'\b(guidance|preannounce|beats?|misses?|earnings|results|q[1-4])\b',
         r'\b(margin|backlog|contract|long-?term agreement|supply deal)\b',
         r'\b(price increase|price cut|capacity add|closure|curtailment)\b',
         r'\b(buyback|tender|equity offering|convertible|refinanc)\b',
@@ -2391,36 +2400,36 @@ def rule_based_triage_score_company(title: str, domain: str) -> Tuple[int, str, 
     
     for pattern in high_events:
         if re.search(pattern, title_lower):
-            score += 60
+            score += 70
             reasons.append("hard business event")
             break
     
-    # MEDIUM PRIORITY - Strategic developments (30-45 points)
-    medium_events = [
-        r'\b(investment|expansion)\b.*\$[\d,]+',  # Investment with $ amount
-        r'\b(technology|product)\b.*\b(launch|deployment|ship)\b',
-        r'\b(ceo|cfo|president|director)\b.*\b(change|resign|appoint|hire)\b',
-        r'\b(partnership|joint venture|collaboration)\b',
-        r'\b(facility|plant|factory)\b.*\b(opening|closing)\b'
-    ]
-    
+    # MEDIUM PRIORITY - Strategic developments (40-55 points)
     if score == 0:  # Only if no high-priority event found
+        medium_events = [
+            r'\b(investment|expansion)\b.*\$[\d,]+',  # Investment with $ amount
+            r'\b(technology|product)\b.*\b(launch|deployment|ship)\b',
+            r'\b(ceo|cfo|president|director)\b.*\b(change|resign|appoint|hire)\b',
+            r'\b(partnership|joint venture|collaboration)\b',
+            r'\b(facility|plant|factory)\b.*\b(opening|closing)\b'
+        ]
+        
         for pattern in medium_events:
             if re.search(pattern, title_lower):
-                score += 40
+                score += 50
                 reasons.append("strategic development")
                 break
     
-    # LOW PRIORITY - Routine coverage (20-30 points)
-    low_events = [
-        r'\b(analyst|rating|target|upgrade|downgrade)\b',
-        r'\b(corporate announcement|operational)\b'
-    ]
-    
+    # LOW PRIORITY - Routine coverage (25-35 points)
     if score == 0:  # Only if no higher priority found
+        low_events = [
+            r'\b(analyst|rating|target|upgrade|downgrade)\b',
+            r'\b(corporate announcement|operational)\b'
+        ]
+        
         for pattern in low_events:
             if re.search(pattern, title_lower):
-                score += 25
+                score += 30
                 reasons.append("routine coverage")
                 break
     
@@ -2480,7 +2489,7 @@ def rule_based_triage_score_industry(title: str, domain: str, industry_keywords:
     title_lower = title.lower()
     keywords = industry_keywords or []
     
-    # HIGH PRIORITY - Policy/regulatory shocks with quantified impact (50-70 points)
+    # HIGH PRIORITY - Policy/regulatory shocks with quantified impact (65-85 points)
     high_events = [
         r'\b(tariff|ban|quota|price control|regulatory change)\b.*\b\d+',
         r'\b(supply shock|inventory)\b.*\b(draw|build)\b.*\b\d+',
@@ -2492,38 +2501,38 @@ def rule_based_triage_score_industry(title: str, domain: str, industry_keywords:
     
     for pattern in high_events:
         if re.search(pattern, title_lower):
-            score += 65
+            score += 75
             reasons.append("policy/regulatory shock")
             break
     
-    # MEDIUM PRIORITY - Sector developments (30-45 points)
-    medium_events = [
-        r'\b(infrastructure investment)\b.*\$[\d,]+',
-        r'\b(industry consolidation)\b.*\$[\d,]+',
-        r'\b(technology standards adoption)\b.*\b(implementation|schedule)\b',
-        r'\b(labor agreement)\b.*\b(wage|benefit|cost)\b',
-        r'\b(supply chain)\b.*\b(volume|pricing)\b',
-        r'\b(capacity)\b.*\b(addition|reduction)\b.*\b(production|impact)\b'
-    ]
-    
+    # MEDIUM PRIORITY - Sector developments (45-60 points)
     if score == 0:
+        medium_events = [
+            r'\b(infrastructure investment)\b.*\$[\d,]+',
+            r'\b(industry consolidation)\b.*\$[\d,]+',
+            r'\b(technology standards adoption)\b.*\b(implementation|schedule)\b',
+            r'\b(labor agreement)\b.*\b(wage|benefit|cost)\b',
+            r'\b(supply chain)\b.*\b(volume|pricing)\b',
+            r'\b(capacity)\b.*\b(addition|reduction)\b.*\b(production|impact)\b'
+        ]
+        
         for pattern in medium_events:
             if re.search(pattern, title_lower):
-                score += 42
+                score += 52
                 reasons.append("sector development")
                 break
     
-    # LOW PRIORITY - Broad trends (20-30 points)
-    low_events = [
-        r'\b(government initiative)\b.*\b(budget|implementation)\b',
-        r'\b(economic indicator)\b.*\b(sector|industry)\b',
-        r'\b(research finding)\b.*\b(quantified|impact)\b'
-    ]
-    
+    # LOW PRIORITY - Broad trends (30-40 points)
     if score == 0:
+        low_events = [
+            r'\b(government initiative)\b.*\b(budget|implementation)\b',
+            r'\b(economic indicator)\b.*\b(sector|industry)\b',
+            r'\b(research finding)\b.*\b(quantified|impact)\b'
+        ]
+        
         for pattern in low_events:
             if re.search(pattern, title_lower):
-                score += 25
+                score += 35
                 reasons.append("broad trend")
                 break
     
@@ -2613,7 +2622,7 @@ def rule_based_triage_score_competitor(title: str, domain: str, competitors: Lis
         score = 15
         reasons.append("no competitor match")
     else:
-        # HIGH PRIORITY - Hard competitive events (50-70 points)
+        # HIGH PRIORITY - Hard competitive events (65-85 points)
         high_events = [
             r'\b(capacity expansion|capacity reduction)\b.*\b\d+',
             r'\b(pricing action|price increase|price cut)\b.*\b\d+%',
@@ -2628,11 +2637,11 @@ def rule_based_triage_score_competitor(title: str, domain: str, competitors: Lis
         
         for pattern in high_events:
             if re.search(pattern, title_lower):
-                score += 65
+                score += 75
                 reasons.append(f"hard competitive event ({mentioned_competitor})")
                 break
         
-        # MEDIUM PRIORITY - Strategic moves (30-45 points)
+        # MEDIUM PRIORITY - Strategic moves (45-60 points)
         if score == 0:
             medium_events = [
                 r'\b(acquisition|partnership)\b.*\b(deal value|strategic)\b',
@@ -2645,11 +2654,11 @@ def rule_based_triage_score_competitor(title: str, domain: str, competitors: Lis
             
             for pattern in medium_events:
                 if re.search(pattern, title_lower):
-                    score += 42
+                    score += 52
                     reasons.append(f"strategic move ({mentioned_competitor})")
                     break
         
-        # LOW PRIORITY - Routine competitive intel (20-30 points)
+        # LOW PRIORITY - Routine competitive intel (30-40 points)
         if score == 0:
             low_events = [
                 r'\b(earnings)\b.*\b(guidance|beat|miss)\b',
@@ -2659,7 +2668,7 @@ def rule_based_triage_score_competitor(title: str, domain: str, competitors: Lis
             
             for pattern in low_events:
                 if re.search(pattern, title_lower):
-                    score += 28
+                    score += 35
                     reasons.append(f"routine intel ({mentioned_competitor})")
                     break
     
@@ -2712,10 +2721,10 @@ def rule_based_triage_score_competitor(title: str, domain: str, competitors: Lis
     
     return final_score, " + ".join(reasons), qb_level
 
-
 def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dict], category: str, low_quality_domains: Set[str], target_limit: int) -> List[Dict]:
     """
     Apply backfill using AI → Quality → Category-specific QB scoring (100→0)
+    AND store QB scores in database for ALL articles
     """
     # Step 1: Start with AI selections
     combined_selected = list(ai_selected)
@@ -2736,7 +2745,7 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
         if domain in QUALITY_DOMAINS:
             quality_selected.append({
                 "id": idx,
-                "scrape_priority": 2,
+                "scrape_priority": "MEDIUM",  # Updated to use HIGH/MEDIUM/LOW
                 "likely_repeat": False,
                 "repeat_key": "",
                 "why": f"Quality domain: {domain}",
@@ -2751,10 +2760,32 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
     current_count = len(combined_selected)
     backfill_selected = []
     
+    # Score ALL articles for QB analysis (regardless of selection)
+    for idx, article in enumerate(articles):
+        domain = normalize_domain(article.get("domain", ""))
+        title = article.get("title", "")
+        
+        if not (domain in low_quality_domains or is_insider_trading_article(title.lower())):
+            # Calculate QB score for every article
+            if category == "company":
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_company(title, domain)
+            elif category == "industry":
+                keywords = [article.get('search_keyword')] if article.get('search_keyword') else []
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_industry(title, domain, keywords)
+            elif category == "competitor":
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score_competitor(title, domain, [])
+            else:
+                qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
+            
+            # Store QB scores in article object for database update
+            article['qb_score'] = qb_score
+            article['qb_level'] = qb_level
+            article['qb_reasoning'] = qb_reasoning
+    
     if current_count < target_limit:
         remaining_slots = target_limit - current_count
         
-        # Score ALL remaining articles using category-specific logic
+        # Score remaining articles for backfill selection
         scored_candidates = []
         for idx, article in enumerate(articles):
             if idx in selected_indices:
@@ -2766,19 +2797,10 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
             if domain in low_quality_domains or is_insider_trading_article(title.lower()):
                 continue
             
-            # Category-specific scoring
-            if category == "company":
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score_company(title, domain)
-            elif category == "industry":
-                # Get industry keywords from first article
-                keywords = [article.get('search_keyword')] if article.get('search_keyword') else []
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score_industry(title, domain, keywords)
-            elif category == "competitor":
-                # Would need competitor list - for now use generic
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score_competitor(title, domain, [])
-            else:
-                # Fallback to original generic scoring
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
+            # Use the QB scores we just calculated
+            qb_score = article.get('qb_score', 0)
+            qb_level = article.get('qb_level', 'QB: Low')
+            qb_reasoning = article.get('qb_reasoning', '')
             
             scored_candidates.append({
                 "id": idx,
@@ -2798,9 +2820,17 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
         
         # Take top candidates up to remaining slots
         for candidate in scored_candidates[:remaining_slots]:
+            # Convert QB level to scrape priority
+            if candidate['qb_score'] >= 70:
+                scrape_priority = "HIGH"
+            elif candidate['qb_score'] >= 40:
+                scrape_priority = "MEDIUM"
+            else:
+                scrape_priority = "LOW"
+                
             backfill_selected.append({
                 "id": candidate["id"],
-                "scrape_priority": 3,
+                "scrape_priority": scrape_priority,
                 "likely_repeat": False,
                 "repeat_key": "",
                 "why": f"{candidate['qb_level']}: {candidate['qb_reasoning']} (score: {candidate['qb_score']})",
@@ -2812,28 +2842,9 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
         
         combined_selected.extend(backfill_selected)
     
-    # Store QB scores for ALL articles
-    for idx, article in enumerate(articles):
-        domain = normalize_domain(article.get("domain", ""))
-        title = article.get("title", "")
-        
-        if not (domain in low_quality_domains or is_insider_trading_article(title.lower())):
-            if category == "company":
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score_company(title, domain)
-            elif category == "industry":
-                keywords = [article.get('search_keyword')] if article.get('search_keyword') else []
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score_industry(title, domain, keywords)
-            elif category == "competitor":
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score_competitor(title, domain, [])
-            else:
-                qb_score, qb_reasoning, qb_level = rule_based_triage_score(title, domain)
-            
-            article['qb_score'] = qb_score
-            article['qb_level'] = qb_level
-            article['qb_reasoning'] = qb_reasoning
-    
-    # Final sort by priority
-    combined_selected.sort(key=lambda x: x.get("scrape_priority", 5))
+    # Final sort by priority (HIGH=1, MEDIUM=2, LOW=3)
+    priority_map = {"HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    combined_selected.sort(key=lambda x: priority_map.get(x.get("scrape_priority", "LOW"), 3))
     
     # Enhanced logging
     ai_count = len(ai_selected)
@@ -2847,6 +2858,7 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
 def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str, List[Dict]], ticker: str, target_limits: Dict[str, int] = None) -> Dict[str, List[Dict]]:
     """
     Enhanced triage with tiered backfill to reach target limits
+    NOW STORES QB SCORES IN DATABASE
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - using quality domains and backfill only")
@@ -2893,10 +2905,24 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
             LOG.error(f"AI triage failed for company: {e}")
             ai_selected = []
         
-        # Apply tiered backfill to reach target
+        # Apply tiered backfill to reach target AND store QB scores
         selected_results["company"] = _apply_tiered_backfill_to_limits(
             articles, ai_selected, "company", LOW_QUALITY_DOMAINS, target
         )
+        
+        # Store QB scores in database for company articles
+        with db() as conn, conn.cursor() as cur:
+            for idx, article in enumerate(articles):
+                if article.get('qb_score') is not None:
+                    # Get the actual database ID for this article
+                    article_db_id = article.get('id')  # This should be the database ID
+                    if article_db_id:
+                        cur.execute("""
+                            UPDATE found_url 
+                            SET qb_score = %s, qb_level = %s, qb_reasoning = %s
+                            WHERE id = %s
+                        """, (article['qb_score'], article['qb_level'], 
+                              article['qb_reasoning'], article_db_id))
     
     # INDUSTRY: Process by keyword batches with backfill
     if "industry" in articles_by_category and articles_by_category["industry"]:
@@ -2953,6 +2979,19 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
                 
                 all_industry_selected.extend(keyword_selected_with_backfill)
                 LOG.info(f"    Keyword '{keyword}' final selection: {len(keyword_selected_with_backfill)} articles")
+                
+                # Store QB scores in database for this keyword's articles
+                with db() as conn, conn.cursor() as cur:
+                    for idx, (original_idx, article) in enumerate(keyword_articles):
+                        if article.get('qb_score') is not None:
+                            article_db_id = article.get('id')
+                            if article_db_id:
+                                cur.execute("""
+                                    UPDATE found_url 
+                                    SET qb_score = %s, qb_level = %s, qb_reasoning = %s
+                                    WHERE id = %s
+                                """, (article['qb_score'], article['qb_level'], 
+                                      article['qb_reasoning'], article_db_id))
                 
             except Exception as e:
                 LOG.error(f"AI triage failed for industry keyword '{keyword}': {e}")
@@ -3031,6 +3070,19 @@ def perform_ai_triage_batch_with_tiered_backfill(articles_by_category: Dict[str,
                 all_competitor_selected.extend(competitor_selected_with_backfill)
                 LOG.info(f"    Competitor '{competitor}' final selection: {len(competitor_selected_with_backfill)} articles")
                 
+                # Store QB scores in database for this competitor's articles
+                with db() as conn, conn.cursor() as cur:
+                    for idx, (original_idx, article) in enumerate(competitor_articles):
+                        if article.get('qb_score') is not None:
+                            article_db_id = article.get('id')
+                            if article_db_id:
+                                cur.execute("""
+                                    UPDATE found_url 
+                                    SET qb_score = %s, qb_level = %s, qb_reasoning = %s
+                                    WHERE id = %s
+                                """, (article['qb_score'], article['qb_level'], 
+                                      article['qb_reasoning'], article_db_id))
+                
             except Exception as e:
                 LOG.error(f"AI triage failed for competitor '{competitor}': {e}")
         
@@ -3087,7 +3139,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             "Content-Type": "application/json"
         }
         
-        # Define JSON schema for structured output
+        # Updated JSON schema to use HIGH/MEDIUM/LOW instead of P1-P5
         triage_schema = {
             "name": "triage_results",
             "strict": True,
@@ -3104,7 +3156,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                             "type": "object",
                             "properties": {
                                 "id": {"type": "integer"},
-                                "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 5},
+                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},  # CHANGED
                                 "likely_repeat": {"type": "boolean"},
                                 "repeat_key": {"type": "string"},
                                 "why": {"type": "string"},
@@ -3120,7 +3172,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
                             "type": "object",
                             "properties": {
                                 "id": {"type": "integer"},
-                                "scrape_priority": {"type": "integer", "minimum": 3, "maximum": 5},
+                                "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},  # CHANGED
                                 "likely_repeat": {"type": "boolean"},
                                 "repeat_key": {"type": "string"},
                                 "why": {"type": "string"},
@@ -3194,7 +3246,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
             if selected_item["id"] < len(original_articles):
                 result_item = {
                     "id": selected_item["id"],
-                    "scrape_priority": selected_item["scrape_priority"],
+                    "scrape_priority": selected_item["scrape_priority"],  # Now HIGH/MEDIUM/LOW
                     "why": selected_item["why"],
                     "confidence": selected_item["confidence"],
                     "likely_repeat": selected_item["likely_repeat"],
@@ -3210,11 +3262,9 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         LOG.error(f"Triage request failed for {payload.get('bucket', 'unknown')} bucket: {str(e)}")
         return []
 
-# Update the individual triage functions to use the new _full suffix
-
 def triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, aliases_brands_assets: Dict, sector_profile: Dict) -> List[Dict]:
     """
-    Enhanced company triage focusing solely on title relevance with mandatory fill-to-cap
+    Enhanced company triage focusing solely on title relevance with HIGH/MEDIUM/LOW priorities
     """
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -3231,7 +3281,7 @@ def triage_company_articles_full(articles: List[Dict], ticker: str, company_name
 
     payload = {
         "bucket": "company",
-        "target_cap": min(30, len(articles)),  # Cap at available articles
+        "target_cap": min(30, len(articles)),
         "ticker": ticker,
         "company_name": company_name,
         "items": items
@@ -3276,13 +3326,13 @@ TITLE SPECIFICITY BOOSTERS (within priority band):
 
 FILL POLICY:
 * Select exactly target_cap items unless there are fewer than target_cap total items
-* Backfill ladder if insufficient High items: High → Medium → Low → (last resort) items matching ticker + relevant business terms
+* Backfill ladder if insufficient High items: HIGH → MEDIUM → LOW → (last resort) items matching ticker + relevant business terms
 * When backfilling from lower categories, mark reason as "backfill" and cite qualifying title tokens
 * Maintain consistent scoring for identical titles regardless of source
 
 REQUIRED RESPONSE FIELDS:
 selected_ids: int[]
-selected: [{id: int, scrape_priority: int (1-5), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
+selected: [{id: int, scrape_priority: string ("HIGH"|"MEDIUM"|"LOW"), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
 skipped: [same structure]
 
 For repeat coverage: explain why each repeat adds value based on title content differences, not source.
@@ -3293,7 +3343,7 @@ The response will be automatically formatted as structured JSON with selected_id
 
 def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[Dict]:
     """
-    Enhanced industry triage focusing on sector-specific relevance with mandatory fill-to-cap
+    Enhanced industry triage focusing on sector-specific relevance with HIGH/MEDIUM/LOW priorities
     """
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -3313,7 +3363,7 @@ def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_prof
 
     payload = {
         "bucket": "industry",
-        "target_cap": min(30, len(articles)),  # Cap at available articles
+        "target_cap": min(30, len(articles)),
         "ticker": ticker,
         "industry_keywords": industry_keywords,
         "sector_profile": sector_profile,
@@ -3362,13 +3412,13 @@ TITLE SPECIFICITY BOOSTERS (within priority band):
 
 FILL POLICY:
 * Select exactly target_cap items unless there are fewer than target_cap total items
-* Backfill ladder if insufficient High items: High → Medium → Low → (last resort) items matching industry_keywords + concrete business terms
+* Backfill ladder if insufficient High items: HIGH → MEDIUM → LOW → (last resort) items matching industry_keywords + concrete business terms
 * When backfilling, mark reason as "backfill" and cite qualifying title tokens (e.g., "healthcare + regulation", "energy + infrastructure")
 * Maintain consistent scoring for identical titles regardless of source
 
 REQUIRED RESPONSE FIELDS:
 selected_ids: int[]
-selected: [{id: int, scrape_priority: int (1-5), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
+selected: [{id: int, scrape_priority: string ("HIGH"|"MEDIUM"|"LOW"), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
 skipped: [same structure]
 
 SECTOR CONTEXT PRIORITY:
@@ -3385,7 +3435,7 @@ The response will be automatically formatted as structured JSON with selected_id
 
 def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[Dict]:
     """
-    Enhanced competitor triage focusing on competitive dynamics with mandatory fill-to-cap
+    Enhanced competitor triage focusing on competitive dynamics with HIGH/MEDIUM/LOW priorities
     """
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -3405,7 +3455,7 @@ def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: Li
 
     payload = {
         "bucket": "competitor",
-        "target_cap": min(30, len(articles)),  # Cap at available articles
+        "target_cap": min(30, len(articles)),
         "ticker": ticker,
         "competitors": competitors,
         "sector_profile": sector_profile,
@@ -3463,13 +3513,13 @@ COMPETITIVE IMPACT ASSESSMENT CRITERIA:
 
 FILL POLICY:
 * Select exactly target_cap items unless there are fewer than target_cap total items  
-* Backfill ladder if insufficient High items: High → Medium → Low → (last resort) items matching competitor names + relevant business terms
+* Backfill ladder if insufficient High items: HIGH → MEDIUM → LOW → (last resort) items matching competitor names + relevant business terms
 * When backfilling, mark reason as "backfill" and cite qualifying elements (e.g., "competitor name + earnings beat", "competitor name + expansion")
 * Maintain consistent scoring for identical titles regardless of source
 
 REQUIRED RESPONSE FIELDS:
 selected_ids: int[]
-selected: [{id: int, scrape_priority: int (1-5), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
+selected: [{id: int, scrape_priority: string ("HIGH"|"MEDIUM"|"LOW"), why: string ≤180, confidence: float 0.1-1.0, likely_repeat: bool false, repeat_key: ""}]
 skipped: [same structure]
 
 For repeat coverage: explain why each repeat adds different competitive intelligence value based on distinct aspects mentioned in title content.
@@ -5661,7 +5711,7 @@ def send_email(subject: str, html_body: str, text_attachment: str = None, to: st
         return False
 
 def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Send enhanced quick email with domain, title, triage results - REMOVED REDUNDANT KEYWORD SECTIONS"""
+    """Send enhanced quick email with domain, title, triage results - Shows AI, Quality, and QB scores"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
         
@@ -5705,11 +5755,9 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
             ".meta { color: #95a5a6; font-size: 11px; }",
             ".triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 8px; }",
             ".triage-selected { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }",
-            ".triage-p1 { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
-            ".triage-p2 { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }",
-            ".triage-p3 { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
-            ".triage-p4 { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
-            ".triage-p5 { background-color: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }",
+            ".triage-high { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
+            ".triage-medium { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+            ".triage-low { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
             ".triage-skipped { background-color: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }",
             ".triage-quality { background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
             ".selected-for-scrape { background-color: #e8f5e8 !important; }",
@@ -5732,7 +5780,7 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
             f"<strong>Generated:</strong> {current_time_est}<br>",
             f"<strong>Status:</strong> Articles ingested and triaged, AI analysis and scraping in progress...<br>",
             f"<strong>Tickers Covered:</strong> {', '.join(articles_by_ticker.keys())}<br>",
-            f"<strong>AI Triage:</strong> Priority scoring complete + Quality domain selections",
+            f"<strong>Scoring:</strong> AI Triage (HIGH/MEDIUM/LOW) + Quality Domain detection + QB Rule-based scoring (High/Medium/Low)",
             "</div>"
         ]
         
@@ -5793,8 +5841,6 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
                 
-                # REMOVED: category-specific keywords section - no more redundant "Monitoring Keywords" or "Monitoring Competitors"
-                
                 # Create combined list with triage priority and quality domain sorting
                 enhanced_articles = []
                 for idx, article in enumerate(articles):
@@ -5802,14 +5848,22 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                     is_ai_selected = idx in selected_article_data
                     is_quality_domain = domain in QUALITY_DOMAINS
                     
+                    # Get QB scores from article (stored during triage)
+                    qb_score = article.get('qb_score', 0)
+                    qb_level = article.get('qb_level', 'QB: Low')
+                    
                     priority = 999  # Default low priority
                     triage_reason = ""
+                    ai_priority = "LOW"
                     
                     if is_ai_selected:
-                        priority = selected_article_data[idx].get("scrape_priority", 5)
+                        ai_priority = selected_article_data[idx].get("scrape_priority", "LOW")
                         triage_reason = selected_article_data[idx].get("why", "")
+                        # Convert AI priority to numeric for sorting
+                        priority_map = {"HIGH": 1, "MEDIUM": 2, "LOW": 3}
+                        priority = priority_map.get(ai_priority, 3)
                     elif is_quality_domain:
-                        priority = 2.5  # Between P2 and P3 for quality domains
+                        priority = 2.5  # Between HIGH and MEDIUM for quality domains
                         triage_reason = "Quality domain auto-selected"
                     
                     enhanced_articles.append({
@@ -5819,6 +5873,9 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                         "is_ai_selected": is_ai_selected,
                         "is_quality_domain": is_quality_domain,
                         "triage_reason": triage_reason,
+                        "ai_priority": ai_priority,
+                        "qb_score": qb_score,
+                        "qb_level": qb_level,
                         "published_at": article.get("published_at")
                     })
                 
@@ -5850,23 +5907,37 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                             )
                             article_keyword_badge = f'<span class="competitor-badge">{comp_name}</span>'
                     
-                    # Determine article class and triage badge
+                    # Determine article class and triage badges
                     article_class = f"article {category}"
-                    triage_badge = ""
+                    triage_badges = []
                     
-                    if enhanced_article["is_ai_selected"] and enhanced_article["is_quality_domain"]:
+                    # AI Triage badge
+                    if enhanced_article["is_ai_selected"]:
                         article_class += " selected-for-scrape"
-                        priority = int(enhanced_article["priority"])
-                        triage_badge = f'<span class="triage triage-p{priority}" title="{enhanced_article["triage_reason"]}">AI P{priority}</span><span class="triage triage-quality">Quality</span>'
-                    elif enhanced_article["is_ai_selected"]:
-                        article_class += " selected-for-scrape"
-                        priority = int(enhanced_article["priority"])
-                        triage_badge = f'<span class="triage triage-p{priority}" title="{enhanced_article["triage_reason"]}">AI P{priority}</span>'
-                    elif enhanced_article["is_quality_domain"]:
-                        article_class += " quality-domain-selected"
-                        triage_badge = '<span class="triage triage-quality">Quality Domain</span>'
+                        ai_priority = enhanced_article["ai_priority"]
+                        badge_class = f"triage-{ai_priority.lower()}"
+                        triage_badges.append(f'<span class="triage {badge_class}" title="{enhanced_article["triage_reason"]}">AI {ai_priority}</span>')
+                    
+                    # Quality Domain badge
+                    if enhanced_article["is_quality_domain"]:
+                        if not enhanced_article["is_ai_selected"]:
+                            article_class += " quality-domain-selected"
+                        triage_badges.append('<span class="triage triage-quality">Quality</span>')
+                    
+                    # QB Score badge (ALWAYS shown)
+                    qb_score = enhanced_article["qb_score"]
+                    qb_level = enhanced_article["qb_level"]
+                    if qb_score >= 70:
+                        qb_class = "qb-high"
+                    elif qb_score >= 40:
+                        qb_class = "qb-medium"
                     else:
-                        triage_badge = '<span class="triage triage-skipped">Skipped</span>'
+                        qb_class = "qb-low"
+                    triage_badges.append(f'<span class="qb-score {qb_class}" title="Score: {qb_score}">{qb_level}</span>')
+                    
+                    # If not selected by AI or Quality, mark as skipped
+                    if not enhanced_article["is_ai_selected"] and not enhanced_article["is_quality_domain"]:
+                        triage_badges.insert(0, '<span class="triage triage-skipped">Skipped</span>')
                     
                     # Format publication time
                     pub_time = ""
@@ -5878,7 +5949,7 @@ def send_quick_ingest_email_with_triage(articles_by_ticker: Dict[str, Dict[str, 
                         <div class='article-header'>
                             <span class='source-badge'>{get_or_create_formal_domain_name(domain)}</span>
                             {article_keyword_badge}
-                            {triage_badge}
+                            {' '.join(triage_badges)}
                         </div>
                         <div class='article-content'>
                             <a href='{article.get("resolved_url") or article.get("url", "")}'>{title}</a>
@@ -6424,6 +6495,7 @@ def cron_ingest(
     ensure_schema()
     update_schema_for_content()
     update_schema_for_triage()
+    update_schema_for_qb_scores()
     
     LOG.info("=== CRON INGEST STARTING (INGESTION 50/25/25 + DYNAMIC SCRAPING) ===")
     LOG.info(f"Processing window: {minutes} minutes")

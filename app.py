@@ -113,6 +113,11 @@ def parse_json_with_fallback(text: str, ticker: str = "") -> dict:
             "aliases_brands_assets": {"aliases": [], "brands": [], "assets": []}
         }
 
+def clean_null_bytes(text: str) -> str:
+    """Remove NULL bytes that cause PostgreSQL errors"""
+    if not text:
+        return text
+    return text.replace('\x00', '').replace('\0', '')
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -1475,12 +1480,16 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 )
                 
                 if content:
-                    scraped_content = content
+                    # Clean scraped content to remove NULL bytes
+                    scraped_content = clean_null_bytes(content)
                     content_scraped_at = datetime.now(timezone.utc)
                     ai_summary = generate_ai_summary(scraped_content, title, ticker)
+                    # Clean AI summary too
+                    if ai_summary:
+                        ai_summary = clean_null_bytes(ai_summary)
                 else:
                     scraping_failed = True
-                    scraping_error = status
+                    scraping_error = clean_null_bytes(status or "")
                     return False
         
         # Continue with existing AI quality scoring...
@@ -1509,6 +1518,15 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         penalty_multiplier = components.get('penalty_multiplier') if components else None
         penalty_reason = components.get('penalty_reason') if components else None
         
+        # Clean all text fields for database storage
+        clean_ai_impact = clean_null_bytes(ai_impact or "")
+        clean_ai_reasoning = clean_null_bytes(ai_reasoning or "")
+        clean_ai_summary = clean_null_bytes(ai_summary or "")
+        clean_scraping_error = clean_null_bytes(scraping_error or "")
+        clean_event_multiplier_reason = clean_null_bytes(event_multiplier_reason or "")
+        clean_relevance_boost_reason = clean_null_bytes(relevance_boost_reason or "")
+        clean_penalty_reason = clean_null_bytes(penalty_reason or "")
+        
         # Update the article in database
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
@@ -1520,11 +1538,11 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                     penalty_multiplier = %s, penalty_reason = %s
                 WHERE id = %s
             """, (
-                scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                ai_summary, quality_score, ai_impact, ai_reasoning,
-                source_tier, event_multiplier, event_multiplier_reason,
-                relevance_boost, relevance_boost_reason, numeric_bonus,
-                penalty_multiplier, penalty_reason,
+                scraped_content, content_scraped_at, scraping_failed, clean_scraping_error,
+                clean_ai_summary, quality_score, clean_ai_impact, clean_ai_reasoning,
+                source_tier, event_multiplier, clean_event_multiplier_reason,
+                relevance_boost, clean_relevance_boost_reason, numeric_bonus,
+                penalty_multiplier, clean_penalty_reason,
                 article_id
             ))
         
@@ -2012,6 +2030,15 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                     display_content = description
                     
+                    # Clean all text fields to remove NULL bytes
+                    clean_url = clean_null_bytes(url or "")
+                    clean_resolved_url = clean_null_bytes(final_resolved_url or "")
+                    clean_title = clean_null_bytes(title or "")
+                    clean_description = clean_null_bytes(display_content or "")
+                    clean_search_keyword = clean_null_bytes(feed.get("search_keyword") or "")
+                    clean_source_url = clean_null_bytes(final_source_url or "")
+                    clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
+                    
                     # Insert article with comprehensive resolution data
                     cur.execute("""
                         INSERT INTO found_url (
@@ -2022,10 +2049,10 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
-                        url, final_resolved_url, url_hash, title, display_content,
+                        clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
                         feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
-                        category, feed.get("search_keyword"), final_source_url,
-                        feed.get("competitor_ticker")
+                        category, clean_search_keyword, clean_source_url,
+                        clean_competitor_ticker
                     ))
                     
                     if cur.fetchone():
@@ -7350,11 +7377,15 @@ def cron_ingest(
                 if article_idx < len(articles):
                     article_id = articles[article_idx]["id"]
                     with db() as conn, conn.cursor() as cur:
+                        # Clean text fields to prevent NULL byte errors
+                        clean_priority = clean_null_bytes(item.get("scrape_priority", "LOW"))
+                        clean_reasoning = clean_null_bytes(item.get("why", ""))
+                        
                         cur.execute("""
                             UPDATE found_url 
                             SET ai_triage_selected = TRUE, triage_priority = %s, triage_reasoning = %s
                             WHERE id = %s
-                        """, (item.get("scrape_priority", "LOW"), item.get("why", ""), article_id))
+                        """, (clean_priority, clean_reasoning, article_id))
     
     # PHASE 3: Send enhanced quick email with triage results
     LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")

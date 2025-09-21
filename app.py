@@ -5768,21 +5768,43 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
                 else:
                     competitor_names.append(comp_str)
         
-        # Generate summary from AI analysis (for final email)
+        # Generate summary from scraped content (for final email)
         ai_analysis_summary = ""
-        ai_summaries = [article.get("ai_summary", "") for article in company_articles if article.get("ai_summary")]
-        competitor_summaries = [article.get("ai_summary", "") for article in competitor_articles if article.get("ai_summary")]
         
-        if ai_summaries:
-            ai_text = "\n".join(f"• {summary}" for summary in ai_summaries[:15])  # Limit to first 15
-            competitor_analysis = ""
-            if competitor_summaries:
-                competitor_analysis = "\n\nCOMPETITOR ANALYSIS:\n" + "\n".join(f"• {summary}" for summary in competitor_summaries[:8])
+        # Get articles with scraped content for analysis
+        articles_with_content = [article for article in company_articles if article.get("scraped_content")]
+        competitor_articles_with_content = [article for article in competitor_articles if article.get("scraped_content")]
+        
+        LOG.info(f"Found {len(articles_with_content)} company articles with scraped content for {ticker}")
+        LOG.info(f"Found {len(competitor_articles_with_content)} competitor articles with scraped content for {ticker}")
+        
+        if articles_with_content:
+            # Build analysis from scraped content
+            content_summaries = []
+            for article in articles_with_content[:15]:  # Limit to first 15
+                title = article.get("title", "")
+                content = article.get("scraped_content", "")
+                if content and len(content) > 200:  # Only use substantial content
+                    # Create mini-summary for each article
+                    content_summaries.append(f"• {title}: {content[:500]}...")
             
-            try:
-                headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+            competitor_content_summaries = []
+            for article in competitor_articles_with_content[:8]:  # Limit to first 8
+                title = article.get("title", "")
+                content = article.get("scraped_content", "")
+                if content and len(content) > 200:
+                    competitor_content_summaries.append(f"• {title}: {content[:500]}...")
+            
+            if content_summaries:
+                ai_text = "\n".join(content_summaries)
+                competitor_analysis = ""
+                if competitor_content_summaries:
+                    competitor_analysis = "\n\nCOMPETITOR ANALYSIS:\n" + "\n".join(competitor_content_summaries)
                 
-                prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
+                try:
+                    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+                    
+                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
 
 SYNTHESIS FRAMEWORK:
 1. FINANCIAL TRAJECTORY: Consolidate revenue, margin, cash flow, and growth indicators
@@ -5807,28 +5829,38 @@ CITATION RULES FOR SYNTHESIS:
 TARGET: {company_name} ({ticker})
 COMPETITIVE CONTEXT: {', '.join(competitor_names) if competitor_names else 'Limited competitor coverage'}
 
-INDIVIDUAL ARTICLE ANALYSES:
+COMPANY ARTICLE CONTENT ANALYSIS:
 {ai_text}{competitor_analysis}
 
 Provide a strategic investment thesis synthesizing the deep content analysis."""
 
-                data = {
-                    "model": OPENAI_MODEL,
-                    "input": prompt,
-                    "max_output_tokens": 3000,
-                    "reasoning": {"effort": "high"},
-                    "text": {"verbosity": "low"},
-                    "truncation": "auto"
-                }
-                
-                response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    ai_analysis_summary = extract_text_from_responses(result)
+                    data = {
+                        "model": OPENAI_MODEL,
+                        "input": prompt,
+                        "max_output_tokens": 3000,
+                        "reasoning": {"effort": "medium"},
+                        "text": {"verbosity": "low"},
+                        "truncation": "auto"
+                    }
                     
-            except Exception as e:
-                LOG.warning(f"Failed to generate AI analysis summary for {ticker}: {e}")
+                    response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        ai_analysis_summary = extract_text_from_responses(result)
+                        
+                        # Log usage
+                        u = result.get("usage", {}) or {}
+                        LOG.info("AI Analysis usage – input:%s output:%s (cap:%s) status:%s",
+                                 u.get("input_tokens"), u.get("output_tokens"),
+                                 result.get("max_output_tokens"),
+                                 result.get("status"))
+                        
+                    else:
+                        LOG.warning(f"AI analysis summary failed: {response.status_code}")
+                        
+                except Exception as e:
+                    LOG.warning(f"Failed to generate AI analysis summary for {ticker}: {e}")
         
         summaries[ticker] = {
             "ai_analysis_summary": ai_analysis_summary,

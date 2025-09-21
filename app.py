@@ -6028,7 +6028,7 @@ Provide a concise executive summary focusing on financial prospects and competit
     return summaries
 
 def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Enhanced quick email with corrected header ordering for triage"""
+    """Enhanced quick email with corrected header ordering for triage and enhanced metadata"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
         
@@ -6038,16 +6038,28 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         # Generate AI summaries from titles (for triage email)
         company_summaries = generate_company_titles_summary(articles_by_ticker)
         
-        # Load ticker metadata for company names
+        # Load ticker metadata for company names and enhanced metadata
         ticker_metadata_cache = {}
         for ticker in articles_by_ticker.keys():
             config = get_ticker_config(ticker)
             if config:
+                competitors = []
+                for comp_str in config.get("competitors", []):
+                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                    if match:
+                        competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+                    else:
+                        competitors.append({"name": comp_str, "ticker": None})
+                
                 ticker_metadata_cache[ticker] = {
                     "company_name": config.get("name", ticker),
                     "industry_keywords": config.get("industry_keywords", []),
-                    "competitors": config.get("competitors", []),
-                    "sector": config.get("sector", "")
+                    "competitors": competitors,
+                    "sector": config.get("sector", ""),
+                    "industry": config.get("industry", ""),
+                    "sub_industry": config.get("sub_industry", ""),
+                    "sector_profile": config.get("sector_profile"),
+                    "aliases_brands_assets": config.get("aliases_brands_assets")
                 }
         
         html = [
@@ -6077,16 +6089,24 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
             ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
             ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+            ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
+            ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
+            ".brand-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fce4ec; color: #ad1457; border: 1px solid #f8bbd9; }",
+            ".asset-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #c5cae9; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+            ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
             ".meta { color: #95a5a6; font-size: 11px; }",
+            "a { color: #2980b9; text-decoration: none; }",
+            "a:hover { text-decoration: underline; }",
             "</style></head><body>",
-            f"<h1>Quick Intelligence Report: {ticker_list} - Triage Complete</h1>",
+            f"<h1>🚀 Quick Intelligence Report: {ticker_list} - Triage Complete</h1>",
             f"<div class='summary'>",
-            f"<strong>Generated:</strong> {current_time_est}<br>",
-            f"<strong>Status:</strong> Articles ingested and triaged, AI analysis and scraping in progress...<br>",
-            f"<strong>Tickers Covered:</strong> {ticker_list}<br>",
-            f"<strong>Selection Process:</strong> AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill",
+            f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
+            f"<strong>🎯 Status:</strong> Articles ingested and triaged, AI analysis and scraping in progress...<br>",
+            f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>",
+            f"<strong>🤖 Selection Process:</strong> AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill",
             "</div>"
         ]
         
@@ -6097,7 +6117,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ticker_count = sum(len(articles) for articles in categories.values())
             total_articles += ticker_count
             
-            # FIXED: Get company name from metadata cache
+            # Get company name from metadata cache
             full_company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
             
             # Count selected articles for this ticker
@@ -6109,16 +6129,93 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             total_selected += ticker_selected
             
             html.append(f"<div class='ticker-section'>")
-            html.append(f"<h2>{ticker} ({full_company_name}) - {ticker_count} Total Articles</h2>")
+            html.append(f"<h2>📈 {ticker} ({full_company_name}) - {ticker_count} Total Articles</h2>")
             
             # Add AI-generated titles summary at the top (triage email)
             if ticker in company_summaries and company_summaries[ticker].get("titles_summary"):
                 html.append("<div class='company-summary'>")
-                html.append("<div class='summary-title'>Executive Summary (Headlines Analysis)</div>")
+                html.append("<div class='summary-title'>📰 Executive Summary (Headlines Analysis)</div>")
                 html.append(f"<div class='summary-content'>{company_summaries[ticker]['titles_summary']}</div>")
                 html.append("</div>")
             
-            html.append(f"<p><strong>Selected for Analysis:</strong> {ticker_selected} articles</p>")
+            html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
+            
+            # Enhanced metadata information with emojis
+            if ticker in ticker_metadata_cache:
+                metadata = ticker_metadata_cache[ticker]
+                html.append("<div class='keywords'>")
+                html.append(f"<strong>🤖 AI-Powered Monitoring Configuration:</strong><br><br>")
+                
+                # Company details
+                if metadata.get("company_name"):
+                    html.append(f"<strong>🏢 Company:</strong> {metadata['company_name']}<br>")
+                
+                # Sector information
+                if metadata.get("sector"):
+                    html.append(f"<strong>📊 Sector:</strong> <span class='sector-badge'>{metadata['sector']}</span><br>")
+                if metadata.get("industry"):
+                    html.append(f"<strong>🏭 Industry:</strong> {metadata['industry']}<br>")
+                if metadata.get("sub_industry"):
+                    html.append(f"<strong>🔧 Sub-Industry:</strong> {metadata['sub_industry']}<br>")
+                
+                # Keywords and competitors
+                if metadata.get("industry_keywords"):
+                    industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
+                    html.append(f"<strong>🔍 Industry Keywords:</strong> {' '.join(industry_badges)}<br>")
+                
+                if metadata.get("competitors"):
+                    competitor_badges = [f'<span class="competitor-badge">🏢 {comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
+                    html.append(f"<strong>⚔️ Competitors:</strong> {' '.join(competitor_badges)}<br>")
+                
+                # Enhanced metadata from sector profile
+                sector_profile = metadata.get("sector_profile")
+                if sector_profile:
+                    try:
+                        if isinstance(sector_profile, str):
+                            sector_data = json.loads(sector_profile)
+                        else:
+                            sector_data = sector_profile
+                        
+                        if sector_data.get("core_geos"):
+                            geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_data["core_geos"][:5]]
+                            html.append(f"<strong>🌎 Core Geographies:</strong> {' '.join(geo_badges)}<br>")
+                        
+                        if sector_data.get("core_inputs"):
+                            input_badges = [f'<span class="sector-badge">🔧 {inp}</span>' for inp in sector_data["core_inputs"][:5]]
+                            html.append(f"<strong>⚙️ Core Inputs:</strong> {' '.join(input_badges)}<br>")
+                        
+                        if sector_data.get("core_channels"):
+                            channel_badges = [f'<span class="geography-badge">📡 {ch}</span>' for ch in sector_data["core_channels"][:5]]
+                            html.append(f"<strong>📢 Core Channels:</strong> {' '.join(channel_badges)}<br>")
+                            
+                    except Exception as e:
+                        LOG.warning(f"Error parsing sector profile for {ticker}: {e}")
+                
+                # Aliases, brands, and assets
+                aliases_brands = metadata.get("aliases_brands_assets")
+                if aliases_brands:
+                    try:
+                        if isinstance(aliases_brands, str):
+                            alias_data = json.loads(aliases_brands)
+                        else:
+                            alias_data = aliases_brands
+                        
+                        if alias_data.get("aliases"):
+                            alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in alias_data["aliases"][:5]]
+                            html.append(f"<strong>🔖 Aliases:</strong> {' '.join(alias_badges)}<br>")
+                        
+                        if alias_data.get("brands"):
+                            brand_badges = [f'<span class="brand-badge">🏆 {brand}</span>' for brand in alias_data["brands"][:5]]
+                            html.append(f"<strong>🏅 Brands:</strong> {' '.join(brand_badges)}<br>")
+                        
+                        if alias_data.get("assets"):
+                            asset_badges = [f'<span class="asset-badge">🏗️ {asset}</span>' for asset in alias_data["assets"][:5]]
+                            html.append(f"<strong>🏭 Key Assets:</strong> {' '.join(asset_badges)}")
+                            
+                    except Exception as e:
+                        LOG.warning(f"Error parsing aliases/brands for {ticker}: {e}")
+                
+                html.append("</div>")
             
             for category, articles in categories.items():
                 if not articles:
@@ -6167,18 +6264,26 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 ))
                 
                 selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or (a["is_quality_domain"] and not a["is_problematic"])])
-                html.append(f"<h3>{category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
+                
+                # Updated category icons
+                category_icons = {
+                    "company": "🎯",
+                    "industry": "🏭", 
+                    "competitor": "⚔️"
+                }
+                
+                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
                 
                 for enhanced_article in enhanced_articles[:50]:  # Show top 50 per category
                     article = enhanced_article["article"]
                     domain = article.get("domain", "unknown")
                     title = article.get("title", "No Title")
                     
-                    # HEADER ORDER: For INDUSTRY -> Industry Keyword, Domain, Quality, Flagged, AI Triage, QB Score
+                    # HEADER ORDER with emojis: For INDUSTRY -> Industry Keyword, Domain, Quality, Flagged, AI Triage, QB Score
                     # For COMPANY/COMPETITOR -> Company/Competitor Name, Domain, Quality, Flagged, AI Triage, QB Score
                     header_badges = []
                     
-                    # 1. First badge depends on category - FIXED to use full company name
+                    # 1. First badge depends on category
                     if category == "company":
                         header_badges.append(f'<span class="company-name-badge">🎯 {full_company_name}</span>')
                     elif category == "competitor":
@@ -6188,34 +6293,38 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
                     
                     # 2. Domain name second
-                    header_badges.append(f'<span class="source-badge">{get_or_create_formal_domain_name(domain)}</span>')
+                    header_badges.append(f'<span class="source-badge">📰 {get_or_create_formal_domain_name(domain)}</span>')
                     
                     # 3. Quality badge third (if applicable)
                     if enhanced_article["is_quality_domain"]:
-                        header_badges.append('<span class="quality-badge">Quality</span>')
+                        header_badges.append('<span class="quality-badge">⭐ Quality</span>')
                     
                     # 4. Flagged badge if AI selected or quality selected
                     if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
-                        header_badges.append('<span class="flagged-badge">Flagged</span>')
+                        header_badges.append('<span class="flagged-badge">🚩 Flagged</span>')
                     
                     # 5. AI Triage fifth (AI: High/Medium/Low format) - only if AI selected
                     if enhanced_article["is_ai_selected"]:
                         ai_priority = enhanced_article["ai_priority"]
                         badge_class = f"ai-{ai_priority.lower()}"
-                        header_badges.append(f'<span class="ai-triage {badge_class}">AI: {ai_priority}</span>')
+                        ai_emoji = {"HIGH": "🔥", "MEDIUM": "⚡", "LOW": "📝"}.get(ai_priority, "📝")
+                        header_badges.append(f'<span class="ai-triage {badge_class}">{ai_emoji} AI: {ai_priority}</span>')
                     
                     # 6. QB Score last (QB: High/Medium/Low format)
                     qb_score = article.get('qb_score', 0)
                     if qb_score >= 70:
                         qb_class = "qb-high"
                         qb_level = "QB: High"
+                        qb_emoji = "🏆"
                     elif qb_score >= 40:
                         qb_class = "qb-medium"
                         qb_level = "QB: Medium"
+                        qb_emoji = "🥉"
                     else:
                         qb_class = "qb-low"
                         qb_level = "QB: Low"
-                    header_badges.append(f'<span class="qb-score {qb_class}">{qb_level}</span>')
+                        qb_emoji = "📊"
+                    header_badges.append(f'<span class="qb-score {qb_class}">{qb_emoji} {qb_level}</span>')
                     
                     # Publication time
                     pub_time = ""
@@ -6229,7 +6338,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         </div>
                         <div class='article-content'>
                             <a href='{article.get("resolved_url") or article.get("url", "")}'>{title}</a>
-                            <span class='meta'> | {pub_time}</span>
+                            <span class='meta'> | ⏰ {pub_time}</span>
                         </div>
                     </div>
                     """)
@@ -6237,14 +6346,14 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             html.append("</div>")
         
         html.append(f"<div class='summary'>")
-        html.append(f"<strong>Total Articles:</strong> {total_articles}<br>")
-        html.append(f"<strong>Selected for Analysis:</strong> {total_selected}<br>")
-        html.append(f"<strong>Next:</strong> Full content analysis and hedge fund summaries in progress...")
+        html.append(f"<strong>📊 Total Articles:</strong> {total_articles}<br>")
+        html.append(f"<strong>✅ Selected for Analysis:</strong> {total_selected}<br>")
+        html.append(f"<strong>🔄 Next:</strong> Full content analysis and hedge fund summaries in progress...")
         html.append("</div>")
         html.append("</body></html>")
         
         html_content = "".join(html)
-        subject = f"Quick Intelligence: {ticker_list} - {total_selected} articles selected"
+        subject = f"🚀 Quick Intelligence: {ticker_list} - {total_selected} articles selected"
         
         return send_email(subject, html_content, "")
         
@@ -6524,7 +6633,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 
                 html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} News ({len(articles)} articles)</h3>")
                 for article in sorted_articles[:100]:  # Show up to 100 articles
-                    html.append(_format_enhanced_article_html_with_emojis(article, category, ticker_metadata_cache, company_name))
+                    html.append(_format_enhanced_article_html(article, category, ticker_metadata_cache, company_name))
         
         html.append("</div>")
     

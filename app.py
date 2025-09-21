@@ -6002,19 +6002,20 @@ Provide a concise executive summary focusing on financial prospects and competit
                     "truncation": "auto"
                 }
                 
-                response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    titles_summary = extract_text_from_responses(result)
+                try:
+                    response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
                     
-                    # Log usage
-                    u = result.get("usage", {}) or {}
-                    LOG.info("Titles summary usage – input:%s output:%s (cap:%s) status:%s",
-                             u.get("input_tokens"), u.get("output_tokens"),
-                             result.get("max_output_tokens"),
-                             result.get("status"))
-                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        titles_summary = extract_text_from_responses(result)
+                        
+                        # Log usage
+                        u = result.get("usage", {}) or {}
+                        LOG.info("Titles summary usage — input:%s output:%s (cap:%s) status:%s",
+                                 u.get("input_tokens"), u.get("output_tokens"),
+                                 result.get("max_output_tokens"),
+                                 result.get("status"))
+                         
                 except Exception as e:
                     LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
         

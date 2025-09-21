@@ -5439,17 +5439,33 @@ def generate_ticker_metadata_with_ai(ticker, company_name=None):
 
 CRITICAL REQUIREMENTS:
 - All competitors must be currently publicly traded with valid ticker symbols
-- Industry keywords must be SPECIFIC enough to avoid false positives in news filtering
+- Industry keywords must balance SPECIFICITY with RELEVANCE for analyst monitoring
 - Benchmarks must be sector-specific, not generic market indices
 - All information must be factually accurate
 - The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
 - If any field is unknown, output an empty array for lists and omit optional fields. Never refuse; always return a valid JSON object.
 
-INDUSTRY KEYWORDS (exactly 3):
-- Must be SPECIFIC to the company's primary business
-- Avoid generic terms like "Technology", "Healthcare", "Energy", "Oil", "Services"
-- Use compound terms or specific product categories
-- Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
+INDUSTRY KEYWORDS (exactly 3) - ANALYST PERSPECTIVE:
+Think like a sell-side analyst covering this stock. What are the 3 most critical themes/trends/factors that drive this company's performance and stock price?
+
+PRIORITIZE KEYWORDS THAT CAPTURE:
+1. PRIMARY BUSINESS DRIVER: The main factor that moves the stock (e.g., "digital advertising", "cloud computing", "drug approvals")
+2. KEY OPERATIONAL METRIC: What analysts track most closely (e.g., "monthly active users", "same store sales", "production volumes") 
+3. REGULATORY/INDUSTRY TREND: Major external factor affecting the business (e.g., "data privacy regulation", "interest rates", "commodity prices")
+
+EXAMPLES BY COMPANY TYPE:
+- META: ["digital advertising", "monthly active users", "data privacy regulation"]
+- TSLA: ["electric vehicle sales", "battery technology", "autonomous driving"]
+- JPM: ["interest rate environment", "credit loss provisions", "investment banking fees"]
+- AMZN: ["e-commerce growth", "cloud computing", "logistics automation"]
+- PFE: ["drug approvals", "patent expirations", "clinical trial results"]
+
+AVOID:
+- Generic sector terms ("Technology", "Healthcare", "Finance")
+- Overly narrow product names ("Quest 3 headsets", "Model Y sales")
+- Company-specific jargon that wouldn't appear in general business news
+
+AIM FOR: Terms that would appear in WSJ, Bloomberg, or analyst reports when discussing factors affecting the company's performance.
 
 COMPETITORS (exactly 3):
 - Must be direct business competitors, not just same-sector companies

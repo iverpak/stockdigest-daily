@@ -1448,12 +1448,29 @@ def reset_enhanced_scraping_stats():
     }
 
 def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dict, ticker: str) -> bool:
-    """Scrape content and run AI analysis for a single article with 3-tier scraping"""
+    """Scrape content and run AI analysis for a single article with 3-tier scraping and smart reuse"""
     try:
         article_id = article["id"]
         resolved_url = article.get("resolved_url") or article.get("url")
         domain = article.get("domain", "unknown")
         title = article.get("title", "")
+        
+        # SMART REUSE: Check if article already has complete analysis
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT scraped_content, ai_summary, ai_impact, ai_reasoning, quality_score
+                FROM found_url WHERE id = %s
+            """, (article_id,))
+            existing_data = cur.fetchone()
+        
+        if (existing_data and 
+            existing_data["scraped_content"] and 
+            existing_data["ai_summary"] and 
+            existing_data["ai_impact"] and 
+            existing_data["quality_score"] is not None):
+            
+            LOG.info(f"REUSING EXISTING: Article {article_id} already has complete analysis")
+            return True  # Count as success since we have all the data
         
         # Get keyword for limit tracking
         if category == "company":
@@ -1474,7 +1491,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
             scrape_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
             
             if scrape_domain not in PAYWALL_DOMAINS:
-                # Use the new 3-tier scraping system
+                # Use the 3-tier scraping system
                 content, status = safe_content_scraper_with_3tier_fallback(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
@@ -3219,10 +3236,11 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
 
 def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[str, List[Dict]], ticker: str, target_limits: Dict[str, int] = None) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage: Process EACH keyword/competitor separately for proper 5-per-item limits
+    Enhanced triage that includes existing triaged articles in the selection pool
+    Processes EACH keyword/competitor separately for proper 5-per-item limits with smart reuse
     """
     if not OPENAI_API_KEY:
-        LOG.warning("OpenAI API key not configured - using quality domains and QB backfill only")
+        LOG.warning("OpenAI API key not configured - using existing triage data and quality domains only")
         return {"company": [], "industry": [], "competitor": []}
     
     selected_results = {"company": [], "industry": [], "competitor": []}
@@ -3231,17 +3249,57 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
     
-    # COMPANY: Process as normal (20 total)
+    # COMPANY: Process as normal with smart reuse
     company_articles = articles_by_category.get("company", [])
     if company_articles:
-        try:
-            company_selected = triage_company_articles_full(company_articles, ticker, company_name, {}, {})
-            selected_results["company"] = company_selected
-            LOG.info(f"Company triage: selected {len(company_selected)} articles")
-        except Exception as e:
-            LOG.error(f"Company triage failed: {e}")
+        # Separate articles into those that need triage vs those already triaged
+        needs_triage = []
+        already_triaged = []
+        
+        for idx, article in enumerate(company_articles):
+            # Check if article already has triage data and good quality
+            if (article.get('ai_triage_selected') and 
+                article.get('triage_priority') and 
+                article.get('quality_score', 0) >= 40):
+                
+                already_triaged.append({
+                    "id": idx,
+                    "scrape_priority": article.get('triage_priority', 'MEDIUM'),
+                    "likely_repeat": False,
+                    "repeat_key": "",
+                    "why": f"Previously triaged - {article.get('triage_reasoning', 'existing selection')}",
+                    "confidence": 0.9,
+                    "selection_method": "existing_triage"
+                })
+            else:
+                needs_triage.append((idx, article))
+        
+        LOG.info(f"Company: {len(already_triaged)} already triaged, {len(needs_triage)} need new triage")
+        
+        # Start with existing triaged articles
+        company_selected = list(already_triaged)
+        
+        # Run AI triage on new articles if needed
+        remaining_slots = 20 - len(company_selected)
+        if remaining_slots > 0 and needs_triage:
+            try:
+                triage_articles = [article for _, article in needs_triage]
+                new_selected = triage_company_articles_full(triage_articles, ticker, company_name, {}, {})
+                
+                # Map back to original indices and add to selection
+                for selected_item in new_selected[:remaining_slots]:
+                    original_idx = needs_triage[selected_item["id"]][0]
+                    selected_item["id"] = original_idx
+                    selected_item["selection_method"] = "new_ai_triage"
+                    company_selected.append(selected_item)
+                
+                LOG.info(f"Company: Added {len(new_selected)} from new AI triage")
+            except Exception as e:
+                LOG.error(f"Company triage failed: {e}")
+        
+        selected_results["company"] = company_selected
     
-    # INDUSTRY: Process EACH keyword separately (5 per keyword)
+    # INDUSTRY: Process EACH keyword separately with smart reuse
     industry_articles = articles_by_category.get("industry", [])
     if industry_articles:
         # Group by search_keyword
@@ -3259,27 +3317,57 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                 
             LOG.info(f"Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
             
-            # Create articles list for this keyword only
-            keyword_article_list = [item["article"] for item in keyword_articles]
+            # Separate into existing vs new for this keyword
+            needs_triage = []
+            already_triaged = []
             
-            try:
-                # Run triage for this specific keyword (target: 5)
-                keyword_selected = triage_industry_articles_full(keyword_article_list, ticker, {}, [])
+            for item in keyword_articles:
+                article = item["article"]
+                original_idx = item["original_idx"]
                 
-                # Map back to original indices
-                for selected_item in keyword_selected:
-                    original_idx = keyword_articles[selected_item["id"]]["original_idx"]
-                    selected_item["id"] = original_idx  # Update to original index
-                
-                industry_selected.extend(keyword_selected)
-                LOG.info(f"Industry keyword '{keyword}': selected {len(keyword_selected)} articles")
-                
-            except Exception as e:
-                LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
+                if (article.get('ai_triage_selected') and 
+                    article.get('triage_priority') and 
+                    article.get('quality_score', 0) >= 40):
+                    
+                    already_triaged.append({
+                        "id": original_idx,
+                        "scrape_priority": article.get('triage_priority', 'MEDIUM'),
+                        "likely_repeat": False,
+                        "repeat_key": "",
+                        "why": f"Previously triaged - {article.get('triage_reasoning', 'existing selection')}",
+                        "confidence": 0.9,
+                        "selection_method": "existing_triage"
+                    })
+                else:
+                    needs_triage.append(item)
+            
+            # Start with existing
+            keyword_selected = list(already_triaged)
+            
+            # Run AI triage on new articles if needed (target: 5 per keyword)
+            remaining_slots = 5 - len(keyword_selected)
+            if remaining_slots > 0 and needs_triage:
+                try:
+                    triage_articles = [item["article"] for item in needs_triage]
+                    new_selected = triage_industry_articles_full(triage_articles, ticker, {}, [])
+                    
+                    # Map back to original indices
+                    for selected_item in new_selected[:remaining_slots]:
+                        original_idx = needs_triage[selected_item["id"]]["original_idx"]
+                        selected_item["id"] = original_idx
+                        selected_item["selection_method"] = "new_ai_triage"
+                        keyword_selected.append(selected_item)
+                    
+                    LOG.info(f"Industry keyword '{keyword}': Added {len(new_selected)} from new AI triage")
+                except Exception as e:
+                    LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
+            
+            industry_selected.extend(keyword_selected)
+            LOG.info(f"Industry keyword '{keyword}': {len(keyword_selected)} total selected")
         
         selected_results["industry"] = industry_selected
     
-    # COMPETITOR: Process EACH competitor separately (5 per competitor)
+    # COMPETITOR: Process EACH competitor separately with smart reuse
     competitor_articles = articles_by_category.get("competitor", [])
     if competitor_articles:
         # Group by competitor_ticker (primary) or search_keyword (fallback)
@@ -3297,23 +3385,53 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                 
             LOG.info(f"Processing competitor '{entity_key}': {len(entity_articles)} articles")
             
-            # Create articles list for this competitor only
-            entity_article_list = [item["article"] for item in entity_articles]
+            # Separate into existing vs new for this competitor
+            needs_triage = []
+            already_triaged = []
             
-            try:
-                # Run triage for this specific competitor (target: 5)
-                entity_selected = triage_competitor_articles_full(entity_article_list, ticker, [], {})
+            for item in entity_articles:
+                article = item["article"]
+                original_idx = item["original_idx"]
                 
-                # Map back to original indices
-                for selected_item in entity_selected:
-                    original_idx = entity_articles[selected_item["id"]]["original_idx"]
-                    selected_item["id"] = original_idx  # Update to original index
-                
-                competitor_selected.extend(entity_selected)
-                LOG.info(f"Competitor '{entity_key}': selected {len(entity_selected)} articles")
-                
-            except Exception as e:
-                LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
+                if (article.get('ai_triage_selected') and 
+                    article.get('triage_priority') and 
+                    article.get('quality_score', 0) >= 40):
+                    
+                    already_triaged.append({
+                        "id": original_idx,
+                        "scrape_priority": article.get('triage_priority', 'MEDIUM'),
+                        "likely_repeat": False,
+                        "repeat_key": "",
+                        "why": f"Previously triaged - {article.get('triage_reasoning', 'existing selection')}",
+                        "confidence": 0.9,
+                        "selection_method": "existing_triage"
+                    })
+                else:
+                    needs_triage.append(item)
+            
+            # Start with existing
+            entity_selected = list(already_triaged)
+            
+            # Run AI triage on new articles if needed (target: 5 per competitor)
+            remaining_slots = 5 - len(entity_selected)
+            if remaining_slots > 0 and needs_triage:
+                try:
+                    triage_articles = [item["article"] for item in needs_triage]
+                    new_selected = triage_competitor_articles_full(triage_articles, ticker, [], {})
+                    
+                    # Map back to original indices
+                    for selected_item in new_selected[:remaining_slots]:
+                        original_idx = needs_triage[selected_item["id"]]["original_idx"]
+                        selected_item["id"] = original_idx
+                        selected_item["selection_method"] = "new_ai_triage"
+                        entity_selected.append(selected_item)
+                    
+                    LOG.info(f"Competitor '{entity_key}': Added {len(new_selected)} from new AI triage")
+                except Exception as e:
+                    LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
+            
+            competitor_selected.extend(entity_selected)
+            LOG.info(f"Competitor '{entity_key}': {len(entity_selected)} total selected")
         
         selected_results["competitor"] = competitor_selected
     
@@ -6678,7 +6796,6 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
-                    AND NOT f.sent_in_digest
                     AND f.ticker = ANY(%s)
                 ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff, tickers))
@@ -6698,7 +6815,6 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND f.quality_score >= 15
-                    AND NOT f.sent_in_digest
                 ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff,))
         
@@ -6714,19 +6830,51 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
             
             articles_by_ticker[ticker][category].append(dict(row))
         
-        # Mark articles as sent
+        # ONLY mark articles as sent if this is NOT a smart reuse run
+        # We can detect this by checking if articles already have sent_in_digest = TRUE
+        # For smart reuse, we want to include articles regardless of sent status
+        
+        # Count articles that would be marked as sent
+        total_to_mark = 0
         if tickers:
             cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s)
+                SELECT COUNT(*) as count
+                FROM found_url
+                WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s) 
+                AND NOT sent_in_digest
             """, (cutoff, tickers))
         else:
             cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15
+                SELECT COUNT(*) as count
+                FROM found_url
+                WHERE found_at >= %s AND quality_score >= 15 
+                AND NOT sent_in_digest
             """, (cutoff,))
+        
+        result = cur.fetchone()
+        total_to_mark = result["count"] if result else 0
+        
+        # Only mark as sent if there are articles that haven't been sent
+        # This prevents re-marking articles in smart reuse scenarios
+        if total_to_mark > 0:
+            if tickers:
+                cur.execute("""
+                    UPDATE found_url
+                    SET sent_in_digest = TRUE
+                    WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s)
+                    AND NOT sent_in_digest
+                """, (cutoff, tickers))
+            else:
+                cur.execute("""
+                    UPDATE found_url
+                    SET sent_in_digest = TRUE
+                    WHERE found_at >= %s AND quality_score >= 15
+                    AND NOT sent_in_digest
+                """, (cutoff,))
+            
+            LOG.info(f"Marked {total_to_mark} articles as sent in digest")
+        else:
+            LOG.info("No new articles to mark as sent (smart reuse mode)")
     
     total_articles = sum(
         sum(len(arts) for arts in categories.values())
@@ -6736,7 +6884,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     if total_articles == 0:
         return {
             "status": "no_articles",
-            "message": f"No new quality articles found in the last {period_label}",
+            "message": f"No quality articles found in the last {period_label}",
             "tickers": tickers or "all"
         }
     
@@ -7155,12 +7303,8 @@ def cron_ingest(
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """
-    Enhanced ingest with 3-tier scraping: requests → Playwright → ScrapingBee
-    1. Ingest URLs from feeds with strict limits (50 company, 25 per industry keyword, 25 per competitor)
-    2. Perform AI triage + quality domain selection
-    3. Send enhanced quick email with triage results
-    4. Scrape selected articles with 3-tier fallback and dynamic limits (20 + 5×keywords + 5×competitors)
-    5. Send final email with full analysis
+    Enhanced ingest with smart reuse of existing AI analysis and triage data
+    Keeps full functionality while optimizing existing processed articles
     """
     require_admin(request)
     ensure_schema()
@@ -7168,11 +7312,11 @@ def cron_ingest(
     update_schema_for_triage()
     update_schema_for_qb_scores()
     
-    LOG.info("=== CRON INGEST STARTING (3-TIER SCRAPING: REQUESTS → PLAYWRIGHT → SCRAPINGBEE) ===")
+    LOG.info("=== CRON INGEST STARTING (SMART REUSE MODE) ===")
     LOG.info(f"Processing window: {minutes} minutes")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
-    # Reset all statistics
+    # Reset statistics
     reset_ingestion_stats()
     reset_scraping_stats()
     reset_enhanced_scraping_stats()
@@ -7182,6 +7326,9 @@ def cron_ingest(
     if tickers:
         for ticker in tickers:
             dynamic_limits[ticker] = calculate_dynamic_scraping_limits(ticker)
+    
+    # PHASE 1: Normal feed processing for new articles
+    LOG.info("=== PHASE 1: PROCESSING FEEDS (NEW + EXISTING ARTICLES) ===")
     
     # Get feeds
     with db() as conn, conn.cursor() as cur:
@@ -7204,106 +7351,101 @@ def cron_ingest(
     if not feeds:
         return {"status": "no_feeds", "message": "No active feeds found"}
     
-    LOG.info(f"=== PHASE 1: INGESTING URLS WITH LIMITS (50/25/25) FROM {len(feeds)} FEEDS ===")
-    
-    # PHASE 1: Ingest URLs with strict limits
-    articles_by_ticker = {}
     ingest_stats = {"total_processed": 0, "total_inserted": 0, "total_duplicates": 0, "total_spam_blocked": 0, "total_limit_reached": 0}
     
+    # Process feeds normally to get new articles
     for feed in feeds:
         try:
             stats = ingest_feed_basic_only(feed)
-            
-            # Collect articles for triage
-            ticker = feed["ticker"]
-            category = feed.get("category", "company")
-            
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
-            
-            # Get recently inserted articles for this feed
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT id, url, resolved_url, title, domain, published_at, category, search_keyword, competitor_ticker
-                    FROM found_url 
-                    WHERE feed_id = %s AND found_at >= %s
-                    ORDER BY found_at DESC
-                """, (feed["id"], datetime.now(timezone.utc) - timedelta(minutes=minutes)))
-                
-                feed_articles = list(cur.fetchall())
-                articles_by_ticker[ticker][category].extend(feed_articles)
-            
             ingest_stats["total_processed"] += stats["processed"]
             ingest_stats["total_inserted"] += stats["inserted"]
             ingest_stats["total_duplicates"] += stats["duplicates"]
             ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
             ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
-            
         except Exception as e:
             LOG.error(f"Feed ingest failed for {feed['name']}: {e}")
             continue
     
-    # Log final ingestion statistics
-    LOG.info("=== INGESTION LIMITS FINAL STATUS ===")
-    LOG.info(f"Company: {ingestion_stats['company_ingested']}/{ingestion_stats['limits']['company']}")
-    for keyword, count in ingestion_stats["industry_ingested_by_keyword"].items():
-        LOG.info(f"Industry '{keyword}': {count}/{ingestion_stats['limits']['industry_per_keyword']}")
-    for keyword, count in ingestion_stats["competitor_ingested_by_keyword"].items():
-        LOG.info(f"Competitor '{keyword}': {count}/{ingestion_stats['limits']['competitor_per_keyword']}")
+    # Now get ALL articles from the timeframe (including existing ones with analysis)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    articles_by_ticker = {}
     
-    LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} articles ingested (limits enforced) ===")
+    with db() as conn, conn.cursor() as cur:
+        if tickers:
+            cur.execute("""
+                SELECT id, url, resolved_url, title, domain, published_at, category, 
+                       search_keyword, competitor_ticker, ticker, ai_triage_selected,
+                       triage_priority, triage_reasoning, quality_score, ai_impact,
+                       scraped_content, ai_summary
+                FROM found_url 
+                WHERE found_at >= %s AND ticker = ANY(%s)
+                ORDER BY ticker, category, found_at DESC
+            """, (cutoff, tickers))
+        else:
+            cur.execute("""
+                SELECT id, url, resolved_url, title, domain, published_at, category, 
+                       search_keyword, competitor_ticker, ticker, ai_triage_selected,
+                       triage_priority, triage_reasoning, quality_score, ai_impact,
+                       scraped_content, ai_summary
+                FROM found_url 
+                WHERE found_at >= %s
+                ORDER BY ticker, category, found_at DESC
+            """, (cutoff,))
+        
+        all_articles = list(cur.fetchall())
     
-    # PHASE 2: Enhanced AI Triage + Quality Domains + Tiered Backfill
-    LOG.info("=== PHASE 2: ENHANCED AI TRIAGE WITH TIERED BACKFILL ===")
+    # Organize articles by ticker and category
+    for article in all_articles:
+        ticker = article["ticker"]
+        category = article["category"] or "company"
+        
+        if ticker not in articles_by_ticker:
+            articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
+        
+        articles_by_ticker[ticker][category].append(article)
+    
+    total_articles = len(all_articles)
+    LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
+    
+    # PHASE 2: Smart triage (reuse existing + AI for new)
+    LOG.info("=== PHASE 2: SMART TRIAGE (REUSE EXISTING + AI FOR NEW) ===")
     triage_results = {}
     
     for ticker in articles_by_ticker.keys():
-        LOG.info(f"Running enhanced triage with backfill for {ticker}")
-        
-        # Calculate dynamic limits for this ticker
-        config = get_ticker_config(ticker)
-        industry_keywords = config.get("industry_keywords", []) if config else []
-        competitors = config.get("competitors", []) if config else []
-        
-        target_limits = {
-            "company": 20,
-            "industry": len(industry_keywords) * 5,  # 5 per keyword
-            "competitor": len(competitors) * 5        # 5 per competitor
-        }
+        LOG.info(f"Running smart triage for {ticker}")
         
         selected_results = perform_ai_triage_batch_with_enhanced_selection(
             articles_by_ticker[ticker], 
-            ticker, 
-            target_limits
+            ticker
         )
         triage_results[ticker] = selected_results
         
-        # Update database with triage results
+        # Update database with NEW triage results only
         for category, selected_items in selected_results.items():
             articles = articles_by_ticker[ticker][category]
             for item in selected_items:
-                article_idx = item["id"]
-                if article_idx < len(articles):
-                    article_id = articles[article_idx]["id"]
-                    with db() as conn, conn.cursor() as cur:
-                        # Clean text fields to prevent NULL byte errors
-                        clean_priority = clean_null_bytes(item.get("scrape_priority", "LOW"))
-                        clean_reasoning = clean_null_bytes(item.get("why", ""))
-                        
-                        cur.execute("""
-                            UPDATE found_url 
-                            SET ai_triage_selected = TRUE, triage_priority = %s, triage_reasoning = %s
-                            WHERE id = %s
-                        """, (clean_priority, clean_reasoning, article_id))
+                if item.get("selection_method") == "new_ai_triage":  # Only update new ones
+                    article_idx = item["id"]
+                    if article_idx < len(articles):
+                        article_id = articles[article_idx]["id"]
+                        with db() as conn, conn.cursor() as cur:
+                            clean_priority = clean_null_bytes(item.get("scrape_priority", "LOW"))
+                            clean_reasoning = clean_null_bytes(item.get("why", ""))
+                            
+                            cur.execute("""
+                                UPDATE found_url 
+                                SET ai_triage_selected = TRUE, triage_priority = %s, triage_reasoning = %s
+                                WHERE id = %s
+                            """, (clean_priority, clean_reasoning, article_id))
     
-    # PHASE 3: Send enhanced quick email with triage results
+    # PHASE 3: Send enhanced quick email
     LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
     quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results)
     LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
     
-    # PHASE 4: Scrape selected articles with 3-TIER FALLBACK and DYNAMIC limits
-    LOG.info("=== PHASE 4: 3-TIER SCRAPING WITH DYNAMIC LIMITS (REQUESTS → PLAYWRIGHT → SCRAPINGBEE) ===")
-    scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0}
+    # PHASE 4: Smart content scraping (skip already processed)
+    LOG.info("=== PHASE 4: SMART CONTENT SCRAPING (SKIP ALREADY PROCESSED) ===")
+    scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
     
     for ticker in articles_by_ticker.keys():
         config = get_ticker_config(ticker)
@@ -7314,96 +7456,51 @@ def cron_ingest(
         
         selected = triage_results.get(ticker, {})
         
-        # Company articles (limit 20)
-        company_selected = selected.get("company", [])
-        LOG.info(f"3-TIER SCRAPING {ticker} Company: {len(company_selected)} articles selected")
-        for item in company_selected:
-            if not _check_scraping_limit("company", ticker):
-                LOG.info(f"Company scraping limit reached for {ticker}")
-                break
-                
-            article_idx = item["id"]
-            if article_idx < len(articles_by_ticker[ticker]["company"]):
-                article = articles_by_ticker[ticker]["company"][article_idx]
-                success = scrape_and_analyze_article_3tier(article, "company", metadata, ticker)
-                if success:
-                    scraping_final_stats["scraped"] += 1
-                    scraping_final_stats["ai_analyzed"] += 1
-                else:
-                    scraping_final_stats["failed"] += 1
-        
-        # Industry articles (5 per keyword)
-        industry_selected = selected.get("industry", [])
-        LOG.info(f"3-TIER SCRAPING {ticker} Industry: {len(industry_selected)} articles selected")
-        for item in industry_selected:
-            article_idx = item["id"]
-            if article_idx < len(articles_by_ticker[ticker]["industry"]):
-                article = articles_by_ticker[ticker]["industry"][article_idx]
-                keyword = article.get("search_keyword", "unknown")
-                
-                if not _check_scraping_limit("industry", keyword):
-                    continue  # Skip this article, try next
-                
-                success = scrape_and_analyze_article_3tier(article, "industry", metadata, ticker)
-                if success:
-                    scraping_final_stats["scraped"] += 1
-                    scraping_final_stats["ai_analyzed"] += 1
-                else:
-                    scraping_final_stats["failed"] += 1
-        
-        # Competitor articles (5 per competitor)
-        competitor_selected = selected.get("competitor", [])
-        LOG.info(f"3-TIER SCRAPING {ticker} Competitor: {len(competitor_selected)} articles selected")
-        for item in competitor_selected:
-            article_idx = item["id"]
-            if article_idx < len(articles_by_ticker[ticker]["competitor"]):
-                article = articles_by_ticker[ticker]["competitor"][article_idx]
-                keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
-                
-                if not _check_scraping_limit("competitor", keyword):
-                    continue  # Skip this article, try next
-                
-                success = scrape_and_analyze_article_3tier(article, "competitor", metadata, ticker)
-                if success:
-                    scraping_final_stats["scraped"] += 1
-                    scraping_final_stats["ai_analyzed"] += 1
-                else:
-                    scraping_final_stats["failed"] += 1
+        for category in ["company", "industry", "competitor"]:
+            category_selected = selected.get(category, [])
+            
+            for item in category_selected:
+                article_idx = item["id"]
+                if article_idx < len(articles_by_ticker[ticker][category]):
+                    article = articles_by_ticker[ticker][category][article_idx]
+                    
+                    # Get appropriate keyword for limit checking
+                    if category == "company":
+                        keyword = ticker
+                    elif category == "competitor":
+                        keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+                    else:
+                        keyword = article.get("search_keyword", "unknown")
+                    
+                    if not _check_scraping_limit(category, keyword):
+                        continue
+                    
+                    # Use smart reuse function
+                    success = scrape_and_analyze_article_3tier(article, category, metadata, ticker)
+                    if success:
+                        # Check if we reused existing data by checking if article already had complete data
+                        if (article.get('scraped_content') and article.get('ai_summary') and article.get('ai_impact')):
+                            scraping_final_stats["reused_existing"] += 1
+                        else:
+                            scraping_final_stats["scraped"] += 1
+                            scraping_final_stats["ai_analyzed"] += 1
+                    else:
+                        scraping_final_stats["failed"] += 1
     
-    LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} articles scraped with 3-tier system ===")
-
+    LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
+    
     log_scraping_success_rates()
-
-    # Log comprehensive scraping statistics
-    LOG.info("=== COMPREHENSIVE SCRAPING STATISTICS ===")
     log_enhanced_scraping_stats()
     log_scrapingbee_stats()
-    
-    # Log traditional scraping limits status
-    LOG.info("=== SCRAPING LIMITS FINAL STATUS ===")
-    LOG.info(f"Company: {scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}")
-    for keyword, count in scraping_stats["industry_scraped_by_keyword"].items():
-        LOG.info(f"Industry '{keyword}': {count}/{scraping_stats['limits']['industry_per_keyword']}")
-    for keyword, count in scraping_stats["competitor_scraped_by_keyword"].items():
-        LOG.info(f"Competitor '{keyword}': {count}/{scraping_stats['limits']['competitor_per_keyword']}")
     
     # PHASE 5: Send final comprehensive email
     LOG.info("=== PHASE 5: SENDING FINAL COMPREHENSIVE EMAIL ===")
     final_digest_result = fetch_digest_articles_with_enhanced_content(minutes / 60, list(articles_by_ticker.keys()) if articles_by_ticker else None)
     LOG.info(f"Final comprehensive email status: {final_digest_result.get('status', 'unknown')}")
     
-    # Clean old articles
-    cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RETAIN_DAYS)
-    with db() as conn, conn.cursor() as cur:
-        if tickers:
-            cur.execute("DELETE FROM found_url WHERE found_at < %s AND ticker = ANY(%s)", (cutoff, tickers))
-        else:
-            cur.execute("DELETE FROM found_url WHERE found_at < %s", (cutoff,))
-        deleted = cur.rowcount
+    LOG.info("=== CRON INGEST COMPLETE (SMART REUSE) ===")
     
-    LOG.info("=== CRON INGEST COMPLETE WITH 3-TIER SCRAPING ===")
-    
-    # Enhanced return with 3-tier stats
+    # Enhanced return with optimization stats
     total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
     total_scraping_success = (enhanced_scraping_stats["requests_success"] + 
                              enhanced_scraping_stats["playwright_success"] + 
@@ -7412,21 +7509,17 @@ def cron_ingest(
     
     return {
         "status": "completed",
-        "workflow": "5_phase_3tier_scraping",
+        "workflow": "smart_reuse_optimization",
         "phase_1_ingest": {
             **ingest_stats,
-            "ingestion_limits_status": {
-                "company": f"{ingestion_stats['company_ingested']}/{ingestion_stats['limits']['company']}",
-                "industry_by_keyword": {k: f"{v}/{ingestion_stats['limits']['industry_per_keyword']}" for k, v in ingestion_stats["industry_ingested_by_keyword"].items()},
-                "competitor_by_keyword": {k: f"{v}/{ingestion_stats['limits']['competitor_per_keyword']}" for k, v in ingestion_stats["competitor_ingested_by_keyword"].items()}
-            }
+            "total_articles_in_timeframe": total_articles
         },
         "phase_2_triage": {
             "tickers_processed": len(triage_results),
             "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()}
         },
         "phase_3_quick_email": {"sent": quick_email_sent},
-        "phase_4_3tier_scraping": {
+        "phase_4_scraping": {
             **scraping_final_stats,
             "overall_success_rate": f"{overall_scraping_rate:.1f}%",
             "tier_breakdown": {
@@ -7436,16 +7529,10 @@ def cron_ingest(
                 "total_attempts": total_scraping_attempts
             },
             "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
-            "scraping_limits_status": {
-                "company": f"{scraping_stats['company_scraped']}/{scraping_stats['limits']['company']}",
-                "industry_by_keyword": {k: f"{v}/{scraping_stats['limits']['industry_per_keyword']}" for k, v in scraping_stats["industry_scraped_by_keyword"].items()},
-                "competitor_by_keyword": {k: f"{v}/{scraping_stats['limits']['competitor_per_keyword']}" for k, v in scraping_stats["competitor_scraped_by_keyword"].items()}
-            },
             "dynamic_limits": dynamic_limits
         },
         "phase_5_final_email": final_digest_result,
-        "cleanup": {"old_articles_deleted": deleted},
-        "message": f"3-TIER SCRAPING: {overall_scraping_rate:.1f}% success rate ({total_scraping_success}/{total_scraping_attempts}) | Cost: ${scrapingbee_stats['cost_estimate']:.3f}"
+        "optimization": f"Reused {scraping_final_stats['reused_existing']} existing analyses, processed {scraping_final_stats['scraped']} new"
     }
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):

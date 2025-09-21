@@ -5806,21 +5806,28 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
         LOG.info(f"Found {len(competitor_articles_with_content)} competitor articles with scraped content for {ticker}")
         
         if articles_with_content:
-            # Build analysis from scraped content
+            # Build analysis from scraped content WITH DOMAIN CITATIONS
             content_summaries = []
             for article in articles_with_content[:15]:  # Limit to first 15
                 title = article.get("title", "")
                 content = article.get("scraped_content", "")
+                domain = article.get("domain", "")
+                
                 if content and len(content) > 200:  # Only use substantial content
-                    # Create mini-summary for each article
-                    content_summaries.append(f"• {title}: {content[:500]}...")
+                    # Get formal domain name for citation
+                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    # Include domain in the content summary
+                    content_summaries.append(f"• {title} [{source_name}]: {content[:500]}...")
             
             competitor_content_summaries = []
             for article in competitor_articles_with_content[:8]:  # Limit to first 8
                 title = article.get("title", "")
                 content = article.get("scraped_content", "")
+                domain = article.get("domain", "")
+                
                 if content and len(content) > 200:
-                    competitor_content_summaries.append(f"• {title}: {content[:500]}...")
+                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    competitor_content_summaries.append(f"• {title} [{source_name}]: {content[:500]}...")
             
             if content_summaries:
                 ai_text = "\n".join(content_summaries)
@@ -5848,24 +5855,24 @@ ENHANCED REQUIREMENTS:
 - Maximum 4-5 sentences with clear financial focus
 
 CITATION RULES FOR SYNTHESIS:
-- Quantitative data: "EBITDA margins under pressure [multiple sources]"
-- Trends: "Consistent theme of market share gains [SYNTHESIS from reuters.com, wsj.com]"
-- Competitive impact: "Rival capacity additions signal pricing pressure ahead [SYNTHESIS]"
-- Strategic assessment: "Digital transformation accelerating revenue mix shift [SYNTHESIS from seeking alpha analysis]"
+- When referencing specific data points, cite the source: "Revenue growth accelerating [Reuters]"
+- For trends across multiple sources: "Consistent margin pressure theme [Reuters, Bloomberg]"
+- For synthesis: "This suggests pricing power erosion [SYNTHESIS]"
+- Use the domain names provided in brackets within the content
 
 TARGET: {company_name} ({ticker})
 COMPETITIVE CONTEXT: {', '.join(competitor_names) if competitor_names else 'Limited competitor coverage'}
 
-COMPANY ARTICLE CONTENT ANALYSIS:
+COMPANY ARTICLE CONTENT ANALYSIS (sources in brackets):
 {ai_text}{competitor_analysis}
 
-Provide a strategic investment thesis synthesizing the deep content analysis."""
+Provide a strategic investment thesis synthesizing the deep content analysis. Use the source names provided in brackets for citations."""
 
                     data = {
                         "model": OPENAI_MODEL,
                         "input": prompt,
-                        "max_output_tokens": 3000,
-                        "reasoning": {"effort": "medium"},
+                        "max_output_tokens": 10000,
+                        "reasoning": {"effort": "high"},
                         "text": {"verbosity": "low"},
                         "truncation": "auto"
                     }
@@ -5923,14 +5930,15 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
                 else:
                     competitor_names.append(comp_str)
         
-        # Generate summary from titles WITH DOMAIN MAPPING
+        # Generate summary from titles WITH DOMAIN MAPPING - OPTIMIZED WITH CITATIONS
         titles_with_sources = []
         for article in company_articles[:20]:  # Limit to first 20
             title = article.get("title", "")
             if title:
                 domain = article.get("domain", "")
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                titles_with_sources.append(f"• {title} ({source_name})")
+                # Include domain in brackets for AI citation
+                titles_with_sources.append(f"• {title} [{source_name}]")
         
         competitor_titles_with_sources = []
         for article in competitor_articles[:10]:  # Limit to first 10
@@ -5938,7 +5946,7 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
             if title:
                 domain = article.get("domain", "")
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                competitor_titles_with_sources.append(f"• {title} ({source_name})")
+                competitor_titles_with_sources.append(f"• {title} [{source_name}]")
         
         titles_summary = ""
         
@@ -5961,36 +5969,35 @@ ANALYSIS FRAMEWORK:
 
 CRITICAL REQUIREMENTS:
 - Focus on NEAR-TERM (next 1-3 quarters) financial implications with confidence, if unsure do not inference
-- Include specific numbers when available and cite formal domain using the format already provided in parentheses
+- Include specific numbers when available and cite sources using the format provided in brackets
 - Do NOT prefix statements with "Facts:" - assume everything is factual unless marked as inference
-- Do NOT include the article title when citing sources, just the domain name in parantheses
 - Only use (Inference) tags when making analytical conclusions beyond reported facts
 - Flag potential impact on key metrics: revenue growth, margin pressure, market share shifts
 - Ignore immaterial purchase/sale of share transactions
 - Assess competitor moves that could affect {company_name}'s performance
 - Keep to 4-5 sentences maximum
 - When mentioning analyst changes, include the brokerage name and specific price targets/ratings
-- Use the source names exactly as provided in the parentheses - do NOT modify them
 
 CITATION & INFERENCE RULES:
-- Factual claims: Use sources as provided: "Company reported X% growth (Reuters)" 
-- Numbers: "Sales declined 15% (Wall Street Journal)" 
+- Factual claims: Use sources as provided: "Company reported X% growth [Reuters]" 
+- Numbers: "Sales declined 15% [Wall Street Journal]" 
 - Inference: "This suggests margin pressure ahead (Inference)"
 - Competitive analysis: "Rival's capacity expansion may pressure pricing (Inference)"
+- Multiple sources: "Consistent analyst upgrades across firms [Reuters, Bloomberg]"
 
 TARGET COMPANY: {company_name} ({ticker})
 KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
 
-COMPANY HEADLINES (with source names already formatted):
+COMPANY HEADLINES (sources provided in brackets):
 {titles_text}{competitor_text}
 
-Provide a concise executive summary focusing on financial prospects and competitive threats. Use the source names exactly as provided in parentheses."""
+Provide a concise executive summary focusing on financial prospects and competitive threats. Use the source names provided in brackets for proper citations."""
 
                 data = {
                     "model": OPENAI_MODEL,
                     "input": prompt,
-                    "max_output_tokens": 3000,
-                    "reasoning": {"effort": "medium"},
+                    "max_output_tokens": 10000,
+                    "reasoning": {"effort": "high"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }
@@ -6001,8 +6008,15 @@ Provide a concise executive summary focusing on financial prospects and competit
                     result = response.json()
                     titles_summary = extract_text_from_responses(result)
                     
-            except Exception as e:
-                LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
+                    # Log usage
+                    u = result.get("usage", {}) or {}
+                    LOG.info("Titles summary usage – input:%s output:%s (cap:%s) status:%s",
+                             u.get("input_tokens"), u.get("output_tokens"),
+                             result.get("max_output_tokens"),
+                             result.get("status"))
+                    
+                except Exception as e:
+                    LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
         
         summaries[ticker] = {
             "titles_summary": titles_summary,

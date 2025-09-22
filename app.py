@@ -6873,8 +6873,6 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         "recipient": DIGEST_TO
     }
 
-format_enhanced_article_
-
 # ------------------------------------------------------------------------------
 # Auth Middleware
 # ------------------------------------------------------------------------------

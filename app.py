@@ -5374,6 +5374,7 @@ CRITICAL REQUIREMENTS:
 
 INDUSTRY KEYWORDS (exactly 3):
 - Must be SPECIFIC to the company's primary business
+- Return proper capitalization format like "Digital Advertising"
 - Avoid generic terms like "Technology", "Healthcare", "Energy", "Oil", "Services"
 - Use compound terms or specific product categories
 - Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"

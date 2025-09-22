@@ -552,18 +552,15 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 
-                -- FIXED: Create unique constraint that PostgreSQL can reference in ON CONFLICT
-                -- Drop the old index if it exists
+                -- FIXED: Use simple unique constraint without COALESCE
+                -- Drop any existing constraints/indexes first
                 DROP INDEX IF EXISTS idx_found_url_unique_analysis;
-                
-                -- Create a proper unique constraint instead
                 ALTER TABLE found_url DROP CONSTRAINT IF EXISTS unique_url_ticker_analysis;
-                ALTER TABLE found_url ADD CONSTRAINT unique_url_ticker_analysis 
-                    UNIQUE (url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
                 
-                -- Create named index for the constraint (PostgreSQL creates this automatically, but being explicit)
+                -- Create simple unique constraint on the three columns
+                -- This handles NULLs naturally (NULL != NULL in PostgreSQL)
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
-                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
+                ON found_url(url_hash, ticker, ai_analysis_ticker);
                 
                 -- Rest of your tables...
                 CREATE TABLE IF NOT EXISTS ticker_config (
@@ -1558,7 +1555,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         
         # Store with analysis_ticker perspective
         with db() as conn, conn.cursor() as cur:
-            # FIXED: Use constraint name directly instead of column expression
+            # FIXED: Use simple column list in ON CONFLICT
             cur.execute("""
                 INSERT INTO found_url (
                     url, resolved_url, url_hash, title, description, ticker, domain,
@@ -1569,7 +1566,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                     relevance_boost, relevance_boost_reason, numeric_bonus,
                     penalty_multiplier, penalty_reason, competitor_ticker
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT ON CONSTRAINT idx_found_url_unique_analysis 
+                ON CONFLICT (url_hash, ticker, ai_analysis_ticker) 
                 DO UPDATE SET
                     scraped_content = EXCLUDED.scraped_content,
                     content_scraped_at = EXCLUDED.content_scraped_at,

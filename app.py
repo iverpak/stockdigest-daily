@@ -119,6 +119,39 @@ def clean_null_bytes(text: str) -> str:
         return text
     return text.replace('\x00', '').replace('\0', '')
 
+def normalize_priority_to_int(priority):
+    """Normalize priority to consistent integer format (1=High, 2=Medium, 3=Low)"""
+    if isinstance(priority, int):
+        return max(1, min(3, priority))
+    elif isinstance(priority, str):
+        priority_upper = priority.upper()
+        if priority_upper in ["HIGH", "H", "1"]:
+            return 1
+        elif priority_upper in ["MEDIUM", "MED", "M", "2"]:
+            return 2
+        elif priority_upper in ["LOW", "L", "3"]:
+            return 3
+    return 2  # Default to Medium
+
+def normalize_priority_to_display(priority):
+    """Convert integer priority to display format"""
+    if isinstance(priority, int):
+        if priority == 1:
+            return "High"
+        elif priority == 2:
+            return "Medium"
+        elif priority == 3:
+            return "Low"
+    elif isinstance(priority, str):
+        priority_upper = priority.upper()
+        if priority_upper in ["HIGH", "H"]:
+            return "High"
+        elif priority_upper in ["MEDIUM", "MED", "M"]:
+            return "Medium"
+        elif priority_upper in ["LOW", "L"]:
+            return "Low"
+    return "Medium"
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -1549,7 +1582,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
             keywords=keywords
         )
         
-        # Store with analysis_ticker perspective
+        # Store with analysis_ticker perspective - FIXED: Use analysis_ticker as string, not None
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO found_url (
@@ -1578,7 +1611,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 scraped_content, content_scraped_at, scraping_failed, 
                 clean_null_bytes(scraping_error or ""), clean_null_bytes(ai_summary or ""),
                 clean_null_bytes(ai_impact or ""), clean_null_bytes(ai_reasoning or ""),
-                analysis_ticker,  # This is the key field
+                analysis_ticker,  # FIXED: Use analysis_ticker string instead of None
                 components.get('source_tier') if components else None,
                 components.get('event_multiplier') if components else None,
                 clean_null_bytes(components.get('event_multiplier_reason', '') if components else ''),
@@ -2084,7 +2117,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                                 WHERE ticker = %s AND category = 'competitor' AND competitor_ticker = %s
                             """, (feed["ticker"], feed_keyword))
                         
-                        # FIXED: Get the result properly with error handling
+                        # Get the result properly with error handling
                         result = cur.fetchone()
                         if result and len(result) > 0:
                             existing_count = result[0] if result[0] is not None else 0
@@ -2127,14 +2160,14 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         clean_source_url = clean_null_bytes(final_source_url or "")
                         clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                         
-                        # Insert with proper constraint handling
+                        # In ingest_feed_basic_only, change the INSERT to:
                         cur.execute("""
                             INSERT INTO found_url (
                                 url, resolved_url, url_hash, title, description,
                                 feed_id, ticker, domain, quality_score, published_at,
                                 category, search_keyword, original_source_url,
-                                competitor_ticker, ai_analysis_ticker, triage_priority
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                competitor_ticker, ai_analysis_ticker
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
                             DO UPDATE SET
                                 updated_at = NOW()
@@ -2143,7 +2176,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                             clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
                             feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
                             category, clean_search_keyword, clean_source_url,
-                            clean_competitor_ticker, None, normalize_priority_to_int(2)  # Default Medium priority
+                            clean_competitor_ticker, ''  # REMOVED: normalize_priority_to_int(2)
                         ))
                         
                         result = cur.fetchone()
@@ -2152,7 +2185,9 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                             LOG.debug(f"INSERTED: {title[:50]}...")
                     
                     except Exception as db_e:
-                        LOG.error(f"Database error processing article '{title[:30]}...': {db_e}")
+                        LOG.error(f"Database error processing article '{title[:30]}...': {type(db_e).__name__}: {str(db_e)}")
+                        # Enhanced debugging
+                        LOG.error(f"SQL params: ticker={feed['ticker']}, category={category}, url_hash={url_hash}, ai_analysis_ticker=''")
                         continue
                             
             except Exception as entry_e:
@@ -5852,39 +5887,6 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return datetime.fromisoformat(str(candidate))
     except:
         return None
-
-def normalize_priority_to_int(priority):
-    """Normalize priority to consistent integer format (1=High, 2=Medium, 3=Low)"""
-    if isinstance(priority, int):
-        return max(1, min(3, priority))
-    elif isinstance(priority, str):
-        priority_upper = priority.upper()
-        if priority_upper in ["HIGH", "H", "1"]:
-            return 1
-        elif priority_upper in ["MEDIUM", "MED", "M", "2"]:
-            return 2
-        elif priority_upper in ["LOW", "L", "3"]:
-            return 3
-    return 2  # Default to Medium
-
-def normalize_priority_to_display(priority):
-    """Convert integer priority to display format"""
-    if isinstance(priority, int):
-        if priority == 1:
-            return "High"
-        elif priority == 2:
-            return "Medium"
-        elif priority == 3:
-            return "Low"
-    elif isinstance(priority, str):
-        priority_upper = priority.upper()
-        if priority_upper in ["HIGH", "H"]:
-            return "High"
-        elif priority_upper in ["MEDIUM", "MED", "M"]:
-            return "Medium"
-        elif priority_upper in ["LOW", "L"]:
-            return "Low"
-    return "Medium"
 
 def format_timestamp_est(dt: datetime) -> str:
     """Format datetime to EST without time emoji"""

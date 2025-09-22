@@ -1558,9 +1558,11 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 if content:
                     scraped_content = clean_null_bytes(content)
                     content_scraped_at = datetime.now(timezone.utc)
+                    # CRITICAL: Generate AI summary after successful scraping
                     ai_summary = generate_ai_summary(scraped_content, title, analysis_ticker)
                     if ai_summary:
                         ai_summary = clean_null_bytes(ai_summary)
+                        LOG.info(f"AI SUMMARY GENERATED for {analysis_ticker}: {len(ai_summary)} chars")
                 else:
                     scraping_failed = True
                     scraping_error = clean_null_bytes(status or "")
@@ -1576,13 +1578,13 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
             title=title,
             domain=domain,
-            ticker=analysis_ticker,  # Use analysis ticker, not article ticker
+            ticker=analysis_ticker,
             description=article.get("description", ""),
             category=category,
             keywords=keywords
         )
         
-        # Store with analysis_ticker perspective - FIXED: Use analysis_ticker as string, not None
+        # Store with analysis_ticker perspective - CRITICAL: Include AI summary
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO found_url (
@@ -1611,7 +1613,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 scraped_content, content_scraped_at, scraping_failed, 
                 clean_null_bytes(scraping_error or ""), clean_null_bytes(ai_summary or ""),
                 clean_null_bytes(ai_impact or ""), clean_null_bytes(ai_reasoning or ""),
-                analysis_ticker,  # FIXED: Use analysis_ticker string instead of None
+                analysis_ticker,
                 components.get('source_tier') if components else None,
                 components.get('event_multiplier') if components else None,
                 clean_null_bytes(components.get('event_multiplier_reason', '') if components else ''),
@@ -1624,7 +1626,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 normalize_priority_to_int(article.get("triage_priority", 2))
             ))
         
-        LOG.info(f"TICKER-SPECIFIC ANALYSIS: {title[:50]}... analyzed from {analysis_ticker}'s perspective")
+        LOG.info(f"TICKER-SPECIFIC ANALYSIS: {title[:50]}... analyzed from {analysis_ticker}'s perspective with AI summary")
         return scraped_content is not None
         
     except Exception as e:
@@ -2269,7 +2271,7 @@ def update_schema_for_ai_summary():
 # Updated article formatting function
 def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
     """
-    Enhanced article HTML formatting with AI summaries and database-based competitor names - NO REDUNDANT KEYWORDS
+    Enhanced article HTML formatting with AI summaries and database-based competitor names
     """
     import html
     
@@ -2327,32 +2329,37 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         }.get(ai_impact.lower(), "impact-neutral")
         impact_html = f'<span class="impact {impact_class}">{ai_impact}</span>'
         
-        # Show "Analyzed" badge if we have scraped content and AI summary
+        # CRITICAL: Check for BOTH scraped content AND AI summary for "Analyzed" badge
         if article.get('scraped_content') and article.get('ai_summary'):
             analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
+            LOG.debug(f"ANALYZED BADGE: Article has content ({len(article.get('scraped_content', ''))} chars) and summary ({len(article.get('ai_summary', ''))} chars)")
+        else:
+            LOG.debug(f"NO ANALYZED BADGE: Content={bool(article.get('scraped_content'))}, Summary={bool(article.get('ai_summary'))}")
     
-    # Build metadata badges for category-specific information with DATABASE LOOKUP
+    # Build metadata badges for category-specific information
     metadata_badges = []
     
     if category == "competitor":
-        # Use competitor_ticker first (most reliable), fallback to search_keyword
         competitor_ticker = article.get('competitor_ticker')
         search_keyword = article.get('search_keyword')
         
         competitor_name = get_competitor_display_name(search_keyword, competitor_ticker)
-        metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
+        metadata_badges.append(f'<span class="competitor-badge">🢢 {competitor_name}</span>')
         
     elif category == "industry" and article.get('search_keyword'):
         industry_keyword = article['search_keyword']
-        metadata_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
+        metadata_badges.append(f'<span class="industry-badge">🭏 {industry_keyword}</span>')
     
     enhanced_metadata = "".join(metadata_badges)
     
-    # AI Summary section (replaces scraped content display)
+    # CRITICAL: AI Summary section - check for ai_summary field
     ai_summary_html = ""
     if article.get("ai_summary"):
         clean_summary = html.escape(article["ai_summary"].strip())
         ai_summary_html = f"<br><div class='ai-summary'><strong>📊 Analysis:</strong> {clean_summary}</div>"
+        LOG.debug(f"AI SUMMARY DISPLAYED: {len(clean_summary)} chars")
+    else:
+        LOG.debug(f"NO AI SUMMARY: ai_summary field = {article.get('ai_summary')}")
     
     # Get description and format it (only if no AI summary)
     description_html = ""
@@ -6907,7 +6914,15 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
             if category not in articles_by_ticker[target_ticker]:
                 articles_by_ticker[target_ticker][category] = []
             
-            articles_by_ticker[target_ticker][category].append(dict(row))
+            # Convert row to dict and add to results
+            article_dict = dict(row)
+            articles_by_ticker[target_ticker][category].append(article_dict)
+            
+            # Debug logging for AI summary presence
+            if article_dict.get('ai_summary'):
+                LOG.debug(f"DIGEST QUERY: Found AI summary for {target_ticker} - {len(article_dict['ai_summary'])} chars")
+            else:
+                LOG.debug(f"DIGEST QUERY: No AI summary for {target_ticker} article: {article_dict.get('title', 'No title')[:50]}")
         
         # Mark articles as sent (only new ones)
         total_to_mark = 0
@@ -6988,6 +7003,8 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 
                 if art.get('ai_summary'):
                     content_stats['ai_summaries'] += 1
+    
+    LOG.info(f"DIGEST STATS: {content_stats['ai_summaries']} articles with AI summaries out of {total_articles} total")
     
     return {
         "status": "sent" if success else "failed",

@@ -4115,6 +4115,19 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
     Priority: competitor_ticker -> search_keyword -> fallback
     """
     
+    # Input validation
+    if competitor_ticker:
+        competitor_ticker = competitor_ticker.strip().upper()
+        if not re.match(r'^[A-Z]{1,5}$', competitor_ticker):
+            LOG.warning(f"Invalid competitor ticker format: {competitor_ticker}")
+            competitor_ticker = None
+    
+    if search_keyword:
+        search_keyword = search_keyword.strip()
+        if len(search_keyword) > 100 or not search_keyword:
+            LOG.warning(f"Invalid search keyword: {search_keyword}")
+            search_keyword = None
+    
     # Try database lookup by ticker first (most reliable)
     if competitor_ticker:
         try:

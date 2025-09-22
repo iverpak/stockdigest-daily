@@ -507,7 +507,7 @@ def ensure_schema():
                     penalty_multiplier DECIMAL(3,2),
                     penalty_reason TEXT,
                     ai_triage_selected BOOLEAN DEFAULT FALSE,
-                    triage_priority VARCHAR(10),
+                    triage_priority INTEGER,
                     triage_reasoning TEXT,
                     qb_score INTEGER,
                     qb_level VARCHAR(20),
@@ -526,7 +526,7 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_level VARCHAR(20);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_reasoning TEXT;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_triage_selected BOOLEAN DEFAULT FALSE;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority VARCHAR(10);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority INTEGER;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraped_content TEXT;
@@ -552,17 +552,15 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 
-                -- FIXED: Use simple unique constraint without COALESCE
-                -- Drop any existing constraints/indexes first
+                -- Drop any existing problematic constraints/indexes first
                 DROP INDEX IF EXISTS idx_found_url_unique_analysis;
                 ALTER TABLE found_url DROP CONSTRAINT IF EXISTS unique_url_ticker_analysis;
                 
                 -- Create simple unique constraint on the three columns
-                -- This handles NULLs naturally (NULL != NULL in PostgreSQL)
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
-                ON found_url(url_hash, ticker, ai_analysis_ticker);
+                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
                 
-                -- Rest of your tables...
+                -- Rest of schema...
                 CREATE TABLE IF NOT EXISTS ticker_config (
                     ticker VARCHAR(10) PRIMARY KEY,
                     name VARCHAR(255),
@@ -601,7 +599,6 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
                 
-                -- Create competitor metadata table
                 CREATE TABLE IF NOT EXISTS competitor_metadata (
                     id SERIAL PRIMARY KEY,
                     ticker VARCHAR(10) NOT NULL,
@@ -614,7 +611,6 @@ def ensure_schema():
                 );
             """)
 
-    # Call additional schema updates
     update_schema_for_enhanced_metadata()
     update_schema_for_triage()
 
@@ -1555,7 +1551,6 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         
         # Store with analysis_ticker perspective
         with db() as conn, conn.cursor() as cur:
-            # FIXED: Use simple column list in ON CONFLICT
             cur.execute("""
                 INSERT INTO found_url (
                     url, resolved_url, url_hash, title, description, ticker, domain,
@@ -1564,9 +1559,10 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                     ai_summary, ai_impact, ai_reasoning, ai_analysis_ticker,
                     source_tier, event_multiplier, event_multiplier_reason,
                     relevance_boost, relevance_boost_reason, numeric_bonus,
-                    penalty_multiplier, penalty_reason, competitor_ticker
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (url_hash, ticker, ai_analysis_ticker) 
+                    penalty_multiplier, penalty_reason, competitor_ticker,
+                    triage_priority
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
                 DO UPDATE SET
                     scraped_content = EXCLUDED.scraped_content,
                     content_scraped_at = EXCLUDED.content_scraped_at,
@@ -1591,7 +1587,8 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 components.get('numeric_bonus') if components else None,
                 components.get('penalty_multiplier') if components else None,
                 clean_null_bytes(components.get('penalty_reason', '') if components else ''),
-                article.get("competitor_ticker")
+                article.get("competitor_ticker"),
+                normalize_priority_to_int(article.get("triage_priority", 2))
             ))
         
         LOG.info(f"TICKER-SPECIFIC ANALYSIS: {title[:50]}... analyzed from {analysis_ticker}'s perspective")
@@ -1958,7 +1955,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     return stats
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion with comprehensive Yahoo Finance resolution and proper deduplication"""
+    """Basic feed ingestion with proper deduplication count tracking"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
     
     category = feed.get("category", "company")
@@ -2006,7 +2003,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 stats["blocked_spam"] += 1
                 continue
             
-            # COMPREHENSIVE URL RESOLUTION - do this early to get proper hash
+            # COMPREHENSIVE URL RESOLUTION
             resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
             
             if not resolved_url or not domain:
@@ -2042,85 +2039,120 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
             # Add to processed set
             processed_hashes.add(url_hash)
             
-            # NOW check ingestion limits and count
-            if not _check_ingestion_limit(category, feed_keyword):
-                stats["limit_reached"] += 1
-                LOG.info(f"INGESTION LIMIT REACHED: Stopping ingestion for {category} '{feed_keyword}'")
-                break
-            
-            # COUNT THIS UNIQUE URL
-            _update_ingestion_stats(category, feed_keyword)
-            
-            try:
-                with db() as conn, conn.cursor() as cur:
-                    # FIXED: Use constraint name directly instead of column expression
-                    cur.execute("""
-                        SELECT id FROM found_url 
-                        WHERE url_hash = %s AND ticker = %s AND COALESCE(ai_analysis_ticker, '') = ''
-                    """, (url_hash, feed["ticker"]))
-                    if cur.fetchone():
-                        stats["duplicates"] += 1
-                        LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
-                        continue
-                    
-                    # Parse publish date
-                    published_at = None
-                    if hasattr(entry, "published_parsed"):
-                        published_at = parse_datetime(entry.published_parsed)
-                    
-                    # Use basic scoring
-                    domain_tier = _get_domain_tier(final_domain, title, description)
-                    basic_quality_score = 50.0 + (domain_tier - 0.5) * 20
-                    
-                    # Add ticker mention bonus
-                    if feed["ticker"].upper() in title.upper():
-                        basic_quality_score += 10
-                    
-                    # Clamp to reasonable range
-                    basic_quality_score = max(20.0, min(80.0, basic_quality_score))
-                    
-                    display_content = description
-                    
-                    # Clean all text fields to remove NULL bytes
-                    clean_url = clean_null_bytes(url or "")
-                    clean_resolved_url = clean_null_bytes(final_resolved_url or "")
-                    clean_title = clean_null_bytes(title or "")
-                    clean_description = clean_null_bytes(display_content or "")
-                    clean_search_keyword = clean_null_bytes(feed.get("search_keyword") or "")
-                    clean_source_url = clean_null_bytes(final_source_url or "")
-                    clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
-                    
-                    # FIXED: Use constraint name directly
-                    cur.execute("""
-                        INSERT INTO found_url (
-                            url, resolved_url, url_hash, title, description,
-                            feed_id, ticker, domain, quality_score, published_at,
-                            category, search_keyword, original_source_url,
-                            competitor_ticker, ai_analysis_ticker
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT ON CONSTRAINT idx_found_url_unique_analysis 
-                        DO UPDATE SET
-                            updated_at = NOW()
-                        RETURNING id
-                    """, (
-                        clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
-                        feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
-                        category, clean_search_keyword, clean_source_url,
-                        clean_competitor_ticker, None  # ai_analysis_ticker is None for basic ingestion
-                    ))
-                    
-                    if cur.fetchone():
-                        stats["inserted"] += 1
-                        LOG.debug(f"INSERTED: {title[:50]}...")
-                        
-            except Exception as e:
-                LOG.error(f"Database error for '{title[:50]}': {e}")
-                continue
+            # NOW check ingestion limits and count unique articles in database
+            with db() as conn, conn.cursor() as cur:
+                # Check if URL already exists in database for this ticker
+                cur.execute("""
+                    SELECT id FROM found_url 
+                    WHERE url_hash = %s AND ticker = %s AND COALESCE(ai_analysis_ticker, '') = ''
+                """, (url_hash, feed["ticker"]))
+                if cur.fetchone():
+                    stats["duplicates"] += 1
+                    LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
+                    continue
                 
+                # Count existing unique URLs for this category/keyword combination
+                if category == "company":
+                    cur.execute("""
+                        SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                        WHERE ticker = %s AND category = 'company'
+                    """, (feed["ticker"],))
+                elif category == "industry":
+                    cur.execute("""
+                        SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                        WHERE ticker = %s AND category = 'industry' AND search_keyword = %s
+                    """, (feed["ticker"], feed_keyword))
+                elif category == "competitor":
+                    cur.execute("""
+                        SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                        WHERE ticker = %s AND category = 'competitor' AND competitor_ticker = %s
+                    """, (feed["ticker"], feed_keyword))
+                
+                existing_count = cur.fetchone()[0] if cur.fetchone() else 0
+                
+                # Check limits based on existing + new count
+                if not _check_ingestion_limit_with_existing_count(category, feed_keyword, existing_count):
+                    stats["limit_reached"] += 1
+                    LOG.info(f"INGESTION LIMIT REACHED: {category} '{feed_keyword}' has {existing_count} existing articles")
+                    break
+                
+                # COUNT THIS UNIQUE URL
+                _update_ingestion_stats(category, feed_keyword)
+                
+                # Parse publish date
+                published_at = None
+                if hasattr(entry, "published_parsed"):
+                    published_at = parse_datetime(entry.published_parsed)
+                
+                # Use basic scoring
+                domain_tier = _get_domain_tier(final_domain, title, description)
+                basic_quality_score = 50.0 + (domain_tier - 0.5) * 20
+                
+                # Add ticker mention bonus
+                if feed["ticker"].upper() in title.upper():
+                    basic_quality_score += 10
+                
+                # Clamp to reasonable range
+                basic_quality_score = max(20.0, min(80.0, basic_quality_score))
+                
+                display_content = description
+                
+                # Clean all text fields to remove NULL bytes
+                clean_url = clean_null_bytes(url or "")
+                clean_resolved_url = clean_null_bytes(final_resolved_url or "")
+                clean_title = clean_null_bytes(title or "")
+                clean_description = clean_null_bytes(display_content or "")
+                clean_search_keyword = clean_null_bytes(feed.get("search_keyword") or "")
+                clean_source_url = clean_null_bytes(final_source_url or "")
+                clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
+                
+                # Insert with proper constraint handling
+                cur.execute("""
+                    INSERT INTO found_url (
+                        url, resolved_url, url_hash, title, description,
+                        feed_id, ticker, domain, quality_score, published_at,
+                        category, search_keyword, original_source_url,
+                        competitor_ticker, ai_analysis_ticker, triage_priority
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                    DO UPDATE SET
+                        updated_at = NOW()
+                    RETURNING id
+                """, (
+                    clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
+                    feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
+                    category, clean_search_keyword, clean_source_url,
+                    clean_competitor_ticker, None, normalize_priority_to_int(2)  # Default Medium priority
+                ))
+                
+                if cur.fetchone():
+                    stats["inserted"] += 1
+                    LOG.debug(f"INSERTED: {title[:50]}...")
+                        
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
     return stats
+
+def _check_ingestion_limit_with_existing_count(category: str, keyword: str, existing_count: int) -> bool:
+    """Check if we can ingest more articles considering existing count in database"""
+    global ingestion_stats
+    
+    if category == "company":
+        total_count = existing_count + ingestion_stats["company_ingested"]
+        return total_count < ingestion_stats["limits"]["company"]
+    
+    elif category == "industry":
+        current_keyword_count = ingestion_stats["industry_ingested_by_keyword"].get(keyword, 0)
+        total_count = existing_count + current_keyword_count
+        return total_count < ingestion_stats["limits"]["industry_per_keyword"]
+    
+    elif category == "competitor":
+        current_keyword_count = ingestion_stats["competitor_ingested_by_keyword"].get(keyword, 0)
+        total_count = existing_count + current_keyword_count
+        return total_count < ingestion_stats["limits"]["competitor_per_keyword"]
+    
+    return False
 
 # Update the database schema to include ai_summary field
 def update_schema_for_ai_summary():
@@ -3483,9 +3515,7 @@ def _safe_json_loads(s: str) -> Dict:
     return {"selected_ids": [], "selected": [], "skipped": []}
 
 def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
-    """
-    Make structured triage request to OpenAI with enhanced error handling and validation
-    """
+    """Make structured triage request to OpenAI with integer priority storage"""
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -3497,18 +3527,7 @@ def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
         total_items = len(payload.get('items', []))
         effective_cap = min(target_cap, total_items)
         
-        # Add explicit selection constraint to system prompt
-        constrained_system_prompt = f"""{system_prompt}
-
-CRITICAL SELECTION CONSTRAINT:
-You MUST select EXACTLY {effective_cap} articles from the {total_items} provided.
-Be highly selective. Choose only the {effective_cap} BEST articles based on the criteria above.
-DO NOT exceed {effective_cap} articles under any circumstances.
-
-Your selected_ids array must contain exactly {effective_cap} integers.
-Your selected array must contain exactly {effective_cap} objects.
-Be ruthless in your selection - quality over quantity."""
-        
+        # Updated schema to use integer priorities
         triage_schema = {
             "type": "object",
             "properties": {
@@ -3524,7 +3543,7 @@ Be ruthless in your selection - quality over quantity."""
                         "type": "object",
                         "properties": {
                             "id": {"type": "integer"},
-                            "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                            "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                             "likely_repeat": {"type": "boolean"},
                             "repeat_key": {"type": "string"},
                             "why": {"type": "string"},
@@ -3542,7 +3561,7 @@ Be ruthless in your selection - quality over quantity."""
                         "type": "object",
                         "properties": {
                             "id": {"type": "integer"},
-                            "scrape_priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                            "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                             "likely_repeat": {"type": "boolean"},
                             "repeat_key": {"type": "string"},
                             "why": {"type": "string"},
@@ -3557,9 +3576,26 @@ Be ruthless in your selection - quality over quantity."""
             "additionalProperties": False
         }
         
+        # Updated system prompt to specify integer priorities
+        constrained_system_prompt = f"""{system_prompt}
+
+CRITICAL SELECTION CONSTRAINT:
+You MUST select EXACTLY {effective_cap} articles from the {total_items} provided.
+Be highly selective. Choose only the {effective_cap} BEST articles based on the criteria above.
+
+Your selected_ids array must contain exactly {effective_cap} integers.
+Your selected array must contain exactly {effective_cap} objects.
+
+PRIORITY SCALE (use integers):
+- 1 = High priority (most important articles requiring immediate scraping)
+- 2 = Medium priority (moderate importance)
+- 3 = Low priority (lower importance, backup selections)
+
+Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
+        
         data = {
             "model": OPENAI_MODEL,
-            "reasoning": {"effort": "medium"},  # Changed from low to medium
+            "reasoning": {"effort": "medium"},
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -3581,76 +3617,24 @@ Be ruthless in your selection - quality over quantity."""
             return []
         
         result = response.json()
-        
-        # Log usage details for debugging
-        u = result.get("usage", {}) or {}
-        LOG.info("OpenAI triage usage — input:%s output:%s (cap:%s) status:%s reason:%s target:%s actual_selected:%s",
-                 u.get("input_tokens"), u.get("output_tokens"),
-                 result.get("max_output_tokens"),
-                 result.get("status"),
-                 (result.get("incomplete_details") or {}).get("reason"),
-                 effective_cap,
-                 "parsing...")
-        
         content = extract_text_from_responses(result)
         
         if not content:
             LOG.error("OpenAI returned no text content for triage")
             return []
         
-        # Check for incomplete response and log if truncated
-        status = result.get("status")
-        if status == "incomplete":
-            incomplete_reason = (result.get("incomplete_details") or {}).get("reason")
-            LOG.warning(f"Triage response incomplete (reason: {incomplete_reason})")
-            LOG.warning(f"Content length: {len(content)} chars")
-        
         try:
             triage_result = json.loads(content)
         except json.JSONDecodeError as e:
             LOG.error(f"JSON parsing failed for triage: {e}")
-            LOG.error(f"Response content: {content[:500]}")
-            
-            # Try to salvage partial JSON
-            try:
-                last_complete = content.rfind('"}')
-                if last_complete != -1:
-                    partial_content = content[:last_complete + 2]
-                    
-                    open_brackets = partial_content.count('[') - partial_content.count(']')
-                    open_braces = partial_content.count('{') - partial_content.count('}')
-                    
-                    for _ in range(open_brackets):
-                        partial_content += ']'
-                    for _ in range(open_braces):
-                        partial_content += '}'
-                    
-                    LOG.info("Attempting to parse salvaged JSON")
-                    triage_result = json.loads(partial_content)
-                    LOG.info("Successfully parsed salvaged JSON")
-                else:
-                    return []
-            except Exception as salvage_error:
-                LOG.error(f"Failed to salvage partial JSON: {salvage_error}")
-                return []
-        
-        selected_count = len(triage_result.get("selected_ids", []))
-        selected_articles_count = len(triage_result.get("selected", []))
-        
-        # Log constraint compliance
-        if selected_count != effective_cap:
-            LOG.warning(f"CONSTRAINT VIOLATION: Expected {effective_cap} selections, got {selected_count}")
-        if selected_articles_count != effective_cap:
-            LOG.warning(f"CONSTRAINT VIOLATION: Expected {effective_cap} selected objects, got {selected_articles_count}")
-        
-        LOG.info(f"Triage completed - Target: {effective_cap}, Selected IDs: {selected_count}, Selected Objects: {selected_articles_count}, Total: {total_items}")
+            return []
         
         selected_articles = []
         for selected_item in triage_result.get("selected", []):
             if selected_item["id"] < total_items:
                 result_item = {
                     "id": selected_item["id"],
-                    "scrape_priority": selected_item["scrape_priority"],
+                    "scrape_priority": normalize_priority_to_int(selected_item["scrape_priority"]),
                     "why": selected_item["why"],
                     "confidence": selected_item["confidence"],
                     "likely_repeat": selected_item["likely_repeat"],
@@ -5839,8 +5823,22 @@ def parse_datetime(candidate) -> Optional[datetime]:
     except:
         return None
 
-def normalize_priority_display(priority):
-    """Normalize priority to consistent display format"""
+def normalize_priority_to_int(priority):
+    """Normalize priority to consistent integer format (1=High, 2=Medium, 3=Low)"""
+    if isinstance(priority, int):
+        return max(1, min(3, priority))
+    elif isinstance(priority, str):
+        priority_upper = priority.upper()
+        if priority_upper in ["HIGH", "H", "1"]:
+            return 1
+        elif priority_upper in ["MEDIUM", "MED", "M", "2"]:
+            return 2
+        elif priority_upper in ["LOW", "L", "3"]:
+            return 3
+    return 2  # Default to Medium
+
+def normalize_priority_to_display(priority):
+    """Convert integer priority to display format"""
     if isinstance(priority, int):
         if priority == 1:
             return "High"
@@ -5850,13 +5848,13 @@ def normalize_priority_display(priority):
             return "Low"
     elif isinstance(priority, str):
         priority_upper = priority.upper()
-        if priority_upper in ["HIGH", "H", "1"]:
+        if priority_upper in ["HIGH", "H"]:
             return "High"
-        elif priority_upper in ["MEDIUM", "MED", "M", "2"]:
+        elif priority_upper in ["MEDIUM", "MED", "M"]:
             return "Medium"
-        elif priority_upper in ["LOW", "L", "3"]:
+        elif priority_upper in ["LOW", "L"]:
             return "Low"
-    return "Medium"  # Default fallback
+    return "Medium"
 
 def format_timestamp_est(dt: datetime) -> str:
     """Format datetime to EST without time emoji"""
@@ -6169,7 +6167,7 @@ Provide a concise executive summary based on the information available in these 
     return summaries
 
 def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Enhanced quick email with corrected header ordering and comprehensive metadata display"""
+    """Enhanced quick email with full metadata display and proper formatting"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
         
@@ -6275,7 +6273,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             
             html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
             
-            # Enhanced metadata information with full display
+            # FULL ENHANCED METADATA DISPLAY
             if ticker in ticker_metadata_cache:
                 metadata = ticker_metadata_cache[ticker]
                 html.append("<div class='keywords'>")
@@ -6283,7 +6281,6 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 
                 if metadata.get("company_name"):
                     html.append(f"<strong>🏢 Company:</strong> {metadata['company_name']}<br>")
-                
                 if metadata.get("sector"):
                     html.append(f"<strong>📊 Sector:</strong> <span class='sector-badge'>{metadata['sector']}</span><br>")
                 if metadata.get("industry"):
@@ -6348,6 +6345,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 
                 html.append("</div>")
             
+            # Process articles with quality domains first
             for category, articles in categories.items():
                 if not articles:
                     continue
@@ -6371,7 +6369,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         priority = 1  # Quality domains get top priority
                         triage_reason = "Quality domain auto-selected"
                     elif is_ai_selected:
-                        ai_priority = normalize_priority_display(selected_article_data[idx].get("scrape_priority", "Low"))
+                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
                         triage_reason = selected_article_data[idx].get("why", "")
                         priority_map = {"High": 2, "Medium": 3, "Low": 4}
                         priority = priority_map.get(ai_priority, 4)
@@ -6420,7 +6418,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
                     
-                    # 2. Domain name second
+                    # 2. Domain name second (no extra space)
                     header_badges.append(f'<span class="source-badge">📰 {get_or_create_formal_domain_name(domain)}</span>')
                     
                     # 3. Quality badge third
@@ -6431,7 +6429,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
                         header_badges.append('<span class="flagged-badge">🚩 Flagged</span>')
                     
-                    # 5. AI Triage fifth - updated format
+                    # 5. AI Triage - normalized format
                     if enhanced_article["is_ai_selected"]:
                         ai_priority = enhanced_article["ai_priority"]
                         badge_class = f"ai-{ai_priority.lower()}"
@@ -6454,7 +6452,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         qb_emoji = "📊"
                     header_badges.append(f'<span class="qb-score {qb_class}">{qb_emoji} {qb_level}</span>')
                     
-                    # Publication time
+                    # Publication time (no emoji)
                     pub_time = ""
                     if article.get("published_at"):
                         pub_time = format_timestamp_est(article["published_at"])
@@ -7206,7 +7204,7 @@ def cron_ingest(
                     if article_idx < len(articles):
                         article_id = articles[article_idx]["id"]
                         with db() as conn, conn.cursor() as cur:
-                            clean_priority = clean_null_bytes(item.get("scrape_priority", "LOW"))
+                            clean_priority = normalize_priority_to_int(item.get("scrape_priority", 2))
                             clean_reasoning = clean_null_bytes(item.get("why", ""))
                             
                             cur.execute("""

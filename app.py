@@ -7072,14 +7072,15 @@ def admin_init(request: Request, body: InitRequest):
     }
  
 @APP.post("/cron/ingest")
+@APP.post("/cron/ingest")
 def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """
-    Enhanced ingest with smart reuse of existing AI analysis and triage data
-    Keeps full functionality while optimizing existing processed articles
+    Enhanced ingest with ticker-specific AI analysis perspective
+    Each URL analyzed from the perspective of the target ticker
     """
     require_admin(request)
     ensure_schema()
@@ -7087,7 +7088,7 @@ def cron_ingest(
     update_schema_for_triage()
     update_schema_for_qb_scores()
     
-    LOG.info("=== CRON INGEST STARTING (SMART REUSE MODE) ===")
+    LOG.info("=== CRON INGEST STARTING (TICKER-SPECIFIC AI PERSPECTIVE) ===")
     LOG.info(f"Processing window: {minutes} minutes")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
@@ -7141,7 +7142,7 @@ def cron_ingest(
             LOG.error(f"Feed ingest failed for {feed['name']}: {e}")
             continue
     
-    # Now get ALL articles from the timeframe (including existing ones with analysis)
+    # Now get ALL articles from the timeframe for ticker-specific analysis
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     articles_by_ticker = {}
     
@@ -7151,7 +7152,7 @@ def cron_ingest(
                 SELECT id, url, resolved_url, title, domain, published_at, category, 
                        search_keyword, competitor_ticker, ticker, ai_triage_selected,
                        triage_priority, triage_reasoning, quality_score, ai_impact,
-                       scraped_content, ai_summary
+                       scraped_content, ai_summary, ai_analysis_ticker, url_hash
                 FROM found_url 
                 WHERE found_at >= %s AND ticker = ANY(%s)
                 ORDER BY ticker, category, found_at DESC
@@ -7161,7 +7162,7 @@ def cron_ingest(
                 SELECT id, url, resolved_url, title, domain, published_at, category, 
                        search_keyword, competitor_ticker, ticker, ai_triage_selected,
                        triage_priority, triage_reasoning, quality_score, ai_impact,
-                       scraped_content, ai_summary
+                       scraped_content, ai_summary, ai_analysis_ticker, url_hash
                 FROM found_url 
                 WHERE found_at >= %s
                 ORDER BY ticker, category, found_at DESC
@@ -7182,66 +7183,63 @@ def cron_ingest(
     total_articles = len(all_articles)
     LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
     
-    # PHASE 2: Smart triage (reuse existing + AI for new)
-    LOG.info("=== PHASE 2: SMART TRIAGE (REUSE EXISTING + AI FOR NEW) ===")
+    # PHASE 2: Pure AI triage (no enhanced selection per your request)
+    LOG.info("=== PHASE 2: PURE AI TRIAGE (NO ENHANCED SELECTION) ===")
     triage_results = {}
     
     for ticker in articles_by_ticker.keys():
-        LOG.info(f"Running smart triage for {ticker}")
+        LOG.info(f"Running pure AI triage for {ticker}")
         
-        selected_results = perform_ai_triage_batch_with_enhanced_selection(
-            articles_by_ticker[ticker], 
-            ticker
-        )
+        # USE PURE AI TRIAGE ONLY (as requested)
+        selected_results = perform_ai_triage_batch(articles_by_ticker[ticker], ticker)
         triage_results[ticker] = selected_results
         
-        # Update database with NEW triage results only
+        # Update database with triage results
         for category, selected_items in selected_results.items():
             articles = articles_by_ticker[ticker][category]
             for item in selected_items:
-                if item.get("selection_method") == "new_ai_triage":  # Only update new ones
-                    article_idx = item["id"]
-                    if article_idx < len(articles):
-                        article_id = articles[article_idx]["id"]
-                        with db() as conn, conn.cursor() as cur:
-                            clean_priority = normalize_priority_to_int(item.get("scrape_priority", 2))
-                            clean_reasoning = clean_null_bytes(item.get("why", ""))
-                            
-                            cur.execute("""
-                                UPDATE found_url 
-                                SET ai_triage_selected = TRUE, triage_priority = %s, triage_reasoning = %s
-                                WHERE id = %s
-                            """, (clean_priority, clean_reasoning, article_id))
+                article_idx = item["id"]
+                if article_idx < len(articles):
+                    article_id = articles[article_idx]["id"]
+                    with db() as conn, conn.cursor() as cur:
+                        clean_priority = normalize_priority_to_int(item.get("scrape_priority", 2))
+                        clean_reasoning = clean_null_bytes(item.get("why", ""))
+                        
+                        cur.execute("""
+                            UPDATE found_url 
+                            SET ai_triage_selected = TRUE, triage_priority = %s, triage_reasoning = %s
+                            WHERE id = %s
+                        """, (clean_priority, clean_reasoning, article_id))
     
     # PHASE 3: Send enhanced quick email
     LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
     quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results)
     LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
     
-    # PHASE 4: Smart content scraping (skip already processed)
-    LOG.info("=== PHASE 4: SMART CONTENT SCRAPING (SKIP ALREADY PROCESSED) ===")
+    # PHASE 4: Ticker-specific content scraping and analysis
+    LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS ===")
     scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
     
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
+    for target_ticker in articles_by_ticker.keys():
+        config = get_ticker_config(target_ticker)
         metadata = {
             "industry_keywords": config.get("industry_keywords", []) if config else [],
             "competitors": config.get("competitors", []) if config else []
         }
         
-        selected = triage_results.get(ticker, {})
+        selected = triage_results.get(target_ticker, {})
         
         for category in ["company", "industry", "competitor"]:
             category_selected = selected.get(category, [])
             
             for item in category_selected:
                 article_idx = item["id"]
-                if article_idx < len(articles_by_ticker[ticker][category]):
-                    article = articles_by_ticker[ticker][category][article_idx]
+                if article_idx < len(articles_by_ticker[target_ticker][category]):
+                    article = articles_by_ticker[target_ticker][category][article_idx]
                     
                     # Get appropriate keyword for limit checking
                     if category == "company":
-                        keyword = ticker
+                        keyword = target_ticker
                     elif category == "competitor":
                         keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
                     else:
@@ -7250,11 +7248,14 @@ def cron_ingest(
                     if not _check_scraping_limit(category, keyword):
                         continue
                     
-                    # Use smart reuse function
-                    success = scrape_and_analyze_article_3tier(article, category, metadata, ticker)
+                    # CRITICAL: Analyze from target_ticker's perspective
+                    success = scrape_and_analyze_article_3tier(article, category, metadata, target_ticker)
                     if success:
-                        # Check if we reused existing data by checking if article already had complete data
-                        if (article.get('scraped_content') and article.get('ai_summary') and article.get('ai_impact')):
+                        # Check if we reused existing data
+                        if (article.get('scraped_content') and 
+                            article.get('ai_summary') and 
+                            article.get('ai_impact') and
+                            article.get('ai_analysis_ticker') == target_ticker):
                             scraping_final_stats["reused_existing"] += 1
                         else:
                             scraping_final_stats["scraped"] += 1
@@ -7268,12 +7269,15 @@ def cron_ingest(
     log_enhanced_scraping_stats()
     log_scrapingbee_stats()
     
-    # PHASE 5: Send final comprehensive email
+    # PHASE 5: Send FINAL comprehensive email (NOT DUPLICATE)
     LOG.info("=== PHASE 5: SENDING FINAL COMPREHENSIVE EMAIL ===")
-    final_digest_result = fetch_digest_articles_with_enhanced_content(minutes / 60, list(articles_by_ticker.keys()) if articles_by_ticker else None)
+    final_digest_result = fetch_digest_articles_with_enhanced_content(
+        minutes / 60, 
+        list(articles_by_ticker.keys()) if articles_by_ticker else None
+    )
     LOG.info(f"Final comprehensive email status: {final_digest_result.get('status', 'unknown')}")
     
-    LOG.info("=== CRON INGEST COMPLETE (SMART REUSE) ===")
+    LOG.info("=== CRON INGEST COMPLETE (TICKER-SPECIFIC ANALYSIS) ===")
     
     # Enhanced return with optimization stats
     total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
@@ -7284,12 +7288,13 @@ def cron_ingest(
     
     return {
         "status": "completed",
-        "workflow": "smart_reuse_optimization",
+        "workflow": "ticker_specific_ai_analysis",
         "phase_1_ingest": {
             **ingest_stats,
             "total_articles_in_timeframe": total_articles
         },
         "phase_2_triage": {
+            "type": "pure_ai_triage_only",
             "tickers_processed": len(triage_results),
             "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()}
         },
@@ -7307,7 +7312,7 @@ def cron_ingest(
             "dynamic_limits": dynamic_limits
         },
         "phase_5_final_email": final_digest_result,
-        "optimization": f"Reused {scraping_final_stats['reused_existing']} existing analyses, processed {scraping_final_stats['scraped']} new"
+        "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective"
     }
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):

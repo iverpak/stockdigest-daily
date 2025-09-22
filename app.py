@@ -6731,7 +6731,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 
                 html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} News ({len(articles)} articles)</h3>")
                 for article in sorted_articles[:100]:
-                    html.append(_format_article_html_with_ai_summary(article, category, ticker_metadata_cache, company_name))
+                    html.append(_format_article_html_with_ai_summary(article, category, ticker_metadata_cache))
         
         html.append("</div>")
     

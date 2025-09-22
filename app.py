@@ -518,7 +518,7 @@ def ensure_schema():
                     ai_analysis_ticker VARCHAR(10)
                 );
                 
-                -- Add missing columns if they don't exist (REMOVED ai_analysis_ticker duplicate)
+                -- Add missing columns if they don't exist
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS competitor_ticker VARCHAR(10);
@@ -541,6 +541,7 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS numeric_bonus DECIMAL(3,2);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_multiplier DECIMAL(3,2);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_reason TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_analysis_ticker VARCHAR(10);
                 
                 -- Update NULL values
                 UPDATE found_url SET updated_at = found_at WHERE updated_at IS NULL;
@@ -551,7 +552,16 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 
-                -- Create the unique constraint LAST (after all columns definitely exist)
+                -- FIXED: Create unique constraint that PostgreSQL can reference in ON CONFLICT
+                -- Drop the old index if it exists
+                DROP INDEX IF EXISTS idx_found_url_unique_analysis;
+                
+                -- Create a proper unique constraint instead
+                ALTER TABLE found_url DROP CONSTRAINT IF EXISTS unique_url_ticker_analysis;
+                ALTER TABLE found_url ADD CONSTRAINT unique_url_ticker_analysis 
+                    UNIQUE (url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
+                
+                -- Create named index for the constraint (PostgreSQL creates this automatically, but being explicit)
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
                 ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
                 
@@ -1548,7 +1558,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         
         # Store with analysis_ticker perspective
         with db() as conn, conn.cursor() as cur:
-            # Insert or update analysis for this ticker's perspective
+            # FIXED: Use constraint name directly instead of column expression
             cur.execute("""
                 INSERT INTO found_url (
                     url, resolved_url, url_hash, title, description, ticker, domain,
@@ -1559,7 +1569,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                     relevance_boost, relevance_boost_reason, numeric_bonus,
                     penalty_multiplier, penalty_reason, competitor_ticker
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                ON CONFLICT ON CONSTRAINT idx_found_url_unique_analysis 
                 DO UPDATE SET
                     scraped_content = EXCLUDED.scraped_content,
                     content_scraped_at = EXCLUDED.content_scraped_at,
@@ -2046,7 +2056,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Check for duplicates in database using the unique constraint
+                    # FIXED: Use constraint name directly instead of column expression
                     cur.execute("""
                         SELECT id FROM found_url 
                         WHERE url_hash = %s AND ticker = %s AND COALESCE(ai_analysis_ticker, '') = ''
@@ -2083,7 +2093,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     clean_source_url = clean_null_bytes(final_source_url or "")
                     clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                     
-                    # Insert article with comprehensive resolution data and ai_analysis_ticker
+                    # FIXED: Use constraint name directly
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
@@ -2091,7 +2101,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                             category, search_keyword, original_source_url,
                             competitor_ticker, ai_analysis_ticker
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                        ON CONFLICT ON CONSTRAINT idx_found_url_unique_analysis 
                         DO UPDATE SET
                             updated_at = NOW()
                         RETURNING id

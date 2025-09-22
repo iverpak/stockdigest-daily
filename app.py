@@ -6092,8 +6092,8 @@ ANALYSIS FRAMEWORK:
 
 CRITICAL REQUIREMENTS:
 - Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale
-- ANALYST ACTIONS: Include firm names and percentage variance from current market price
+- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
+- ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
 - NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
 - Include specific numbers when available and cite sources
 - Assess competitor moves that could affect {company_name}'s performance
@@ -6105,7 +6105,7 @@ KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None s
 COMPANY HEADLINES (sources provided in brackets):
 {titles_text}{competitor_text}
 
-Provide a concise executive summary with specific dates, materiality context, and analyst price targets."""
+Provide a concise executive summary based on the information available in these headlines."""
 
                 data = {
                     "model": OPENAI_MODEL,

@@ -2160,9 +2160,9 @@ def _format_enhanced_article_html_with_quality_priority(article: Dict, category:
         est_time = pub_dt.astimezone(eastern)
         pub_date = est_time.strftime("%b %d, %I:%M%p").lower().replace(' 0', ' ').replace('0:', ':')
         tz_abbrev = est_time.strftime("%Z")
-        pub_date = f"🕐 {pub_date} {tz_abbrev}"
+        pub_date = f"🕕 {pub_date} {tz_abbrev}"
     else:
-        pub_date = "🕐 N/A"
+        pub_date = "🕕 N/A"
     
     original_title = article["title"] or "No Title"
     resolved_domain = article["domain"] or "unknown"
@@ -2185,17 +2185,20 @@ def _format_enhanced_article_html_with_quality_priority(article: Dict, category:
     # Link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
-    # Quality score and impact badges
+    # Quality score and impact badges - ALWAYS SHOW IF AVAILABLE
     score_html = ""
     analyzed_html = ""
     impact_html = ""
     quality_score = article.get("quality_score")
     ai_impact = article.get("ai_impact")
     
-    if ai_impact is not None and quality_score is not None:
+    # Show score if available
+    if quality_score is not None:
         score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
         score_html = f'<span class="score {score_class}">Score: {quality_score:.0f}</span>'
-        
+    
+    # Show impact if available
+    if ai_impact is not None:
         impact_class = {
             "positive": "impact-positive", 
             "negative": "impact-negative", 
@@ -2204,9 +2207,10 @@ def _format_enhanced_article_html_with_quality_priority(article: Dict, category:
         }.get(ai_impact.lower(), "impact-neutral")
         impact_display = ai_impact.capitalize()
         impact_html = f'<span class="impact {impact_class}">{impact_display}</span>'
-        
-        if article.get('scraped_content') and article.get('ai_summary'):
-            analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
+    
+    # Analyzed badge - if has both scraped content AND AI summary
+    if article.get('scraped_content') and article.get('ai_summary'):
+        analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
     
     # Enhanced metadata badges
     metadata_badges = []
@@ -6225,7 +6229,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     "aliases_brands_assets": config.get("aliases_brands_assets")
                 }
         
-        # Same CSS styling as digest for consistency
+        # Complete CSS styling with all badges
         html = [
             "<html><head><style>",
             "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
@@ -6246,6 +6250,16 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".company-name-badge { display: inline-block; padding: 3px 8px; margin-right: 8px; border-radius: 4px; font-weight: bold; font-size: 11px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
             ".source-badge { display: inline-block; padding: 2px 6px; margin-left: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
             ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+            ".score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            ".high-score { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
+            ".med-score { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+            ".low-score { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
+            ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            ".impact-positive { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
+            ".impact-negative { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
+            ".impact-mixed { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+            ".impact-neutral { background-color: #e2e3e5; color: #383d41; border: 1px solid #dee2e6; }",
+            ".analyzed-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
             ".ai-triage { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
             ".ai-high { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
             ".ai-medium { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
@@ -6261,6 +6275,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
             ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
             ".meta { color: #95a5a6; font-size: 11px; }",
+            ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+            ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
             "a { color: #2980b9; text-decoration: none; }",
             "a:hover { text-decoration: underline; }",
             "</style></head><body>",
@@ -6303,7 +6319,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             
             html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
             
-            # Enhanced metadata information (same as digest)
+            # Enhanced metadata information (FULL METADATA PRESERVED)
             if ticker in ticker_metadata_cache:
                 metadata = ticker_metadata_cache[ticker]
                 html.append("<div class='keywords'>")
@@ -6345,7 +6361,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         
                         if sector_data.get("core_inputs"):
                             input_badges = [f'<span class="sector-badge">🔧 {inp}</span>' for inp in sector_data["core_inputs"][:5]]
-                            html.append(f"<strong>🏗️ Core Inputs:</strong> {' '.join(input_badges)}<br>")
+                            html.append(f"<strong>🗃️ Core Inputs:</strong> {' '.join(input_badges)}<br>")
+                        
+                        if sector_data.get("core_channels"):
+                            channel_badges = [f'<span class="geography-badge">📡 {ch}</span>' for ch in sector_data["core_channels"][:5]]
+                            html.append(f"<strong>📢 Core Channels:</strong> {' '.join(channel_badges)}<br>")
                             
                     except Exception as e:
                         LOG.warning(f"Error parsing sector profile for {ticker}: {e}")
@@ -6359,9 +6379,17 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         else:
                             alias_data = aliases_brands
                         
+                        if alias_data.get("aliases"):
+                            alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in alias_data["aliases"][:5]]
+                            html.append(f"<strong>📖 Aliases:</strong> {' '.join(alias_badges)}<br>")
+                        
                         if alias_data.get("brands"):
-                            brand_badges = [f'<span class="brand-badge">🏷️ {brand}</span>' for brand in alias_data["brands"][:5]]
-                            html.append(f"<strong>🏅 Brands:</strong> {' '.join(brand_badges)}")
+                            brand_badges = [f'<span class="brand-badge">🏆 {brand}</span>' for brand in alias_data["brands"][:5]]
+                            html.append(f"<strong>🏅 Brands:</strong> {' '.join(brand_badges)}<br>")
+                        
+                        if alias_data.get("assets"):
+                            asset_badges = [f'<span class="asset-badge">🏗️ {asset}</span>' for asset in alias_data["assets"][:5]]
+                            html.append(f"<strong>🏭 Key Assets:</strong> {' '.join(asset_badges)}")
                             
                     except Exception as e:
                         LOG.warning(f"Error parsing aliases/brands for {ticker}: {e}")
@@ -6423,8 +6451,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if item["is_ai_selected"]:
                         ai_class = f"ai-{item['ai_priority'].lower()}"
                         triage_badge = f'<span class="ai-triage {ai_class}">AI: {item["ai_priority"]}</span>'
-                        article_html = article_html.replace('<div class=\'article-content\'>', 
-                                                           f'{triage_badge}<div class=\'article-content\'>')
+                        # Insert the badge right after the article-header div
+                        article_html = article_html.replace('</div>', f'{triage_badge}</div>', 1)
                     
                     html.append(article_html)
             
@@ -6549,7 +6577,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
         ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
         ".article[data-quality='1'] { order: -1; background-color: #f8fffe; }",  # Quality domains first and highlighted
-        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
         ".article-header { margin-bottom: 5px; }",
         ".article-content { }",
         ".company { border-left-color: #27ae60; }",
@@ -6613,7 +6641,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
             html.append(f"<div class='summary-content'>{company_summaries[ticker]['ai_analysis_summary']}</div>")
             html.append("</div>")
         
-        # Enhanced keyword information with full metadata
+        # Enhanced keyword information with FULL metadata
         if ticker in ticker_metadata_cache:
             metadata = ticker_metadata_cache[ticker]
             html.append("<div class='keywords'>")
@@ -6675,7 +6703,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                     
                     if alias_data.get("aliases"):
                         alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in alias_data["aliases"][:5]]
-                        html.append(f"<strong>🔖 Aliases:</strong> {' '.join(alias_badges)}<br>")
+                        html.append(f"<strong>📖 Aliases:</strong> {' '.join(alias_badges)}<br>")
                     
                     if alias_data.get("brands"):
                         brand_badges = [f'<span class="brand-badge">🏆 {brand}</span>' for brand in alias_data["brands"][:5]]

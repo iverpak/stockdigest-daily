@@ -6474,7 +6474,7 @@ def send_email(subject: str, html_content: str, text_content: str = "") -> bool:
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
-        msg['From'] = DIGEST_FROM
+        msg['From'] = EMAIL_FROM or SMTP_USERNAME or "noreply@quantbrief.com"
         msg['To'] = DIGEST_TO
         
         if text_content:
@@ -6485,10 +6485,10 @@ def send_email(subject: str, html_content: str, text_content: str = "") -> bool:
         msg.attach(html_part)
         
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            if SMTP_TLS:
+            if SMTP_STARTTLS:
                 server.starttls()
-            if SMTP_USER and SMTP_PASS:
-                server.login(SMTP_USER, SMTP_PASS)
+            if SMTP_USERNAME and SMTP_PASSWORD:
+                server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.send_message(msg)
         
         # Cache successful send

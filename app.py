@@ -2119,8 +2119,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         
                         # Get the result properly with error handling
                         result = cur.fetchone()
-                        if result and len(result) > 0:
-                            existing_count = result[0] if result[0] is not None else 0
+                        if result and len(result) > 0 and result[0] is not None:
+                            existing_count = result[0]
                         else:
                             existing_count = 0
                         

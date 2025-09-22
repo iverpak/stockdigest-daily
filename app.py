@@ -518,7 +518,34 @@ def ensure_schema():
                     ai_analysis_ticker VARCHAR(10)
                 );
                 
+                -- Add missing columns if they don't exist
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_analysis_ticker VARCHAR(10);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS competitor_ticker VARCHAR(10);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_score INTEGER;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_level VARCHAR(20);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_reasoning TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_triage_selected BOOLEAN DEFAULT FALSE;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority VARCHAR(10);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraped_content TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS content_scraped_at TIMESTAMP;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS source_tier DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier_reason TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS relevance_boost DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS relevance_boost_reason TEXT;
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS numeric_bonus DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_multiplier DECIMAL(3,2);
+                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_reason TEXT;
+                
+                -- Update NULL updated_at values
+                UPDATE found_url SET updated_at = found_at WHERE updated_at IS NULL;
+                UPDATE found_url SET created_at = found_at WHERE created_at IS NULL;
                 
                 CREATE INDEX IF NOT EXISTS idx_found_url_analysis_ticker ON found_url(url_hash, ticker, ai_analysis_ticker);
                 
@@ -565,6 +592,7 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
             """)
 
+    # Call additional schema updates
     update_schema_for_enhanced_metadata()
     update_schema_for_triage()
 
@@ -6703,7 +6731,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 
                 html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} News ({len(articles)} articles)</h3>")
                 for article in sorted_articles[:100]:
-                    html.append(_format_enhanced_article_html(article, category, ticker_metadata_cache, company_name))
+                    html.append(_format_article_html_with_ai_summary(article, category, ticker_metadata_cache, company_name))
         
         html.append("</div>")
     

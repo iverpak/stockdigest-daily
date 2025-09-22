@@ -2160,34 +2160,71 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         clean_source_url = clean_null_bytes(final_source_url or "")
                         clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                         
-                        # In ingest_feed_basic_only, change the INSERT to:
-                        cur.execute("""
-                            INSERT INTO found_url (
-                                url, resolved_url, url_hash, title, description,
-                                feed_id, ticker, domain, quality_score, published_at,
-                                category, search_keyword, original_source_url,
-                                competitor_ticker, ai_analysis_ticker
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
-                            DO UPDATE SET
-                                updated_at = NOW()
-                            RETURNING id
-                        """, (
-                            clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
-                            feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
-                            category, clean_search_keyword, clean_source_url,
-                            clean_competitor_ticker, ''  # REMOVED: normalize_priority_to_int(2)
-                        ))
-                        
-                        result = cur.fetchone()
-                        if result:
-                            stats["inserted"] += 1
-                            LOG.debug(f"INSERTED: {title[:50]}...")
+                        # ENHANCED VALIDATION BEFORE INSERT
+                        try:
+                            # Validate critical fields
+                            if not url_hash or len(url_hash) != 32:
+                                LOG.error(f"Invalid url_hash: '{url_hash}' (length: {len(url_hash) if url_hash else 0})")
+                                continue
+                            if not feed.get("ticker"):
+                                LOG.error(f"Missing ticker in feed: {feed}")
+                                continue
+                            if not final_domain:
+                                LOG.error(f"Missing domain for article: {title[:30]}")
+                                continue
+                            if not feed.get("id"):
+                                LOG.error(f"Missing feed ID in feed: {feed}")
+                                continue
+                                
+                            # Log all parameters being sent to database
+                            LOG.debug(f"About to insert article with params:")
+                            LOG.debug(f"  url_hash: {url_hash}")
+                            LOG.debug(f"  ticker: {feed['ticker']}")
+                            LOG.debug(f"  feed_id: {feed['id']}")
+                            LOG.debug(f"  domain: {final_domain}")
+                            LOG.debug(f"  category: {category}")
+                            LOG.debug(f"  quality_score: {basic_quality_score}")
+                            
+                            # Insert with proper constraint handling
+                            cur.execute("""
+                                INSERT INTO found_url (
+                                    url, resolved_url, url_hash, title, description,
+                                    feed_id, ticker, domain, quality_score, published_at,
+                                    category, search_keyword, original_source_url,
+                                    competitor_ticker, ai_analysis_ticker
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                                DO UPDATE SET
+                                    updated_at = NOW()
+                                RETURNING id
+                            """, (
+                                clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
+                                feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
+                                category, clean_search_keyword, clean_source_url,
+                                clean_competitor_ticker, ''
+                            ))
+                            
+                            result = cur.fetchone()
+                            if result:
+                                stats["inserted"] += 1
+                                LOG.debug(f"INSERTED: {title[:50]}...")
+                            else:
+                                LOG.warning(f"Insert returned no result for: {title[:30]}")
+                                
+                        except Exception as validation_e:
+                            LOG.error(f"Validation failed for article '{title[:30]}...': {validation_e}")
+                            continue
                     
                     except Exception as db_e:
+                        import traceback
                         LOG.error(f"Database error processing article '{title[:30]}...': {type(db_e).__name__}: {str(db_e)}")
-                        # Enhanced debugging
-                        LOG.error(f"SQL params: ticker={feed['ticker']}, category={category}, url_hash={url_hash}, ai_analysis_ticker=''")
+                        LOG.error(f"Full traceback: {traceback.format_exc()}")
+                        LOG.error(f"SQL params being used:")
+                        LOG.error(f"  url_hash: {url_hash}")
+                        LOG.error(f"  ticker: {feed['ticker']}")
+                        LOG.error(f"  domain: {final_domain}")
+                        LOG.error(f"  category: {category}")
+                        LOG.error(f"  feed_id: {feed.get('id')}")
                         continue
                             
             except Exception as entry_e:

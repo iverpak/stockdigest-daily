@@ -2083,15 +2083,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     
     # Format timestamp for individual articles
     if article["published_at"]:
-        eastern = pytz.timezone('US/Eastern')
-        pub_dt = article["published_at"]
-        if pub_dt.tzinfo is None:
-            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-        
-        est_time = pub_dt.astimezone(eastern)
-        pub_date = est_time.strftime("%b %d, %I:%M%p").lower().replace(' 0', ' ').replace('0:', ':')
-        tz_abbrev = est_time.strftime("%Z")
-        pub_date = f"{pub_date} {tz_abbrev}"
+        pub_date = format_timestamp_est(article["published_at"])
     else:
         pub_date = "N/A"
     
@@ -5776,7 +5768,26 @@ def parse_datetime(candidate) -> Optional[datetime]:
         return datetime.fromisoformat(str(candidate))
     except:
         return None
-        
+
+def normalize_priority_display(priority):
+    """Normalize priority to consistent display format"""
+    if isinstance(priority, int):
+        if priority == 1:
+            return "High"
+        elif priority == 2:
+            return "Medium"
+        elif priority == 3:
+            return "Low"
+    elif isinstance(priority, str):
+        priority_upper = priority.upper()
+        if priority_upper in ["HIGH", "H", "1"]:
+            return "High"
+        elif priority_upper in ["MEDIUM", "MED", "M", "2"]:
+            return "Medium"
+        elif priority_upper in ["LOW", "L", "3"]:
+            return "Low"
+    return "Medium"  # Default fallback
+
 def format_timestamp_est(dt: datetime) -> str:
     """Format datetime to EST without time emoji"""
     if not dt:
@@ -6290,7 +6301,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         priority = 1  # Quality domains get top priority
                         triage_reason = "Quality domain auto-selected"
                     elif is_ai_selected:
-                        ai_priority = selected_article_data[idx].get("scrape_priority", "Low")
+                        ai_priority = normalize_priority_display(selected_article_data[idx].get("scrape_priority", "Low"))
                         triage_reason = selected_article_data[idx].get("why", "")
                         priority_map = {"High": 2, "Medium": 3, "Low": 4}
                         priority = priority_map.get(ai_priority, 4)
@@ -6339,7 +6350,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
                     
-                    # 2. Domain name second - remove gap
+                    # 2. Domain name second
                     header_badges.append(f'<span class="source-badge">📰 {get_or_create_formal_domain_name(domain)}</span>')
                     
                     # 3. Quality badge third
@@ -6354,7 +6365,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if enhanced_article["is_ai_selected"]:
                         ai_priority = enhanced_article["ai_priority"]
                         badge_class = f"ai-{ai_priority.lower()}"
-                        ai_emoji = {"High": "🔥", "Medium": "⚡", "Low": "📋"}.get(ai_priority, "📋")
+                        ai_emoji = {"High": "🔥", "Medium": "⚡", "Low": "🔋"}.get(ai_priority, "🔋")
                         header_badges.append(f'<span class="ai-triage {badge_class}">{ai_emoji} AI: {ai_priority}</span>')
                     
                     # 6. QB Score last
@@ -6373,7 +6384,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         qb_emoji = "📊"
                     header_badges.append(f'<span class="qb-score {qb_class}">{qb_emoji} {qb_level}</span>')
                     
-                    # Publication time - remove time emoji
+                    # Publication time
                     pub_time = ""
                     if article.get("published_at"):
                         pub_time = format_timestamp_est(article["published_at"])
@@ -6848,230 +6859,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         "recipient": DIGEST_TO
     }
 
-def _format_enhanced_article_html(article: Dict, category: str, ticker_metadata_cache: Dict = None, company_name: str = None) -> str:
-    """Enhanced article formatting for final email with quality domains first and proper spacing"""
-    import html
-    
-    if article["published_at"]:
-        eastern = pytz.timezone('US/Eastern')
-        pub_dt = article["published_at"]
-        if pub_dt.tzinfo is None:
-            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-        
-        est_time = pub_dt.astimezone(eastern)
-        pub_date = est_time.strftime("%b %d, %I:%M%p").lower().replace(' 0', ' ').replace('0:', ':')
-        tz_abbrev = est_time.strftime("%Z")
-        pub_date = f"{pub_date} {tz_abbrev}"
-    else:
-        pub_date = "N/A"
-    
-    original_title = article["title"] or "No Title"
-    resolved_domain = article["domain"] or "unknown"
-    
-    if "news.google.com" in resolved_domain or resolved_domain == "google-news-unresolved":
-        title_result = extract_source_from_title_smart(original_title)
-        if title_result[0] is None:
-            return ""
-        title, extracted_source = title_result
-        if extracted_source:
-            display_source = get_or_create_formal_domain_name(extracted_source)
-        else:
-            display_source = "Google News"
-    else:
-        title = original_title
-        display_source = get_or_create_formal_domain_name(resolved_domain)
-    
-    title = re.sub(r'\s*\$[A-Z]+\s*-?\s*', ' ', title)
-    title = re.sub(r'\s+', ' ', title).strip()
-    
-    link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
-    
-    # Header badges with proper spacing
-    header_badges = []
-    
-    # 1. First badge depends on category
-    if category == "company" and company_name:
-        header_badges.append(f'<span class="company-name-badge">🎯 {company_name}</span>')
-    elif category == "competitor":
-        competitor_name = get_competitor_display_name(
-            article.get('search_keyword'), 
-            article.get('competitor_ticker')
-        )
-        header_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
-    elif category == "industry" and article.get('search_keyword'):
-        industry_keyword = article['search_keyword']
-        header_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
-    
-    # 2. Domain name second with proper spacing
-    header_badges.append(f'<span class="source-badge">📰 {display_source}</span>')
-    
-    # 3. Quality badge third
-    if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
-        header_badges.append('<span class="quality-badge">⭐ Quality</span>')
-    
-    # 4. Score fourth
-    quality_score = article.get("quality_score")
-    ai_impact = article.get("ai_impact")
-    
-    if ai_impact is not None and quality_score is not None:
-        score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
-        header_badges.append(f'<span class="score {score_class}">Score: {quality_score:.0f}</span>')
-        
-        # 5. Impact fifth
-        impact_class = {
-            "positive": "impact-positive", 
-            "negative": "impact-negative", 
-            "mixed": "impact-mixed", 
-            "neutral": "impact-neutral"
-        }.get(ai_impact.lower(), "impact-neutral")
-        header_badges.append(f'<span class="impact {impact_class}">{ai_impact}</span>')
-    
-    # 6. Analyzed badge last
-    if article.get('scraped_content') and article.get('ai_summary'):
-        header_badges.append('<span class="analyzed-badge">✅ Analyzed</span>')
-    
-    # AI Summary section
-    ai_summary_html = ""
-    if article.get("ai_summary"):
-        clean_summary = html.escape(article["ai_summary"].strip())
-        ai_summary_html = f"<br><div class='ai-summary'><strong>📊 Analysis:</strong> {clean_summary}</div>"
-    
-    # Description (only if no AI summary)
-    description_html = ""
-    if not article.get("ai_summary") and article.get("description"):
-        description = article["description"].strip()
-        description = html.unescape(description)
-        description = re.sub(r'<[^>]+>', '', description)
-        description = re.sub(r'\s+', ' ', description).strip()
-        
-        if len(description) > 500:
-            description = description[:500] + "..."
-        
-        description = html.escape(description)
-        description_html = f"<br><div class='description'>{description}</div>"
-    
-    return f"""
-    <div class='article {category}'>
-        <div class='article-header'>
-            {' '.join(header_badges)}
-        </div>
-        <div class='article-content'>
-            <a href='{link_url}' target='_blank'>{title}</a>
-            <span class='meta'> | {pub_date}</span>
-            {ai_summary_html}
-            {description_html}
-        </div>
-    </div>
-    """
-    
-def fetch_digest_articles(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
-    """Fetch categorized articles for digest with content scraping data"""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
-    days = int(hours / 24) if hours >= 24 else 0
-    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
-    
-    with db() as conn, conn.cursor() as cur:
-        # Enhanced query to include content scraping fields
-        if tickers:
-            cur.execute("""
-                SELECT 
-                    f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning,
-                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
-                FROM found_url f
-                WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
-                    AND NOT f.sent_in_digest
-                    AND f.ticker = ANY(%s)
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
-            """, (cutoff, tickers))
-        else:
-            cur.execute("""
-                SELECT 
-                    f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning,
-                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error
-                FROM found_url f
-                WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
-                    AND NOT f.sent_in_digest
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
-            """, (cutoff,))
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            category = row["category"] or "company"
-            
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = {}
-            if category not in articles_by_ticker[ticker]:
-                articles_by_ticker[ticker][category] = []
-            
-            articles_by_ticker[ticker][category].append(dict(row))
-        
-        # Mark articles as sent
-        if tickers:
-            cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15 AND ticker = ANY(%s)
-            """, (cutoff, tickers))
-        else:
-            cur.execute("""
-                UPDATE found_url
-                SET sent_in_digest = TRUE
-                WHERE found_at >= %s AND quality_score >= 15
-            """, (cutoff,))
-    
-    total_articles = sum(
-        sum(len(arts) for arts in categories.values())
-        for categories in articles_by_ticker.values()
-    )
-    
-    if total_articles == 0:
-        return {
-            "status": "no_articles",
-            "message": f"No new quality articles found in the last {period_label}",
-            "tickers": tickers or "all"
-        }
-    
-    # FIXED: build_enhanced_digest_html now returns tuple, extract first element
-    html, text_export = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1)
-    
-    tickers_str = ', '.join(articles_by_ticker.keys())
-    subject = f"Stock Intelligence: {tickers_str} - {total_articles} articles"
-    # FIXED: Add empty text attachment parameter
-    success = send_email(subject, html, "")
-    
-    # Count by category and content scraping
-    category_counts = {"company": 0, "industry": 0, "competitor": 0}
-    content_stats = {"scraped": 0, "failed": 0, "skipped": 0}
-    
-    for ticker_cats in articles_by_ticker.values():
-        for cat, arts in ticker_cats.items():
-            category_counts[cat] = category_counts.get(cat, 0) + len(arts)
-            for art in arts:
-                if art.get('scraped_content'):
-                    content_stats['scraped'] += 1
-                elif art.get('scraping_failed'):
-                    content_stats['failed'] += 1
-                else:
-                    content_stats['skipped'] += 1
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "by_category": category_counts,
-        "content_scraping_stats": content_stats,
-        "recipient": DIGEST_TO
-    }
+format_enhanced_article_
 
 # ------------------------------------------------------------------------------
 # Auth Middleware

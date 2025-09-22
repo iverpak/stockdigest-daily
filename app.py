@@ -543,11 +543,18 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_multiplier DECIMAL(3,2);
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_reason TEXT;
                 
-                -- Update NULL updated_at values
+                -- Update NULL values
                 UPDATE found_url SET updated_at = found_at WHERE updated_at IS NULL;
                 UPDATE found_url SET created_at = found_at WHERE created_at IS NULL;
                 
-                CREATE INDEX IF NOT EXISTS idx_found_url_analysis_ticker ON found_url(url_hash, ticker, ai_analysis_ticker);
+                -- Create the unique constraint that was missing (THIS IS THE KEY FIX)
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
+                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
+                
+                -- Other indexes
+                CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
+                CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 
                 CREATE TABLE IF NOT EXISTS ticker_config (
                     ticker VARCHAR(10) PRIMARY KEY,
@@ -587,9 +594,17 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
                 
-                CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
-                CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
+                -- Create competitor metadata table
+                CREATE TABLE IF NOT EXISTS competitor_metadata (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    company_name VARCHAR(255) NOT NULL,
+                    parent_ticker VARCHAR(10) NOT NULL,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, parent_ticker)
+                );
             """)
 
     # Call additional schema updates

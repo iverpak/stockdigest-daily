@@ -2707,7 +2707,7 @@ Content: {scraped_content[:2500]}"""
             "model": OPENAI_MODEL,
             "input": prompt,
             "max_output_tokens": 1200,
-            "reasoning": {"effort": "high"},
+            "reasoning": {"effort": "medium"},
             "text": {"verbosity": "low"},
             "truncation": "auto"
         }
@@ -6167,7 +6167,7 @@ Provide enhanced executive summary with financial materiality and specific dates
                     "model": OPENAI_MODEL,
                     "input": prompt,
                     "max_output_tokens": 1200,
-                    "reasoning": {"effort": "high"},
+                    "reasoning": {"effort": "medium"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }

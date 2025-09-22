@@ -1972,6 +1972,11 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
     try:
         parsed = feedparser.parse(feed["url"])
         
+        # Check if feed parsed successfully
+        if not hasattr(parsed, 'entries') or not parsed.entries:
+            LOG.warning(f"No entries found in feed: {feed['name']}")
+            return stats
+        
         # Sort entries by publication date (newest first) if available
         entries_with_dates = []
         for entry in parsed.entries:
@@ -1983,154 +1988,176 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
         entries_with_dates.sort(key=lambda x: (x[1] or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
         
         for entry, _ in entries_with_dates:
-            stats["processed"] += 1
-            
-            url = getattr(entry, "link", None)
-            title = getattr(entry, "title", "") or "No Title"
-            raw_description = getattr(entry, "summary", "") if hasattr(entry, "summary") else ""
-            
-            # Filter description
-            description = ""
-            if raw_description and is_description_valuable(title, raw_description):
-                description = raw_description
-            
-            # Quick spam checks
-            if not url or contains_non_latin_script(title):
-                stats["blocked_non_latin"] += 1
-                continue
+            try:
+                stats["processed"] += 1
                 
-            if any(spam in title.lower() for spam in ["marketbeat", "newser", "khodrobank"]):
-                stats["blocked_spam"] += 1
-                continue
-            
-            # COMPREHENSIVE URL RESOLUTION
-            resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
-            
-            if not resolved_url or not domain:
-                stats["blocked_spam"] += 1
-                continue
-            
-            # Handle Yahoo Finance resolution
-            final_resolved_url = resolved_url
-            final_domain = domain
-            final_source_url = source_url
-            
-            # Check if this is a Yahoo Finance URL
-            is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
-                "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
-            ])
-            
-            if is_yahoo_finance:
-                yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
-                if yahoo_original:
-                    final_resolved_url = yahoo_original
-                    final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
-                    final_source_url = resolved_url
-            
-            # Generate hash for deduplication
-            url_hash = get_url_hash(url, final_resolved_url)
-            
-            # CHECK FOR DUPLICATES WITHIN THIS RUN FIRST
-            if url_hash in processed_hashes:
-                stats["duplicates"] += 1
-                LOG.debug(f"FEED DUPLICATE SKIPPED: {title[:50]}... (same URL within feed)")
-                continue
-            
-            # Add to processed set
-            processed_hashes.add(url_hash)
-            
-            # NOW check ingestion limits and count unique articles in database
-            with db() as conn, conn.cursor() as cur:
-                # Check if URL already exists in database for this ticker
-                cur.execute("""
-                    SELECT id FROM found_url 
-                    WHERE url_hash = %s AND ticker = %s AND COALESCE(ai_analysis_ticker, '') = ''
-                """, (url_hash, feed["ticker"]))
-                if cur.fetchone():
-                    stats["duplicates"] += 1
-                    LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
+                url = getattr(entry, "link", None)
+                title = getattr(entry, "title", "") or "No Title"
+                raw_description = getattr(entry, "summary", "") if hasattr(entry, "summary") else ""
+                
+                # Filter description
+                description = ""
+                if raw_description and is_description_valuable(title, raw_description):
+                    description = raw_description
+                
+                # Quick spam checks
+                if not url or contains_non_latin_script(title):
+                    stats["blocked_non_latin"] += 1
+                    continue
+                    
+                if any(spam in title.lower() for spam in ["marketbeat", "newser", "khodrobank"]):
+                    stats["blocked_spam"] += 1
                     continue
                 
-                # Count existing unique URLs for this category/keyword combination - FIXED
-                if category == "company":
-                    cur.execute("""
-                        SELECT COUNT(DISTINCT url_hash) FROM found_url 
-                        WHERE ticker = %s AND category = 'company'
-                    """, (feed["ticker"],))
-                elif category == "industry":
-                    cur.execute("""
-                        SELECT COUNT(DISTINCT url_hash) FROM found_url 
-                        WHERE ticker = %s AND category = 'industry' AND search_keyword = %s
-                    """, (feed["ticker"], feed_keyword))
-                elif category == "competitor":
-                    cur.execute("""
-                        SELECT COUNT(DISTINCT url_hash) FROM found_url 
-                        WHERE ticker = %s AND category = 'competitor' AND competitor_ticker = %s
-                    """, (feed["ticker"], feed_keyword))
+                # COMPREHENSIVE URL RESOLUTION
+                try:
+                    resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+                    
+                    if not resolved_url or not domain:
+                        stats["blocked_spam"] += 1
+                        continue
+                except Exception as e:
+                    LOG.warning(f"URL resolution failed for {url}: {e}")
+                    stats["blocked_spam"] += 1
+                    continue
                 
-                # FIXED: Get the result properly
-                result = cur.fetchone()
-                existing_count = result[0] if result else 0
+                # Handle Yahoo Finance resolution
+                final_resolved_url = resolved_url
+                final_domain = domain
+                final_source_url = source_url
                 
-                # Check limits based on existing + new count
-                if not _check_ingestion_limit_with_existing_count(category, feed_keyword, existing_count):
-                    stats["limit_reached"] += 1
-                    LOG.info(f"INGESTION LIMIT REACHED: {category} '{feed_keyword}' has {existing_count} existing articles")
-                    break
+                # Check if this is a Yahoo Finance URL
+                is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
+                    "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
+                ])
                 
-                # COUNT THIS UNIQUE URL
-                _update_ingestion_stats(category, feed_keyword)
+                if is_yahoo_finance:
+                    try:
+                        yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
+                        if yahoo_original:
+                            final_resolved_url = yahoo_original
+                            final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
+                            final_source_url = resolved_url
+                    except Exception as e:
+                        LOG.warning(f"Yahoo source extraction failed for {resolved_url}: {e}")
                 
-                # Parse publish date
-                published_at = None
-                if hasattr(entry, "published_parsed"):
-                    published_at = parse_datetime(entry.published_parsed)
+                # Generate hash for deduplication
+                url_hash = get_url_hash(url, final_resolved_url)
                 
-                # Use basic scoring
-                domain_tier = _get_domain_tier(final_domain, title, description)
-                basic_quality_score = 50.0 + (domain_tier - 0.5) * 20
+                # CHECK FOR DUPLICATES WITHIN THIS RUN FIRST
+                if url_hash in processed_hashes:
+                    stats["duplicates"] += 1
+                    LOG.debug(f"FEED DUPLICATE SKIPPED: {title[:50]}... (same URL within feed)")
+                    continue
                 
-                # Add ticker mention bonus
-                if feed["ticker"].upper() in title.upper():
-                    basic_quality_score += 10
+                # Add to processed set
+                processed_hashes.add(url_hash)
                 
-                # Clamp to reasonable range
-                basic_quality_score = max(20.0, min(80.0, basic_quality_score))
-                
-                display_content = description
-                
-                # Clean all text fields to remove NULL bytes
-                clean_url = clean_null_bytes(url or "")
-                clean_resolved_url = clean_null_bytes(final_resolved_url or "")
-                clean_title = clean_null_bytes(title or "")
-                clean_description = clean_null_bytes(display_content or "")
-                clean_search_keyword = clean_null_bytes(feed.get("search_keyword") or "")
-                clean_source_url = clean_null_bytes(final_source_url or "")
-                clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
-                
-                # Insert with proper constraint handling
-                cur.execute("""
-                    INSERT INTO found_url (
-                        url, resolved_url, url_hash, title, description,
-                        feed_id, ticker, domain, quality_score, published_at,
-                        category, search_keyword, original_source_url,
-                        competitor_ticker, ai_analysis_ticker, triage_priority
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
-                    DO UPDATE SET
-                        updated_at = NOW()
-                    RETURNING id
-                """, (
-                    clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
-                    feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
-                    category, clean_search_keyword, clean_source_url,
-                    clean_competitor_ticker, None, normalize_priority_to_int(2)  # Default Medium priority
-                ))
-                
-                result = cur.fetchone()
-                if result:
-                    stats["inserted"] += 1
-                    LOG.debug(f"INSERTED: {title[:50]}...")
+                # NOW check ingestion limits and count unique articles in database
+                with db() as conn, conn.cursor() as cur:
+                    try:
+                        # Check if URL already exists in database for this ticker
+                        cur.execute("""
+                            SELECT id FROM found_url 
+                            WHERE url_hash = %s AND ticker = %s AND COALESCE(ai_analysis_ticker, '') = ''
+                        """, (url_hash, feed["ticker"]))
+                        if cur.fetchone():
+                            stats["duplicates"] += 1
+                            LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
+                            continue
+                        
+                        # Count existing unique URLs for this category/keyword combination
+                        existing_count = 0
+                        if category == "company":
+                            cur.execute("""
+                                SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                                WHERE ticker = %s AND category = 'company'
+                            """, (feed["ticker"],))
+                        elif category == "industry":
+                            cur.execute("""
+                                SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                                WHERE ticker = %s AND category = 'industry' AND search_keyword = %s
+                            """, (feed["ticker"], feed_keyword))
+                        elif category == "competitor":
+                            cur.execute("""
+                                SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                                WHERE ticker = %s AND category = 'competitor' AND competitor_ticker = %s
+                            """, (feed["ticker"], feed_keyword))
+                        
+                        # FIXED: Get the result properly with error handling
+                        result = cur.fetchone()
+                        if result and len(result) > 0:
+                            existing_count = result[0] if result[0] is not None else 0
+                        else:
+                            existing_count = 0
+                        
+                        # Check limits based on existing + new count
+                        if not _check_ingestion_limit_with_existing_count(category, feed_keyword, existing_count):
+                            stats["limit_reached"] += 1
+                            LOG.info(f"INGESTION LIMIT REACHED: {category} '{feed_keyword}' has {existing_count} existing articles")
+                            break
+                        
+                        # COUNT THIS UNIQUE URL
+                        _update_ingestion_stats(category, feed_keyword)
+                        
+                        # Parse publish date
+                        published_at = None
+                        if hasattr(entry, "published_parsed"):
+                            published_at = parse_datetime(entry.published_parsed)
+                        
+                        # Use basic scoring
+                        domain_tier = _get_domain_tier(final_domain, title, description)
+                        basic_quality_score = 50.0 + (domain_tier - 0.5) * 20
+                        
+                        # Add ticker mention bonus
+                        if feed["ticker"].upper() in title.upper():
+                            basic_quality_score += 10
+                        
+                        # Clamp to reasonable range
+                        basic_quality_score = max(20.0, min(80.0, basic_quality_score))
+                        
+                        display_content = description
+                        
+                        # Clean all text fields to remove NULL bytes
+                        clean_url = clean_null_bytes(url or "")
+                        clean_resolved_url = clean_null_bytes(final_resolved_url or "")
+                        clean_title = clean_null_bytes(title or "")
+                        clean_description = clean_null_bytes(display_content or "")
+                        clean_search_keyword = clean_null_bytes(feed.get("search_keyword") or "")
+                        clean_source_url = clean_null_bytes(final_source_url or "")
+                        clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
+                        
+                        # Insert with proper constraint handling
+                        cur.execute("""
+                            INSERT INTO found_url (
+                                url, resolved_url, url_hash, title, description,
+                                feed_id, ticker, domain, quality_score, published_at,
+                                category, search_keyword, original_source_url,
+                                competitor_ticker, ai_analysis_ticker, triage_priority
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                            DO UPDATE SET
+                                updated_at = NOW()
+                            RETURNING id
+                        """, (
+                            clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
+                            feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
+                            category, clean_search_keyword, clean_source_url,
+                            clean_competitor_ticker, None, normalize_priority_to_int(2)  # Default Medium priority
+                        ))
+                        
+                        result = cur.fetchone()
+                        if result:
+                            stats["inserted"] += 1
+                            LOG.debug(f"INSERTED: {title[:50]}...")
+                    
+                    except Exception as db_e:
+                        LOG.error(f"Database error processing article '{title[:30]}...': {db_e}")
+                        continue
+                            
+            except Exception as entry_e:
+                LOG.error(f"Error processing feed entry: {entry_e}")
+                continue
                         
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")

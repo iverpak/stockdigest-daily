@@ -2051,7 +2051,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
                     continue
                 
-                # Count existing unique URLs for this category/keyword combination
+                # Count existing unique URLs for this category/keyword combination - FIXED
                 if category == "company":
                     cur.execute("""
                         SELECT COUNT(DISTINCT url_hash) FROM found_url 
@@ -2068,7 +2068,9 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         WHERE ticker = %s AND category = 'competitor' AND competitor_ticker = %s
                     """, (feed["ticker"], feed_keyword))
                 
-                existing_count = cur.fetchone()[0] if cur.fetchone() else 0
+                # FIXED: Get the result properly
+                result = cur.fetchone()
+                existing_count = result[0] if result else 0
                 
                 # Check limits based on existing + new count
                 if not _check_ingestion_limit_with_existing_count(category, feed_keyword, existing_count):
@@ -2125,7 +2127,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     clean_competitor_ticker, None, normalize_priority_to_int(2)  # Default Medium priority
                 ))
                 
-                if cur.fetchone():
+                result = cur.fetchone()
+                if result:
                     stats["inserted"] += 1
                     LOG.debug(f"INSERTED: {title[:50]}...")
                         

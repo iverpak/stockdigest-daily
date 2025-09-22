@@ -1559,7 +1559,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                     relevance_boost, relevance_boost_reason, numeric_bonus,
                     penalty_multiplier, penalty_reason, competitor_ticker
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (url_hash, ticker, ai_analysis_ticker) 
+                ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
                 DO UPDATE SET
                     scraped_content = EXCLUDED.scraped_content,
                     content_scraped_at = EXCLUDED.content_scraped_at,

@@ -518,8 +518,7 @@ def ensure_schema():
                     ai_analysis_ticker VARCHAR(10)
                 );
                 
-                -- Add missing columns if they don't exist
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_analysis_ticker VARCHAR(10);
+                -- Add missing columns if they don't exist (REMOVED ai_analysis_ticker duplicate)
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS competitor_ticker VARCHAR(10);
@@ -547,15 +546,16 @@ def ensure_schema():
                 UPDATE found_url SET updated_at = found_at WHERE updated_at IS NULL;
                 UPDATE found_url SET created_at = found_at WHERE created_at IS NULL;
                 
-                -- Create the unique constraint that was missing (THIS IS THE KEY FIX)
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
-                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
-                
-                -- Other indexes
+                -- Create regular indexes first
                 CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
                 
+                -- Create the unique constraint LAST (after all columns definitely exist)
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
+                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
+                
+                -- Rest of your tables...
                 CREATE TABLE IF NOT EXISTS ticker_config (
                     ticker VARCHAR(10) PRIMARY KEY,
                     name VARCHAR(255),
@@ -2046,8 +2046,11 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Check for duplicates in database
-                    cur.execute("SELECT id FROM found_url WHERE url_hash = %s", (url_hash,))
+                    # Check for duplicates in database using the unique constraint
+                    cur.execute("""
+                        SELECT id FROM found_url 
+                        WHERE url_hash = %s AND ticker = %s AND COALESCE(ai_analysis_ticker, '') = ''
+                    """, (url_hash, feed["ticker"]))
                     if cur.fetchone():
                         stats["duplicates"] += 1
                         LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
@@ -2080,20 +2083,23 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     clean_source_url = clean_null_bytes(final_source_url or "")
                     clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                     
-                    # Insert article with comprehensive resolution data
+                    # Insert article with comprehensive resolution data and ai_analysis_ticker
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
                             feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url,
-                            competitor_ticker
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            competitor_ticker, ai_analysis_ticker
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                        DO UPDATE SET
+                            updated_at = NOW()
                         RETURNING id
                     """, (
                         clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
                         feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
                         category, clean_search_keyword, clean_source_url,
-                        clean_competitor_ticker
+                        clean_competitor_ticker, None  # ai_analysis_ticker is None for basic ingestion
                     ))
                     
                     if cur.fetchone():

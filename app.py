@@ -1562,7 +1562,10 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                     ai_summary = generate_ai_summary(scraped_content, title, analysis_ticker)
                     if ai_summary:
                         ai_summary = clean_null_bytes(ai_summary)
-                        LOG.info(f"AI SUMMARY GENERATED for {analysis_ticker}: {len(ai_summary)} chars")
+                        LOG.info(f"AI SUMMARY GENERATED for {analysis_ticker}: {len(ai_summary)} chars - '{ai_summary[:100]}...'")
+                    else:
+                        LOG.warning(f"AI SUMMARY FAILED for {analysis_ticker}: {title[:50]}...")
+                        ai_summary = None  # Explicitly set to None if generation failed
                 else:
                     scraping_failed = True
                     scraping_error = clean_null_bytes(status or "")
@@ -2783,6 +2786,7 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
 def generate_ai_summary(scraped_content: str, title: str, ticker: str, description: str = "") -> Optional[str]:
     """Generate enhanced hedge fund analyst summary with specific financial context and materiality assessment"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        LOG.warning(f"AI summary generation skipped - API key: {bool(OPENAI_API_KEY)}, content length: {len(scraped_content) if scraped_content else 0}")
         return None
     
     try:
@@ -2811,7 +2815,7 @@ CONTENT SCOPE: Extract actionable intelligence that affects {ticker}'s financial
 
 Article Title: {title}
 Content Snippet: {description[:500] if description else ""}
-Full Content: {scraped_content[:2500]}
+Full Content: {scraped_content[:3000]}
 
 Provide 3-5 sentences focusing on material financial impact, specific timelines, and analyst consensus with price variance calculations."""
 
@@ -2823,11 +2827,13 @@ Provide 3-5 sentences focusing on material financial impact, specific timelines,
         data = {
             "model": OPENAI_MODEL,
             "input": prompt,
-            "max_output_tokens": 1200,
+            "max_output_tokens": 1500,
             "reasoning": {"effort": "medium"},
             "text": {"verbosity": "low"},
             "truncation": "auto"
         }
+        
+        LOG.info(f"Generating AI summary for {ticker} - Content: {len(scraped_content)} chars, Title: {title[:50]}...")
         
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
         
@@ -2842,14 +2848,18 @@ Provide 3-5 sentences focusing on material financial impact, specific timelines,
                      (result.get("incomplete_details") or {}).get("reason"))
             
             summary = extract_text_from_responses(result)
-            if summary:
-                LOG.info(f"Generated enhanced AI summary for {ticker}: {len(summary)} chars")
-                return summary
-                
-        return None
+            if summary and len(summary.strip()) > 10:
+                LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars - '{summary[:100]}...'")
+                return summary.strip()
+            else:
+                LOG.warning(f"AI summary empty or too short for {ticker}: '{summary}'")
+                return None
+        else:
+            LOG.error(f"AI summary API error {response.status_code} for {ticker}: {response.text}")
+            return None
             
     except Exception as e:
-        LOG.warning(f"AI enhanced summary generation failed: {e}")
+        LOG.error(f"AI enhanced summary generation failed for {ticker}: {e}")
         return None
 
 def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:

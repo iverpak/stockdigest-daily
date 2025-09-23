@@ -222,7 +222,7 @@ PROBLEMATIC_SCRAPE_DOMAINS = {
     "msn.com", "templates.cds.yahoo", "sharewise.com", "news.stocktradersdaily.com",
     "247wallst.com", "barchart.com", "newstrail.com", "telecompaper.com",
     "video.media.yql.yahoo.com", "fool.com", "insidermonkey.com",
-    "simplywall.st", "investing.com", "gurufocus.com",
+    "simplywall.st", "investing.com", "gurufocus.com", "seekingalpha.com",
     "markets.financialcontent.com", "nasdaq.com"
 }
 
@@ -718,7 +718,7 @@ def store_competitor_metadata(ticker: str, competitors: List[Dict]) -> None:
 
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Enhanced article extraction with intelligent delay management
+    Enhanced article extraction with intelligent delay management and content cleaning
     """
     try:
         # Check for known paywall domains first (reduced list)
@@ -769,67 +769,46 @@ def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optio
         article.parse()
         
         # Get the main text content
-        content = article.text.strip()
+        raw_content = article.text.strip()
         
-        if not content:
+        if not raw_content:
             return None, "No content extracted"
         
-        # Enhanced cookie banner detection
+        # ENHANCED CONTENT CLEANING
+        cleaned_content = clean_scraped_content(raw_content, url, domain)
+        
+        if not cleaned_content or len(cleaned_content.strip()) < 100:
+            return None, "Content too short after cleaning"
+        
+        # Enhanced cookie banner detection on cleaned content
+        content_lower = cleaned_content.lower()
         cookie_indicators = [
             "we use cookies", "accept all cookies", "cookie policy",
-            "privacy policy and terms of service", "consent to the use",
-            "personalizing content and advertising", "marketing cookies",
-            "essential cookies", "functional cookies", "deny optional",
-            "accept all or closing out of this banner", "revised from time to time"
+            "privacy policy and terms of service", "consent to the use"
         ]
         
-        content_lower = content.lower()
         cookie_count = sum(1 for indicator in cookie_indicators if indicator in content_lower)
         
         # If multiple cookie indicators and content is short, likely a cookie page
-        if cookie_count >= 3 and len(content) < 800:
+        if cookie_count >= 2 and len(cleaned_content) < 500:
             return None, "Cookie consent page detected"
         
-        # If content starts with cookie text, likely a banner page
-        cookie_start_indicators = [
-            "we use cookies to understand",
-            "this site uses cookies",
-            "by continuing to use this site"
-        ]
-        if any(content_lower.startswith(indicator) for indicator in cookie_start_indicators):
-            return None, "Cookie banner content detected"
-        
-        # Enhanced paywall indicators (try scraping first, then check)
+        # Enhanced paywall indicators (check cleaned content)
         paywall_indicators = [
             "subscribe to continue", "unlock this story", "premium content",
-            "sign up to read", "become a member", "subscription required",
-            "create free account", "log in to continue", "paywall",
-            "this article is for subscribers", "register to read",
-            "403 forbidden", "401 unauthorized", "access denied",
-            "upgrade to premium", "become a subscriber"
+            "sign up to read", "become a member", "subscription required"
         ]
         
         if any(indicator in content_lower for indicator in paywall_indicators):
             return None, "Paywall content detected"
         
-        # Check for error pages
-        error_indicators = [
-            "404", "page not found", "forbidden",
-            "this page doesn't exist", "error occurred",
-            "internal server error", "service unavailable"
-        ]
-        
-        if any(error in content_lower for error in error_indicators):
-            return None, "Error page detected"
-        
-        # Validate content quality
-        is_valid, validation_msg = validate_scraped_content(content, url, domain)
+        # Validate content quality on cleaned content
+        is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
         if not is_valid:
             return None, validation_msg
         
-        # Store full content (no length limit)
-        LOG.info(f"Successfully extracted {len(content)} chars from {domain}")
-        return content, None
+        LOG.info(f"Successfully extracted and cleaned {len(cleaned_content)} chars from {domain}")
+        return cleaned_content, None
         
     except newspaper.article.ArticleException as e:
         error_msg = f"Newspaper article error: {str(e)}"
@@ -873,7 +852,7 @@ def create_scraping_session():
 # Add this function after your existing extract_article_content function
 def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Memory-optimized article extraction using Playwright for JavaScript-heavy sites
+    Memory-optimized article extraction using Playwright with enhanced content cleaning
     """
     try:
         # Check for known paywall domains first
@@ -888,7 +867,7 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 headless=True,
                 args=[
                     '--no-sandbox',
-                    '--disable-dev-shm-usage',  # Use /tmp instead of /dev/shm for lower memory
+                    '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--disable-web-security',
                     '--disable-features=VizDisplayCompositor',
@@ -897,7 +876,7 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                     '--disable-renderer-backgrounding',
                     '--disable-extensions',
                     '--disable-plugins',
-                    '--disable-images',  # Don't load images to save memory
+                    '--disable-images',
                     '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 ]
             )
@@ -929,20 +908,20 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 page.wait_for_timeout(1000)
                 
                 # Try multiple content extraction methods
-                content = None
+                raw_content = None
                 extraction_method = None
                 
                 # Method 1: Try article tag first
                 try:
                     article_element = page.query_selector('article')
                     if article_element:
-                        content = article_element.inner_text()
+                        raw_content = article_element.inner_text()
                         extraction_method = "article tag"
                 except Exception:
                     pass
                 
                 # Method 2: Try main content selectors
-                if not content or len(content.strip()) < 200:
+                if not raw_content or len(raw_content.strip()) < 200:
                     selectors = [
                         '[role="main"]',
                         'main',
@@ -959,16 +938,16 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                             if element:
                                 temp_content = element.inner_text()
                                 if temp_content and len(temp_content.strip()) > 200:
-                                    content = temp_content
+                                    raw_content = temp_content
                                     extraction_method = f"selector: {selector}"
                                     break
                         except Exception:
                             continue
                 
                 # Method 3: Smart body text extraction (removes navigation/ads)
-                if not content or len(content.strip()) < 200:
+                if not raw_content or len(raw_content.strip()) < 200:
                     try:
-                        content = page.evaluate("""
+                        raw_content = page.evaluate("""
                             () => {
                                 // Remove unwanted elements
                                 const unwanted = document.querySelectorAll(`
@@ -1000,14 +979,14 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                         extraction_method = "smart body extraction"
                     except Exception:
                         try:
-                            content = page.evaluate("() => document.body ? document.body.innerText : ''")
+                            raw_content = page.evaluate("() => document.body ? document.body.innerText : ''")
                             extraction_method = "fallback body text"
                         except Exception:
-                            content = None
+                            raw_content = None
                 
             except Exception as e:
                 LOG.warning(f"PLAYWRIGHT: Navigation/extraction failed for {domain}: {str(e)}")
-                content = None
+                raw_content = None
             finally:
                 # Always close browser to free memory
                 try:
@@ -1015,18 +994,25 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 except Exception:
                     pass
             
-            if not content or len(content.strip()) < 100:
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient content extracted")
+            if not raw_content or len(raw_content.strip()) < 100:
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient raw content extracted")
                 return None, "Insufficient content extracted"
             
-            # Enhanced content validation
-            is_valid, validation_msg = validate_scraped_content(content, url, domain)
+            # ENHANCED CONTENT CLEANING
+            cleaned_content = clean_scraped_content(raw_content, url, domain)
+            
+            if not cleaned_content or len(cleaned_content.strip()) < 100:
+                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Content too short after cleaning")
+                return None, "Content too short after cleaning"
+            
+            # Enhanced content validation on cleaned content
+            is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
             if not is_valid:
                 LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> {validation_msg}")
                 return None, validation_msg
             
-            # Check for common error pages or blocking messages
-            content_lower = content.lower()
+            # Check for common error pages or blocking messages on cleaned content
+            content_lower = cleaned_content.lower()
             error_indicators = [
                 "403 forbidden", "access denied", "captcha", "robot", "bot detection",
                 "please verify you are human", "cloudflare", "rate limit", "blocked",
@@ -1037,8 +1023,8 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Error page detected")
                 return None, "Error page or blocking detected"
             
-            LOG.info(f"PLAYWRIGHT SUCCESS: {domain} -> {len(content)} chars extracted via {extraction_method}")
-            return content.strip(), None
+            LOG.info(f"PLAYWRIGHT SUCCESS: {domain} -> {len(cleaned_content)} chars extracted and cleaned via {extraction_method}")
+            return cleaned_content.strip(), None
             
     except Exception as e:
         error_msg = f"Playwright extraction failed: {str(e)}"
@@ -1051,7 +1037,7 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
 
 def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    Enhanced ScrapingBee with retry logic for 500 errors and comprehensive stats
+    Enhanced ScrapingBee with improved text extraction and content cleaning
     """
     global scrapingbee_stats, enhanced_scraping_stats
     
@@ -1064,7 +1050,6 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
                 return None, f"Paywall domain: {domain}"
             
             if attempt > 0:
-                # Exponential backoff: 2s, 4s, 8s
                 delay = 2 ** attempt
                 LOG.info(f"SCRAPINGBEE RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
                 time.sleep(delay)
@@ -1077,15 +1062,15 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
             scrapingbee_stats["by_domain"][domain]["attempts"] += 1
             enhanced_scraping_stats["by_method"]["scrapingbee"]["attempts"] += 1
             
-            # Optimized parameters for reliability
+            # Improved parameters with better text extraction targeting
             params = {
                 'api_key': SCRAPINGBEE_API_KEY,
                 'url': url,
-                'render_js': 'false',  # Disable JS for speed/reliability
+                'render_js': 'false',
                 'premium_proxy': 'true',
                 'country_code': 'us',
                 'timeout': 15000,
-                'wait_for': 'networkidle2',
+                'extract_rules': '{"article_text": "article, main, .article-content, .story-content, .entry-content, .post-content, .content, [role=main], .post-body, .article-body"}',
                 'block_ads': 'true',
                 'block_resources': 'true'
             }
@@ -1095,34 +1080,53 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
                                    timeout=30)
             
             if response.status_code == 200:
-                content = response.text.strip()
+                try:
+                    # ScrapingBee returns JSON when using extract_rules
+                    result = response.json()
+                    raw_content = result.get('article_text', '') or response.text
+                except:
+                    # Fallback to raw text if JSON parsing fails
+                    raw_content = response.text
                 
-                if content and len(content) > 100:
-                    # Validate content quality
-                    is_valid, validation_msg = validate_scraped_content(content, url, domain)
-                    if is_valid:
-                        scrapingbee_stats["successful"] += 1
-                        scrapingbee_stats["by_domain"][domain]["successes"] += 1
-                        enhanced_scraping_stats["by_method"]["scrapingbee"]["successes"] += 1
-                        LOG.info(f"SCRAPINGBEE SUCCESS: {domain} -> {len(content)} chars")
-                        return content, None
-                    else:
-                        LOG.warning(f"SCRAPINGBEE: Content validation failed for {domain}: {validation_msg}")
-                        # Don't retry validation failures
-                        break
+                if not raw_content or len(raw_content.strip()) < 100:
+                    LOG.warning(f"SCRAPINGBEE: Insufficient raw content for {domain} (attempt {attempt + 1})")
+                    continue
+                
+                # Apply content cleaning to the extracted text
+                cleaned_content = clean_scraped_content(raw_content, url, domain)
+                
+                if not cleaned_content or len(cleaned_content.strip()) < 100:
+                    LOG.warning(f"SCRAPINGBEE: Content too short after cleaning for {domain}")
+                    continue
+                
+                # Validate cleaned content quality
+                is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
+                if is_valid:
+                    scrapingbee_stats["successful"] += 1
+                    scrapingbee_stats["by_domain"][domain]["successes"] += 1
+                    enhanced_scraping_stats["by_method"]["scrapingbee"]["successes"] += 1
+                    
+                    # Enhanced logging to show cleaning effectiveness
+                    raw_len = len(str(raw_content))
+                    clean_len = len(cleaned_content)
+                    reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0
+                    
+                    LOG.info(f"SCRAPINGBEE SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
+                    return cleaned_content, None
                 else:
-                    LOG.warning(f"SCRAPINGBEE: Insufficient content for {domain} (attempt {attempt + 1})")
+                    LOG.warning(f"SCRAPINGBEE: Content validation failed for {domain}: {validation_msg}")
+                    break
             
             elif response.status_code == 500:
                 LOG.warning(f"SCRAPINGBEE: Server error 500 for {domain} (attempt {attempt + 1})")
                 if attempt < max_retries:
-                    continue  # Retry on 500 errors
+                    continue
                 else:
                     LOG.warning(f"SCRAPINGBEE: Max retries reached for {domain} after repeated 500 errors")
             
             elif response.status_code == 422:
                 LOG.warning(f"SCRAPINGBEE: Invalid parameters for {domain}")
-                break  # Don't retry parameter errors
+                break
             
             else:
                 LOG.warning(f"SCRAPINGBEE: HTTP {response.status_code} for {domain}")
@@ -1161,6 +1165,133 @@ def get_referrer_for_domain(url, domain):
     if any(news in domain for news in ['news', 'finance', 'investing']):
         return random.choice(referrers['news_sites'])
     return random.choice(referrers['default'])
+
+def clean_scraped_content(content: str, url: str = "", domain: str = "") -> str:
+    """
+    Conservative content cleaning that removes obvious junk while preserving article content
+    """
+    if not content:
+        return ""
+    
+    original_length = len(content)
+    
+    # Stage 1: Remove obvious binary/encoded data
+    # Remove sequences that look like binary data or encoding artifacts
+    content = re.sub(r'[¿½]{3,}.*?[¿½]{3,}', '', content)  # Remove sequences with encoding markers
+    content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]+', '', content)  # Remove control characters
+    content = re.sub(r'[A-Za-z0-9+/]{50,}={0,2}', '', content)  # Remove base64-like sequences
+    
+    # Stage 2: Remove HTML/CSS/JavaScript remnants
+    # Remove HTML tags that newspaper3k might have missed
+    content = re.sub(r'<[^>]+>', '', content)
+    content = re.sub(r'&[a-zA-Z0-9#]+;', ' ', content)  # HTML entities
+    
+    # Remove CSS-like patterns
+    content = re.sub(r'\{[^}]*\}', '', content)  # CSS rules
+    content = re.sub(r'@media[^{]*\{[^}]*\}', '', content)  # Media queries
+    content = re.sub(r'font-[a-z-]+:[^;]+;', '', content)  # CSS font properties
+    content = re.sub(r'text-[a-z-]+:[^;]+;', '', content)  # CSS text properties
+    content = re.sub(r'color:[^;]+;', '', content)  # CSS colors
+    content = re.sub(r'margin[^;]*:[^;]+;', '', content)  # CSS margins
+    content = re.sub(r'padding[^;]*:[^;]+;', '', content)  # CSS padding
+    
+    # Remove class and data attributes
+    content = re.sub(r'class="[^"]*"', '', content)
+    content = re.sub(r'data-[a-z-]+="[^"]*"', '', content)
+    
+    # Stage 3: Remove technical metadata
+    # Remove image metadata
+    content = re.sub(r'EXIF[^.]*\.', '', content)
+    content = re.sub(r'sRGB\.IEC[^.]*\.', '', content)
+    content = re.sub(r'Adobe RGB[^.]*\.', '', content)
+    content = re.sub(r'Photoshop[^.]*\.', '', content)
+    
+    # Remove file paths and technical specs
+    content = re.sub(r'/[A-Z]+/[A-Z0-9]+', '', content)  # File paths like /MARCH/MARCH30
+    content = re.sub(r'[A-Z]{2,}\d+[A-Z]*\d*', '', content)  # Technical codes like RTAO, RGB
+    content = re.sub(r'\d{8,}', '', content)  # Long number sequences
+    
+    # Stage 4: Remove navigation and UI elements
+    navigation_patterns = [
+        r'Home\s*>\s*[^.]*',  # Breadcrumbs
+        r'Share on [A-Za-z]+',  # Social sharing
+        r'Tweet this',
+        r'Follow us on',
+        r'Subscribe to',
+        r'Sign up for',
+        r'Newsletter',
+        r'Related Articles?',
+        r'More from',
+        r'Continue reading',
+        r'Read more',
+        r'Click here',
+        r'Advertisement',
+        r'Sponsored Content',
+        r'Exit Content Preview',
+    ]
+    
+    for pattern in navigation_patterns:
+        content = re.sub(pattern, '', content, flags=re.IGNORECASE)
+    
+    # Stage 5: Remove cookie and consent text
+    cookie_patterns = [
+        r'We use cookies[^.]*\.',
+        r'Accept all cookies[^.]*\.',
+        r'Cookie policy[^.]*\.',
+        r'Privacy policy[^.]*\.',
+        r'By continuing to use[^.]*\.',
+        r'This site uses cookies[^.]*\.',
+    ]
+    
+    for pattern in cookie_patterns:
+        content = re.sub(pattern, '', content, flags=re.IGNORECASE)
+    
+    # Stage 6: Clean up whitespace but preserve paragraph structure
+    content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Reduce excessive line breaks
+    content = re.sub(r'[ \t]+', ' ', content)  # Normalize spaces
+    content = re.sub(r'\n +', '\n', content)  # Remove leading spaces on lines
+    content = re.sub(r' +\n', '\n', content)  # Remove trailing spaces on lines
+    
+    # Stage 7: Remove obviously broken sentences/paragraphs
+    lines = content.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Skip lines that are mostly special characters or numbers
+        if len(re.sub(r'[a-zA-Z\s]', '', line)) > len(line) * 0.5:
+            continue
+            
+        # Skip very short fragments that don't end properly
+        if len(line) < 20 and not line.endswith(('.', '!', '?', ':')):
+            continue
+            
+        # Skip lines that look like technical data
+        if re.search(r'^[A-Z]{3,}[0-9]', line):  # Technical codes
+            continue
+            
+        if re.search(r'^\d+px|em|rem|%', line):  # CSS measurements
+            continue
+            
+        # Keep lines that look like real sentences
+        cleaned_lines.append(line)
+    
+    # Reconstruct content with proper paragraph breaks
+    content = '\n\n'.join(cleaned_lines)
+    
+    # Final cleanup
+    content = content.strip()
+    
+    # Log cleaning effectiveness
+    final_length = len(content)
+    reduction = ((original_length - final_length) / original_length * 100) if original_length > 0 else 0
+    
+    LOG.debug(f"Content cleaning: {original_length} → {final_length} chars ({reduction:.1f}% reduction)")
+    
+    return content
 
 def get_domain_strategy(domain):
     return DOMAIN_STRATEGIES.get(domain, {
@@ -1276,12 +1407,12 @@ def log_scraping_success_rates():
     LOG.info("=" * 60)
 
 def validate_scraped_content(content, url, domain):
-    """Multi-step content validation"""
+    """Enhanced content validation for cleaned content"""
     if not content or len(content.strip()) < 100:
         return False, "Content too short"
     
     # Check content-to-boilerplate ratio
-    sentences = content.split('.')
+    sentences = [s.strip() for s in content.split('.') if s.strip()]
     if len(sentences) < 3:
         return False, "Insufficient sentences"
     
@@ -1289,6 +1420,16 @@ def validate_scraped_content(content, url, domain):
     words = content.lower().split()
     if len(words) > 0 and len(set(words)) / len(words) < 0.3:  # Less than 30% unique words
         return False, "Repetitive content detected"
+    
+    # Check if content is mostly technical/code-like
+    technical_chars = len(re.findall(r'[{}();:=<>]', content))
+    if technical_chars > len(content) * 0.1:  # More than 10% technical characters
+        return False, "Content appears to be technical/code data"
+    
+    # Check for reasonable sentence structure
+    proper_sentences = len([s for s in sentences if len(s) > 10 and s[0].isupper()])
+    if proper_sentences < len(sentences) * 0.5:  # Less than 50% proper sentences
+        return False, "Poor sentence structure"
     
     return True, "Valid content"
 

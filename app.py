@@ -6015,7 +6015,7 @@ def is_description_valuable(title: str, description: str) -> bool:
     return True
 
 def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries with enhanced financial context and critical event detection"""
+    """Generate AI summaries with enhanced financial context and materiality focus"""
     if not OPENAI_API_KEY:
         return {}
     
@@ -6085,34 +6085,21 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
                     
                     prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
 
-CRITICAL FINANCIAL EVENTS TO PRIORITIZE (never miss these):
-1. DEBT ISSUANCES: Any debt raising, bond offerings, credit facilities - include amounts and terms
-2. ACQUISITIONS & MERGERS: Any acquisition announcements, merger activity, asset purchases - include deal values and strategic rationale
-3. BUYBACK PROGRAMS: Share repurchase announcements, program expansions, authorizations - include amounts and timelines
-4. MAJOR CONTRACTS: Significant customer wins, long-term agreements, backlog changes - include contract values and duration
-5. EARNINGS & GUIDANCE: Beat/miss results, guidance revisions, preannouncements - include specific numbers and variance
-6. CAPACITY CHANGES: Plant expansions, closures, production increases/decreases - include capacity figures and timing
-7. REGULATORY ACTIONS: Approvals, fines, sanctions, compliance issues - include financial impact
-8. MANAGEMENT CHANGES: CEO/CFO transitions, key executive appointments - include effective dates
+SYNTHESIS FRAMEWORK:
+1. FINANCIAL TRAJECTORY: Consolidate revenue, margin, cash flow, and growth indicators with SPECIFIC DATES
+2. COMPETITIVE POSITION: Assess market share dynamics and competitive threats from analysis
+3. STRATEGIC EXECUTION: Evaluate management actions, capital allocation, operational efficiency
+4. RISK/CATALYST ASSESSMENT: Identify key upside drivers and downside risks with TIMELINES
 
-ANALYSIS FRAMEWORK:
-1. FINANCIAL IMPACT ASSESSMENT: Identify developments affecting sales, margins, EBITDA, FCF, or growth
-2. COMPETITIVE DYNAMICS: Assess competitor actions impacting {company_name}'s market position
-3. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts
-4. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships
-
-CRITICAL REQUIREMENTS:
-- NEVER miss debt issuances, acquisitions, buybacks, or major contracts mentioned in headlines
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
-   - Comparing project costs to typical company cash flows/capex
-   - Calculating percentages of segment revenue vs total company revenue
-   - Evaluating contract values against company size
-- ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
-- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
-- Include specific numbers when available and cite sources
-- Assess competitor moves that could affect {company_name}'s performance
-- Keep to 4-5 sentences maximum
+ENHANCED REQUIREMENTS:
+- Include SPECIFIC DATES: earnings dates, regulatory deadlines, project completion timelines
+- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale and historical metrics
+- ANALYST ACTIONS: Include firm names and percentage variance from current market price
+- NEAR-TERM FOCUS: Emphasize near-term (<1 year) but note medium/long-term implications
+- Synthesize quantitative metrics when available with domain citations [domain.com]
+- Assess competitive moves that may impact {company_name}'s financial performance
+- Focus on investment implications with specific timelines
+- Maximum 4-5 sentences with clear financial focus
 
 FINANCIAL CONTEXT: {financial_context}
 
@@ -6121,7 +6108,7 @@ TARGET: {company_name} ({ticker})
 COMPANY ARTICLE CONTENT ANALYSIS (sources in brackets):
 {ai_text}{competitor_analysis}
 
-Provide a strategic investment thesis with specific dates, materiality context, and analyst price targets. PRIORITIZE any critical financial events mentioned above."""
+Provide a strategic investment thesis with specific dates, materiality context, and analyst price targets."""
 
                     data = {
                         "model": OPENAI_MODEL,
@@ -6157,7 +6144,7 @@ Provide a strategic investment thesis with specific dates, materiality context, 
     return summaries
 
 def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries from company article titles with enhanced financial focus and critical event detection"""
+    """Generate AI summaries from company article titles with enhanced financial focus"""
     if not OPENAI_API_KEY:
         return {}
     
@@ -6211,16 +6198,6 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
                 
                 prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent news headlines to assess near-term financial impact.
 
-CRITICAL FINANCIAL EVENTS TO PRIORITIZE (never miss these):
-1. DEBT ISSUANCES: Any debt raising, bond offerings, credit facilities - include amounts and terms
-2. ACQUISITIONS & MERGERS: Any acquisition announcements, merger activity, asset purchases - include deal values and strategic rationale
-3. BUYBACK PROGRAMS: Share repurchase announcements, program expansions, authorizations - include amounts and timelines
-4. MAJOR CONTRACTS: Significant customer wins, long-term agreements, backlog changes - include contract values and duration
-5. EARNINGS & GUIDANCE: Beat/miss results, guidance revisions, preannouncements - include specific numbers and variance
-6. CAPACITY CHANGES: Plant expansions, closures, production increases/decreases - include capacity figures and timing
-7. REGULATORY ACTIONS: Approvals, fines, sanctions, compliance issues - include financial impact
-8. MANAGEMENT CHANGES: CEO/CFO transitions, key executive appointments - include effective dates
-
 ANALYSIS FRAMEWORK:
 1. FINANCIAL IMPACT ASSESSMENT: Identify developments affecting sales, margins, EBITDA, FCF, or growth
 2. COMPETITIVE DYNAMICS: Assess competitor actions impacting {company_name}'s market position
@@ -6228,7 +6205,6 @@ ANALYSIS FRAMEWORK:
 4. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships
 
 CRITICAL REQUIREMENTS:
-- NEVER miss debt issuances, acquisitions, buybacks, or major contracts mentioned in headlines
 - Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines
 - MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
 - ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
@@ -6243,13 +6219,13 @@ KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None s
 COMPANY HEADLINES (sources provided in brackets):
 {titles_text}{competitor_text}
 
-Provide a concise executive summary based on the information available in these headlines. PRIORITIZE critical financial events listed above."""
+Provide a concise executive summary based on the information available in these headlines."""
 
                 data = {
                     "model": OPENAI_MODEL,
                     "input": prompt,
                     "max_output_tokens": 10000,
-                    "reasoning": {"effort": "medium"},
+                    "reasoning": {"effort": "high"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }

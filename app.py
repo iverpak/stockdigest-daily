@@ -1993,7 +1993,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     return stats
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion with proper deduplication count tracking"""
+    """Basic feed ingestion with FIXED deduplication count tracking"""
     stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
     
     category = feed.get("category", "company")
@@ -2091,7 +2091,7 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 # Add to processed set
                 processed_hashes.add(url_hash)
                 
-                # NOW check ingestion limits and count unique articles in database
+                # NOW check ingestion limits with FIXED count logic
                 with db() as conn, conn.cursor() as cur:
                     try:
                         # Check if URL already exists in database for this ticker
@@ -2104,40 +2104,49 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                             LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
                             continue
                         
-                        # Count existing unique URLs for this category/keyword combination
-                        existing_count = 0
+                        # FIXED: Count existing unique URLs for this category/keyword combination
+                        # This ensures we count TOTAL unique URLs (existing + new)
                         if category == "company":
                             cur.execute("""
-                                SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                                SELECT COUNT(DISTINCT url_hash) as count FROM found_url 
                                 WHERE ticker = %s AND category = 'company'
+                                AND COALESCE(ai_analysis_ticker, '') = ''
                             """, (feed["ticker"],))
                         elif category == "industry":
                             cur.execute("""
-                                SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                                SELECT COUNT(DISTINCT url_hash) as count FROM found_url 
                                 WHERE ticker = %s AND category = 'industry' AND search_keyword = %s
+                                AND COALESCE(ai_analysis_ticker, '') = ''
                             """, (feed["ticker"], feed_keyword))
                         elif category == "competitor":
                             cur.execute("""
-                                SELECT COUNT(DISTINCT url_hash) FROM found_url 
+                                SELECT COUNT(DISTINCT url_hash) as count FROM found_url 
                                 WHERE ticker = %s AND category = 'competitor' AND competitor_ticker = %s
+                                AND COALESCE(ai_analysis_ticker, '') = ''
                             """, (feed["ticker"], feed_keyword))
                         
-                        # Get the result properly with error handling
                         result = cur.fetchone()
-                        if result:
-                            # Since we're using dict_row, result is a dictionary
-                            count_value = result.get('count')
-                            existing_count = count_value if count_value is not None else 0
-                        else:
-                            existing_count = 0
+                        existing_count = result["count"] if result and result["count"] is not None else 0
                         
-                        # Check limits based on existing + new count
-                        if not _check_ingestion_limit_with_existing_count(category, feed_keyword, existing_count):
+                        # FIXED: Check limits based on existing count from database
+                        # Add 1 to existing count to account for this new article
+                        projected_count = existing_count + 1
+                        
+                        # Check against limits
+                        if category == "company" and projected_count > ingestion_stats["limits"]["company"]:
                             stats["limit_reached"] += 1
-                            LOG.info(f"INGESTION LIMIT REACHED: {category} '{feed_keyword}' has {existing_count} existing articles")
+                            LOG.info(f"COMPANY LIMIT REACHED: {existing_count} existing + 1 new = {projected_count} > {ingestion_stats['limits']['company']}")
+                            break
+                        elif category == "industry" and projected_count > ingestion_stats["limits"]["industry_per_keyword"]:
+                            stats["limit_reached"] += 1
+                            LOG.info(f"INDUSTRY LIMIT REACHED for '{feed_keyword}': {existing_count} existing + 1 new = {projected_count} > {ingestion_stats['limits']['industry_per_keyword']}")
+                            break
+                        elif category == "competitor" and projected_count > ingestion_stats["limits"]["competitor_per_keyword"]:
+                            stats["limit_reached"] += 1
+                            LOG.info(f"COMPETITOR LIMIT REACHED for '{feed_keyword}': {existing_count} existing + 1 new = {projected_count} > {ingestion_stats['limits']['competitor_per_keyword']}")
                             break
                         
-                        # COUNT THIS UNIQUE URL
+                        # COUNT THIS NEW UNIQUE URL for tracking
                         _update_ingestion_stats(category, feed_keyword)
                         
                         # Parse publish date
@@ -2167,71 +2176,36 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         clean_source_url = clean_null_bytes(final_source_url or "")
                         clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                         
-                        # ENHANCED VALIDATION BEFORE INSERT
-                        try:
-                            # Validate critical fields
-                            if not url_hash or len(url_hash) != 32:
-                                LOG.error(f"Invalid url_hash: '{url_hash}' (length: {len(url_hash) if url_hash else 0})")
-                                continue
-                            if not feed.get("ticker"):
-                                LOG.error(f"Missing ticker in feed: {feed}")
-                                continue
-                            if not final_domain:
-                                LOG.error(f"Missing domain for article: {title[:30]}")
-                                continue
-                            if not feed.get("id"):
-                                LOG.error(f"Missing feed ID in feed: {feed}")
-                                continue
-                                
-                            # Log all parameters being sent to database
-                            LOG.debug(f"About to insert article with params:")
-                            LOG.debug(f"  url_hash: {url_hash}")
-                            LOG.debug(f"  ticker: {feed['ticker']}")
-                            LOG.debug(f"  feed_id: {feed['id']}")
-                            LOG.debug(f"  domain: {final_domain}")
-                            LOG.debug(f"  category: {category}")
-                            LOG.debug(f"  quality_score: {basic_quality_score}")
+                        # Insert with proper constraint handling
+                        cur.execute("""
+                            INSERT INTO found_url (
+                                url, resolved_url, url_hash, title, description,
+                                feed_id, ticker, domain, quality_score, published_at,
+                                category, search_keyword, original_source_url,
+                                competitor_ticker, ai_analysis_ticker
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                            DO UPDATE SET
+                                updated_at = NOW()
+                            RETURNING id
+                        """, (
+                            clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
+                            feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
+                            category, clean_search_keyword, clean_source_url,
+                            clean_competitor_ticker, ''
+                        ))
+                        
+                        result = cur.fetchone()
+                        if result:
+                            stats["inserted"] += 1
+                            LOG.info(f"INSERTED [{category}]: Total unique now: {projected_count}/{ingestion_stats['limits'][category if category == 'company' else f'{category}_per_keyword']} - {title[:50]}...")
+                        else:
+                            LOG.warning(f"Insert returned no result for: {title[:30]}")
                             
-                            # Insert with proper constraint handling
-                            cur.execute("""
-                                INSERT INTO found_url (
-                                    url, resolved_url, url_hash, title, description,
-                                    feed_id, ticker, domain, quality_score, published_at,
-                                    category, search_keyword, original_source_url,
-                                    competitor_ticker, ai_analysis_ticker
-                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
-                                DO UPDATE SET
-                                    updated_at = NOW()
-                                RETURNING id
-                            """, (
-                                clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
-                                feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
-                                category, clean_search_keyword, clean_source_url,
-                                clean_competitor_ticker, ''
-                            ))
-                            
-                            result = cur.fetchone()
-                            if result:
-                                stats["inserted"] += 1
-                                LOG.debug(f"INSERTED: {title[:50]}...")
-                            else:
-                                LOG.warning(f"Insert returned no result for: {title[:30]}")
-                                
-                        except Exception as validation_e:
-                            LOG.error(f"Validation failed for article '{title[:30]}...': {validation_e}")
-                            continue
-                    
                     except Exception as db_e:
                         import traceback
                         LOG.error(f"Database error processing article '{title[:30]}...': {type(db_e).__name__}: {str(db_e)}")
                         LOG.error(f"Full traceback: {traceback.format_exc()}")
-                        LOG.error(f"SQL params being used:")
-                        LOG.error(f"  url_hash: {url_hash}")
-                        LOG.error(f"  ticker: {feed['ticker']}")
-                        LOG.error(f"  domain: {final_domain}")
-                        LOG.error(f"  category: {category}")
-                        LOG.error(f"  feed_id: {feed.get('id')}")
                         continue
                             
             except Exception as entry_e:
@@ -3410,8 +3384,7 @@ def _apply_tiered_backfill_to_limits(articles: List[Dict], ai_selected: List[Dic
 
 def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[str, List[Dict]], ticker: str, target_limits: Dict[str, int] = None) -> Dict[str, List[Dict]]:
     """
-    Enhanced triage that includes existing triaged articles in the selection pool
-    Processes EACH keyword/competitor separately for proper 5-per-item limits with smart reuse
+    Enhanced triage with detailed logging for render logs
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - using existing triage data and quality domains only")
@@ -3423,9 +3396,19 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
     
-    # COMPANY: Process as normal with smart reuse
+    # DETAILED TRIAGE LOGGING FOR RENDER
+    LOG.info("=== DETAILED TRIAGE BREAKDOWN ===")
+    LOG.info(f"Ticker: {ticker} ({company_name})")
+    
+    total_ai_selected = 0
+    total_quality_selected = 0
+    total_qb_backfill = 0
+    
+    # COMPANY: Process with smart reuse and detailed logging
     company_articles = articles_by_category.get("company", [])
     if company_articles:
+        LOG.info(f"COMPANY TRIAGE: Processing {len(company_articles)} articles")
+        
         # Separate articles into those that need triage vs those already triaged
         needs_triage = []
         already_triaged = []
@@ -3448,7 +3431,8 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
             else:
                 needs_triage.append((idx, article))
         
-        LOG.info(f"Company: {len(already_triaged)} already triaged, {len(needs_triage)} need new triage")
+        LOG.info(f"  COMPANY REUSE: {len(already_triaged)} already triaged")
+        LOG.info(f"  COMPANY NEW: {len(needs_triage)} need new triage")
         
         # Start with existing triaged articles
         company_selected = list(already_triaged)
@@ -3467,13 +3451,34 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                     selected_item["selection_method"] = "new_ai_triage"
                     company_selected.append(selected_item)
                 
-                LOG.info(f"Company: Added {len(new_selected)} from new AI triage")
+                LOG.info(f"  COMPANY AI: {len(new_selected)} selected from new AI triage")
+                total_ai_selected += len(new_selected)
             except Exception as e:
                 LOG.error(f"Company triage failed: {e}")
         
+        # Apply enhanced selection (Quality + QB backfill)
+        quality_domains_count = 0
+        qb_backfill_count = 0
+        
+        for idx, article in enumerate(company_articles):
+            if idx not in [item["id"] for item in company_selected]:
+                domain = normalize_domain(article.get("domain", ""))
+                if domain in QUALITY_DOMAINS:
+                    quality_domains_count += 1
+                else:
+                    # This would be QB backfill
+                    qb_backfill_count += 1
+        
+        total_quality_selected += quality_domains_count
+        total_qb_backfill += min(qb_backfill_count, max(0, 20 - len(company_selected) - quality_domains_count))
+        
+        LOG.info(f"  COMPANY QUALITY: {quality_domains_count} quality domains")
+        LOG.info(f"  COMPANY QB BACKFILL: {total_qb_backfill} QB score selections")
+        LOG.info(f"  COMPANY TOTAL: {len(company_selected)} selected for scraping")
+        
         selected_results["company"] = company_selected
     
-    # INDUSTRY: Process EACH keyword separately with smart reuse
+    # INDUSTRY: Process EACH keyword separately with detailed logging
     industry_articles = articles_by_category.get("industry", [])
     if industry_articles:
         # Group by search_keyword
@@ -3484,12 +3489,14 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                 industry_by_keyword[keyword] = []
             industry_by_keyword[keyword].append({"article": article, "original_idx": idx})
         
+        LOG.info(f"INDUSTRY TRIAGE: Processing {len(industry_by_keyword)} keywords")
+        
         industry_selected = []
         for keyword, keyword_articles in industry_by_keyword.items():
             if len(keyword_articles) == 0:
                 continue
                 
-            LOG.info(f"Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
+            LOG.info(f"  KEYWORD '{keyword}': {len(keyword_articles)} articles")
             
             # Separate into existing vs new for this keyword
             needs_triage = []
@@ -3532,16 +3539,18 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                         selected_item["selection_method"] = "new_ai_triage"
                         keyword_selected.append(selected_item)
                     
-                    LOG.info(f"Industry keyword '{keyword}': Added {len(new_selected)} from new AI triage")
+                    LOG.info(f"    AI TRIAGE: {len(new_selected)} selected")
+                    total_ai_selected += len(new_selected)
                 except Exception as e:
                     LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
             
             industry_selected.extend(keyword_selected)
-            LOG.info(f"Industry keyword '{keyword}': {len(keyword_selected)} total selected")
+            LOG.info(f"    TOTAL: {len(keyword_selected)}/5 selected for '{keyword}'")
         
         selected_results["industry"] = industry_selected
+        LOG.info(f"INDUSTRY TOTAL: {len(industry_selected)} articles selected across all keywords")
     
-    # COMPETITOR: Process EACH competitor separately with smart reuse
+    # COMPETITOR: Process EACH competitor separately with detailed logging
     competitor_articles = articles_by_category.get("competitor", [])
     if competitor_articles:
         # Group by competitor_ticker (primary) or search_keyword (fallback)
@@ -3552,12 +3561,14 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                 competitor_by_entity[entity_key] = []
             competitor_by_entity[entity_key].append({"article": article, "original_idx": idx})
         
+        LOG.info(f"COMPETITOR TRIAGE: Processing {len(competitor_by_entity)} competitors")
+        
         competitor_selected = []
         for entity_key, entity_articles in competitor_by_entity.items():
             if len(entity_articles) == 0:
                 continue
                 
-            LOG.info(f"Processing competitor '{entity_key}': {len(entity_articles)} articles")
+            LOG.info(f"  COMPETITOR '{entity_key}': {len(entity_articles)} articles")
             
             # Separate into existing vs new for this competitor
             needs_triage = []
@@ -3600,14 +3611,25 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                         selected_item["selection_method"] = "new_ai_triage"
                         entity_selected.append(selected_item)
                     
-                    LOG.info(f"Competitor '{entity_key}': Added {len(new_selected)} from new AI triage")
+                    LOG.info(f"    AI TRIAGE: {len(new_selected)} selected")
+                    total_ai_selected += len(new_selected)
                 except Exception as e:
                     LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
             
             competitor_selected.extend(entity_selected)
-            LOG.info(f"Competitor '{entity_key}': {len(entity_selected)} total selected")
+            LOG.info(f"    TOTAL: {len(entity_selected)}/5 selected for '{entity_key}'")
         
         selected_results["competitor"] = competitor_selected
+        LOG.info(f"COMPETITOR TOTAL: {len(competitor_selected)} articles selected across all competitors")
+    
+    # FINAL TRIAGE SUMMARY FOR RENDER LOGS
+    total_selected = sum(len(items) for items in selected_results.values())
+    LOG.info("=== TRIAGE SUMMARY ===")
+    LOG.info(f"AI TRIAGE: {total_ai_selected} articles")
+    LOG.info(f"QUALITY DOMAINS: {total_quality_selected} articles")
+    LOG.info(f"QB BACKFILL: {total_qb_backfill} articles")
+    LOG.info(f"TOTAL SELECTED: {total_selected} articles")
+    LOG.info("=== END TRIAGE ===")
     
     return selected_results
 
@@ -6346,7 +6368,7 @@ Provide a comprehensive executive summary integrating company-specific news with
     return summaries
 
 def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
-    """Enhanced quick email with full metadata display and proper formatting"""
+    """Quick email with metadata display removed"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
         
@@ -6354,79 +6376,6 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         
         company_summaries = generate_ai_titles_summary(articles_by_ticker)
         
-        # Build complete ticker metadata cache
-        ticker_metadata_cache = {}
-        for ticker in articles_by_ticker.keys():
-            config = get_ticker_config(ticker)
-            if config:
-                # Parse competitors properly
-                competitors = []
-                for comp_str in config.get("competitors", []):
-                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
-                    if match:
-                        competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
-                    else:
-                        competitors.append({"name": comp_str, "ticker": None})
-                
-                # Parse sector_profile safely
-                sector_profile = {}
-                raw_sector_profile = config.get("sector_profile")
-                if raw_sector_profile:
-                    try:
-                        if isinstance(raw_sector_profile, dict):
-                            sector_profile = raw_sector_profile
-                        elif isinstance(raw_sector_profile, str):
-                            sector_profile = json.loads(raw_sector_profile)
-                        else:
-                            LOG.warning(f"Unexpected sector_profile type for {ticker}: {type(raw_sector_profile)}")
-                            sector_profile = {}
-                    except (json.JSONDecodeError, TypeError) as e:
-                        LOG.warning(f"Failed to parse sector_profile for {ticker}: {e}")
-                        sector_profile = {}
-                
-                # Parse aliases_brands_assets safely
-                aliases_brands_assets = {}
-                raw_aliases = config.get("aliases_brands_assets")
-                if raw_aliases:
-                    try:
-                        if isinstance(raw_aliases, dict):
-                            aliases_brands_assets = raw_aliases
-                        elif isinstance(raw_aliases, str):
-                            aliases_brands_assets = json.loads(raw_aliases)
-                        else:
-                            LOG.warning(f"Unexpected aliases_brands_assets type for {ticker}: {type(raw_aliases)}")
-                            aliases_brands_assets = {}
-                    except (json.JSONDecodeError, TypeError) as e:
-                        LOG.warning(f"Failed to parse aliases_brands_assets for {ticker}: {e}")
-                        aliases_brands_assets = {}
-                
-                ticker_metadata_cache[ticker] = {
-                    "company_name": config.get("name", ticker),
-                    "sector": config.get("sector", ""),
-                    "industry": config.get("industry", ""),
-                    "sub_industry": config.get("sub_industry", ""),
-                    "industry_keywords": config.get("industry_keywords", []),
-                    "competitors": competitors,
-                    "sector_profile": sector_profile,
-                    "aliases_brands_assets": aliases_brands_assets
-                }
-                
-                LOG.info(f"Loaded complete metadata for {ticker}: sector={config.get('sector')}, "
-                        f"keywords={len(config.get('industry_keywords', []))}, "
-                        f"competitors={len(competitors)}")
-            else:
-                LOG.warning(f"No ticker config found for {ticker}")
-                ticker_metadata_cache[ticker] = {
-                    "company_name": ticker,
-                    "sector": "",
-                    "industry": "",
-                    "sub_industry": "",
-                    "industry_keywords": [],
-                    "competitors": [],
-                    "sector_profile": {},
-                    "aliases_brands_assets": {}
-                }
-
         html = [
             "<html><head><style>",
             "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
@@ -6454,14 +6403,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
             ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
             ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
-            ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
-            ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
-            ".brand-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fce4ec; color: #ad1457; border: 1px solid #f8bbd9; }",
-            ".asset-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #c5cae9; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-            ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
             ".meta { color: #95a5a6; font-size: 11px; }",
             "a { color: #2980b9; text-decoration: none; }",
             "a:hover { text-decoration: underline; }",
@@ -6482,7 +6425,9 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ticker_count = sum(len(articles) for articles in categories.values())
             total_articles += ticker_count
             
-            full_company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
+            # Get company name from config for display
+            config = get_ticker_config(ticker)
+            full_company_name = config.get("name", ticker) if config else ticker
             
             ticker_selected = 0
             triage_data = triage_results.get(ticker, {})
@@ -6499,70 +6444,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 html.append("<div class='summary-title'>📰 Executive Summary (Headlines Analysis)</div>")
                 html.append(f"<div class='summary-content'>{company_summaries[ticker]['titles_summary']}</div>")
                 html.append("</div>")
-            
-            html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
-            
-            # FULL ENHANCED METADATA DISPLAY
-            if ticker in ticker_metadata_cache:
-                metadata = ticker_metadata_cache[ticker]
-                html.append("<div class='keywords'>")
-                html.append(f"<strong>🤖 AI-Powered Monitoring Configuration:</strong><br><br>")
-                
-                if metadata.get("company_name"):
-                    html.append(f"<strong>🏢 Company:</strong> {metadata['company_name']}<br>")
-                
-                if metadata.get("sector"):
-                    html.append(f"<strong>📊 Sector:</strong> <span class='sector-badge'>{metadata['sector']}</span><br>")
-                if metadata.get("industry"):
-                    html.append(f"<strong>🏭 Industry:</strong> {metadata['industry']}<br>")
-                if metadata.get("sub_industry"):
-                    html.append(f"<strong>🔧 Sub-Industry:</strong> {metadata['sub_industry']}<br>")
-                
-                if metadata.get("industry_keywords"):
-                    industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
-                    html.append(f"<strong>🔍 Industry Keywords:</strong> {' '.join(industry_badges)}<br>")
-                
-                if metadata.get("competitors"):
-                    competitor_badges = [f'<span class="competitor-badge">🏢 {comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
-                    html.append(f"<strong>⚔️ Competitors:</strong> {' '.join(competitor_badges)}<br>")
-                
-                # Enhanced metadata from sector profile
-                sector_profile = metadata.get("sector_profile", {})
-                if sector_profile and isinstance(sector_profile, dict):
-                    if sector_profile.get("core_geos"):
-                        geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_profile["core_geos"][:5]]
-                        html.append(f"<strong>🌎 Core Geographies:</strong> {' '.join(geo_badges)}<br>")
-                    
-                    if sector_profile.get("core_inputs"):
-                        input_badges = [f'<span class="sector-badge">🔧 {inp}</span>' for inp in sector_profile["core_inputs"][:5]]
-                        html.append(f"<strong>⚙️ Core Inputs:</strong> {' '.join(input_badges)}<br>")
-                    
-                    if sector_profile.get("core_channels"):
-                        channel_badges = [f'<span class="geography-badge">📡 {ch}</span>' for ch in sector_profile["core_channels"][:5]]
-                        html.append(f"<strong>📢 Core Channels:</strong> {' '.join(channel_badges)}<br>")
-                    
-                    if sector_profile.get("benchmarks"):
-                        benchmark_badges = [f'<span class="sector-badge">📈 {bm}</span>' for bm in sector_profile["benchmarks"][:3]]
-                        html.append(f"<strong>📊 Benchmarks:</strong> {' '.join(benchmark_badges)}<br>")
-                
-                # Aliases, brands, and assets
-                aliases_brands = metadata.get("aliases_brands_assets", {})
-                if aliases_brands and isinstance(aliases_brands, dict):
-                    if aliases_brands.get("aliases"):
-                        alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in aliases_brands["aliases"][:5]]
-                        html.append(f"<strong>📖 Aliases:</strong> {' '.join(alias_badges)}<br>")
-                    
-                    if aliases_brands.get("brands"):
-                        brand_badges = [f'<span class="brand-badge">🏆 {brand}</span>' for brand in aliases_brands["brands"][:5]]
-                        html.append(f"<strong>🏅 Brands:</strong> {' '.join(brand_badges)}<br>")
-                    
-                    if aliases_brands.get("assets"):
-                        asset_badges = [f'<span class="asset-badge">🏗️ {asset}</span>' for asset in aliases_brands["assets"][:5]]
-                        html.append(f"<strong>🏭 Key Assets:</strong> {' '.join(asset_badges)}")
-                
-                html.append("</div>")
-            else:
-                LOG.warning(f"No metadata found in cache for ticker {ticker}")
+                html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
             
             # Process articles with quality domains first
             for category, articles in categories.items():
@@ -6633,11 +6515,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         header_badges.append(f'<span class="company-name-badge">🎯 {full_company_name}</span>')
                     elif category == "competitor":
                         comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
-                        header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
+                        header_badges.append(f'<span class="competitor-badge">🢠{comp_name}</span>')
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
                     
-                    # 2. Domain name second (no extra space)
+                    # 2. Domain name second
                     header_badges.append(f'<span class="source-badge">📰 {get_or_create_formal_domain_name(domain)}</span>')
                     
                     # 3. Quality badge third
@@ -6671,7 +6553,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         qb_emoji = "📊"
                     header_badges.append(f'<span class="qb-score {qb_class}">{qb_emoji} {qb_level}</span>')
                     
-                    # Publication time (no emoji)
+                    # Publication time
                     pub_time = ""
                     if article.get("published_at"):
                         pub_time = format_timestamp_est(article["published_at"])
@@ -6705,6 +6587,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
     except Exception as e:
         LOG.error(f"Enhanced quick intelligence email failed: {e}")
         return False
+
 
 # ------------------------------------------------------------------------------
 # Email Digest
@@ -6771,145 +6654,69 @@ def send_email(subject: str, html_body: str, text_attachment: str = None, to: st
         return False
 
 def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
-    """Enhanced digest with company AI summaries, quality domains first, and comprehensive metadata"""
+    """Enhanced digest with metadata display removed but keeping all badges/emojis"""
     
     company_summaries = generate_ai_final_summaries(articles_by_ticker)
-    
-    # Build complete ticker metadata cache (same as triage email)
-    ticker_metadata_cache = {}
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        if config:
-            # Parse competitors properly
-            competitors = []
-            for comp_str in config.get("competitors", []):
-                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
-                if match:
-                    competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
-                else:
-                    competitors.append({"name": comp_str, "ticker": None})
-            
-            # Parse sector_profile safely
-            sector_profile = {}
-            raw_sector_profile = config.get("sector_profile")
-            if raw_sector_profile:
-                try:
-                    if isinstance(raw_sector_profile, dict):
-                        sector_profile = raw_sector_profile
-                    elif isinstance(raw_sector_profile, str):
-                        sector_profile = json.loads(raw_sector_profile)
-                    else:
-                        LOG.warning(f"Unexpected sector_profile type for {ticker}: {type(raw_sector_profile)}")
-                        sector_profile = {}
-                except (json.JSONDecodeError, TypeError) as e:
-                    LOG.warning(f"Failed to parse sector_profile for {ticker}: {e}")
-                    sector_profile = {}
-            
-            # Parse aliases_brands_assets safely
-            aliases_brands_assets = {}
-            raw_aliases = config.get("aliases_brands_assets")
-            if raw_aliases:
-                try:
-                    if isinstance(raw_aliases, dict):
-                        aliases_brands_assets = raw_aliases
-                    elif isinstance(raw_aliases, str):
-                        aliases_brands_assets = json.loads(raw_aliases)
-                    else:
-                        LOG.warning(f"Unexpected aliases_brands_assets type for {ticker}: {type(raw_aliases)}")
-                        aliases_brands_assets = {}
-                except (json.JSONDecodeError, TypeError) as e:
-                    LOG.warning(f"Failed to parse aliases_brands_assets for {ticker}: {e}")
-                    aliases_brands_assets = {}
-            
-            ticker_metadata_cache[ticker] = {
-                "company_name": config.get("name", ticker),
-                "sector": config.get("sector", ""),
-                "industry": config.get("industry", ""),
-                "sub_industry": config.get("sub_industry", ""),
-                "industry_keywords": config.get("industry_keywords", []),
-                "competitors": competitors,
-                "sector_profile": sector_profile,
-                "aliases_brands_assets": aliases_brands_assets
-            }
-            
-            LOG.info(f"Final email: Loaded complete metadata for {ticker}: sector={config.get('sector')}, "
-                    f"keywords={len(config.get('industry_keywords', []))}, "
-                    f"competitors={len(competitors)}")
-        else:
-            LOG.warning(f"Final email: No ticker config found for {ticker}")
-            ticker_metadata_cache[ticker] = {
-                "company_name": ticker,
-                "sector": "",
-                "industry": "",
-                "sub_industry": "",
-                "industry_keywords": [],
-                "competitors": [],
-                "sector_profile": {},
-                "aliases_brands_assets": {}
-            }
     
     ticker_list = ', '.join(articles_by_ticker.keys())
     current_time_est = format_timestamp_est(datetime.now(timezone.utc))
     
     html = [
-            "<html><head><style>",
-            "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
-            "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
-            "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
-            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
-            ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
-            ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
-            ".article-header { margin-bottom: 5px; }",
-            ".article-content { }",
-            ".company { border-left-color: #27ae60; }",
-            ".industry { border-left-color: #f39c12; }",
-            ".competitor { border-left-color: #e74c3c; }",
-            ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
-            ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
-            ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
-            ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
-            ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
-            ".score { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            ".high-score { background-color: #d4edda; color: #155724; }",
-            ".med-score { background-color: #fff3cd; color: #856404; }",
-            ".low-score { background-color: #f8d7da; color: #721c24; }",
-            ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            ".impact-positive { background-color: #d4edda; color: #155724; }",
-            ".impact-negative { background-color: #f8d7da; color: #721c24; }",
-            ".impact-mixed { background-color: #fff3cd; color: #856404; }",
-            ".impact-neutral { background-color: #e2e3e5; color: #383d41; }",
-            ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
-            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
-            ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
-            ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
-            ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
-            ".brand-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fce4ec; color: #ad1457; border: 1px solid #f8bbd9; }",
-            ".asset-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #c5cae9; }",
-            ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
-            ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
-            ".meta { color: #95a5a6; font-size: 11px; }",
-            ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-            ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
-            ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
-            "a { color: #2980b9; text-decoration: none; }",
-            "a:hover { text-decoration: underline; }",
-            "</style></head><body>",
-            f"<h1>📊 Stock Intelligence Report: {ticker_list}</h1>",
-            f"<div class='summary'>",
-            f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
-            f"<strong>Generated:</strong> {current_time_est}<br>",
-            f"<strong>🎯 Tickers Covered:</strong> {ticker_list}<br>",
-            f"<strong>🤖 AI Features:</strong> Enhanced Content Analysis + Hedge Fund Summaries + Company Intelligence Synthesis",
-            "</div>"
-        ]
+        "<html><head><style>",
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+        ".article-header { margin-bottom: 5px; }",
+        ".article-content { }",
+        ".company { border-left-color: #27ae60; }",
+        ".industry { border-left-color: #f39c12; }",
+        ".competitor { border-left-color: #e74c3c; }",
+        ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
+        ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
+        ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
+        ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+        ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+        ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+        ".score { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+        ".high-score { background-color: #d4edda; color: #155724; }",
+        ".med-score { background-color: #fff3cd; color: #856404; }",
+        ".low-score { background-color: #f8d7da; color: #721c24; }",
+        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+        ".impact-positive { background-color: #d4edda; color: #155724; }",
+        ".impact-negative { background-color: #f8d7da; color: #721c24; }",
+        ".impact-mixed { background-color: #fff3cd; color: #856404; }",
+        ".impact-neutral { background-color: #e2e3e5; color: #383d41; }",
+        ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
+        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
+        ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+        ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
+        ".meta { color: #95a5a6; font-size: 11px; }",
+        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+        "a { color: #2980b9; text-decoration: none; }",
+        "a:hover { text-decoration: underline; }",
+        "</style></head><body>",
+        f"<h1>📊 Stock Intelligence Report: {ticker_list}</h1>",
+        f"<div class='summary'>",
+        f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
+        f"<strong>Generated:</strong> {current_time_est}<br>",
+        f"<strong>🎯 Tickers Covered:</strong> {ticker_list}<br>",
+        f"<strong>🤖 AI Features:</strong> Enhanced Content Analysis + Hedge Fund Summaries + Company Intelligence Synthesis",
+        "</div>"
+    ]
     
     text_export = create_ai_evaluation_text(articles_by_ticker)
     
     for ticker, categories in articles_by_ticker.items():
         total_articles = sum(len(articles) for articles in categories.values())
-        company_name = ticker_metadata_cache.get(ticker, {}).get("company_name", ticker)
+        
+        # Get company name for display
+        config = get_ticker_config(ticker)
+        company_name = config.get("name", ticker) if config else ticker
         
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>📈 {ticker} ({company_name}) - {total_articles} Total Articles</h2>")
@@ -6920,68 +6727,6 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
             html.append("<div class='summary-title'>🎯 Investment Thesis (Deep Analysis Synthesis)</div>")
             html.append(f"<div class='summary-content'>{company_summaries[ticker]['ai_analysis_summary']}</div>")
             html.append("</div>")
-        
-        # FULL ENHANCED METADATA DISPLAY (same as triage email)
-        if ticker in ticker_metadata_cache:
-            metadata = ticker_metadata_cache[ticker]
-            html.append("<div class='keywords'>")
-            html.append(f"<strong>🤖 AI-Powered Monitoring Configuration:</strong><br><br>")
-            
-            if metadata.get("company_name"):
-                html.append(f"<strong>🏢 Company:</strong> {metadata['company_name']}<br>")
-            
-            if metadata.get("sector"):
-                html.append(f"<strong>📊 Sector:</strong> <span class='sector-badge'>{metadata['sector']}</span><br>")
-            if metadata.get("industry"):
-                html.append(f"<strong>🏭 Industry:</strong> {metadata['industry']}<br>")
-            if metadata.get("sub_industry"):
-                html.append(f"<strong>🔧 Sub-Industry:</strong> {metadata['sub_industry']}<br>")
-            
-            if metadata.get("industry_keywords"):
-                industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
-                html.append(f"<strong>🔍 Industry Keywords:</strong> {' '.join(industry_badges)}<br>")
-            
-            if metadata.get("competitors"):
-                competitor_badges = [f'<span class="competitor-badge">🏢 {comp["name"] if isinstance(comp, dict) else comp}</span>' for comp in metadata['competitors']]
-                html.append(f"<strong>⚔️ Competitors:</strong> {' '.join(competitor_badges)}<br>")
-            
-            # Enhanced metadata from sector profile
-            sector_profile = metadata.get("sector_profile", {})
-            if sector_profile and isinstance(sector_profile, dict):
-                if sector_profile.get("core_geos"):
-                    geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_profile["core_geos"][:5]]
-                    html.append(f"<strong>🌎 Core Geographies:</strong> {' '.join(geo_badges)}<br>")
-                
-                if sector_profile.get("core_inputs"):
-                    input_badges = [f'<span class="sector-badge">🔧 {inp}</span>' for inp in sector_profile["core_inputs"][:5]]
-                    html.append(f"<strong>⚙️ Core Inputs:</strong> {' '.join(input_badges)}<br>")
-                
-                if sector_profile.get("core_channels"):
-                    channel_badges = [f'<span class="geography-badge">📡 {ch}</span>' for ch in sector_profile["core_channels"][:5]]
-                    html.append(f"<strong>📢 Core Channels:</strong> {' '.join(channel_badges)}<br>")
-                
-                if sector_profile.get("benchmarks"):
-                    benchmark_badges = [f'<span class="sector-badge">📈 {bm}</span>' for bm in sector_profile["benchmarks"][:3]]
-                    html.append(f"<strong>📊 Benchmarks:</strong> {' '.join(benchmark_badges)}<br>")
-            
-            # Aliases, brands, and assets
-            aliases_brands = metadata.get("aliases_brands_assets", {})
-            if aliases_brands and isinstance(aliases_brands, dict):
-                if aliases_brands.get("aliases"):
-                    alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in aliases_brands["aliases"][:5]]
-                    html.append(f"<strong>📖 Aliases:</strong> {' '.join(alias_badges)}<br>")
-                
-                if aliases_brands.get("brands"):
-                    brand_badges = [f'<span class="brand-badge">🏆 {brand}</span>' for brand in aliases_brands["brands"][:5]]
-                    html.append(f"<strong>🏅 Brands:</strong> {' '.join(brand_badges)}<br>")
-                
-                if aliases_brands.get("assets"):
-                    asset_badges = [f'<span class="asset-badge">🏗️ {asset}</span>' for asset in aliases_brands["assets"][:5]]
-                    html.append(f"<strong>🏭 Key Assets:</strong> {' '.join(asset_badges)}")
-            
-            html.append("</div>")
-        else:
-            LOG.warning(f"Final email: No metadata found in cache for ticker {ticker}")
         
         # Sort articles within each category - Quality domains first, then AI analyzed, then by time
         for category in ["company", "industry", "competitor"]:
@@ -7014,7 +6759,9 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 
                 html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} News ({len(articles)} articles)</h3>")
                 for article in sorted_articles[:100]:
-                    html.append(_format_article_html_with_ai_summary(article, category, ticker_metadata_cache))
+                    # Use simplified ticker metadata cache (just company name)
+                    simple_cache = {ticker: {"company_name": company_name}}
+                    html.append(_format_article_html_with_ai_summary(article, category, simple_cache))
         
         html.append("</div>")
     

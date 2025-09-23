@@ -7236,6 +7236,7 @@ def cron_ingest(
     Enhanced ingest with ticker-specific AI analysis perspective
     Each URL analyzed from the perspective of the target ticker
     """
+    start_time = time.time()
     require_admin(request)
     ensure_schema()
     update_schema_for_content()
@@ -7370,9 +7371,19 @@ def cron_ingest(
     quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results)
     LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
     
-    # PHASE 4: Ticker-specific content scraping and analysis
+    # PHASE 4: Ticker-specific content scraping and analysis (WITH HEARTBEATS)
     LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS ===")
     scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
+    
+    # Count total articles to be processed for heartbeat tracking
+    total_articles_to_process = 0
+    for target_ticker in articles_by_ticker.keys():
+        selected = triage_results.get(target_ticker, {})
+        for category in ["company", "industry", "competitor"]:
+            total_articles_to_process += len(selected.get(category, []))
+    
+    processed_count = 0
+    LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process across all tickers")
     
     for target_ticker in articles_by_ticker.keys():
         config = get_ticker_config(target_ticker)
@@ -7387,6 +7398,14 @@ def cron_ingest(
             category_selected = selected.get(category, [])
             
             for item in category_selected:
+                processed_count += 1
+                
+                # Heartbeat every 5 articles to prevent Render timeout
+                if processed_count % 5 == 0:
+                    elapsed = time.time() - start_time
+                    LOG.info(f"HEARTBEAT: Processing article {processed_count}/{total_articles_to_process} - {category} for {target_ticker} ({elapsed:.1f}s elapsed)")
+                    LOG.info(f"HEARTBEAT: Progress {(processed_count/total_articles_to_process)*100:.1f}% - Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
+                
                 article_idx = item["id"]
                 if article_idx < len(articles_by_ticker[target_ticker][category]):
                     article = articles_by_ticker[target_ticker][category][article_idx]
@@ -7416,14 +7435,23 @@ def cron_ingest(
                             scraping_final_stats["ai_analyzed"] += 1
                     else:
                         scraping_final_stats["failed"] += 1
+                
+                # Additional heartbeat for very large batches (every 10 articles)
+                if processed_count % 10 == 0:
+                    elapsed = time.time() - start_time
+                    LOG.info(f"HEARTBEAT: {processed_count}/{total_articles_to_process} complete after {elapsed:.1f}s - keeping connection alive")
     
+    # Final heartbeat before completion
+    elapsed = time.time() - start_time
+    LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in {elapsed:.1f}s")
     LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
     
     log_scraping_success_rates()
     log_enhanced_scraping_stats()
     log_scrapingbee_stats()
     
-    LOG.info("=== CRON INGEST COMPLETE (TICKER-SPECIFIC ANALYSIS) ===")
+    processing_time = time.time() - start_time
+    LOG.info(f"=== CRON INGEST COMPLETE (TICKER-SPECIFIC ANALYSIS) - Total time: {processing_time:.1f}s ===")
     
     # Enhanced return with optimization stats
     total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
@@ -7434,6 +7462,7 @@ def cron_ingest(
     
     return {
         "status": "completed",
+        "processing_time_seconds": round(processing_time, 1),
         "workflow": "ticker_specific_ai_analysis",
         "phase_1_ingest": {
             **ingest_stats,

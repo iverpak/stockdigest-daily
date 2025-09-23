@@ -6086,29 +6086,33 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
                     prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
 
 CRITICAL FINANCIAL EVENTS TO PRIORITIZE (never miss these):
-1. DEBT ISSUANCES: Any debt raising, bond offerings, credit facilities - assess impact on leverage and liquidity
-2. ACQUISITIONS & MERGERS: Deal announcements, asset purchases - evaluate strategic fit and financial impact
-3. BUYBACK PROGRAMS: Share repurchase programs, authorizations - assess capital allocation efficiency
-4. MAJOR CONTRACTS: Significant customer agreements, backlog changes - evaluate revenue visibility
-5. CAPACITY CHANGES: Expansions, closures, production changes - assess operational leverage
-6. REGULATORY ACTIONS: Approvals, fines, compliance - evaluate business risk and opportunity
+1. DEBT ISSUANCES: Any debt raising, bond offerings, credit facilities - include amounts and terms
+2. ACQUISITIONS & MERGERS: Any acquisition announcements, merger activity, asset purchases - include deal values and strategic rationale
+3. BUYBACK PROGRAMS: Share repurchase announcements, program expansions, authorizations - include amounts and timelines
+4. MAJOR CONTRACTS: Significant customer wins, long-term agreements, backlog changes - include contract values and duration
+5. EARNINGS & GUIDANCE: Beat/miss results, guidance revisions, preannouncements - include specific numbers and variance
+6. CAPACITY CHANGES: Plant expansions, closures, production increases/decreases - include capacity figures and timing
+7. REGULATORY ACTIONS: Approvals, fines, sanctions, compliance issues - include financial impact
+8. MANAGEMENT CHANGES: CEO/CFO transitions, key executive appointments - include effective dates
 
-SYNTHESIS FRAMEWORK:
-1. FINANCIAL TRAJECTORY: Consolidate revenue, margin, cash flow, and growth indicators with SPECIFIC DATES
-2. COMPETITIVE POSITION: Assess market share dynamics and competitive threats from analysis
-3. STRATEGIC EXECUTION: Evaluate management actions, capital allocation, operational efficiency
-4. RISK/CATALYST ASSESSMENT: Identify key upside drivers and downside risks with TIMELINES
+ANALYSIS FRAMEWORK:
+1. FINANCIAL IMPACT ASSESSMENT: Identify developments affecting sales, margins, EBITDA, FCF, or growth
+2. COMPETITIVE DYNAMICS: Assess competitor actions impacting {company_name}'s market position
+3. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts
+4. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships
 
-ENHANCED REQUIREMENTS:
-- NEVER miss material financial events: debt issuances, acquisitions, buybacks, major contracts
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, project completion timelines
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale and historical metrics
-- ANALYST ACTIONS: Include firm names and percentage variance from current market price
-- NEAR-TERM FOCUS: Emphasize near-term (<1 year) but note medium/long-term implications
-- Synthesize quantitative metrics when available with domain citations [domain.com]
-- Assess competitive moves that may impact {company_name}'s financial performance
-- Focus on investment implications with specific timelines
-- Maximum 4-5 sentences with clear financial focus
+CRITICAL REQUIREMENTS:
+- NEVER miss debt issuances, acquisitions, buybacks, or major contracts mentioned in headlines
+- Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines
+- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
+   - Comparing project costs to typical company cash flows/capex
+   - Calculating percentages of segment revenue vs total company revenue
+   - Evaluating contract values against company size
+- ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
+- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
+- Include specific numbers when available and cite sources
+- Assess competitor moves that could affect {company_name}'s performance
+- Keep to 4-5 sentences maximum
 
 FINANCIAL CONTEXT: {financial_context}
 

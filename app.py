@@ -6422,7 +6422,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 "sector_profile": {},
                 "aliases_brands_assets": {}
             }
-        
+
+        except Exception as e:
+            LOG.error(f"Error building ticker metadata cache: {e}")
+            ticker_metadata_cache = {}
+
         html = [
             "<html><head><style>",
             "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",

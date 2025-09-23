@@ -7417,6 +7417,14 @@ def cron_ingest(
     log_enhanced_scraping_stats()
     log_scrapingbee_stats()
     
+    # PHASE 5: Send FINAL comprehensive email (NOT DUPLICATE)
+    LOG.info("=== PHASE 5: SENDING FINAL COMPREHENSIVE EMAIL ===")
+    final_digest_result = fetch_digest_articles_with_enhanced_content(
+        minutes / 60, 
+        list(articles_by_ticker.keys()) if articles_by_ticker else None
+    )
+    LOG.info(f"Final comprehensive email status: {final_digest_result.get('status', 'unknown')}")
+    
     LOG.info("=== CRON INGEST COMPLETE (TICKER-SPECIFIC ANALYSIS) ===")
     
     # Enhanced return with optimization stats
@@ -7451,6 +7459,7 @@ def cron_ingest(
             "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
             "dynamic_limits": dynamic_limits
         },
+        "phase_5_final_email": final_digest_result,
         "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective"
     }
 

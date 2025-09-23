@@ -2827,7 +2827,7 @@ Provide 3-5 sentences focusing on material financial impact, specific timelines,
         data = {
             "model": OPENAI_MODEL,
             "input": prompt,
-            "max_output_tokens": 1500,
+            "max_output_tokens": 5000,
             "reasoning": {"effort": "medium"},
             "text": {"verbosity": "low"},
             "truncation": "auto"

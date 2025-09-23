@@ -2432,10 +2432,11 @@ def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False
         ))
 
 def get_ticker_config(ticker: str) -> Optional[Dict]:
-    """Get ticker configuration from database"""
+    """Get ticker configuration from database with complete metadata extraction"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT ticker, name, industry_keywords, competitors, ai_generated
+            SELECT ticker, name, industry_keywords, competitors, ai_generated,
+                   sector, industry, sub_industry, sector_profile, aliases_brands_assets
             FROM ticker_config
             WHERE ticker = %s AND active = TRUE
         """, (ticker,))
@@ -6203,19 +6204,37 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
         
+        # Get enhanced competitor information
         competitor_names = []
         if config and config.get("competitors"):
-            for comp_str in config["competitors"]:
-                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
-                if match:
-                    competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
+            for comp in config["competitors"]:
+                if isinstance(comp, dict):
+                    if comp.get('ticker'):
+                        competitor_names.append(f"{comp['name']} ({comp['ticker']})")
+                    else:
+                        competitor_names.append(comp['name'])
                 else:
-                    competitor_names.append(comp_str)
+                    # Handle string format "Name (TICKER)"
+                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp)
+                    if match:
+                        competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
+                    else:
+                        competitor_names.append(comp)
         
-        # Get industry keywords for context
-        industry_keywords = []
-        if config and config.get("industry_keywords"):
-            industry_keywords = config["industry_keywords"]
+        # Get enhanced industry keywords
+        industry_keywords = config.get("industry_keywords", []) if config else []
+        
+        # Get enhanced sector information  
+        sector_info = ""
+        if config:
+            sector = config.get("sector", "")
+            industry = config.get("industry", "") 
+            if sector and industry:
+                sector_info = f"Sector: {sector}, Industry: {industry}"
+            elif sector:
+                sector_info = f"Sector: {sector}"
+            elif industry:
+                sector_info = f"Industry: {industry}"
         
         # Company titles
         titles_with_sources = []
@@ -6331,28 +6350,78 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         
         company_summaries = generate_ai_titles_summary(articles_by_ticker)
         
-        ticker_metadata_cache = {}
-        for ticker in articles_by_ticker.keys():
-            config = get_ticker_config(ticker)
-            if config:
-                competitors = []
-                for comp_str in config.get("competitors", []):
-                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
-                    if match:
-                        competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+    # Build complete ticker metadata cache
+    ticker_metadata_cache = {}
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        if config:
+            # Parse competitors properly
+            competitors = []
+            for comp_str in config.get("competitors", []):
+                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                if match:
+                    competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
+                else:
+                    competitors.append({"name": comp_str, "ticker": None})
+            
+            # Parse sector_profile safely
+            sector_profile = {}
+            raw_sector_profile = config.get("sector_profile")
+            if raw_sector_profile:
+                try:
+                    if isinstance(raw_sector_profile, dict):
+                        sector_profile = raw_sector_profile
+                    elif isinstance(raw_sector_profile, str):
+                        sector_profile = json.loads(raw_sector_profile)
                     else:
-                        competitors.append({"name": comp_str, "ticker": None})
-                
-                ticker_metadata_cache[ticker] = {
-                    "company_name": config.get("name", ticker),
-                    "industry_keywords": config.get("industry_keywords", []),
-                    "competitors": competitors,
-                    "sector": config.get("sector", ""),
-                    "industry": config.get("industry", ""),
-                    "sub_industry": config.get("sub_industry", ""),
-                    "sector_profile": config.get("sector_profile"),
-                    "aliases_brands_assets": config.get("aliases_brands_assets")
-                }
+                        LOG.warning(f"Unexpected sector_profile type for {ticker}: {type(raw_sector_profile)}")
+                        sector_profile = {}
+                except (json.JSONDecodeError, TypeError) as e:
+                    LOG.warning(f"Failed to parse sector_profile for {ticker}: {e}")
+                    sector_profile = {}
+            
+            # Parse aliases_brands_assets safely
+            aliases_brands_assets = {}
+            raw_aliases = config.get("aliases_brands_assets")
+            if raw_aliases:
+                try:
+                    if isinstance(raw_aliases, dict):
+                        aliases_brands_assets = raw_aliases
+                    elif isinstance(raw_aliases, str):
+                        aliases_brands_assets = json.loads(raw_aliases)
+                    else:
+                        LOG.warning(f"Unexpected aliases_brands_assets type for {ticker}: {type(raw_aliases)}")
+                        aliases_brands_assets = {}
+                except (json.JSONDecodeError, TypeError) as e:
+                    LOG.warning(f"Failed to parse aliases_brands_assets for {ticker}: {e}")
+                    aliases_brands_assets = {}
+            
+            ticker_metadata_cache[ticker] = {
+                "company_name": config.get("name", ticker),
+                "sector": config.get("sector", ""),
+                "industry": config.get("industry", ""),
+                "sub_industry": config.get("sub_industry", ""),
+                "industry_keywords": config.get("industry_keywords", []),
+                "competitors": competitors,
+                "sector_profile": sector_profile,
+                "aliases_brands_assets": aliases_brands_assets
+            }
+            
+            LOG.info(f"Loaded complete metadata for {ticker}: sector={config.get('sector')}, "
+                    f"keywords={len(config.get('industry_keywords', []))}, "
+                    f"competitors={len(competitors)}")
+        else:
+            LOG.warning(f"No ticker config found for {ticker}")
+            ticker_metadata_cache[ticker] = {
+                "company_name": ticker,
+                "sector": "",
+                "industry": "",
+                "sub_industry": "",
+                "industry_keywords": [],
+                "competitors": [],
+                "sector_profile": {},
+                "aliases_brands_assets": {}
+            }
         
         html = [
             "<html><head><style>",
@@ -6437,12 +6506,14 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 
                 if metadata.get("company_name"):
                     html.append(f"<strong>🏢 Company:</strong> {metadata['company_name']}<br>")
+                
                 if metadata.get("sector"):
                     html.append(f"<strong>📊 Sector:</strong> <span class='sector-badge'>{metadata['sector']}</span><br>")
                 if metadata.get("industry"):
                     html.append(f"<strong>🏭 Industry:</strong> {metadata['industry']}<br>")
                 if metadata.get("sub_industry"):
                     html.append(f"<strong>🔧 Sub-Industry:</strong> {metadata['sub_industry']}<br>")
+                
                 if metadata.get("industry_keywords"):
                     industry_badges = [f'<span class="industry-badge">🏭 {kw}</span>' for kw in metadata['industry_keywords']]
                     html.append(f"<strong>🔍 Industry Keywords:</strong> {' '.join(industry_badges)}<br>")
@@ -6452,54 +6523,42 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     html.append(f"<strong>⚔️ Competitors:</strong> {' '.join(competitor_badges)}<br>")
                 
                 # Enhanced metadata from sector profile
-                sector_profile = metadata.get("sector_profile")
-                if sector_profile:
-                    try:
-                        if isinstance(sector_profile, str):
-                            sector_data = json.loads(sector_profile)
-                        else:
-                            sector_data = sector_profile
-                        
-                        if sector_data.get("core_geos"):
-                            geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_data["core_geos"][:5]]
-                            html.append(f"<strong>🌎 Core Geographies:</strong> {' '.join(geo_badges)}<br>")
-                        
-                        if sector_data.get("core_inputs"):
-                            input_badges = [f'<span class="sector-badge">🔧 {inp}</span>' for inp in sector_data["core_inputs"][:5]]
-                            html.append(f"<strong>⚙️ Core Inputs:</strong> {' '.join(input_badges)}<br>")
-                        
-                        if sector_data.get("core_channels"):
-                            channel_badges = [f'<span class="geography-badge">📡 {ch}</span>' for ch in sector_data["core_channels"][:5]]
-                            html.append(f"<strong>📢 Core Channels:</strong> {' '.join(channel_badges)}<br>")
-                            
-                    except Exception as e:
-                        LOG.warning(f"Error parsing sector profile for {ticker}: {e}")
+                sector_profile = metadata.get("sector_profile", {})
+                if sector_profile and isinstance(sector_profile, dict):
+                    if sector_profile.get("core_geos"):
+                        geo_badges = [f'<span class="geography-badge">🌍 {geo}</span>' for geo in sector_profile["core_geos"][:5]]
+                        html.append(f"<strong>🌎 Core Geographies:</strong> {' '.join(geo_badges)}<br>")
+                    
+                    if sector_profile.get("core_inputs"):
+                        input_badges = [f'<span class="sector-badge">🔧 {inp}</span>' for inp in sector_profile["core_inputs"][:5]]
+                        html.append(f"<strong>⚙️ Core Inputs:</strong> {' '.join(input_badges)}<br>")
+                    
+                    if sector_profile.get("core_channels"):
+                        channel_badges = [f'<span class="geography-badge">📡 {ch}</span>' for ch in sector_profile["core_channels"][:5]]
+                        html.append(f"<strong>📢 Core Channels:</strong> {' '.join(channel_badges)}<br>")
+                    
+                    if sector_profile.get("benchmarks"):
+                        benchmark_badges = [f'<span class="sector-badge">📈 {bm}</span>' for bm in sector_profile["benchmarks"][:3]]
+                        html.append(f"<strong>📊 Benchmarks:</strong> {' '.join(benchmark_badges)}<br>")
                 
                 # Aliases, brands, and assets
-                aliases_brands = metadata.get("aliases_brands_assets")
-                if aliases_brands:
-                    try:
-                        if isinstance(aliases_brands, str):
-                            alias_data = json.loads(aliases_brands)
-                        else:
-                            alias_data = aliases_brands
-                        
-                        if alias_data.get("aliases"):
-                            alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in alias_data["aliases"][:5]]
-                            html.append(f"<strong>📖 Aliases:</strong> {' '.join(alias_badges)}<br>")
-                        
-                        if alias_data.get("brands"):
-                            brand_badges = [f'<span class="brand-badge">🏆 {brand}</span>' for brand in alias_data["brands"][:5]]
-                            html.append(f"<strong>🏅 Brands:</strong> {' '.join(brand_badges)}<br>")
-                        
-                        if alias_data.get("assets"):
-                            asset_badges = [f'<span class="asset-badge">🏗️ {asset}</span>' for asset in alias_data["assets"][:5]]
-                            html.append(f"<strong>🏭 Key Assets:</strong> {' '.join(asset_badges)}")
-                            
-                    except Exception as e:
-                        LOG.warning(f"Error parsing aliases/brands for {ticker}: {e}")
+                aliases_brands = metadata.get("aliases_brands_assets", {})
+                if aliases_brands and isinstance(aliases_brands, dict):
+                    if aliases_brands.get("aliases"):
+                        alias_badges = [f'<span class="alias-badge">🏷️ {alias}</span>' for alias in aliases_brands["aliases"][:5]]
+                        html.append(f"<strong>📖 Aliases:</strong> {' '.join(alias_badges)}<br>")
+                    
+                    if aliases_brands.get("brands"):
+                        brand_badges = [f'<span class="brand-badge">🏆 {brand}</span>' for brand in aliases_brands["brands"][:5]]
+                        html.append(f"<strong>🏅 Brands:</strong> {' '.join(brand_badges)}<br>")
+                    
+                    if aliases_brands.get("assets"):
+                        asset_badges = [f'<span class="asset-badge">🏗️ {asset}</span>' for asset in aliases_brands["assets"][:5]]
+                        html.append(f"<strong>🏭 Key Assets:</strong> {' '.join(asset_badges)}")
                 
                 html.append("</div>")
+            else:
+                LOG.warning(f"No metadata found in cache for ticker {ticker}")
             
             # Process articles with quality domains first
             for category, articles in categories.items():

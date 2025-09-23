@@ -6109,7 +6109,6 @@ ENHANCED REQUIREMENTS:
 - Assess competitive moves that may impact {company_name}'s financial performance
 - Focus on investment implications with specific timelines
 - Maximum 4-5 sentences with clear financial focus
-- Use ALERT: prefix for critical material events
 
 FINANCIAL CONTEXT: {financial_context}
 
@@ -6233,7 +6232,6 @@ CRITICAL REQUIREMENTS:
 - Include specific numbers when available and cite sources
 - Assess competitor moves that could affect {company_name}'s performance
 - Keep to 4-5 sentences maximum
-- Flag critical financial events with ALERT: prefix if material
 
 TARGET COMPANY: {company_name} ({ticker})
 KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}

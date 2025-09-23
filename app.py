@@ -6350,82 +6350,78 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         
         company_summaries = generate_ai_titles_summary(articles_by_ticker)
         
-    # Build complete ticker metadata cache
-    ticker_metadata_cache = {}
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        if config:
-            # Parse competitors properly
-            competitors = []
-            for comp_str in config.get("competitors", []):
-                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
-                if match:
-                    competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
-                else:
-                    competitors.append({"name": comp_str, "ticker": None})
-            
-            # Parse sector_profile safely
-            sector_profile = {}
-            raw_sector_profile = config.get("sector_profile")
-            if raw_sector_profile:
-                try:
-                    if isinstance(raw_sector_profile, dict):
-                        sector_profile = raw_sector_profile
-                    elif isinstance(raw_sector_profile, str):
-                        sector_profile = json.loads(raw_sector_profile)
+        # Build complete ticker metadata cache
+        ticker_metadata_cache = {}
+        for ticker in articles_by_ticker.keys():
+            config = get_ticker_config(ticker)
+            if config:
+                # Parse competitors properly
+                competitors = []
+                for comp_str in config.get("competitors", []):
+                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                    if match:
+                        competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
                     else:
-                        LOG.warning(f"Unexpected sector_profile type for {ticker}: {type(raw_sector_profile)}")
+                        competitors.append({"name": comp_str, "ticker": None})
+                
+                # Parse sector_profile safely
+                sector_profile = {}
+                raw_sector_profile = config.get("sector_profile")
+                if raw_sector_profile:
+                    try:
+                        if isinstance(raw_sector_profile, dict):
+                            sector_profile = raw_sector_profile
+                        elif isinstance(raw_sector_profile, str):
+                            sector_profile = json.loads(raw_sector_profile)
+                        else:
+                            LOG.warning(f"Unexpected sector_profile type for {ticker}: {type(raw_sector_profile)}")
+                            sector_profile = {}
+                    except (json.JSONDecodeError, TypeError) as e:
+                        LOG.warning(f"Failed to parse sector_profile for {ticker}: {e}")
                         sector_profile = {}
-                except (json.JSONDecodeError, TypeError) as e:
-                    LOG.warning(f"Failed to parse sector_profile for {ticker}: {e}")
-                    sector_profile = {}
-            
-            # Parse aliases_brands_assets safely
-            aliases_brands_assets = {}
-            raw_aliases = config.get("aliases_brands_assets")
-            if raw_aliases:
-                try:
-                    if isinstance(raw_aliases, dict):
-                        aliases_brands_assets = raw_aliases
-                    elif isinstance(raw_aliases, str):
-                        aliases_brands_assets = json.loads(raw_aliases)
-                    else:
-                        LOG.warning(f"Unexpected aliases_brands_assets type for {ticker}: {type(raw_aliases)}")
+                
+                # Parse aliases_brands_assets safely
+                aliases_brands_assets = {}
+                raw_aliases = config.get("aliases_brands_assets")
+                if raw_aliases:
+                    try:
+                        if isinstance(raw_aliases, dict):
+                            aliases_brands_assets = raw_aliases
+                        elif isinstance(raw_aliases, str):
+                            aliases_brands_assets = json.loads(raw_aliases)
+                        else:
+                            LOG.warning(f"Unexpected aliases_brands_assets type for {ticker}: {type(raw_aliases)}")
+                            aliases_brands_assets = {}
+                    except (json.JSONDecodeError, TypeError) as e:
+                        LOG.warning(f"Failed to parse aliases_brands_assets for {ticker}: {e}")
                         aliases_brands_assets = {}
-                except (json.JSONDecodeError, TypeError) as e:
-                    LOG.warning(f"Failed to parse aliases_brands_assets for {ticker}: {e}")
-                    aliases_brands_assets = {}
-            
-            ticker_metadata_cache[ticker] = {
-                "company_name": config.get("name", ticker),
-                "sector": config.get("sector", ""),
-                "industry": config.get("industry", ""),
-                "sub_industry": config.get("sub_industry", ""),
-                "industry_keywords": config.get("industry_keywords", []),
-                "competitors": competitors,
-                "sector_profile": sector_profile,
-                "aliases_brands_assets": aliases_brands_assets
-            }
-            
-            LOG.info(f"Loaded complete metadata for {ticker}: sector={config.get('sector')}, "
-                    f"keywords={len(config.get('industry_keywords', []))}, "
-                    f"competitors={len(competitors)}")
-        else:
-            LOG.warning(f"No ticker config found for {ticker}")
-            ticker_metadata_cache[ticker] = {
-                "company_name": ticker,
-                "sector": "",
-                "industry": "",
-                "sub_industry": "",
-                "industry_keywords": [],
-                "competitors": [],
-                "sector_profile": {},
-                "aliases_brands_assets": {}
-            }
-
-        except Exception as e:
-            LOG.error(f"Error building ticker metadata cache: {e}")
-            ticker_metadata_cache = {}
+                
+                ticker_metadata_cache[ticker] = {
+                    "company_name": config.get("name", ticker),
+                    "sector": config.get("sector", ""),
+                    "industry": config.get("industry", ""),
+                    "sub_industry": config.get("sub_industry", ""),
+                    "industry_keywords": config.get("industry_keywords", []),
+                    "competitors": competitors,
+                    "sector_profile": sector_profile,
+                    "aliases_brands_assets": aliases_brands_assets
+                }
+                
+                LOG.info(f"Loaded complete metadata for {ticker}: sector={config.get('sector')}, "
+                        f"keywords={len(config.get('industry_keywords', []))}, "
+                        f"competitors={len(competitors)}")
+            else:
+                LOG.warning(f"No ticker config found for {ticker}")
+                ticker_metadata_cache[ticker] = {
+                    "company_name": ticker,
+                    "sector": "",
+                    "industry": "",
+                    "sub_industry": "",
+                    "industry_keywords": [],
+                    "competitors": [],
+                    "sector_profile": {},
+                    "aliases_brands_assets": {}
+                }
 
         html = [
             "<html><head><style>",

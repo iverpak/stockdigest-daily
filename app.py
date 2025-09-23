@@ -2274,7 +2274,7 @@ def update_schema_for_ai_summary():
 # Updated article formatting function
 def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
     """
-    Enhanced article HTML formatting with AI summaries and database-based competitor names
+    Enhanced article HTML formatting with AI summaries and proper left-side headers
     """
     import html
     
@@ -2311,6 +2311,27 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # Determine the actual link URL
     link_url = article["resolved_url"] or article.get("original_source_url") or article["url"]
     
+    # Get company name for company articles
+    ticker = article.get("ticker", "")
+    company_name = ticker
+    if ticker_metadata_cache and ticker in ticker_metadata_cache:
+        company_name = ticker_metadata_cache[ticker].get("company_name", ticker)
+    
+    # Build header badges - LEFT SIDE POSITIONING
+    header_badges = []
+    
+    # 1. FIRST BADGE: Category-specific (LEFT SIDE)
+    if category == "company":
+        header_badges.append(f'<span class="company-name-badge">🎯 {company_name}</span>')
+    elif category == "competitor":
+        comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
+        header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
+    elif category == "industry" and article.get('search_keyword'):
+        header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
+    
+    # 2. SECOND BADGE: Source name
+    header_badges.append(f'<span class="source-badge">{display_source}</span>')
+    
     # Quality score styling - only show if AI analyzed
     score_html = ""
     analyzed_html = ""
@@ -2335,34 +2356,20 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         # CRITICAL: Check for BOTH scraped content AND AI summary for "Analyzed" badge
         if article.get('scraped_content') and article.get('ai_summary'):
             analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
-            LOG.debug(f"ANALYZED BADGE: Article has content ({len(article.get('scraped_content', ''))} chars) and summary ({len(article.get('ai_summary', ''))} chars)")
-        else:
-            LOG.debug(f"NO ANALYZED BADGE: Content={bool(article.get('scraped_content'))}, Summary={bool(article.get('ai_summary'))}")
     
-    # Build metadata badges for category-specific information
-    metadata_badges = []
-    
-    if category == "competitor":
-        competitor_ticker = article.get('competitor_ticker')
-        search_keyword = article.get('search_keyword')
-        
-        competitor_name = get_competitor_display_name(search_keyword, competitor_ticker)
-        metadata_badges.append(f'<span class="competitor-badge">🏢 {competitor_name}</span>')
-        
-    elif category == "industry" and article.get('search_keyword'):
-        industry_keyword = article['search_keyword']
-        metadata_badges.append(f'<span class="industry-badge">🏭 {industry_keyword}</span>')
-    
-    enhanced_metadata = "".join(metadata_badges)
+    # Add score and analysis badges to header
+    if score_html:
+        header_badges.append(score_html)
+    if impact_html:
+        header_badges.append(impact_html)
+    if analyzed_html:
+        header_badges.append(analyzed_html)
     
     # CRITICAL: AI Summary section - check for ai_summary field
     ai_summary_html = ""
     if article.get("ai_summary"):
         clean_summary = html.escape(article["ai_summary"].strip())
         ai_summary_html = f"<br><div class='ai-summary'><strong>📊 Analysis:</strong> {clean_summary}</div>"
-        LOG.debug(f"AI SUMMARY DISPLAYED: {len(clean_summary)} chars")
-    else:
-        LOG.debug(f"NO AI SUMMARY: ai_summary field = {article.get('ai_summary')}")
     
     # Get description and format it (only if no AI summary)
     description_html = ""
@@ -2381,11 +2388,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     return f"""
     <div class='article {category}'>
         <div class='article-header'>
-            <span class='source-badge'>{display_source}</span>
-            {enhanced_metadata}
-            {score_html}
-            {impact_html}
-            {analyzed_html}
+            {' '.join(header_badges)}
         </div>
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
@@ -6849,58 +6852,58 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
     current_time_est = format_timestamp_est(datetime.now(timezone.utc))
     
     html = [
-        "<html><head><style>",
-        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
-        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
-        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
-        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
-        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
-        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
-        ".article-header { margin-bottom: 5px; }",
-        ".article-content { }",
-        ".company { border-left-color: #27ae60; }",
-        ".industry { border-left-color: #f39c12; }",
-        ".competitor { border-left-color: #e74c3c; }",
-        ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
-        ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
-        ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
-        ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-        ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
-        ".quality-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
-        ".score { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-        ".high-score { background-color: #d4edda; color: #155724; }",
-        ".med-score { background-color: #fff3cd; color: #856404; }",
-        ".low-score { background-color: #f8d7da; color: #721c24; }",
-        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-        ".impact-positive { background-color: #d4edda; color: #155724; }",
-        ".impact-negative { background-color: #f8d7da; color: #721c24; }",
-        ".impact-mixed { background-color: #fff3cd; color: #856404; }",
-        ".impact-neutral { background-color: #e2e3e5; color: #383d41; }",
-        ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
-        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; max-width: 200px; white-space: nowrap; overflow: visible; }",
-        ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; max-width: 200px; white-space: nowrap; overflow: visible; }",
-        ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-        ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
-        ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
-        ".brand-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fce4ec; color: #ad1457; border: 1px solid #f8bbd9; }",
-        ".asset-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #c5cae9; }",
-        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
-        ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 3px; border-left: 3px solid #3498db; }",
-        ".meta { color: #95a5a6; font-size: 11px; }",
-        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
-        ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
-        "a { color: #2980b9; text-decoration: none; }",
-        "a:hover { text-decoration: underline; }",
-        "</style></head><body>",
-        f"<h1>📊 Stock Intelligence Report: {ticker_list}</h1>",
-        f"<div class='summary'>",
-        f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
-        f"<strong>Generated:</strong> {current_time_est}<br>",
-        f"<strong>🎯 Tickers Covered:</strong> {ticker_list}<br>",
-        f"<strong>🤖 AI Features:</strong> Enhanced Content Analysis + Hedge Fund Summaries + Company Intelligence Synthesis",
-        "</div>"
-    ]
+            "<html><head><style>",
+            "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+            "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+            "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+            ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+            ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+            ".article-header { margin-bottom: 5px; }",
+            ".article-content { }",
+            ".company { border-left-color: #27ae60; }",
+            ".industry { border-left-color: #f39c12; }",
+            ".competitor { border-left-color: #e74c3c; }",
+            ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
+            ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
+            ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
+            ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+            ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+            ".score { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            ".high-score { background-color: #d4edda; color: #155724; }",
+            ".med-score { background-color: #fff3cd; color: #856404; }",
+            ".low-score { background-color: #f8d7da; color: #721c24; }",
+            ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            ".impact-positive { background-color: #d4edda; color: #155724; }",
+            ".impact-negative { background-color: #f8d7da; color: #721c24; }",
+            ".impact-mixed { background-color: #fff3cd; color: #856404; }",
+            ".impact-neutral { background-color: #e2e3e5; color: #383d41; }",
+            ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
+            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
+            ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+            ".sector-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".geography-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }",
+            ".alias-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
+            ".brand-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fce4ec; color: #ad1457; border: 1px solid #f8bbd9; }",
+            ".asset-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #c5cae9; }",
+            ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+            ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
+            ".meta { color: #95a5a6; font-size: 11px; }",
+            ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+            ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+            ".keywords { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-radius: 8px; font-size: 11px; border-left: 4px solid #3498db; }",
+            "a { color: #2980b9; text-decoration: none; }",
+            "a:hover { text-decoration: underline; }",
+            "</style></head><body>",
+            f"<h1>📊 Stock Intelligence Report: {ticker_list}</h1>",
+            f"<div class='summary'>",
+            f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
+            f"<strong>Generated:</strong> {current_time_est}<br>",
+            f"<strong>🎯 Tickers Covered:</strong> {ticker_list}<br>",
+            f"<strong>🤖 AI Features:</strong> Enhanced Content Analysis + Hedge Fund Summaries + Company Intelligence Synthesis",
+            "</div>"
+        ]
     
     text_export = create_ai_evaluation_text(articles_by_ticker)
     

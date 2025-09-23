@@ -2800,7 +2800,7 @@ def generate_ai_final_summary(scraped_content: str, title: str, ticker: str, des
         competitor_names = []
         if config and config.get("competitors"):
             for comp_str in config["competitors"]:
-                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\), comp_str)
+                match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
                 if match:
                     competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
                 else:

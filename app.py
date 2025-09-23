@@ -6076,7 +6076,7 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
         if articles_with_content or industry_articles_with_content:
             # Company content summaries
             content_summaries = []
-            for article in articles_with_content[:12]:  # Reduce to make room for industry
+            for article in articles_with_content[:20]:  # Reduce to make room for industry
                 title = article.get("title", "")
                 content = article.get("scraped_content", "")
                 domain = article.get("domain", "")
@@ -6087,7 +6087,7 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
             
             # Industry content summaries with keyword context
             industry_content_summaries = []
-            for article in industry_articles_with_content[:8]:  # Add industry content
+            for article in industry_articles_with_content[:15]:  # Add industry content
                 title = article.get("title", "")
                 content = article.get("scraped_content", "")
                 domain = article.get("domain", "")
@@ -6099,7 +6099,7 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
             
             # Competitor content summaries
             competitor_content_summaries = []
-            for article in competitor_articles_with_content[:6]:  # Reduce slightly
+            for article in competitor_articles_with_content[:15]:  # Reduce slightly
                 title = article.get("title", "")
                 content = article.get("scraped_content", "")
                 domain = article.get("domain", "")
@@ -6186,7 +6186,7 @@ Provide a strategic investment thesis integrating company developments, industry
     return summaries
 
 def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries from company article titles with enhanced financial focus"""
+    """Generate AI summaries from company + industry article titles with enhanced financial focus"""
     if not OPENAI_API_KEY:
         return {}
     
@@ -6195,8 +6195,9 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
     for ticker, categories in articles_by_ticker.items():
         company_articles = categories.get("company", [])
         competitor_articles = categories.get("competitor", [])
+        industry_articles = categories.get("industry", [])  # Add industry articles
         
-        if not company_articles:
+        if not company_articles and not industry_articles:
             continue
         
         config = get_ticker_config(ticker)
@@ -6211,6 +6212,12 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 else:
                     competitor_names.append(comp_str)
         
+        # Get industry keywords for context
+        industry_keywords = []
+        if config and config.get("industry_keywords"):
+            industry_keywords = config["industry_keywords"]
+        
+        # Company titles
         titles_with_sources = []
         for article in company_articles[:20]:
             title = article.get("title", "")
@@ -6219,6 +6226,17 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
                 titles_with_sources.append(f"• {title} [{source_name}]")
         
+        # Industry titles with keyword context
+        industry_titles_with_sources = []
+        for article in industry_articles[:10]:  # Add industry articles
+            title = article.get("title", "")
+            if title:
+                domain = article.get("domain", "")
+                keyword = article.get("search_keyword", "Industry")
+                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                industry_titles_with_sources.append(f"• {title} [Industry: {keyword}] [{source_name}]")
+        
+        # Competitor titles
         competitor_titles_with_sources = []
         for article in competitor_articles[:10]:
             title = article.get("title", "")
@@ -6229,8 +6247,11 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
         
         titles_summary = ""
         
-        if titles_with_sources:
+        if titles_with_sources or industry_titles_with_sources:
             titles_text = "\n".join(titles_with_sources)
+            industry_text = ""
+            if industry_titles_with_sources:
+                industry_text = "\n\nINDUSTRY DEVELOPMENTS:\n" + "\n".join(industry_titles_with_sources)
             competitor_text = ""
             if competitor_titles_with_sources:
                 competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(competitor_titles_with_sources)
@@ -6238,7 +6259,7 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
             try:
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                 
-                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent news headlines to assess near-term financial impact.
+                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact.
 
 ANALYSIS FRAMEWORK:
 1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
@@ -6258,14 +6279,14 @@ CRITICAL REQUIREMENTS:
 - Include specific numbers when available and cite sources using formal domain names and nothing else: {source_name}. Cite them in parentheses, e.g., (Business Wire).
 - Keep to 5-6 sentences maximum
 
-
 TARGET COMPANY: {company_name} ({ticker})
+INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'None specified'}
 KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
 
 COMPANY HEADLINES (sources provided in brackets):
-{titles_text}{competitor_text}
+{titles_text}{industry_text}{competitor_text}
 
-Provide a concise executive summary based on the information available in these headlines."""
+Provide a comprehensive executive summary integrating company-specific news with relevant industry and competitive developments."""
 
                 data = {
                     "model": OPENAI_MODEL,
@@ -6283,19 +6304,20 @@ Provide a concise executive summary based on the information available in these 
                     titles_summary = extract_text_from_responses(result)
                     
                     u = result.get("usage", {}) or {}
-                    LOG.info("Titles summary usage — input:%s output:%s (cap:%s) status:%s",
+                    LOG.info("Enhanced titles summary usage — input:%s output:%s (cap:%s) status:%s",
                              u.get("input_tokens"), u.get("output_tokens"),
                              result.get("max_output_tokens"),
                              result.get("status"))
                 else:
-                    LOG.warning(f"Titles summary failed: {response.status_code}")
+                    LOG.warning(f"Enhanced titles summary failed: {response.status_code}")
                          
             except Exception as e:
                 LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
         
         summaries[ticker] = {
             "titles_summary": titles_summary,
-            "company_name": company_name
+            "company_name": company_name,
+            "industry_coverage": len(industry_titles_with_sources)
         }
     
     return summaries

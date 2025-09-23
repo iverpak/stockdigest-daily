@@ -2795,29 +2795,45 @@ def generate_ai_summary(scraped_content: str, title: str, ticker: str, descripti
         sector = config.get("sector", "") if config else ""
         market_cap_context = f"This is a {sector} company" if sector else "Financial context"
         
+        # Get domain for citation
+        domain_name = "Article Content"  # Default since this is scraped content
+        
         prompt = f"""As a hedge-fund analyst, provide a materiality-focused summary for {company_name} ({ticker}). Use specific financial impact assessment.
 
+SYNTHESIS FRAMEWORK:
+1. FINANCIAL TRAJECTORY: Consolidate revenue, margin, cash flow, and growth indicators with specific dates
+2. COMPETITIVE POSITION: Assess market share dynamics and competitive threats 
+3. STRATEGIC EXECUTION: Evaluate management actions, capital allocation, operational efficiency
+4. RISK/CATALYST ASSESSMENT: Identify key upside drivers and downside risks with timelines
+
 CRITICAL REQUIREMENTS:
-1) SPECIFIC DATES: Extract and highlight any earnings dates, event timelines, regulatory deadlines, or completion dates mentioned
-2) MATERIALITY ANALYSIS: For any dollar amounts mentioned, assess materiality by:
-   - Comparing project costs to typical company cash flows/capex
-   - Calculating percentages of segment revenue vs total company revenue
-   - Evaluating contract values against company size
-3) ANALYST ACTIONS: For any analyst changes, calculate percentage difference from recent market price and include firm name
-4) TIMELINE FOCUS: Emphasize near-term impact (<1 year) but note any medium/long-term implications
-5) FINANCIAL SPECIFICITY: Focus on quantified business impact, not generic commentary
-6) DO NOT mention that this article is about a different company - focus on impact to {ticker}
+1) SPECIFIC DATES: Report earnings dates, event timelines, regulatory deadlines, completion dates ONLY if present; otherwise write 'not stated'
+2) MATERIALITY ANALYSIS: For dollar amounts mentioned, assess materiality against company scale ONLY if amounts are provided in text
+3) ANALYST ACTIONS: Report firm names and price targets ONLY if present in text; do not calculate price differences unless both current and target prices appear in content
+4) TIMELINE FOCUS: Emphasize near-term impact (<1 year) based on dates provided in text
+5) FINANCIAL SPECIFICITY: Report quantified metrics ONLY if present; write 'not stated' when absent
+6) COMPANY FOCUS: Frame impacts to {ticker}. If indirect (peer/supplier/customer), label '(Inference)'
 
-ENHANCED CONTEXT: {market_cap_context}. Assess all financial figures for materiality to a company of this scale.
+MANDATORY FLAGGING (ONLY IF PRESENT):
+- Acquisitions, mergers, debt issuances 
+- Buyback announcements
+- Analyst upgrades/downgrades/price target changes with firm names
+- Backlog developments and capacity announcements
+- Specific numbers, percentages, dollar amounts (report exactly as stated)
 
-TARGET ANALYSIS: {company_name} ({ticker}) from this company's perspective
-CONTENT SCOPE: Extract actionable intelligence that affects {ticker}'s financial trajectory
+GUARDRAILS:
+- No outside knowledge. No estimates. No guessing.
+- Content may be truncated - do not fabricate missing parts
+- Sources: use only "{domain_name}" - do not add others
+- Add (Inference) after analytical interpretations not explicitly stated
 
+ENHANCED CONTEXT: {market_cap_context}. Assess financial figures for materiality only if amounts are provided.
+
+TARGET ANALYSIS: {company_name} ({ticker})
 Article Title: {title}
-Content Snippet: {description[:500] if description else ""}
-Full Content: {scraped_content[:3000]}
+Content (may be truncated): {scraped_content[:3000]}
 
-Provide 3-5 sentences focusing on material financial impact, specific timelines, and analyst consensus with price variance calculations."""
+Provide 3-5 sentences focusing on material financial impact using only information present in the content."""
 
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -2833,15 +2849,13 @@ Provide 3-5 sentences focusing on material financial impact, specific timelines,
             "truncation": "auto"
         }
         
-        LOG.info(f"Generating AI summary for {ticker} - Content: {len(scraped_content)} chars, Title: {title[:50]}...")
-        
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
         
         if response.status_code == 200:
             result = response.json()
             
             u = result.get("usage", {}) or {}
-            LOG.info("AI Enhanced Summary usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+            LOG.info("AI Summary usage — input:%s output:%s (cap:%s) status:%s reason:%s",
                      u.get("input_tokens"), u.get("output_tokens"),
                      result.get("max_output_tokens"),
                      result.get("status"),
@@ -2849,17 +2863,17 @@ Provide 3-5 sentences focusing on material financial impact, specific timelines,
             
             summary = extract_text_from_responses(result)
             if summary and len(summary.strip()) > 10:
-                LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars - '{summary[:100]}...'")
+                LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars")
                 return summary.strip()
             else:
-                LOG.warning(f"AI summary empty or too short for {ticker}: '{summary}'")
+                LOG.warning(f"AI summary empty or too short for {ticker}")
                 return None
         else:
             LOG.error(f"AI summary API error {response.status_code} for {ticker}: {response.text}")
             return None
             
     except Exception as e:
-        LOG.error(f"AI enhanced summary generation failed for {ticker}: {e}")
+        LOG.error(f"AI summary generation failed for {ticker}: {e}")
         return None
 
 def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
@@ -6015,7 +6029,7 @@ def is_description_valuable(title: str, description: str) -> bool:
     return True
 
 def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries with enhanced financial context and materiality focus"""
+    """Generate AI summaries with enhanced financial context from scraped article content"""
     if not OPENAI_API_KEY:
         return {}
     
@@ -6030,12 +6044,6 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
         
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
-        
-        sector = config.get("sector", "") if config else ""
-        industry = config.get("industry", "") if config else ""
-        financial_context = f"{company_name} operates in {sector}" if sector else f"{company_name}"
-        if industry:
-            financial_context += f" within the {industry} industry"
         
         articles_with_content = [
             article for article in company_articles 
@@ -6055,6 +6063,8 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
         
         if articles_with_content:
             content_summaries = []
+            source_domains = []
+            
             for article in articles_with_content[:15]:
                 title = article.get("title", "")
                 content = article.get("scraped_content", "")
@@ -6062,6 +6072,7 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
                 
                 if content and len(content) > 200:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    source_domains.append(source_name)
                     content_summaries.append(f"• {title} [{source_name}]: {content[:500]}...")
             
             competitor_content_summaries = []
@@ -6072,6 +6083,7 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
                 
                 if content and len(content) > 200:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    source_domains.append(source_name)
                     competitor_content_summaries.append(f"• {title} [{source_name}]: {content[:500]}...")
             
             if content_summaries:
@@ -6083,32 +6095,52 @@ def generate_company_ai_summaries(articles_by_ticker: Dict[str, Dict[str, List[D
                 try:
                     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                     
+                    financial_context = f"{company_name}"
+                    if config.get("sector"):
+                        financial_context = f"{company_name} operates in {config['sector']}"
+                        if config.get("industry"):
+                            financial_context += f" within the {config['industry']} industry"
+                    
+                    # Get unique domain names for citation
+                    unique_domains = list(set(source_domains))[:5]  # Limit to 5 for readability
+                    source_list = ', '.join(unique_domains) if unique_domains else 'Article Content'
+                    
                     prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
 
 SYNTHESIS FRAMEWORK:
-1. FINANCIAL TRAJECTORY: Consolidate revenue, margin, cash flow, and growth indicators with SPECIFIC DATES
-2. COMPETITIVE POSITION: Assess market share dynamics and competitive threats from analysis
+1. FINANCIAL TRAJECTORY: Consolidate revenue, margin, cash flow, and growth indicators with specific dates
+2. COMPETITIVE POSITION: Assess market share dynamics and competitive threats
 3. STRATEGIC EXECUTION: Evaluate management actions, capital allocation, operational efficiency
-4. RISK/CATALYST ASSESSMENT: Identify key upside drivers and downside risks with TIMELINES
+4. RISK/CATALYST ASSESSMENT: Identify key upside drivers and downside risks with timelines
 
-ENHANCED REQUIREMENTS:
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, project completion timelines
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale and historical metrics
-- ANALYST ACTIONS: Include firm names and percentage variance from current market price
-- NEAR-TERM FOCUS: Emphasize near-term (<1 year) but note medium/long-term implications
-- Synthesize quantitative metrics when available with domain citations [domain.com]
-- Assess competitive moves that may impact {company_name}'s financial performance
-- Focus on investment implications with specific timelines
-- Maximum 4-5 sentences with clear financial focus
+CRITICAL REQUIREMENTS:
+1) SPECIFIC DATES: Report earnings dates, event timelines, regulatory deadlines, completion dates ONLY if present; otherwise write 'not stated'
+2) MATERIALITY ANALYSIS: For dollar amounts mentioned, assess materiality against company scale ONLY if amounts are provided in text
+3) ANALYST ACTIONS: Report firm names and price targets ONLY if present in text; do not calculate price differences unless both prices appear in content
+4) TIMELINE FOCUS: Emphasize near-term impact (<1 year) based on dates provided in content
+5) FINANCIAL SPECIFICITY: Report quantified metrics ONLY if present; write 'not stated' when absent
+6) COMPANY FOCUS: Frame impacts to {ticker}. If indirect (peer/supplier/customer), label '(Inference)'
+
+MANDATORY FLAGGING (ONLY IF PRESENT):
+- Acquisitions, mergers, debt issuances
+- Buyback announcements  
+- Analyst upgrades/downgrades/price target changes with firm names
+- Backlog developments and capacity announcements
+- Specific numbers, percentages, dollar amounts (report exactly as stated)
+
+GUARDRAILS:
+- No outside knowledge. No estimates. No guessing.
+- Content may be truncated - do not fabricate missing parts
+- Sources: use only from this list: {source_list} - do not add others
+- Add (Inference) after analytical interpretations not explicitly stated
 
 FINANCIAL CONTEXT: {financial_context}
-
 TARGET: {company_name} ({ticker})
 
-COMPANY ARTICLE CONTENT ANALYSIS (sources in brackets):
+CONTENT ANALYSIS (sources in brackets, may be truncated):
 {ai_text}{competitor_analysis}
 
-Provide a strategic investment thesis with specific dates, materiality context, and analyst price targets."""
+Provide a strategic investment thesis with specific information present in the content."""
 
                     data = {
                         "model": OPENAI_MODEL,
@@ -6170,11 +6202,14 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
                     competitor_names.append(comp_str)
         
         titles_with_sources = []
+        source_domains = []
+        
         for article in company_articles[:20]:
             title = article.get("title", "")
             if title:
                 domain = article.get("domain", "")
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                source_domains.append(source_name)
                 titles_with_sources.append(f"• {title} [{source_name}]")
         
         competitor_titles_with_sources = []
@@ -6183,6 +6218,7 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
             if title:
                 domain = article.get("domain", "")
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                source_domains.append(source_name)
                 competitor_titles_with_sources.append(f"• {title} [{source_name}]")
         
         titles_summary = ""
@@ -6196,36 +6232,52 @@ def generate_company_titles_summary(articles_by_ticker: Dict[str, Dict[str, List
             try:
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                 
-                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent news headlines to assess near-term financial impact.
+                # Get unique domain names for citation
+                unique_domains = list(set(source_domains))[:5]  # Limit to 5 for readability
+                source_list = ', '.join(unique_domains) if unique_domains else 'Headlines'
+                
+                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent news headlines using signal detection approach.
 
-ANALYSIS FRAMEWORK:
-1. FINANCIAL IMPACT ASSESSMENT: Identify developments affecting sales, margins, EBITDA, FCF, or growth
-2. COMPETITIVE DYNAMICS: Assess competitor actions impacting {company_name}'s market position
-3. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts
-4. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships
+SYNTHESIS FRAMEWORK:
+1. FINANCIAL IMPACT SIGNALS: Flag developments that may affect sales, margins, EBITDA, FCF, or growth
+2. COMPETITIVE DYNAMICS: Flag competitor actions that may impact {company_name}'s market position
+3. OPERATIONAL DEVELOPMENTS: Flag capacity changes, strategic moves, regulatory impacts
+4. MARKET POSITIONING: Flag changes in brand strength, pricing power, customer relationships
 
 CRITICAL REQUIREMENTS:
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
-- ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
-- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
-- Include specific numbers when available and cite sources
-- Assess competitor moves that could affect {company_name}'s performance
-- Keep to 4-5 sentences maximum
+1) HEADLINE SIGNAL DETECTION: Flag presence/absence of key events - do not infer specific amounts or dates not stated
+2) MATERIALITY SIGNALS: Flag if headlines suggest material events - do not estimate dollar impacts
+3) ANALYST ACTIONS: Report firm names and actions ONLY if present in headlines; do not infer price targets
+4) TIMELINE SIGNALS: Flag near-term vs long-term signals based on headline language
+5) FINANCIAL SIGNALS: Flag quantified metrics ONLY if present in headlines; write 'signals present/absent'
+6) COMPANY FOCUS: Frame impacts to {ticker}. If indirect (peer/supplier/customer), label '(Inference)'
+
+MANDATORY SIGNAL FLAGS (ONLY IF PRESENT IN HEADLINES):
+- Acquisitions, mergers, debt issuances (flag presence)
+- Buyback announcements (flag presence)
+- Analyst upgrades/downgrades/price changes (flag firm names if present)
+- Backlog developments and capacity announcements (flag presence)
+- Specific numbers in headlines (report exactly as stated)
+
+GUARDRAILS:
+- No outside knowledge. No estimates. No guessing.
+- Headlines may not contain full details - flag signals only, don't fabricate specifics
+- Sources: use only from this list: {source_list} - do not add others
+- Add (Inference) after analytical interpretations not explicitly stated in headlines
 
 TARGET COMPANY: {company_name} ({ticker})
 KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
 
-COMPANY HEADLINES (sources provided in brackets):
+HEADLINES FOR SIGNAL DETECTION:
 {titles_text}{competitor_text}
 
-Provide a concise executive summary based on the information available in these headlines."""
+Provide executive summary focusing on signals detected in headlines - flag presence/absence rather than fabricating details."""
 
                 data = {
                     "model": OPENAI_MODEL,
                     "input": prompt,
                     "max_output_tokens": 10000,
-                    "reasoning": {"effort": "high"},
+                    "reasoning": {"effort": "medium"},
                     "text": {"verbosity": "low"},
                     "truncation": "auto"
                 }
@@ -7170,7 +7222,6 @@ def admin_init(request: Request, body: InitRequest):
     }
  
 @APP.post("/cron/ingest")
-@APP.post("/cron/ingest")
 def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),
@@ -7367,14 +7418,6 @@ def cron_ingest(
     log_enhanced_scraping_stats()
     log_scrapingbee_stats()
     
-    # PHASE 5: Send FINAL comprehensive email (NOT DUPLICATE)
-    LOG.info("=== PHASE 5: SENDING FINAL COMPREHENSIVE EMAIL ===")
-    final_digest_result = fetch_digest_articles_with_enhanced_content(
-        minutes / 60, 
-        list(articles_by_ticker.keys()) if articles_by_ticker else None
-    )
-    LOG.info(f"Final comprehensive email status: {final_digest_result.get('status', 'unknown')}")
-    
     LOG.info("=== CRON INGEST COMPLETE (TICKER-SPECIFIC ANALYSIS) ===")
     
     # Enhanced return with optimization stats
@@ -7409,7 +7452,6 @@ def cron_ingest(
             "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
             "dynamic_limits": dynamic_limits
         },
-        "phase_5_final_email": final_digest_result,
         "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective"
     }
 

@@ -152,6 +152,47 @@ def normalize_priority_to_display(priority):
             return "Low"
     return "Medium"
 
+def _normalize_host(url_or_domain: str) -> str:
+    """
+    Returns a lowercase hostname (no scheme/port/path). 
+    Accepts either a full URL or a bare domain.
+    """
+    s = (url_or_domain or "").strip().lower()
+    if not s:
+        return ""
+    if "://" not in s:
+        # treat as bare domain
+        host = s.split("/")[0]
+    else:
+        host = urlparse(s).hostname or ""
+    # strip common prefixes so matching is stable
+    for prefix in ("www.", "m."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+    return host
+
+def _domain_matches(host: str, needle: str) -> bool:
+    """
+    True if host == needle OR host ends with '.' + needle
+    This safely matches subdomains (e.g., foo.bar.com vs bar.com),
+    and also supports specific subdomains like 'video.media.yql.yahoo.com'.
+    """
+    if not host or not needle:
+        return False
+    return host == needle or host.endswith("." + needle)
+
+def needs_antibot(url_or_domain: str) -> bool:
+    """
+    Should we enable Scrapfly anti-bot + JS rendering for this target?
+    """
+    host = _normalize_host(url_or_domain)
+    if not host:
+        return False
+    for dom in PROBLEMATIC_SCRAPE_DOMAINS:
+        if _domain_matches(host, dom):
+            return True
+    return False
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -218,7 +259,13 @@ QUALITY_DOMAINS = {
 
 # Domains known to have consistent scraping failures or poor content quality
 PROBLEMATIC_SCRAPE_DOMAINS = {
-    "defenseworld.net", "defense-world.net", "defensenews.com",
+    # finance & article sites w/ bot protection or heavy JS
+    "zacks.com", "thefly.com", "accesswire.com", "streetinsider.com",
+    "msn.com", "templates.cds.yahoo", "sharewise.com", "news.stocktradersdaily.com",
+    "247wallst.com", "barchart.com", "newstrail.com", "telecompaper.com",
+    "video.media.yql.yahoo.com", "fool.com", "insidermonkey.com",
+    "simplywall.st", "investing.com", "gurufocus.com", "seekingalpha.com",
+    "markets.financialcontent.com", "nasdaq.com"
 }
 
 # Known paywall domains to skip during content scraping
@@ -1179,21 +1226,23 @@ def scrape_with_scrapfly(url: str, domain: str, max_retries: int = 2) -> Tuple[O
             
             # Scrapfly API parameters
             params = {
-                'key': SCRAPFLY_API_KEY,
-                'url': url,
-                'render_js': 'false',
-                'country': 'US',
-                'timeout': 15000,
-                'format': 'text',  # Get clean text instead of HTML
-                'extraction_template': 'article',  # Use their article extraction
-                'cache': 'false',
-                'ssl_verification': 'false'
+                "key": SCRAPFLY_API_KEY,
+                "url": url,
+                "render_js": False,
+                "country": "us",
+                "timeout": 20,   # seconds
+                "cache": False,
+                **(base_params or {}),
             }
+        
+            if needs_antibot(url):
+                params["asp"] = True
+                params["render_js"] = True
             
             # Add anti-bot measures for problematic domains
             if domain in ['simplywall.st', 'seekingalpha.com', 'zacks.com']:
-                params['asp'] = 'true'  # Anti-scraping protection
-                params['render_js'] = 'true'  # Enable JS rendering for dynamic content
+                params['asp'] = True  # Anti-scraping protection
+                params['render_js'] = True  # Enable JS rendering for dynamic content
             
             response = requests.get('https://api.scrapfly.io/scrape', 
                                    params=params, 
@@ -1203,6 +1252,7 @@ def scrape_with_scrapfly(url: str, domain: str, max_retries: int = 2) -> Tuple[O
                 try:
                     # Scrapfly returns JSON
                     result = response.json()
+                    html = result.get("result", {}).get("content", "")
                     
                     # Extract content based on format
                     if params.get('format') == 'text':
@@ -1222,6 +1272,14 @@ def scrape_with_scrapfly(url: str, domain: str, max_retries: int = 2) -> Tuple[O
                 except Exception as json_error:
                     LOG.warning(f"SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
                     raw_content = response.text
+
+            else:
+                req_id = response.headers.get("x-request-id") or response.headers.get("cf-ray")
+                LOG.warning(
+                    f"SCRAPFLY: HTTP {response.status_code} for {domain} "
+                    f"(attempt {attempt + 1}) id={req_id} body: {response.text[:500]}"
+                )
+                continue  # let your retry loop handle next attempt
                 
                 if not raw_content or len(raw_content.strip()) < 100:
                     LOG.warning(f"SCRAPFLY: Insufficient raw content for {domain} (attempt {attempt + 1})")

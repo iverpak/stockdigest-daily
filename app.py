@@ -719,6 +719,29 @@ def update_schema_for_triage():
             ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
         """)
 
+def create_ticker_reference_table():
+    """Create simplified ticker reference table"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ticker_reference (
+                id SERIAL PRIMARY KEY,
+                ticker VARCHAR(20) UNIQUE NOT NULL,  -- This IS the Yahoo format
+                country VARCHAR(5) NOT NULL,
+                company_name VARCHAR(255) NOT NULL,
+                industry VARCHAR(255),
+                sector VARCHAR(255),
+                exchange VARCHAR(20),
+                active BOOLEAN DEFAULT TRUE,
+                industry_keywords TEXT[],
+                competitors TEXT[],
+                ai_generated BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
+        """)
+
 def store_competitor_metadata(ticker: str, competitors: List[Dict]) -> None:
     """Store competitor metadata in a dedicated table for better normalization"""
     with db() as conn, conn.cursor() as cur:
@@ -5085,7 +5108,7 @@ class TickerManager:
                     }
         
         # Generate with AI
-        ai_metadata = generate_ticker_metadata_with_ai(ticker)
+        ai_metadata = generate_enhanced_ticker_metadata_with_ai(ticker)
         
         # ALWAYS store something, even if AI failed
         if ai_metadata:
@@ -5197,9 +5220,9 @@ class TickerManager:
 ticker_manager = TickerManager()
 feed_manager = FeedManager()
 
-def generate_ticker_metadata_with_ai(ticker, company_name=None):
+def generate_enhanced_ticker_metadata_with_ai(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
     """
-    Generate comprehensive ticker metadata using OpenAI with improved validation and fallback
+    Enhanced AI generation with company context from ticker reference table
     """
     if company_name is None:
         company_name = ticker
@@ -5233,19 +5256,27 @@ COMPETITORS (exactly 3):
 
 Generate response in valid JSON format with all required fields. Be concise and precise."""
 
+    # Enhanced prompt with context from ticker reference table
+    context_info = f"Company: {company_name} ({ticker})"
+    if sector:
+        context_info += f", Sector: {sector}"
+    if industry:
+        context_info += f", Industry: {industry}"
+
     user_prompt = f"""Generate metadata for hedge fund news monitoring. Focus on precision to avoid irrelevant news articles.
 
-Ticker: {ticker}
-Company: {company_name}
+{context_info}
 
-CRITICAL: The "name" field MUST contain the full official company name, not just the ticker.
+Since we have basic company information, focus on generating specific industry keywords and direct competitors with accurate tickers.
+
+CRITICAL: The "company_name" field should be: {company_name}
 
 Required JSON format:
 {{
     "ticker": "{ticker}",
-    "company_name": "FULL OFFICIAL COMPANY NAME HERE",
-    "sector": "GICS Sector",
-    "industry": "GICS Industry",
+    "company_name": "{company_name}",
+    "sector": "{sector if sector else 'GICS Sector'}",
+    "industry": "{industry if industry else 'GICS Industry'}",
     "sub_industry": "GICS Sub-Industry",
     "industry_keywords": ["keyword1", "keyword2", "keyword3"],
     "competitors": ["Company Name (TICKER)", "Company Name (TICKER)", "Company Name (TICKER)"],
@@ -5262,12 +5293,12 @@ Required JSON format:
     }}
 }}"""
 
-    brief_user_prompt = f"""Generate compact JSON metadata for {ticker}. ENSURE "company_name" is the FULL official company name:
+    brief_user_prompt = f"""Generate compact JSON metadata for {company_name} ({ticker}):
 {{
     "ticker": "{ticker}",
-    "company_name": "FULL OFFICIAL COMPANY NAME",
-    "sector": "GICS Sector",
-    "industry": "GICS Industry", 
+    "company_name": "{company_name}",
+    "sector": "{sector if sector else 'GICS Sector'}",
+    "industry": "{industry if industry else 'GICS Industry'}", 
     "sub_industry": "GICS Sub-Industry",
     "industry_keywords": ["k1", "k2", "k3"],
     "competitors": ["Co1 (TKR1)", "Co2 (TKR2)", "Co3 (TKR3)"],
@@ -5306,7 +5337,7 @@ Use exactly 3 items per list. Be brief and specific."""
         
         # Log usage details for debugging
         u = result.get("usage", {}) or {}
-        LOG.info("OpenAI usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+        LOG.info("Enhanced OpenAI usage — input:%s output:%s (cap:%s) status:%s reason:%s",
                  u.get("input_tokens"), u.get("output_tokens"),
                  result.get("max_output_tokens"),
                  result.get("status"),
@@ -5338,7 +5369,7 @@ Use exactly 3 items per list. Be brief and specific."""
                 
                 # Log retry usage too
                 retry_u = retry_result.get("usage", {}) or {}
-                LOG.info("OpenAI retry usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+                LOG.info("Enhanced OpenAI retry usage — input:%s output:%s (cap:%s) status:%s reason:%s",
                          retry_u.get("input_tokens"), retry_u.get("output_tokens"),
                          retry_result.get("max_output_tokens"),
                          retry_result.get("status"),
@@ -5346,16 +5377,16 @@ Use exactly 3 items per list. Be brief and specific."""
                 
                 text = extract_text_from_responses(retry_result)
                 if text:
-                    LOG.info(f"Brief prompt successful for {ticker}")
+                    LOG.info(f"Enhanced brief prompt successful for {ticker}")
         
         if not text:
-            print(f"❌ No content returned for {ticker} even after retry")
+            print(f"No content returned for {ticker} even after retry")
             return None
         
         # Parse JSON with robust fallback
         metadata = parse_json_with_fallback(text, ticker)
         
-        # CRITICAL FIX: Ensure company name is properly set
+        # Process the results using existing logic
         def _list3(x): 
             if isinstance(x, (list, tuple)):
                 items = [item for item in list(x)[:3] if item]
@@ -5363,16 +5394,11 @@ Use exactly 3 items per list. Be brief and specific."""
             return []
         
         metadata.setdefault("ticker", ticker)
+        metadata["name"] = company_name  # Use the provided company name
+        metadata["company_name"] = company_name  # Ensure both fields are set
         
-        # FIX: Use company_name field, fallback to name, then ticker
-        if metadata.get("company_name"):
-            metadata["name"] = metadata["company_name"]
-        elif not metadata.get("name") or metadata.get("name") == ticker:
-            # If name is missing or just the ticker, try to use company_name
-            metadata["name"] = metadata.get("company_name", ticker)
-        
-        metadata.setdefault("sector", "")
-        metadata.setdefault("industry", "")
+        metadata.setdefault("sector", sector)
+        metadata.setdefault("industry", industry)
         metadata.setdefault("sub_industry", "")
         
         # Normalize lists (no padding)
@@ -5392,32 +5418,92 @@ Use exactly 3 items per list. Be brief and specific."""
         aliases_brands["brands"] = _list3(aliases_brands.get("brands", []))
         aliases_brands["assets"] = _list3(aliases_brands.get("assets", []))
         
-        # Log what we got for company name
-        LOG.info(f"Metadata generated for {ticker}: name='{metadata.get('name')}', company_name='{metadata.get('company_name')}'")
-        
-        # Store in database
-        stored_successfully = store_ticker_metadata(
-            ticker=metadata['ticker'],
-            name=metadata['name'],  # This should now be the full company name
-            sector=metadata['sector'],
-            industry=metadata['industry'],
-            sub_industry=metadata['sub_industry'],
-            industry_keywords=metadata['industry_keywords'],
-            competitors=metadata['competitors'],
-            sector_profile=metadata['sector_profile'],
-            aliases_brands_assets=metadata['aliases_brands_assets']
-        )
-        
-        if stored_successfully:
-            print(f"✅ Generated and stored metadata for {ticker} with name: {metadata['name']}")
-            return metadata
-        else:
-            print(f"❌ Failed to store metadata for {ticker}")
-            return None
+        LOG.info(f"Enhanced metadata generated for {ticker}: {company_name}")
+        return metadata
             
     except Exception as e:
-        print(f"❌ Error generating metadata for {ticker}: {e}")
+        print(f"Error generating enhanced metadata for {ticker}: {e}")
         return None
+
+
+def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
+    """Get ticker metadata with reference table lookup first, then AI enhancement"""
+    
+    # Step 1: Check ticker_reference table
+    reference_data = get_ticker_reference(ticker)
+    
+    if reference_data and not force_refresh:
+        # Use reference data as base
+        metadata = {
+            "ticker": ticker,
+            "company_name": reference_data["company_name"],
+            "name": reference_data["company_name"],  # Both fields for compatibility
+            "sector": reference_data.get("sector", ""),
+            "industry": reference_data.get("industry", ""),
+            "industry_keywords": reference_data.get("industry_keywords", []),
+            "competitors": reference_data.get("competitors", [])
+        }
+        
+        # If reference data lacks AI-generated keywords/competitors, enhance with AI
+        if (not reference_data.get("industry_keywords") or 
+            not reference_data.get("competitors") or 
+            not reference_data.get("ai_generated")):
+            
+            LOG.info(f"Enhancing {ticker} ({reference_data['company_name']}) with AI generation")
+            ai_metadata = generate_enhanced_ticker_metadata_with_ai(
+                ticker, 
+                reference_data["company_name"],
+                reference_data.get("sector", ""),
+                reference_data.get("industry", "")
+            )
+            
+            if ai_metadata:
+                # Merge AI enhancements with reference data
+                metadata.update({
+                    "industry_keywords": ai_metadata.get("industry_keywords", []),
+                    "competitors": ai_metadata.get("competitors", []),
+                    "sector_profile": ai_metadata.get("sector_profile", {}),
+                    "aliases_brands_assets": ai_metadata.get("aliases_brands_assets", {})
+                })
+                
+                # Update reference table with AI enhancements
+                update_ticker_reference_ai_data(ticker, metadata)
+        
+        return metadata
+    
+    # Step 2: Fall back to original AI generation (for unknown tickers)
+    LOG.info(f"No reference data found for {ticker}, using original AI generation")
+    return generate_enhanced_ticker_metadata_with_ai(ticker)
+
+
+def get_ticker_reference(ticker: str) -> Optional[Dict]:
+    """Get ticker reference data from database"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT ticker, country, company_name, industry, sector,
+                   exchange, active, industry_keywords, competitors, ai_generated
+            FROM ticker_reference
+            WHERE ticker = %s AND active = TRUE
+        """, (ticker,))
+        return cur.fetchone()
+
+
+def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
+    """Update reference table with AI-generated enhancements"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            UPDATE ticker_reference
+            SET industry_keywords = %s,
+                competitors = %s,
+                ai_generated = TRUE,
+                updated_at = NOW()
+            WHERE ticker = %s
+        """, (
+            metadata.get("industry_keywords", []),
+            metadata.get("competitors", []),
+            ticker
+        ))
+        LOG.info(f"Updated {ticker} reference table with AI enhancements")
 
 def validate_metadata(metadata):
     """
@@ -7613,6 +7699,90 @@ def test_yahoo_resolution(request: Request, url: str = Query(...)):
         "domain": result[1],
         "source_url": result[2]
     }
+
+@APP.post("/admin/import-ticker-reference")
+def import_ticker_reference(request: Request, file_path: str = Body(..., embed=True)):
+    """Import ticker reference data from CSV file"""
+    require_admin(request)
+
+    file_path = r"C:\Users\14166\Desktop\QuantBrief\data\ticker_reference.csv"
+    import csv
+    import os
+    from datetime import datetime
+    
+    if not os.path.exists(file_path):
+        return {"status": "error", "message": f"File not found: {file_path}"}
+    
+    # Ensure table exists
+    create_ticker_reference_table()
+    
+    imported = 0
+    updated = 0
+    errors = []
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            
+            with db() as conn, conn.cursor() as cur:
+                for row_num, row in enumerate(reader, start=2):
+                    try:
+                        # Parse arrays from string
+                        industry_keywords = []
+                        competitors = []
+                        
+                        if row.get('industry_keywords'):
+                            industry_keywords = [kw.strip() for kw in row['industry_keywords'].split(',')]
+                        
+                        if row.get('competitors'):
+                            competitors = [comp.strip() for comp in row['competitors'].split(',')]
+                        
+                        # Convert boolean
+                        active = row.get('active', 'TRUE').upper() in ('TRUE', '1', 'YES')
+                        ai_generated = row.get('ai_generated', 'FALSE').upper() in ('TRUE', '1', 'YES')
+                        
+                        cur.execute("""
+                            INSERT INTO ticker_reference (
+                                ticker, country, company_name, industry, sector, 
+                                yahoo_ticker, exchange, active, industry_keywords, 
+                                competitors, ai_generated
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (ticker) DO UPDATE SET
+                                country = EXCLUDED.country,
+                                company_name = EXCLUDED.company_name,
+                                industry = EXCLUDED.industry,
+                                sector = EXCLUDED.sector,
+                                yahoo_ticker = EXCLUDED.yahoo_ticker,
+                                exchange = EXCLUDED.exchange,
+                                active = EXCLUDED.active,
+                                industry_keywords = EXCLUDED.industry_keywords,
+                                competitors = EXCLUDED.competitors,
+                                updated_at = NOW()
+                        """, (
+                            row['ticker'], row['country'], row['company_name'],
+                            row.get('industry'), row.get('sector'),
+                            row.get('yahoo_ticker', row['ticker']), row.get('exchange'),
+                            active, industry_keywords, competitors, ai_generated
+                        ))
+                        
+                        if cur.rowcount == 1:
+                            imported += 1
+                        else:
+                            updated += 1
+                            
+                    except Exception as e:
+                        errors.append(f"Row {row_num}: {str(e)}")
+                        
+        return {
+            "status": "completed",
+            "imported": imported,
+            "updated": updated,
+            "errors": errors[:10],  # Limit error display
+            "total_errors": len(errors)
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

@@ -245,7 +245,8 @@ DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com", "marketbeat",
     "newser.com", "www.newser.com", "newser", 
-    "khodrobank.com", "www.khodrobank.com", "khodrobank"  # ADD this line
+    "khodrobank.com", "www.khodrobank.com", "khodrobank",
+    "defenseworld.net", "defense-world.net", "defensenews.com",
 }
 
 QUALITY_DOMAINS = {
@@ -259,6 +260,8 @@ QUALITY_DOMAINS = {
 PROBLEMATIC_SCRAPE_DOMAINS = {
     # finance & article sites w/ bot protection or heavy JS
     "defenseworld.net", "defense-world.net", "defensenews.com",
+    # Sites to avoid scraping (not spam, just problematic)
+    "zacks.com", "insidermonkey.com", "fool.com",
 }
 
 # Known paywall domains to skip during content scraping
@@ -270,6 +273,7 @@ PAYWALL_DOMAINS = {
     "nytimes.com", "www.nytimes.com",
     "seekingalpha.com", "www.seekingalpha.com",
     "washingtonpost.com", "www.washingtonpost.com",
+    "barrons.com", "www.barrons.com",
     
     # Academic/research paywalls
     "sciencedirect.com", "www.sciencedirect.com",

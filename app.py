@@ -4344,295 +4344,6 @@ class TriageResponse(BaseModel):
     selected: List[TriageItem]
     skipped: List[TriageItem]
 
-def create_ai_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> str:
-    """Create structured text file for AI evaluation of scoring quality with full metadata and AI summaries"""
-    
-    text_lines = []
-    text_lines.append("STOCK NEWS AGGREGATOR - AI SCORING EVALUATION DATA")
-    text_lines.append("=" * 60)
-    text_lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    text_lines.append("")
-    text_lines.append("PURPOSE: Evaluate quality scoring algorithm performance")
-    text_lines.append("INSTRUCTIONS: Analyze patterns in scoring components vs article content")
-    text_lines.append("=" * 60)
-    text_lines.append("")
-    
-    article_count = 0
-    
-    for ticker, categories in articles_by_ticker.items():
-        text_lines.append(f"TICKER: {ticker}")
-        text_lines.append("-" * 40)
-        
-        # Add COMPLETE enhanced metadata for each ticker
-        config = get_ticker_config(ticker)
-        if config:
-            text_lines.append("COMPLETE TICKER METADATA:")
-            text_lines.append(f"Company Name: {config.get('name', ticker)}")
-            text_lines.append(f"Sector: {config.get('sector', 'N/A')}")
-            text_lines.append(f"Industry: {config.get('industry', 'N/A')}")
-            text_lines.append(f"Sub-Industry: {config.get('sub_industry', 'N/A')}")
-            
-            # Industry keywords
-            if config.get("industry_keywords"):
-                text_lines.append(f"Industry Keywords: {', '.join(config['industry_keywords'])}")
-            
-            # Competitors with full details
-            if config.get("competitors"):
-                text_lines.append("Competitors:")
-                for i, comp in enumerate(config['competitors'], 1):
-                    text_lines.append(f"  {i}. {comp}")
-            
-            # Sector profile with full details
-            sector_profile = config.get("sector_profile")
-            if sector_profile:
-                try:
-                    if isinstance(sector_profile, str):
-                        sector_data = json.loads(sector_profile)
-                    else:
-                        sector_data = sector_profile
-                    
-                    text_lines.append("SECTOR PROFILE:")
-                    if sector_data.get("core_inputs"):
-                        text_lines.append(f"  Core Inputs: {', '.join(sector_data['core_inputs'])}")
-                    if sector_data.get("core_geos"):
-                        text_lines.append(f"  Core Geographies: {', '.join(sector_data['core_geos'])}")
-                    if sector_data.get("core_channels"):
-                        text_lines.append(f"  Core Channels: {', '.join(sector_data['core_channels'])}")
-                    if sector_data.get("benchmarks"):
-                        text_lines.append(f"  Benchmarks: {', '.join(sector_data['benchmarks'])}")
-                except Exception as e:
-                    text_lines.append(f"SECTOR PROFILE: Error parsing - {e}")
-            
-            # Aliases, brands, and assets with full details
-            aliases_brands = config.get("aliases_brands_assets")
-            if aliases_brands:
-                try:
-                    if isinstance(aliases_brands, str):
-                        alias_data = json.loads(aliases_brands)
-                    else:
-                        alias_data = aliases_brands
-                    
-                    text_lines.append("ALIASES, BRANDS & ASSETS:")
-                    if alias_data.get("aliases"):
-                        text_lines.append(f"  Aliases: {', '.join(alias_data['aliases'])}")
-                    if alias_data.get("brands"):
-                        text_lines.append(f"  Brands: {', '.join(alias_data['brands'])}")
-                    if alias_data.get("assets"):
-                        text_lines.append(f"  Key Assets: {', '.join(alias_data['assets'])}")
-                except Exception as e:
-                    text_lines.append(f"ALIASES/BRANDS: Error parsing - {e}")
-            
-            text_lines.append("")
-        
-        for category, articles in categories.items():
-            if not articles:
-                continue
-                
-            text_lines.append(f"CATEGORY: {category.upper()}")
-            text_lines.append("")
-            
-            for article in articles:
-                article_count += 1
-                
-                text_lines.append(f"ARTICLE {article_count}:")
-                text_lines.append(f"Type: {category}")
-                text_lines.append(f"Ticker: {ticker}")
-                text_lines.append(f"Title: {article.get('title', 'No Title')}")
-                text_lines.append(f"Domain: {article.get('domain', 'unknown')}")
-                text_lines.append(f"URL: {article.get('resolved_url') or article.get('url', 'N/A')}")
-                
-                if article.get('published_at'):
-                    text_lines.append(f"Published: {article['published_at']}")
-                
-                if article.get('search_keyword'):
-                    text_lines.append(f"Search Keyword: {article['search_keyword']}")
-                
-                if article.get('competitor_ticker'):
-                    text_lines.append(f"Competitor Ticker: {article['competitor_ticker']}")
-                
-                text_lines.append("")
-                
-                # AI Analysis section with ALL components
-                text_lines.append("AI ANALYSIS:")
-                quality_score = article.get('quality_score', 0)
-                text_lines.append(f"Final Score: {quality_score:.1f}")
-                
-                # Show ALL scoring components for verification
-                if article.get('source_tier'):
-                    text_lines.append(f"Source Tier: {article['source_tier']} (Domain: {article.get('domain', 'unknown')})")
-                if article.get('event_multiplier'):
-                    text_lines.append(f"Event Multiplier: {article['event_multiplier']} - {article.get('event_multiplier_reason', '')}")
-                if article.get('relevance_boost'):
-                    text_lines.append(f"Relevance Boost: {article['relevance_boost']} - {article.get('relevance_boost_reason', '')}")
-                if article.get('numeric_bonus'):
-                    text_lines.append(f"Numeric Bonus: {article['numeric_bonus']}")
-                if article.get('penalty_multiplier'):
-                    text_lines.append(f"Penalty Multiplier: {article['penalty_multiplier']} - {article.get('penalty_reason', '')}")
-                
-                # Calculation verification
-                if all(article.get(field) is not None for field in ['source_tier', 'event_multiplier', 'relevance_boost', 'penalty_multiplier']):
-                    calculated = ((100 * article['source_tier'] * article['event_multiplier'] * article['relevance_boost']) * 
-                                article['penalty_multiplier'] + article.get('numeric_bonus', 0))
-                    text_lines.append(f"CALCULATION CHECK: (100 × {article['source_tier']} × {article['event_multiplier']} × {article['relevance_boost']}) × {article['penalty_multiplier']} + {article.get('numeric_bonus', 0)} = {calculated:.1f}")
-                
-                ai_impact = article.get('ai_impact', 'N/A')
-                ai_reasoning = article.get('ai_reasoning', 'N/A')
-                text_lines.append(f"Impact: {ai_impact}")
-                text_lines.append(f"Reasoning: {ai_reasoning}")
-                
-                # Triage information
-                if article.get('ai_triage_selected'):
-                    text_lines.append(f"AI Triage: SELECTED (Priority: {article.get('triage_priority', 'N/A')})")
-                    if article.get('triage_reasoning'):
-                        text_lines.append(f"Triage Reasoning: {article['triage_reasoning']}")
-                else:
-                    text_lines.append(f"AI Triage: NOT SELECTED")
-                
-                text_lines.append("")
-                
-                # AI SUMMARY (if available)
-                if article.get('ai_summary'):
-                    text_lines.append("AI HEDGE FUND SUMMARY:")
-                    text_lines.append(article['ai_summary'])
-                    text_lines.append("")
-                
-                # Original description
-                if article.get('description'):
-                    text_lines.append("ORIGINAL DESCRIPTION:")
-                    text_lines.append(article['description'])
-                    text_lines.append("")
-                
-                # Scraped content
-                if article.get('scraped_content'):
-                    text_lines.append("SCRAPED CONTENT:")
-                    text_lines.append(article['scraped_content'])
-                elif article.get('scraping_error'):
-                    text_lines.append("SCRAPING FAILED:")
-                    text_lines.append(article['scraping_error'])
-                else:
-                    text_lines.append("SCRAPED CONTENT: Not attempted or not available")
-                
-                text_lines.append("")
-                text_lines.append("-" * 80)
-                text_lines.append("")
-    
-    text_lines.append(f"\nTOTAL ARTICLES: {article_count}")
-    text_lines.append("END OF EVALUATION DATA")
-    
-    return "\n".join(text_lines)
-
-def create_triage_evaluation_text(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], ticker_metadata_cache: Dict) -> str:
-    """Create structured text file for AI triage evaluation and improvement"""
-    
-    text_lines = []
-    text_lines.append("STOCK NEWS AGGREGATOR - AI TRIAGE EVALUATION DATA")
-    text_lines.append("=" * 60)
-    text_lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    text_lines.append("")
-    text_lines.append("PURPOSE: Evaluate triage algorithm performance and improve selection logic")
-    text_lines.append("INSTRUCTIONS: Analyze triage reasoning vs article titles for prompt optimization")
-    text_lines.append("=" * 60)
-    text_lines.append("")
-    
-    article_count = 0
-    
-    for ticker, categories in articles_by_ticker.items():
-        text_lines.append(f"TICKER: {ticker}")
-        text_lines.append("-" * 40)
-        
-        # Add enhanced metadata for each ticker
-        if ticker in ticker_metadata_cache:
-            metadata = ticker_metadata_cache[ticker]
-            text_lines.append("ENHANCED METADATA:")
-            text_lines.append(f"Company Name: {metadata.get('company_name', ticker)}")
-            text_lines.append(f"Sector: {metadata.get('sector', 'N/A')}")
-            
-            # Industry keywords
-            if metadata.get("industry_keywords"):
-                text_lines.append(f"Industry Keywords: {', '.join(metadata['industry_keywords'])}")
-            
-            # Competitors
-            if metadata.get("competitors"):
-                comp_names = [comp["name"] if isinstance(comp, dict) else comp for comp in metadata['competitors']]
-                text_lines.append(f"Competitors: {', '.join(comp_names)}")
-            
-            text_lines.append("")
-        
-        triage_data = triage_results.get(ticker, {})
-        
-        for category, articles in categories.items():
-            if not articles:
-                continue
-                
-            text_lines.append(f"CATEGORY: {category.upper()}")
-            text_lines.append("")
-            
-            # Get triage results for this category
-            category_triage = triage_data.get(category, [])
-            selected_article_data = {item["id"]: item for item in category_triage}
-            
-            for idx, article in enumerate(articles):
-                article_count += 1
-                
-                text_lines.append(f"ARTICLE {article_count}:")
-                text_lines.append(f"Type: {category}")
-                text_lines.append(f"Ticker: {ticker}")
-                text_lines.append(f"Index: {idx}")
-                text_lines.append(f"Title: {article.get('title', 'No Title')}")
-                text_lines.append(f"Domain: {article.get('domain', 'unknown')}")
-                
-                # Check domain tier
-                domain = normalize_domain(article.get("domain", ""))
-                source_tier = _get_domain_tier(domain, article.get("title", ""), article.get("description", ""))
-                text_lines.append(f"Source Tier: {source_tier}")
-                text_lines.append(f"Quality Domain: {'YES' if domain in QUALITY_DOMAINS else 'NO'}")
-                
-                if article.get('published_at'):
-                    text_lines.append(f"Published: {article['published_at']}")
-                
-                if article.get('search_keyword'):
-                    text_lines.append(f"Search Keyword: {article['search_keyword']}")
-                
-                text_lines.append("")
-                
-                # AI Triage Results
-                text_lines.append("AI TRIAGE RESULTS:")
-                if idx in selected_article_data:
-                    triage_item = selected_article_data[idx]
-                    priority = triage_item.get("scrape_priority", 5)
-                    confidence = triage_item.get("confidence", 0.0)
-                    reason = triage_item.get("why", "")
-                    
-                    text_lines.append(f"SELECTED: YES")
-                    text_lines.append(f"Priority: P{priority}")
-                    text_lines.append(f"Confidence: {confidence:.2f}")
-                    text_lines.append(f"AI Reasoning: {reason}")
-                else:
-                    text_lines.append(f"SELECTED: NO")
-                    text_lines.append(f"AI Reasoning: Not selected by triage algorithm")
-                
-                # Final selection status
-                will_scrape = (idx in selected_article_data) or (domain in QUALITY_DOMAINS)
-                text_lines.append(f"FINAL STATUS: {'WILL SCRAPE' if will_scrape else 'SKIPPED'}")
-                
-                text_lines.append("")
-                
-                # Original description for context
-                if article.get('description'):
-                    text_lines.append("ORIGINAL DESCRIPTION:")
-                    text_lines.append(article['description'])
-                else:
-                    text_lines.append("ORIGINAL DESCRIPTION: Not available")
-                
-                text_lines.append("")
-                text_lines.append("-" * 80)
-                text_lines.append("")
-    
-    text_lines.append(f"\nTOTAL ARTICLES EVALUATED: {article_count}")
-    text_lines.append("END OF TRIAGE EVALUATION DATA")
-    
-    return "\n".join(text_lines)
-
 def get_competitor_display_name(search_keyword: str, competitor_ticker: str = None) -> str:
     """
     Get standardized competitor display name using database lookup with proper fallback
@@ -6526,7 +6237,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         html_content = "".join(html)
         subject = f"🚀 Quick Intelligence: {ticker_list} - {total_selected} articles selected"
         
-        return send_email(subject, html_content, "")
+        return send_email(subject, html_content)
         
     except Exception as e:
         LOG.error(f"Enhanced quick intelligence email failed: {e}")
@@ -6538,7 +6249,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 # ------------------------------------------------------------------------------
 
 # Updated email sending function with text attachment
-def send_email(subject: str, html_body: str, text_attachment: str = None, to: str = None):
+def send_email(subject: str, html_body: str, to: str = None):
     """Send email with HTML body displayed properly and optional text attachment"""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
@@ -6643,9 +6354,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         f"<strong>🤖 AI Features:</strong> Enhanced Content Analysis + Hedge Fund Summaries + Company Intelligence Synthesis",
         "</div>"
     ]
-    
-    text_export = create_ai_evaluation_text(articles_by_ticker)
-    
+        
     for ticker, categories in articles_by_ticker.items():
         total_articles = sum(len(articles) for articles in categories.values())
         
@@ -6714,7 +6423,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
     """)
     
     html_content = "".join(html)
-    return html_content, text_export
+    return html_content
 
 def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
     """Fetch categorized articles for digest with ticker-specific AI analysis"""
@@ -6835,13 +6544,13 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
             "tickers": tickers or "all"
         }
     
-    # Use the enhanced digest function with text export
-    html, text_export = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1)
+    # Use the enhanced digest function
+    html = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1)
     
     # Enhanced subject with ticker list
     ticker_list = ', '.join(articles_by_ticker.keys())
-    subject = f"Stock Intelligence: {ticker_list} - {total_articles} articles"
-    success = send_email(subject, html, text_export)
+    subject = f"📊 Stock Intelligence: {ticker_list} - {total_articles} articles"
+    success = send_email(subject, html)
     
     # Count by category and content scraping
     category_counts = {"company": 0, "industry": 0, "competitor": 0}
@@ -7477,10 +7186,10 @@ def force_digest(request: Request, body: ForceDigestRequest):
         return {"status": "no_articles", "message": "No articles found in database"}
     
     # FIXED: Extract HTML from tuple and add empty text attachment
-    html, text_export = build_enhanced_digest_html(articles_by_ticker, 7)
+    html = build_enhanced_digest_html(articles_by_ticker, 7)
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email(subject, html, "")
+    success = send_email(subject, html)
     
     return {
         "status": "sent" if success else "failed",

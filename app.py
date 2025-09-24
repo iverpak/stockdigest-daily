@@ -1235,7 +1235,6 @@ def scrape_with_scrapfly(
                 "url": url,
                 "render_js": False,
                 "country": "us",
-                "timeout": 20,    # seconds
                 "cache": False,
                 **(base_params or {}),
             }

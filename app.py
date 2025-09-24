@@ -425,7 +425,6 @@ def _update_ingestion_stats(category: str, keyword: str):
     if category == "company":
         ingestion_stats["company_ingested"] += 1
         LOG.info(f"INGESTION: Company {ingestion_stats['company_ingested']}/{ingestion_stats['limits']['company']}")
-        LOG.info(f"INGESTION BLOCKS: Spam={stats['blocked_spam']}, Non-Latin={stats['blocked_non_latin']}, Insider Trading={stats.get('blocked_insider_trading', 0)}")
     
     elif category == "industry":
         if keyword not in ingestion_stats["industry_ingested_by_keyword"]:
@@ -441,7 +440,6 @@ def _update_ingestion_stats(category: str, keyword: str):
         ingestion_stats["competitor_ingested_by_keyword"][keyword] += 1
         keyword_count = ingestion_stats["competitor_ingested_by_keyword"][keyword]
         LOG.info(f"INGESTION: Competitor '{keyword}' {keyword_count}/{ingestion_stats['limits']['competitor_per_keyword']}")
-        LOG.info(f"INGESTION BLOCKS: Spam={stats['blocked_spam']}, Non-Latin={stats['blocked_non_latin']}, Insider Trading={stats.get('blocked_insider_trading', 0)}")
 
 def _check_ingestion_limit(category: str, keyword: str) -> bool:
     """Check if we can ingest more articles for this category/keyword - FIXED for competitor consolidation"""

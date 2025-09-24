@@ -6168,7 +6168,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         header_badges.append(f'<span class="company-name-badge">🎯 {full_company_name}</span>')
                     elif category == "competitor":
                         comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
-                        header_badges.append(f'<span class="competitor-badge">🢠{comp_name}</span>')
+                        header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
                     

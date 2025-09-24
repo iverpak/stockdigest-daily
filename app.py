@@ -251,10 +251,8 @@ SPAM_DOMAINS = {
 QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
-    "seekingalpha.com",
     "theglobeandmail.com",
     "apnews.com",
-    "reuters.com",
 }
 
 # Domains known to have consistent scraping failures or poor content quality
@@ -270,6 +268,7 @@ PAYWALL_DOMAINS = {
     "ft.com", "www.ft.com",
     "economist.com", "www.economist.com",
     "nytimes.com", "www.nytimes.com",
+    "seekingalpha.com", "www.seekingalpha.com",
     "washingtonpost.com", "www.washingtonpost.com",
     
     # Academic/research paywalls

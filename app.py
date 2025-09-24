@@ -565,7 +565,6 @@ def ensure_schema():
                     feed_id INTEGER,
                     ticker VARCHAR(10) NOT NULL,
                     domain VARCHAR(255),
-                    quality_score DECIMAL(5,2) DEFAULT 50.0,
                     published_at TIMESTAMP,
                     found_at TIMESTAMP DEFAULT NOW(),
                     sent_in_digest BOOLEAN DEFAULT FALSE,
@@ -576,17 +575,7 @@ def ensure_schema():
                     content_scraped_at TIMESTAMP,
                     scraping_failed BOOLEAN DEFAULT FALSE,
                     scraping_error TEXT,
-                    ai_impact VARCHAR(20),
-                    ai_reasoning TEXT,
                     ai_summary TEXT,
-                    source_tier DECIMAL(3,2),
-                    event_multiplier DECIMAL(3,2),
-                    event_multiplier_reason TEXT,
-                    relevance_boost DECIMAL(3,2),
-                    relevance_boost_reason TEXT,
-                    numeric_bonus DECIMAL(3,2),
-                    penalty_multiplier DECIMAL(3,2),
-                    penalty_reason TEXT,
                     ai_triage_selected BOOLEAN DEFAULT FALSE,
                     triage_priority INTEGER,
                     triage_reasoning TEXT,
@@ -614,14 +603,6 @@ def ensure_schema():
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS content_scraped_at TIMESTAMP;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS source_tier DECIMAL(3,2);
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier DECIMAL(3,2);
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS event_multiplier_reason TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS relevance_boost DECIMAL(3,2);
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS relevance_boost_reason TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS numeric_bonus DECIMAL(3,2);
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_multiplier DECIMAL(3,2);
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS penalty_reason TEXT;
                 ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_analysis_ticker VARCHAR(10);
                 
                 -- Update NULL values
@@ -1625,10 +1606,7 @@ def validate_scraped_content(content, url, domain):
     if technical_chars > len(content) * 0.1:  # More than 10% technical characters
         return False, "Content appears to be technical/code data"
     
-    # Check for reasonable sentence structure
-    proper_sentences = len([s for s in sentences if len(s) > 10 and s[0].isupper()])
-    if proper_sentences < len(sentences) * 0.5:  # Less than 50% proper sentences
-        return False, "Poor sentence structure"
+    # REMOVED: Sentence structure validation that was rejecting legitimate articles
     
     return True, "Valid content"
 
@@ -1902,7 +1880,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         # Check if this URL already has analysis from this ticker's perspective
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT scraped_content, ai_summary, ai_impact, ai_reasoning, quality_score
+                SELECT scraped_content, ai_summary
                 FROM found_url 
                 WHERE url_hash = %s AND ai_analysis_ticker = %s
             """, (url_hash, analysis_ticker))
@@ -1910,8 +1888,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         
         if (existing_analysis and 
             existing_analysis["scraped_content"] and 
-            existing_analysis["ai_summary"] and 
-            existing_analysis["ai_impact"]):
+            existing_analysis["ai_summary"]):
             
             LOG.info(f"REUSING ANALYSIS: Article {article_id} already analyzed from {analysis_ticker}'s perspective")
             return True
@@ -1942,74 +1919,41 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 if content:
                     scraped_content = clean_null_bytes(content)
                     content_scraped_at = datetime.now(timezone.utc)
-                    # CRITICAL: Generate AI summary after successful scraping
+                    # Generate AI summary after successful scraping
                     ai_summary = generate_ai_individual_summary(scraped_content, title, analysis_ticker)
                     if ai_summary:
                         ai_summary = clean_null_bytes(ai_summary)
                         LOG.info(f"AI SUMMARY GENERATED for {analysis_ticker}: {len(ai_summary)} chars - '{ai_summary[:100]}...'")
                     else:
                         LOG.warning(f"AI SUMMARY FAILED for {analysis_ticker}: {title[:50]}...")
-                        ai_summary = None  # Explicitly set to None if generation failed
+                        ai_summary = None
                 else:
                     scraping_failed = True
                     scraping_error = clean_null_bytes(status or "")
                     return False
         
-        # Calculate quality score from analysis_ticker's perspective
-        keywords = []
-        if category == "industry":
-            keywords = metadata.get("industry_keywords", [])
-        elif category == "competitor":
-            keywords = metadata.get("competitors", [])
-        
-        quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-            title=title,
-            domain=domain,
-            ticker=analysis_ticker,
-            description=article.get("description", ""),
-            category=category,
-            keywords=keywords
-        )
-        
-        # Store with analysis_ticker perspective - CRITICAL: Include AI summary
+        # Store with analysis_ticker perspective
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO found_url (
                     url, resolved_url, url_hash, title, description, ticker, domain,
-                    quality_score, published_at, category, search_keyword, 
+                    published_at, category, search_keyword, 
                     scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                    ai_summary, ai_impact, ai_reasoning, ai_analysis_ticker,
-                    source_tier, event_multiplier, event_multiplier_reason,
-                    relevance_boost, relevance_boost_reason, numeric_bonus,
-                    penalty_multiplier, penalty_reason, competitor_ticker,
-                    triage_priority
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ai_summary, ai_analysis_ticker, competitor_ticker, triage_priority
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
                 DO UPDATE SET
                     scraped_content = EXCLUDED.scraped_content,
                     content_scraped_at = EXCLUDED.content_scraped_at,
                     ai_summary = EXCLUDED.ai_summary,
-                    ai_impact = EXCLUDED.ai_impact,
-                    ai_reasoning = EXCLUDED.ai_reasoning,
-                    quality_score = EXCLUDED.quality_score,
                     updated_at = NOW()
             """, (
                 article.get("url"), resolved_url, url_hash, title, 
-                article.get("description"), analysis_ticker, domain, quality_score, 
+                article.get("description"), analysis_ticker, domain, 
                 article.get("published_at"), category, article.get("search_keyword"),
                 scraped_content, content_scraped_at, scraping_failed, 
                 clean_null_bytes(scraping_error or ""), clean_null_bytes(ai_summary or ""),
-                clean_null_bytes(ai_impact or ""), clean_null_bytes(ai_reasoning or ""),
-                analysis_ticker,
-                components.get('source_tier') if components else None,
-                components.get('event_multiplier') if components else None,
-                clean_null_bytes(components.get('event_multiplier_reason', '') if components else ''),
-                components.get('relevance_boost') if components else None,
-                clean_null_bytes(components.get('relevance_boost_reason', '') if components else ''),
-                components.get('numeric_bonus') if components else None,
-                components.get('penalty_multiplier') if components else None,
-                clean_null_bytes(components.get('penalty_reason', '') if components else ''),
-                article.get("competitor_ticker"),
+                analysis_ticker, article.get("competitor_ticker"),
                 normalize_priority_to_int(article.get("triage_priority", 2))
             ))
         
@@ -2717,40 +2661,13 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # 2. SECOND BADGE: Source name
     header_badges.append(f'<span class="source-badge">{display_source}</span>')
     
-    # Quality score styling - only show if AI analyzed
-    score_html = ""
+    # 3. Analysis badge if both content and summary exist
     analyzed_html = ""
-    impact_html = ""
-    quality_score = article.get("quality_score")
-    ai_impact = article.get("ai_impact")
-    
-    if ai_impact is not None and quality_score is not None:
-        # This article was AI analyzed - show score
-        score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
-        score_html = f'<span class="score {score_class}">Score: {quality_score:.0f}</span>'
-        
-        # Show impact next to score with appropriate styling
-        impact_class = {
-            "positive": "impact-positive", 
-            "negative": "impact-negative", 
-            "mixed": "impact-mixed", 
-            "neutral": "impact-neutral"
-        }.get(ai_impact.lower(), "impact-neutral")
-        impact_html = f'<span class="impact {impact_class}">{ai_impact}</span>'
-        
-        # CRITICAL: Check for BOTH scraped content AND AI summary for "Analyzed" badge
-        if article.get('scraped_content') and article.get('ai_summary'):
-            analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
-    
-    # Add score and analysis badges to header
-    if score_html:
-        header_badges.append(score_html)
-    if impact_html:
-        header_badges.append(impact_html)
-    if analyzed_html:
+    if article.get('scraped_content') and article.get('ai_summary'):
+        analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
         header_badges.append(analyzed_html)
     
-    # CRITICAL: AI Summary section - check for ai_summary field
+    # AI Summary section - check for ai_summary field
     ai_summary_html = ""
     if article.get("ai_summary"):
         clean_summary = html.escape(article["ai_summary"].strip())
@@ -3107,7 +3024,6 @@ def _is_spam_content(title: str, domain: str, description: str = "") -> bool:
     combined_text = f"{title} {description}".lower()
     return any(phrase in combined_text for phrase in spam_phrases)
 
-# Update the calculate_quality_score function to return components
 def calculate_quality_score(
     title: str, 
     domain: str, 
@@ -3116,41 +3032,8 @@ def calculate_quality_score(
     category: str = "company",
     keywords: List[str] = None
 ) -> Tuple[float, Optional[str], Optional[str], Optional[Dict]]:
-    """Calculate quality score using component-based AI scoring - UPDATED to return components
-    Returns: (score, impact, reasoning, components)
-    """
-    
-    # Debug logging
-    LOG.info(f"SCORING: {category} article for {ticker}: '{title[:30]}...'")
-    
-    # Pre-filter spam
-    if _is_spam_content(title, domain, description):
-        return 0.0, "Negative", "Spam content detected", None
-     
-    # If no OpenAI key, use fallback scoring
-    if not OPENAI_API_KEY or not title.strip():
-        score = _fallback_quality_score(title, domain, ticker, description, keywords)
-        return score, None, None, None
-    
-    # Use category-specific AI component extraction
-    try:
-        if category.lower() in ["company", "company_news", "comp"]:
-            score, impact, reasoning, components = _ai_quality_score_company_components(title, domain, ticker, description, keywords)
-        elif category.lower() in ["industry", "industry_market", "market"]:
-            score, impact, reasoning, components = _ai_quality_score_industry_components(title, domain, ticker, description, keywords)
-        elif category.lower() in ["competitor", "competitor_intel", "competition"]:
-            score, impact, reasoning, components = _ai_quality_score_competitor_components(title, domain, ticker, description, keywords)
-        else:
-            # Fallback for unknown categories
-            score = _fallback_quality_score(title, domain, ticker, description, keywords)
-            return score, None, None, None
-            
-        LOG.info(f"Component-based score [{ticker}] '{title[:50]}...' from {domain}: {score:.1f} ({category})")
-        return max(0.0, min(100.0, score)), impact, reasoning, components
-    except Exception as e:
-        LOG.warning(f"AI component scoring failed for '{title[:50]}...': {e}")
-        score = _fallback_quality_score(title, domain, ticker, description, keywords)
-        return score, None, None, None
+    """No individual article scoring - return None values"""
+    return None, None, None, None
 
 def _fallback_quality_score(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
     """Fallback scoring when AI is unavailable - GUARANTEED NO AI CALLS"""
@@ -4794,396 +4677,6 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
         
     # Final fallback - use ticker if that's all we have
     return competitor_ticker or search_keyword or "Unknown Competitor"
-
-def _ai_quality_score_company_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
-    """Enhanced AI-powered component extraction for company articles"""
-    
-    source_tier = _get_domain_tier(domain, title, description)
-    desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
-    
-    config = get_ticker_config(ticker)
-    company_name = config.get("name", ticker) if config else ticker
-    
-    schema = {
-        "name": "company_news_components",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "event_multiplier": {"type": "number", "minimum": 0.5, "maximum": 2.0},
-                "event_multiplier_reason": {"type": "string"},
-                "relevance_boost": {"type": "number", "minimum": 1.0, "maximum": 1.3},
-                "relevance_boost_reason": {"type": "string"},
-                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 0.4},
-                "penalty_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.0},
-                "penalty_reason": {"type": "string"},
-                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Neutral"]},
-                "reason_short": {"type": "string"},
-                "debug_tags": {"type": "array", "items": {"type": "string"}}
-            },
-            "required": ["event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short", "debug_tags"],
-            "additionalProperties": False
-        }
-    }
-    
-    system_prompt = f"""You are a hedge-fund news scorer for COMPANY context affecting {company_name}. Base ALL judgments ONLY on title and description_snippet. Do NOT compute a final score. Return STRICT JSON exactly as specified.
-
-INPUTS PROVIDED:
-- bucket = "company_news"
-- company_ticker = "{ticker}"
-- company_name = "{company_name}"
-- title = "{title}"
-- description_snippet = "{desc_snippet}"
-- source_tier = {source_tier} (already calculated)
-
-GENERAL RELEVANCE FACTORS (APPLY IN ORDER; USE FIRST MATCH):
-- 1.3 Direct company match: title/desc matches ticker/company_name OR a named asset/subsidiary unique to the firm.
-- 1.2 First-order exposure: named counterparty contract/customer/supplier that binds economics to the firm (with $$, units, volumes, pricing, or %, OR a named regulator decision on the firm).
-- 1.1 Second-order but specific: sector/policy/benchmark/geography explicitly tied to the firm's core inputs/channels/geos.
-- 1.0 Vague/off-sector: generic market commentary, far geographies, or missing a clear tie to firm economics.
-
-EVENT MULTIPLIER (PICK ONE):
-- 2.0 Hard corporate actions: M&A (acquires/divests/spin), bankruptcy/Chapter 11, delist/halt/recall, large asset closure, definitive regulatory fines/settlements with $.
-- 1.8 Capital actions: major buyback start/upsizing, dividend initiation/meaningful change, debt/equity issuance, rating change with outlook.
-- 1.6 Binding regulatory/procedural decisions affecting the company (approval/denial, tariff specific to the firm).
-- 1.5 Signed commercial contracts/backlog/LOIs with named counterparties and $$ or units.
-- 1.4 Earnings/guidance (scheduled reports, pre-announcements) with numbers.
-- 1.2-1.1 Management changes, product launches without numbers, notable partnerships w/o $$.
-- 1.0 Miscellaneous updates with unclear financial impact.
-- 0.9 Institutional flows (13F, small stake changes) with no activism/merger intent.
-- 0.6 Price-move explainers/recaps/opinion/education; previews with no new facts.
-- 0.5 Routine PR (awards, CSR, conference attendance) with no economic detail.
-
-NUMERIC BONUS (COMPANY) --- CAP = +0.40:
-- +0.20 Per clearly material FINANCIAL figure (EPS, revenue, margin, FCF, capex, buyback $, guidance delta, unit/capacity adds/cuts) that is NEW in this item (max 2 such adds).
-- +0.10 Additional supporting numeric detail (mix, ASP, utilization, backlog change) that ties to economics.
-- +0.00 Trivial counts (e.g., "added 879 shares"), headcounts, vague % with no base.
-
-PENALTIES (COMPANY):
-- 0.5 PR/sponsored/marketing tone or PR domains; "market size will reach ... CAGR ..."
-- 0.6 Question/listicle/prediction ("Top X...", "Should you...", "What to watch")
-- 1.0 Otherwise
-
-IMPACT DIRECTION (COMPANY):
-- Positive: beats/raises; upgrades; accretive deals; favorable rulings; capacity adds with demand.
-- Negative: misses/cuts; downgrades; dilutive raises; adverse rulings; closures/recalls.
-- Mixed: e.g., guide up YoY but down QoQ; cost up but price up; EPS beat on lower quality.
-- Neutral: minor 10b5-1 sales (<5% holdings), routine housekeeping, ceremonial PR.
-
-DEFENSIVE CLAMPS (ALWAYS APPLY):
-- If title indicates price-move recap without concrete action → event=0.6; numeric_bonus=0.
-- If 13F/holding tweaks only → event=0.9; numeric_bonus=0.
-- If "Rule 10b5-1" and <5% of reported holdings → event ≤1.1; impact=Neutral.
-- If data insufficient (no event keywords & no numbers) → event ≤1.1; numeric_bonus=0.
-
-RETURN STRICT JSON ONLY."""
-
-    user_payload = {
-        "bucket": "company_news",
-        "company_ticker": ticker,
-        "company_name": company_name,
-        "title": title,
-        "description_snippet": desc_snippet,
-        "source_tier": source_tier
-    }
-    
-    return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
-
-def _ai_quality_score_industry_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
-    """Enhanced AI-powered component extraction for industry articles"""
-    
-    source_tier = _get_domain_tier(domain, title, description)
-    desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
-    
-    config = get_ticker_config(ticker)
-    company_name = config.get("name", ticker) if config else ticker
-    
-    sector_profile = {}
-    
-    schema = {
-        "name": "industry_market_components",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "event_multiplier": {"type": "number", "minimum": 0.6, "maximum": 1.6},
-                "event_multiplier_reason": {"type": "string"},
-                "relevance_boost": {"type": "number", "minimum": 1.0, "maximum": 1.2},
-                "relevance_boost_reason": {"type": "string"},
-                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 0.3},
-                "penalty_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.0},
-                "penalty_reason": {"type": "string"},
-                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Neutral"]},
-                "reason_short": {"type": "string"},
-                "debug_tags": {"type": "array", "items": {"type": "string"}}
-            },
-            "required": ["event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short", "debug_tags"],
-            "additionalProperties": False
-        }
-    }
-    
-    system_prompt = f"""You are a hedge-fund news scorer for INDUSTRY context affecting {company_name}. Base ALL judgments ONLY on title and description_snippet. Do NOT compute a final score. Return STRICT JSON exactly as specified.
-
-INPUTS PROVIDED:
-- bucket = "industry_market"
-- target_company_ticker = "{ticker}"
-- company_name = "{company_name}"
-- title = "{title}"
-- description_snippet = "{desc_snippet}"
-- industry_keywords = {keywords or []}
-- sector_profile = {sector_profile}
-
-GENERAL RELEVANCE FACTORS (INDUSTRY):
-- 1.2 Article explicitly mentions any of sector_profile.core_inputs / benchmarks / core_geos / core_channels in a way that clearly affects sector economics (cost, price, availability, demand).
-- 1.1 Sector-matching but adjacent geo/channel (e.g., EU policy for US-centric firm) or early-stage proposals with plausible path to effect.
-- 1.0 Generic macro/sustainability platitudes or unrelated sub-sector news.
-
-EVENT MULTIPLIER (INDUSTRY):
-- 1.6 Enacted policy/regulation with effective dates/geos (tariffs, standards, reimbursement, safety/emissions rules) that shape sector economics.
-- 1.5 Input/commodity/benchmark supply-demand or price shocks tied to core_inputs/benchmarks (e.g., ore/energy shortage, index spike), or infrastructure funding passed.
-- 1.4 Ecosystem capacity/capex/standardization (new mills/lines, grid or logistics expansions, standards adoption) with implications for cost/throughput.
-- 1.1 Reputable research/indices (PMI sub-indices, monthly production, government stats) directly relevant.
-- 1.0 Sector commentary without new data.
-- 0.6 Market-size/vendor marketing/CSR with no quantified economics.
-
-NUMERIC BONUS (INDUSTRY) --- CAP = +0.30:
-- +0.15 Clear magnitude on policy/price/capacity (e.g., tariff %; index +X%; capacity +Y units; capex $ with commissioning date).
-- +0.10 Secondary corroboration (inventory days, utilization, lead times).
-- +0.05 Concrete effective date/time-to-impact (e.g., "effective Jan 1, 2026").
-- +0.00 Vague "billions by 2030" TAM claims without sources/method.
-
-PENALTIES (INDUSTRY):
-- 0.5 Vendor PR/marketing puff or TAM-CAGR boilerplate.
-- 0.6 Opinion/listicle/forecast pieces without cited data.
-- 1.0 Otherwise.
-
-IMPACT DIRECTION (ON TARGET COMPANY):
-- Positive: inputs down; favorable tariffs/subsidies; demand-side stimulus in core channels; supportive benchmark moves.
-- Negative: inputs up/shortages; adverse tariffs/quotas; regulatory burdens increasing costs; unfavorable benchmark shifts.
-- Mixed: opposing forces (e.g., input up but prices up).
-- Neutral: data points not yet directional.
-
-DEFENSIVE CLAMPS:
-- If core_inputs/benchmarks/geos/channels not mentioned and no numbers → relevance=1.0; event ≤1.0; numeric_bonus=0.
-- Title/desc only: cap numeric_bonus at +0.20; require explicit units/%/$ to award any bonus.
-
-RETURN STRICT JSON ONLY."""
-
-    user_payload = {
-        "bucket": "industry_market",
-        "target_company_ticker": ticker,
-        "title": title,
-        "description_snippet": desc_snippet,
-        "industry_keywords": keywords or [],
-        "sector_profile": sector_profile
-    }
-    
-    return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
-
-def _ai_quality_score_competitor_components(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> Tuple[float, str, str, Dict]:
-    """Enhanced AI-powered component extraction for competitor articles"""
-    
-    source_tier = _get_domain_tier(domain, title, description)
-    desc_snippet = description[:500] if description and description.lower() != title.lower().strip() else ""
-    
-    config = get_ticker_config(ticker)
-    company_name = config.get("name", ticker) if config else ticker
-    
-    competitor_whitelist = []
-    if config and config.get("competitors"):
-        for comp_str in config["competitors"]:
-            match = re.search(r'\(([A-Z]{1,5})\)', comp_str)
-            if match:
-                competitor_whitelist.append(match.group(1))
-    
-    schema = {
-        "name": "competitor_intel_components",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "event_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.7},
-                "event_multiplier_reason": {"type": "string"},
-                "relevance_boost": {"type": "number", "minimum": 1.0, "maximum": 1.2},
-                "relevance_boost_reason": {"type": "string"},
-                "numeric_bonus": {"type": "number", "minimum": 0.0, "maximum": 0.35},
-                "penalty_multiplier": {"type": "number", "minimum": 0.5, "maximum": 1.0},
-                "penalty_reason": {"type": "string"},
-                "impact_on_main": {"type": "string", "enum": ["Positive", "Negative", "Mixed", "Neutral"]},
-                "reason_short": {"type": "string"},
-                "debug_tags": {"type": "array", "items": {"type": "string"}}
-            },
-            "required": ["event_multiplier", "event_multiplier_reason", "relevance_boost", "relevance_boost_reason", "numeric_bonus", "penalty_multiplier", "penalty_reason", "impact_on_main", "reason_short", "debug_tags"],
-            "additionalProperties": False
-        }
-    }
-    
-    system_prompt = f"""You are a hedge-fund news scorer for COMPETITIVE intelligence affecting {company_name}. Base ALL judgments ONLY on title and description_snippet. Do NOT compute a final score. Return STRICT JSON exactly as specified.
-
-INPUTS PROVIDED:
-- bucket = "competitor_intel"
-- target_company_ticker = "{ticker}"
-- company_name = "{company_name}"
-- title = "{title}"
-- description_snippet = "{desc_snippet}"
-- competitor_whitelist = {competitor_whitelist}
-
-GENERAL RELEVANCE FACTORS (COMPETITOR):
-- 1.2 The SUBJECT of the article is in competitor_whitelist AND explicit competitive implications are stated (price/capacity/share/customer win/loss).
-- 1.1 Close adjacent peer (same sub-industry) with explicit implications, but not in whitelist.
-- 1.0 Vague peer reference, editorial/preview, or off-universe.
-
-EVENT MULTIPLIER (COMPETITOR):
-- 1.7 Rival hard events likely to shift share/price: M&A, major capacity adds/cuts, price hikes/cuts, plant shutdown/curtailment, large customer win/loss with $$.
-- 1.6 Capital structure stress/advantage: punitive refi, large equity raise, rating cut to HY, covenant issues; or major cost advantage emergence.
-- 1.4 Rival guidance with numbers, product/pricing launch with explicit $$/units, meaningful opex/capex changes.
-- 1.1 Management changes or announcements without tangible economics.
-- 1.0 Miscellaneous/unclear impact on competitive landscape.
-- 0.9 Holdings/13F flows about the peer (non-activist).
-- 0.6 Opinion/preview/"why it moved" without new facts.
-- 0.5 Routine PR by the peer with no economics.
-
-NUMERIC BONUS (COMPETITOR) --- CAP = +0.35:
-- +0.20 Concrete economics: announced capacity (units/Mt/MW), explicit price change %, contract value, guide deltas that plausibly affect the target company's market.
-- +0.10 Secondary figures (utilization, mix, input cost changes) that inform rivalry economics.
-- +0.00 Trivial numbers (share counts, social metrics).
-
-PENALTIES (COMPETITOR):
-- 0.5 Press release/sponsored content or vendor marketing.
-- 0.6 Question/listicle/preview framing.
-- 1.0 Otherwise.
-
-IMPACT DIRECTION (ON TARGET COMPANY):
-- Positive: rival capacity cuts/outages; rival distress; rival price increases; loss of a key customer by the rival that the target might win.
-- Negative: rival capacity adds; under-cut pricing; rival wins a key customer from target; rival cost breakthrough.
-- Mixed: simultaneous adds and shutdowns, or price up but input costs fall for both.
-- Neutral: editorial notes, small sponsorships, or ambiguous previews.
-
-DEFENSIVE CLAMPS:
-- If the subject company is NOT a plausible peer (fails whitelist and not same sub-industry) → relevance=1.0; event ≤1.1; numeric_bonus=0.
-- If only title/desc and no concrete economics → event ≤1.1; numeric_bonus=0.
-
-RETURN STRICT JSON ONLY."""
-
-    user_payload = {
-        "bucket": "competitor_intel",
-        "target_company_ticker": ticker,
-        "title": title,
-        "description_snippet": desc_snippet,
-        "competitor_whitelist": competitor_whitelist
-    }
-    
-    return _make_ai_component_request(system_prompt, user_payload, schema, source_tier)
-
-def calculate_score_from_components(components: Dict) -> float:
-    """
-    Calculate quality score from AI-provided components using our own formula
-    Formula: (100 × source_tier × event_multiplier × relevance_boost) × penalty_multiplier + numeric_bonus
-    """
-    try:
-        source_tier = float(components.get('source_tier', 0.5))
-        event_multiplier = float(components.get('event_multiplier', 1.0))
-        relevance_boost = float(components.get('relevance_boost', 1.0))
-        numeric_bonus = float(components.get('numeric_bonus', 0.0))
-        penalty_multiplier = float(components.get('penalty_multiplier', 1.0))
-        
-        # Validate ranges
-        source_tier = max(0.1, min(1.0, source_tier))
-        event_multiplier = max(0.1, min(2.0, event_multiplier))
-        relevance_boost = max(0.5, min(1.5, relevance_boost))
-        numeric_bonus = max(0.0, min(1.0, numeric_bonus))
-        penalty_multiplier = max(0.1, min(1.0, penalty_multiplier))
-        
-        # Calculate score using exact formula - penalty applies to base score, then add numeric bonus
-        base_score = 100 * source_tier * event_multiplier * relevance_boost
-        penalized_score = base_score * penalty_multiplier
-        final_score_raw = penalized_score + numeric_bonus
-        
-        # Clamp to valid range
-        final_score = max(0.0, min(100.0, final_score_raw))
-        
-        LOG.info(f"COMPONENT CALCULATION: (100 × {source_tier} × {event_multiplier} × {relevance_boost}) × {penalty_multiplier} + {numeric_bonus} = {final_score:.1f}")
-        
-        return final_score
-        
-    except (ValueError, TypeError) as e:
-        LOG.error(f"Invalid components for score calculation: {e}, using fallback score 50.0")
-        return 50.0
-
-def _make_ai_component_request(system_prompt: str, user_payload: Dict, schema: Dict, source_tier: float) -> Tuple[float, str, str, Dict]:
-    """Make AI request for components only, calculate score ourselves"""
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": OPENAI_MODEL,
-        "input": f"{system_prompt}\n\n{json.dumps(user_payload)}",
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": schema.get("name", "components"),
-                "schema": schema["schema"],
-                "strict": schema.get("strict", True)
-            },
-            "verbosity": "low"
-        },
-        "reasoning": {"effort": "medium"},
-        "max_output_tokens": 5000,  # Increased for component scoring
-        "truncation": "auto"
-    }
-    
-    response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-    
-    if response.status_code != 200:
-        LOG.warning(f"OpenAI API error {response.status_code}: {response.text[:200]}")
-        raise Exception(f"API error: {response.status_code}")
-    
-    result = response.json()
-    
-    # Log usage details
-    u = result.get("usage", {}) or {}
-    LOG.info("AI Component usage — input:%s output:%s (cap:%s) status:%s reason:%s",
-             u.get("input_tokens"), u.get("output_tokens"),
-             result.get("max_output_tokens"),
-             result.get("status"),
-             (result.get("incomplete_details") or {}).get("reason"))
-    
-    content = extract_text_from_responses(result)
-    
-    if not content:
-        LOG.error("Structured output missing text payload")
-        LOG.error(f"Raw result keys: {list(result.keys())}")
-        if result.get("output"):
-            LOG.error(f"Output blocks: {len(result['output'])}")
-            for i, block in enumerate(result.get("output", [])):
-                LOG.error(f"Block {i}: {list(block.keys())}")
-        raise Exception("No content returned from API")
-    
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError as e:
-        LOG.error(f"Failed to parse component JSON: {e}; raw: {content[:500]}")
-        raise Exception(f"JSON parsing failed: {e}")
-    
-    # Extract components with reasons
-    components = {
-        'source_tier': source_tier,
-        'event_multiplier': parsed.get('event_multiplier', 1.0),
-        'event_multiplier_reason': parsed.get('event_multiplier_reason', ''),
-        'relevance_boost': parsed.get('relevance_boost', 1.0),
-        'relevance_boost_reason': parsed.get('relevance_boost_reason', ''),
-        'numeric_bonus': parsed.get('numeric_bonus', 0.0),
-        'penalty_multiplier': parsed.get('penalty_multiplier', 1.0),
-        'penalty_reason': parsed.get('penalty_reason', '')
-    }
-    
-    calculated_score = calculate_score_from_components(components)
-    impact = parsed.get("impact_on_main", "Unclear")
-    reason = parsed.get("reason_short", "")
-    
-    return max(0.0, min(100.0, calculated_score)), impact, reason, components
 
 def get_url_hash(url: str, resolved_url: str = None) -> str:
     """Generate hash for URL deduplication, using resolved URL if available"""
@@ -7115,15 +6608,6 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
-        ".score { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-        ".high-score { background-color: #d4edda; color: #155724; }",
-        ".med-score { background-color: #fff3cd; color: #856404; }",
-        ".low-score { background-color: #f8d7da; color: #721c24; }",
-        ".impact { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-        ".impact-positive { background-color: #d4edda; color: #155724; }",
-        ".impact-negative { background-color: #f8d7da; color: #721c24; }",
-        ".impact-mixed { background-color: #fff3cd; color: #856404; }",
-        ".impact-neutral { background-color: #e2e3e5; color: #383d41; }",
         ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
@@ -7229,18 +6713,14 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
             cur.execute("""
                 SELECT 
                     f.id, f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.ticker, f.domain, f.published_at,
                     f.found_at, f.category, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning, f.ai_summary,
+                    f.search_keyword, f.ai_summary,
                     f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
-                    f.source_tier, f.event_multiplier, f.event_multiplier_reason,
-                    f.relevance_boost, f.relevance_boost_reason, f.numeric_bonus,
-                    f.penalty_multiplier, f.penalty_reason, f.competitor_ticker,
-                    f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
+                    f.competitor_ticker, f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
                     f.qb_score, f.qb_level, f.qb_reasoning, f.ai_analysis_ticker
                 FROM found_url f
                 WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
                     AND (f.ticker = ANY(%s) OR f.ai_analysis_ticker = ANY(%s))
                 ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff, tickers, tickers))
@@ -7248,18 +6728,14 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
             cur.execute("""
                 SELECT 
                     f.id, f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
+                    f.ticker, f.domain, f.published_at,
                     f.found_at, f.category, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning, f.ai_summary,
+                    f.search_keyword, f.ai_summary,
                     f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
-                    f.source_tier, f.event_multiplier, f.event_multiplier_reason,
-                    f.relevance_boost, f.relevance_boost_reason, f.numeric_bonus,
-                    f.penalty_multiplier, f.penalty_reason, f.competitor_ticker,
-                    f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
+                    f.competitor_ticker, f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
                     f.qb_score, f.qb_level, f.qb_reasoning, f.ai_analysis_ticker
                 FROM found_url f
                 WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
                 ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff,))
         
@@ -7942,7 +7418,6 @@ def force_digest(request: Request, body: ForceDigestRequest):
                     f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
                     AND f.ticker = ANY(%s)
                 ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
@@ -7955,7 +7430,6 @@ def force_digest(request: Request, body: ForceDigestRequest):
                     f.search_keyword, f.ai_impact, f.ai_reasoning
                 FROM found_url f
                 WHERE f.found_at >= %s
-                    AND f.quality_score >= 15
                 ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7),))
         

@@ -1204,9 +1204,33 @@ def scrape_with_scrapfly(
     base_params: dict | None = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
-    Scrapfly scraping with improved text extraction and content cleaning
+    Scrapfly scraping with improved text extraction and content cleaning.
+    - Uses client-side retries/backoff here (do not rely on Scrapfly retry).
+    - Does NOT send 'timeout' in Scrapfly params (prevents 400 when retry is enabled server-side).
+    - Cranks up anti-bot only for domains in LOCAL_SCRAPFLY_ANTIBOT.
+    Returns: (cleaned_content, error_message)
     """
     global scrapfly_stats, enhanced_scraping_stats
+
+    def _host(u: str) -> str:
+        h = (urlparse(u).hostname or "").lower()
+        if h.startswith("www."):
+            h = h[4:]
+        return h
+
+    def _matches(host: str, dom: str) -> bool:
+        return host == dom or host.endswith("." + dom)
+
+    # Local list affects ONLY this function (you said you’ll empty the global list upstream)
+    LOCAL_SCRAPFLY_ANTIBOT = {
+        "simplywall.st", "seekingalpha.com", "zacks.com", "benzinga.com",
+        "cnbc.com", "investing.com", "gurufocus.com", "fool.com",
+        "insidermonkey.com", "nasdaq.com", "markets.financialcontent.com",
+        "thefly.com", "streetinsider.com", "accesswire.com",
+        "247wallst.com", "barchart.com", "telecompaper.com",
+        "news.stocktradersdaily.com", "sharewise.com",
+        "video.media.yql.yahoo.com", "templates.cds.yahoo"
+    }
 
     for attempt in range(max_retries + 1):
         try:
@@ -1223,13 +1247,15 @@ def scrape_with_scrapfly(
 
             LOG.info(f"SCRAPFLY: Starting scrape for {domain} (attempt {attempt + 1})")
 
-            # usage stats
+            # --- usage stats
             scrapfly_stats["requests_made"] += 1
-            scrapfly_stats["cost_estimate"] += 0.002
+            scrapfly_stats["cost_estimate"] += 0.002  # rough est.
             scrapfly_stats["by_domain"][domain]["attempts"] += 1
             enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
 
-            # --- build params (use real booleans; lowercase country) ---
+            host = _host(url)
+
+            # --- Build Scrapfly params (NO 'timeout' here; keep client timeout in requests.get)
             params = {
                 "key": SCRAPFLY_API_KEY,
                 "url": url,
@@ -1238,23 +1264,24 @@ def scrape_with_scrapfly(
                 "cache": False,
                 **(base_params or {}),
             }
-            if needs_antibot(url):
+
+            # Toggle anti-bot/JS only for local list
+            if any(_matches(host, d) for d in LOCAL_SCRAPFLY_ANTIBOT):
                 params["asp"] = True
                 params["render_js"] = True
 
             response = requests.get("https://api.scrapfly.io/scrape", params=params, timeout=30)
 
-            # ---- status handling: keep in a single if/elif/elif/else chain ----
+            # ---- Status handling
             if response.status_code == 200:
                 try:
                     result = response.json()
                     html_content = result.get("result", {}).get("content", "") or ""
                 except Exception as json_error:
                     LOG.warning(f"SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
-                    # fall back to raw text if API didn’t return JSON we expect
                     html_content = response.text or ""
 
-                # extract text from HTML (don’t rely on unsupported `format` param)
+                # Extract text from HTML (don't rely on unsupported API-side text formats)
                 raw_content = ""
                 if html_content:
                     try:
@@ -1292,7 +1319,6 @@ def scrape_with_scrapfly(
                 return cleaned_content, None
 
             elif response.status_code == 422:
-                # invalid params; log body to see which field was wrong
                 LOG.warning(f"SCRAPFLY: 422 invalid parameters for {domain} body: {response.text[:500]}")
                 break
 
@@ -1303,7 +1329,6 @@ def scrape_with_scrapfly(
                     continue
 
             else:
-                # log error body + request ID for support
                 req_id = response.headers.get("x-request-id") or response.headers.get("cf-ray")
                 LOG.warning(
                     f"SCRAPFLY: HTTP {response.status_code} for {domain} "

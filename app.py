@@ -246,8 +246,8 @@ SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com", "marketbeat",
     "newser.com", "www.newser.com", "newser", 
     "khodrobank.com", "www.khodrobank.com", "khodrobank",
-    "defenseworld.net", "defense-world.net", "defensenews.com",
-    "facebook.com"
+    "www.defenseworld.net", "www.defense-world.net", "www.defensenews.com",
+    "www.facebook.com"
 }
 
 QUALITY_DOMAINS = {

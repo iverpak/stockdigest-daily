@@ -260,12 +260,7 @@ QUALITY_DOMAINS = {
 # Domains known to have consistent scraping failures or poor content quality
 PROBLEMATIC_SCRAPE_DOMAINS = {
     # finance & article sites w/ bot protection or heavy JS
-    "zacks.com", "thefly.com", "accesswire.com", "streetinsider.com",
-    "msn.com", "templates.cds.yahoo", "sharewise.com", "news.stocktradersdaily.com",
-    "247wallst.com", "barchart.com", "newstrail.com", "telecompaper.com",
-    "video.media.yql.yahoo.com", "fool.com", "insidermonkey.com",
-    "simplywall.st", "investing.com", "gurufocus.com", "seekingalpha.com",
-    "markets.financialcontent.com", "nasdaq.com"
+    "defenseworld.net", "defense-world.net", "defensenews.com",
 }
 
 # Known paywall domains to skip during content scraping

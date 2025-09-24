@@ -6045,39 +6045,39 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
         ai_analysis_summary = ""
         
         if articles_with_content or industry_articles_with_content:
-            # Company content summaries
+            # Company content summaries - USE AI SUMMARIES
             content_summaries = []
-            for article in articles_with_content[:20]:  # Reduce to make room for industry
+            for article in articles_with_content[:20]:
                 title = article.get("title", "")
-                content = article.get("scraped_content", "")
+                ai_summary = article.get("ai_summary", "")  # CHANGED: Use AI summary instead of scraped content
                 domain = article.get("domain", "")
                 
-                if content and len(content) > 200:
+                if ai_summary and len(ai_summary) > 50:  # CHANGED: Lower threshold for AI summaries
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    content_summaries.append(f"• {title} [{source_name}]: {content[:500]}...")
+                    content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")  # CHANGED: Use full AI summary
             
-            # Industry content summaries with keyword context
+            # Industry content summaries with keyword context - USE AI SUMMARIES
             industry_content_summaries = []
-            for article in industry_articles_with_content[:15]:  # Add industry content
+            for article in industry_articles_with_content[:15]:
                 title = article.get("title", "")
-                content = article.get("scraped_content", "")
+                ai_summary = article.get("ai_summary", "")  # CHANGED: Use AI summary
                 domain = article.get("domain", "")
                 keyword = article.get("search_keyword", "Industry")
                 
-                if content and len(content) > 200:
+                if ai_summary and len(ai_summary) > 50:  # CHANGED: Lower threshold
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}]: {content[:500]}...")
+                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}]: {ai_summary}")  # CHANGED: Use full AI summary
             
-            # Competitor content summaries
+            # Competitor content summaries - USE AI SUMMARIES
             competitor_content_summaries = []
-            for article in competitor_articles_with_content[:15]:  # Reduce slightly
+            for article in competitor_articles_with_content[:15]:
                 title = article.get("title", "")
-                content = article.get("scraped_content", "")
+                ai_summary = article.get("ai_summary", "")  # CHANGED: Use AI summary
                 domain = article.get("domain", "")
                 
-                if content and len(content) > 200:
+                if ai_summary and len(ai_summary) > 50:  # CHANGED: Lower threshold
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    competitor_content_summaries.append(f"• {title} [{source_name}]: {content[:500]}...")
+                    competitor_content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")  # CHANGED: Use full AI summary
             
             if content_summaries or industry_content_summaries:
                 ai_text = "\n".join(content_summaries)

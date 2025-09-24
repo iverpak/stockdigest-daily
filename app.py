@@ -3183,14 +3183,16 @@ def generate_ai_individual_summary(scraped_content: str, title: str, ticker: str
         company_name = config.get("name", ticker) if config else ticker
         sector = config.get("sector", "") if config else ""
         
-        prompt = f"""You are a hedge-fund analyst. Write a concise, non-promotional summary in 5–7 sentences.
+        prompt = f"""You are a hedge-fund analyst. Write a 5–7 sentence summary that is 100% EXTRACTIVE.
 
-Must do:
-- Lead with what happened, who’s involved, timing, and dollar figures.
-- Include at least one line on balance-sheet/earnings/cash-flow impact or unit economics.
-- Add catalysts (next events), key risks, and any regulatory/antitrust/financing angles.
-- Note second-order effects on suppliers/competitors/customers if material.
-Rules: no bullets, no intro/conclusion labels, no quotes, no headlines, no “we”. Prefer numbers and dates. Each sentence ≤ 28 words.
+Rules (hard):
+- Use ONLY facts explicitly present in the provided text (no outside knowledge, no inference, no estimates).
+- Include every stated number, date, percentage, price, share count, unit, and named entity relevant to the main event.
+- If a detail is not stated in the text, do NOT mention it or imply it.
+- Forbidden words/hedges: likely, may, could, should, appears, expect, estimate, assume, infer, suggests, catalysts, risks, second-order.
+- No bullets, no labels, no quotes, no headlines; 5–7 sentences; each ≤ 28 words.
+
+If the text lacks enough information for 5 sentences, write only as many factual sentences as the text supports (minimum 3), still ≤ 28 words each.
 
 Article Title: {title}
 Content Snippet: {description[:1000] if description else ""}

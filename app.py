@@ -179,6 +179,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
+SCRAPFLY_API_KEY = os.getenv("SCRAPFLY_API_KEY")
 
 # Email configuration
 def _first(*vals) -> Optional[str]:
@@ -3194,7 +3195,7 @@ Provide 3-5 sentences focusing on material financial impact, specific timelines,
 def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
     Perform AI triage on batched articles to identify scraping candidates
-    Returns dict with category -> list of selected article data (including priority, reasoning)
+    FIXED: Process industry/competitor articles by keyword/competitor separately
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - skipping triage")
@@ -3206,44 +3207,82 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
     
-    # Build enhanced metadata
-    aliases_brands_assets = {"aliases": [], "brands": [], "assets": []}
-    sector_profile = {"core_inputs": [], "core_channels": [], "core_geos": [], "benchmarks": []}
-    
-    if config:
+    # Company articles - process as single batch (limit: 20)
+    company_articles = articles_by_category.get("company", [])
+    if company_articles:
+        LOG.info(f"Starting AI triage for company: {len(company_articles)} articles")
         try:
-            if config.get("aliases_brands_assets"):
-                aliases_brands_assets = json.loads(config["aliases_brands_assets"]) if isinstance(config["aliases_brands_assets"], str) else config["aliases_brands_assets"]
-            if config.get("sector_profile"):
-                sector_profile = json.loads(config["sector_profile"]) if isinstance(config["sector_profile"], str) else config["sector_profile"]
-        except:
-            pass
-    
-    # Process each category
-    for category, articles in articles_by_category.items():
-        if not articles:
-            continue
-            
-        LOG.info(f"Starting AI triage for {category}: {len(articles)} articles")
-        
-        try:
-            if category == "company":
-                selected = triage_company_articles_full(articles, ticker, company_name, aliases_brands_assets, sector_profile)
-            elif category == "industry":
-                peers = config.get("competitors", []) if config else []
-                selected = triage_industry_articles_full(articles, ticker, sector_profile, peers)
-            elif category == "competitor":
-                peers = config.get("competitors", []) if config else []
-                selected = triage_competitor_articles_full(articles, ticker, peers, sector_profile)
-            else:
-                selected = []
-                
-            selected_results[category] = selected
-            LOG.info(f"AI triage {category}: selected {len(selected)} articles for scraping")
-            
+            selected = triage_company_articles_full(company_articles, ticker, company_name, {}, {})
+            selected_results["company"] = selected
+            LOG.info(f"AI triage company: selected {len(selected)} articles for scraping")
         except Exception as e:
-            LOG.error(f"AI triage failed for {category}: {e}")
-            selected_results[category] = []
+            LOG.error(f"Company triage failed: {e}")
+    
+    # Industry articles - FIXED: Process by keyword separately (5 per keyword)
+    industry_articles = articles_by_category.get("industry", [])
+    if industry_articles:
+        # Group by search_keyword
+        industry_by_keyword = {}
+        for idx, article in enumerate(industry_articles):
+            keyword = article.get("search_keyword", "unknown")
+            if keyword not in industry_by_keyword:
+                industry_by_keyword[keyword] = []
+            industry_by_keyword[keyword].append({"article": article, "original_idx": idx})
+        
+        LOG.info(f"Starting AI triage for industry: {len(industry_articles)} articles across {len(industry_by_keyword)} keywords")
+        
+        all_industry_selected = []
+        for keyword, keyword_articles in industry_by_keyword.items():
+            try:
+                LOG.info(f"Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
+                triage_articles = [item["article"] for item in keyword_articles]
+                selected = triage_industry_articles_full(triage_articles, ticker, {}, [])
+                
+                # Map back to original indices
+                for selected_item in selected:
+                    original_idx = keyword_articles[selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx
+                    all_industry_selected.append(selected_item)
+                
+                LOG.info(f"Industry keyword '{keyword}': selected {len(selected)} articles")
+            except Exception as e:
+                LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
+        
+        selected_results["industry"] = all_industry_selected
+        LOG.info(f"AI triage industry: selected {len(all_industry_selected)} articles total")
+    
+    # Competitor articles - FIXED: Process by competitor separately (5 per competitor)
+    competitor_articles = articles_by_category.get("competitor", [])
+    if competitor_articles:
+        # Group by competitor_ticker (primary) or search_keyword (fallback)
+        competitor_by_entity = {}
+        for idx, article in enumerate(competitor_articles):
+            entity_key = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+            if entity_key not in competitor_by_entity:
+                competitor_by_entity[entity_key] = []
+            competitor_by_entity[entity_key].append({"article": article, "original_idx": idx})
+        
+        LOG.info(f"Starting AI triage for competitor: {len(competitor_articles)} articles across {len(competitor_by_entity)} competitors")
+        
+        all_competitor_selected = []
+        for entity_key, entity_articles in competitor_by_entity.items():
+            try:
+                LOG.info(f"Processing competitor '{entity_key}': {len(entity_articles)} articles")
+                triage_articles = [item["article"] for item in entity_articles]
+                selected = triage_competitor_articles_full(triage_articles, ticker, [], {})
+                
+                # Map back to original indices
+                for selected_item in selected:
+                    original_idx = entity_articles[selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx
+                    all_competitor_selected.append(selected_item)
+                
+                LOG.info(f"Competitor '{entity_key}': selected {len(selected)} articles")
+            except Exception as e:
+                LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
+        
+        selected_results["competitor"] = all_competitor_selected
+        LOG.info(f"AI triage competitor: selected {len(all_competitor_selected)} articles total")
     
     return selected_results
 
@@ -5904,7 +5943,7 @@ def generate_ticker_metadata_with_ai(ticker, company_name=None):
 
 CRITICAL REQUIREMENTS:
 - All competitors must be currently publicly traded with valid ticker symbols
-- Industry keywords must be SPECIFIC enough to avoid false positives in news filtering
+- Industry keywords must be SPECIFIC enough to avoid false positives in news filtering, but not so narrow that they miss material news.
 - Benchmarks must be sector-specific, not generic market indices
 - All information must be factually accurate
 - The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")

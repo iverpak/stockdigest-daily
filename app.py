@@ -1197,134 +1197,122 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
     scrapingbee_stats["failed"] += 1
     return None, f"ScrapingBee failed after {max_retries + 1} attempts"
 
-def scrape_with_scrapfly(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
+def scrape_with_scrapfly(
+    url: str,
+    domain: str,
+    max_retries: int = 2,
+    base_params: dict | None = None,
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Scrapfly scraping with improved text extraction and content cleaning
     """
     global scrapfly_stats, enhanced_scraping_stats
-    
+
     for attempt in range(max_retries + 1):
         try:
             if not SCRAPFLY_API_KEY:
                 return None, "Scrapfly API key not configured"
-            
+
             if normalize_domain(domain) in PAYWALL_DOMAINS:
                 return None, f"Paywall domain: {domain}"
-            
+
             if attempt > 0:
                 delay = 2 ** attempt
                 LOG.info(f"SCRAPFLY RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
                 time.sleep(delay)
-            
+
             LOG.info(f"SCRAPFLY: Starting scrape for {domain} (attempt {attempt + 1})")
-            
-            # Update usage stats
+
+            # usage stats
             scrapfly_stats["requests_made"] += 1
-            scrapfly_stats["cost_estimate"] += 0.002  # Scrapfly is typically ~$0.002 per request
+            scrapfly_stats["cost_estimate"] += 0.002
             scrapfly_stats["by_domain"][domain]["attempts"] += 1
             enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
-            
-            # Scrapfly API parameters
+
+            # --- build params (use real booleans; lowercase country) ---
             params = {
                 "key": SCRAPFLY_API_KEY,
                 "url": url,
                 "render_js": False,
                 "country": "us",
-                "timeout": 20,   # seconds
+                "timeout": 20,    # seconds
                 "cache": False,
                 **(base_params or {}),
             }
-        
             if needs_antibot(url):
                 params["asp"] = True
                 params["render_js"] = True
-            
-            # Add anti-bot measures for problematic domains
-            if domain in ['simplywall.st', 'seekingalpha.com', 'zacks.com']:
-                params['asp'] = True  # Anti-scraping protection
-                params['render_js'] = True  # Enable JS rendering for dynamic content
-            
-            response = requests.get('https://api.scrapfly.io/scrape', 
-                                   params=params, 
-                                   timeout=30)
-            
+
+            response = requests.get("https://api.scrapfly.io/scrape", params=params, timeout=30)
+
+            # ---- status handling: keep in a single if/elif/elif/else chain ----
             if response.status_code == 200:
                 try:
-                    # Scrapfly returns JSON
                     result = response.json()
-                    html = result.get("result", {}).get("content", "")
-                    
-                    # Extract content based on format
-                    if params.get('format') == 'text':
-                        raw_content = result.get('result', {}).get('content', '')
-                    else:
-                        # Fallback to HTML parsing if needed
-                        html_content = result.get('result', {}).get('content', '')
-                        if html_content:
-                            # Use newspaper to extract from HTML
-                            article = newspaper.Article(url)
-                            article.set_html(html_content)
-                            article.parse()
-                            raw_content = article.text
-                        else:
-                            raw_content = ''
-                    
+                    html_content = result.get("result", {}).get("content", "") or ""
                 except Exception as json_error:
                     LOG.warning(f"SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
-                    raw_content = response.text
+                    # fall back to raw text if API didn’t return JSON we expect
+                    html_content = response.text or ""
+
+                # extract text from HTML (don’t rely on unsupported `format` param)
+                raw_content = ""
+                if html_content:
+                    try:
+                        article = newspaper.Article(url)
+                        article.set_html(html_content)
+                        article.parse()
+                        raw_content = article.text or ""
+                    except Exception as e:
+                        LOG.warning(f"SCRAPFLY: Newspaper parse failed for {domain}: {e}")
+                        raw_content = html_content
+
+                if not raw_content or len(raw_content.strip()) < 100:
+                    LOG.warning(f"SCRAPFLY: Insufficient raw content for {domain} (attempt {attempt + 1})")
+                    continue
+
+                cleaned_content = clean_scraped_content(raw_content, url, domain)
+                if not cleaned_content or len(cleaned_content.strip()) < 100:
+                    LOG.warning(f"SCRAPFLY: Content too short after cleaning for {domain}")
+                    continue
+
+                is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
+                if not is_valid:
+                    LOG.warning(f"SCRAPFLY: Content validation failed for {domain}: {validation_msg}")
+                    break
+
+                # success stats
+                scrapfly_stats["successful"] += 1
+                scrapfly_stats["by_domain"][domain]["successes"] += 1
+                enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
+
+                raw_len = len(str(raw_content))
+                clean_len = len(cleaned_content)
+                reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0.0
+                LOG.info(f"SCRAPFLY SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
+                return cleaned_content, None
+
+            elif response.status_code == 422:
+                # invalid params; log body to see which field was wrong
+                LOG.warning(f"SCRAPFLY: 422 invalid parameters for {domain} body: {response.text[:500]}")
+                break
+
+            elif response.status_code == 429:
+                LOG.warning(f"SCRAPFLY: 429 rate limited for {domain} (attempt {attempt + 1})")
+                if attempt < max_retries:
+                    time.sleep(5)
+                    continue
 
             else:
+                # log error body + request ID for support
                 req_id = response.headers.get("x-request-id") or response.headers.get("cf-ray")
                 LOG.warning(
                     f"SCRAPFLY: HTTP {response.status_code} for {domain} "
                     f"(attempt {attempt + 1}) id={req_id} body: {response.text[:500]}"
                 )
-                continue  # let your retry loop handle next attempt
-                
-                if not raw_content or len(raw_content.strip()) < 100:
-                    LOG.warning(f"SCRAPFLY: Insufficient raw content for {domain} (attempt {attempt + 1})")
-                    continue
-                
-                # Apply content cleaning to the extracted text
-                cleaned_content = clean_scraped_content(raw_content, url, domain)
-                
-                if not cleaned_content or len(cleaned_content.strip()) < 100:
-                    LOG.warning(f"SCRAPFLY: Content too short after cleaning for {domain}")
-                    continue
-                
-                # Validate cleaned content quality
-                is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
-                if is_valid:
-                    scrapfly_stats["successful"] += 1
-                    scrapfly_stats["by_domain"][domain]["successes"] += 1
-                    enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
-                    
-                    # Enhanced logging to show cleaning effectiveness
-                    raw_len = len(str(raw_content))
-                    clean_len = len(cleaned_content)
-                    reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0
-                    
-                    LOG.info(f"SCRAPFLY SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
-                    return cleaned_content, None
-                else:
-                    LOG.warning(f"SCRAPFLY: Content validation failed for {domain}: {validation_msg}")
-                    break
-            
-            elif response.status_code == 422:
-                LOG.warning(f"SCRAPFLY: Invalid parameters for {domain}")
-                break
-            
-            elif response.status_code == 429:
-                LOG.warning(f"SCRAPFLY: Rate limited for {domain} (attempt {attempt + 1})")
-                if attempt < max_retries:
-                    time.sleep(5)  # Longer delay for rate limits
-                    continue
-            
-            else:
-                LOG.warning(f"SCRAPFLY: HTTP {response.status_code} for {domain}")
                 if attempt < max_retries:
                     continue
-                    
+
         except requests.RequestException as e:
             LOG.warning(f"SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
             if attempt < max_retries:
@@ -1332,7 +1320,7 @@ def scrape_with_scrapfly(url: str, domain: str, max_retries: int = 2) -> Tuple[O
         except Exception as e:
             LOG.error(f"SCRAPFLY: Unexpected error for {domain}: {e}")
             break
-    
+
     scrapfly_stats["failed"] += 1
     return None, f"Scrapfly failed after {max_retries + 1} attempts"
 

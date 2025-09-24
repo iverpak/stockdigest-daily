@@ -3182,37 +3182,21 @@ def generate_ai_individual_summary(scraped_content: str, title: str, ticker: str
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
         sector = config.get("sector", "") if config else ""
-        market_cap_context = f"This is a {sector} company" if sector else "Financial context"
         
-        prompt = f"""As a hedge-fund analyst, provide a materiality-focused summary for {company_name} ({ticker}). Use specific financial impact assessment.
+        prompt = f"""You are a hedge-fund analyst. Write a concise, non-promotional summary in 5–7 sentences.
 
-SYNTHESIS FRAMEWORK:
-1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
-2. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts, if present.
-3. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships, if present.
-4. STRATEGIC EXECUTION: Evaluate management actions, capital allocation, operational efficiency, if present.
-5. RISK/CATALYST ASSESSMENT: Identify key upside drivers and downside risks with TIMELINES, if present.
-
-ENHANCED REQUIREMENTS:
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, investor days, conference dates, completion timelines, if present
-- Report figures (%/$/units) exactly if present; no estimates/price math unless both numbers are in-text
-- Synthesize quantitative metrics when available
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale and historical metrics
-- ANALYST ACTIONS: Include firm names and percentage variance from current market price
-- NEAR-TERM FOCUS: Emphasize near-term (<1 year) but note medium/long-term implications
-- Focus on investment implications with specific timelines
-- Maximum 4-5 sentences with clear financial focus
-
-ENHANCED CONTEXT: {market_cap_context}. Assess all financial figures for materiality to a company of this scale.
-
-TARGET ANALYSIS: {company_name} ({ticker}) from this company's perspective
-CONTENT SCOPE: Extract actionable intelligence that affects {ticker}'s financial trajectory
+Must do:
+- Lead with what happened, who’s involved, timing, and dollar figures.
+- Include at least one line on balance-sheet/earnings/cash-flow impact or unit economics.
+- Add catalysts (next events), key risks, and any regulatory/antitrust/financing angles.
+- Note second-order effects on suppliers/competitors/customers if material.
+Rules: no bullets, no intro/conclusion labels, no quotes, no headlines, no “we”. Prefer numbers and dates. Each sentence ≤ 28 words.
 
 Article Title: {title}
-Content Snippet: {description[:500] if description else ""}
-Full Content: {scraped_content[:3000]}
+Content Snippet: {description[:1000] if description else ""}
+Full Content: {scraped_content[:10000]}
 
-Provide 3-5 sentences focusing on material financial impact, specific timelines, and analyst consensus with price variance calculations."""
+"""
 
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",

@@ -245,10 +245,7 @@ DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 SPAM_DOMAINS = {
     "marketbeat.com", "www.marketbeat.com", "marketbeat",
     "newser.com", "www.newser.com", "newser", 
-    "khodrobank.com", "www.khodrobank.com", "khodrobank",
-    "defenseworld.net", "www.defenseworld.net", "defenseworld",
-    "defense-world.net", "www.defense-world.net", "defense-world",
-    "defensenews.com", "www.defensenews.com", "defensenews"
+    "khodrobank.com", "www.khodrobank.com", "khodrobank"  # ADD this line
 }
 
 QUALITY_DOMAINS = {
@@ -1609,26 +1606,29 @@ def log_scraping_success_rates():
     LOG.info("=" * 60)
 
 def validate_scraped_content(content, url, domain):
-    """Relaxed content validation for cleaned content"""
-    if not content or len(content.strip()) < 50:  # Reduced from 100
+    """Enhanced content validation for cleaned content"""
+    if not content or len(content.strip()) < 100:
         return False, "Content too short"
     
-    # Check content-to-boilerplate ratio (more lenient)
+    # Check content-to-boilerplate ratio
     sentences = [s.strip() for s in content.split('.') if s.strip()]
-    if len(sentences) < 2:  # Reduced from 3
+    if len(sentences) < 3:
         return False, "Insufficient sentences"
     
-    # Check for repetitive content (more lenient)
+    # Check for repetitive content (often indicates scraping issues)
     words = content.lower().split()
-    if len(words) > 0 and len(set(words)) / len(words) < 0.15:  # Reduced from 0.3 to 0.15
+    if len(words) > 0 and len(set(words)) / len(words) < 0.3:  # Less than 30% unique words
         return False, "Repetitive content detected"
     
-    # Check if content is mostly technical/code-like (more lenient)
+    # Check if content is mostly technical/code-like
     technical_chars = len(re.findall(r'[{}();:=<>]', content))
-    if technical_chars > len(content) * 0.2:  # Increased from 0.1 to 0.2
+    if technical_chars > len(content) * 0.1:  # More than 10% technical characters
         return False, "Content appears to be technical/code data"
     
-    # REMOVED: Proper sentence structure check - too aggressive for financial content
+    # Check for reasonable sentence structure
+    proper_sentences = len([s for s in sentences if len(s) > 10 and s[0].isupper()])
+    if proper_sentences < len(sentences) * 0.5:  # Less than 50% proper sentences
+        return False, "Poor sentence structure"
     
     return True, "Valid content"
 
@@ -1891,7 +1891,7 @@ def reset_enhanced_scraping_stats():
     }
 
 def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dict, analysis_ticker: str) -> bool:
-    """Scrape content and run AI analysis for a single article from specific ticker's perspective - NO SCORING"""
+    """Scrape content and run AI analysis for a single article from specific ticker's perspective"""
     try:
         article_id = article["id"]
         resolved_url = article.get("resolved_url") or article.get("url")
@@ -1902,7 +1902,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         # Check if this URL already has analysis from this ticker's perspective
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT scraped_content, ai_summary
+                SELECT scraped_content, ai_summary, ai_impact, ai_reasoning, quality_score
                 FROM found_url 
                 WHERE url_hash = %s AND ai_analysis_ticker = %s
             """, (url_hash, analysis_ticker))
@@ -1910,7 +1910,8 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
         
         if (existing_analysis and 
             existing_analysis["scraped_content"] and 
-            existing_analysis["ai_summary"]):
+            existing_analysis["ai_summary"] and 
+            existing_analysis["ai_impact"]):
             
             LOG.info(f"REUSING ANALYSIS: Article {article_id} already analyzed from {analysis_ticker}'s perspective")
             return True
@@ -1941,42 +1942,74 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
                 if content:
                     scraped_content = clean_null_bytes(content)
                     content_scraped_at = datetime.now(timezone.utc)
-                    # Generate AI summary after successful scraping
+                    # CRITICAL: Generate AI summary after successful scraping
                     ai_summary = generate_ai_individual_summary(scraped_content, title, analysis_ticker)
                     if ai_summary:
                         ai_summary = clean_null_bytes(ai_summary)
                         LOG.info(f"AI SUMMARY GENERATED for {analysis_ticker}: {len(ai_summary)} chars - '{ai_summary[:100]}...'")
                     else:
                         LOG.warning(f"AI SUMMARY FAILED for {analysis_ticker}: {title[:50]}...")
-                        ai_summary = None
+                        ai_summary = None  # Explicitly set to None if generation failed
                 else:
                     scraping_failed = True
                     scraping_error = clean_null_bytes(status or "")
                     return False
         
-        # Store with analysis_ticker perspective - NO SCORING AT ALL
+        # Calculate quality score from analysis_ticker's perspective
+        keywords = []
+        if category == "industry":
+            keywords = metadata.get("industry_keywords", [])
+        elif category == "competitor":
+            keywords = metadata.get("competitors", [])
+        
+        quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
+            title=title,
+            domain=domain,
+            ticker=analysis_ticker,
+            description=article.get("description", ""),
+            category=category,
+            keywords=keywords
+        )
+        
+        # Store with analysis_ticker perspective - CRITICAL: Include AI summary
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO found_url (
                     url, resolved_url, url_hash, title, description, ticker, domain,
-                    published_at, category, search_keyword, 
+                    quality_score, published_at, category, search_keyword, 
                     scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                    ai_summary, ai_analysis_ticker, competitor_ticker,
+                    ai_summary, ai_impact, ai_reasoning, ai_analysis_ticker,
+                    source_tier, event_multiplier, event_multiplier_reason,
+                    relevance_boost, relevance_boost_reason, numeric_bonus,
+                    penalty_multiplier, penalty_reason, competitor_ticker,
                     triage_priority
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
                 DO UPDATE SET
                     scraped_content = EXCLUDED.scraped_content,
                     content_scraped_at = EXCLUDED.content_scraped_at,
                     ai_summary = EXCLUDED.ai_summary,
+                    ai_impact = EXCLUDED.ai_impact,
+                    ai_reasoning = EXCLUDED.ai_reasoning,
+                    quality_score = EXCLUDED.quality_score,
                     updated_at = NOW()
             """, (
                 article.get("url"), resolved_url, url_hash, title, 
-                article.get("description"), analysis_ticker, domain,
+                article.get("description"), analysis_ticker, domain, quality_score, 
                 article.get("published_at"), category, article.get("search_keyword"),
                 scraped_content, content_scraped_at, scraping_failed, 
                 clean_null_bytes(scraping_error or ""), clean_null_bytes(ai_summary or ""),
-                analysis_ticker, article.get("competitor_ticker"),
+                clean_null_bytes(ai_impact or ""), clean_null_bytes(ai_reasoning or ""),
+                analysis_ticker,
+                components.get('source_tier') if components else None,
+                components.get('event_multiplier') if components else None,
+                clean_null_bytes(components.get('event_multiplier_reason', '') if components else ''),
+                components.get('relevance_boost') if components else None,
+                clean_null_bytes(components.get('relevance_boost_reason', '') if components else ''),
+                components.get('numeric_bonus') if components else None,
+                components.get('penalty_multiplier') if components else None,
+                clean_null_bytes(components.get('penalty_reason', '') if components else ''),
+                article.get("competitor_ticker"),
                 normalize_priority_to_int(article.get("triage_priority", 2))
             ))
         
@@ -2291,25 +2324,30 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         penalty_reason = None
                         stats["basic_scored"] += 1
                     
-                    # NO SCORING AT ALL - just store the article
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article with NO scoring whatsoever
+                    # Insert article with AI summary and comprehensive resolution data
                     cur.execute("""
                         INSERT INTO found_url (
                             url, resolved_url, url_hash, title, description,
-                            feed_id, ticker, domain, published_at,
+                            feed_id, ticker, domain, quality_score, published_at,
                             category, search_keyword, original_source_url,
                             scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_summary
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ai_impact, ai_reasoning, ai_summary,
+                            source_tier, event_multiplier, event_multiplier_reason,
+                            relevance_boost, relevance_boost_reason, numeric_bonus,
+                            penalty_multiplier, penalty_reason
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         url, final_resolved_url, url_hash, title, display_content,
-                        feed["id"], feed["ticker"], final_domain, published_at,
+                        feed["id"], feed["ticker"], final_domain, quality_score, published_at,
                         category, feed.get("search_keyword"), final_source_url,
                         scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                        ai_summary
+                        ai_impact, ai_reasoning, ai_summary,
+                        source_tier, event_multiplier, event_multiplier_reason,
+                        relevance_boost, relevance_boost_reason, numeric_bonus,
+                        penalty_multiplier, penalty_reason
                     ))
                     
                     if cur.fetchone():
@@ -2540,21 +2578,21 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         clean_source_url = clean_null_bytes(final_source_url or "")
                         clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                         
-                        # Insert with NO quality_score field
+                        # Insert with proper constraint handling
                         cur.execute("""
                             INSERT INTO found_url (
                                 url, resolved_url, url_hash, title, description,
-                                feed_id, ticker, domain, published_at,
+                                feed_id, ticker, domain, quality_score, published_at,
                                 category, search_keyword, original_source_url,
                                 competitor_ticker, ai_analysis_ticker
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
                             DO UPDATE SET
                                 updated_at = NOW()
                             RETURNING id
                         """, (
                             clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
-                            feed["id"], feed["ticker"], final_domain, published_at,
+                            feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
                             category, clean_search_keyword, clean_source_url,
                             clean_competitor_ticker, ''
                         ))
@@ -2621,7 +2659,7 @@ def update_schema_for_ai_summary():
 # Updated article formatting function
 def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
     """
-    Enhanced article HTML formatting with AI summaries and proper left-side headers - NO QUALITY SCORING
+    Enhanced article HTML formatting with AI summaries and proper left-side headers
     """
     import html
     
@@ -2667,12 +2705,11 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # Build header badges - LEFT SIDE POSITIONING
     header_badges = []
     
-    # 1. FIRST BADGE: Category-specific (LEFT SIDE) - RESTORED competitor/industry flags
+    # 1. FIRST BADGE: Category-specific (LEFT SIDE)
     if category == "company":
         header_badges.append(f'<span class="company-name-badge">🎯 {company_name}</span>')
     elif category == "competitor":
         comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
-        # FIXED: Use proper emoji instead of problematic character
         header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
     elif category == "industry" and article.get('search_keyword'):
         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
@@ -2680,40 +2717,40 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # 2. SECOND BADGE: Source name
     header_badges.append(f'<span class="source-badge">{display_source}</span>')
     
-    # 3. Quality badge if domain is in quality list
-    if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
-        header_badges.append('<span class="quality-badge">⭐ Quality</span>')
+    # Quality score styling - only show if AI analyzed
+    score_html = ""
+    analyzed_html = ""
+    impact_html = ""
+    quality_score = article.get("quality_score")
+    ai_impact = article.get("ai_impact")
     
-    # REMOVED: Quality score and impact badges (the 1-100 scores and positive/negative/mixed)
+    if ai_impact is not None and quality_score is not None:
+        # This article was AI analyzed - show score
+        score_class = "high-score" if quality_score >= 70 else "med-score" if quality_score >= 40 else "low-score"
+        score_html = f'<span class="score {score_class}">Score: {quality_score:.0f}</span>'
+        
+        # Show impact next to score with appropriate styling
+        impact_class = {
+            "positive": "impact-positive", 
+            "negative": "impact-negative", 
+            "mixed": "impact-mixed", 
+            "neutral": "impact-neutral"
+        }.get(ai_impact.lower(), "impact-neutral")
+        impact_html = f'<span class="impact {impact_class}">{ai_impact}</span>'
+        
+        # CRITICAL: Check for BOTH scraped content AND AI summary for "Analyzed" badge
+        if article.get('scraped_content') and article.get('ai_summary'):
+            analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
     
-    # 4. Analyzed badge if has content and AI summary
-    if article.get('scraped_content') and article.get('ai_summary'):
-        header_badges.append('<span class="analyzed-badge">Analyzed</span>')
+    # Add score and analysis badges to header
+    if score_html:
+        header_badges.append(score_html)
+    if impact_html:
+        header_badges.append(impact_html)
+    if analyzed_html:
+        header_badges.append(analyzed_html)
     
-    # KEEP: AI Triage badges
-    if article.get('ai_triage_selected') and article.get('triage_priority'):
-        priority_display = normalize_priority_to_display(article['triage_priority'])
-        badge_class = f"ai-{priority_display.lower()}"
-        ai_emoji = {"High": "🔥", "Medium": "⚡", "Low": "🔋"}.get(priority_display, "🔋")
-        header_badges.append(f'<span class="ai-triage {badge_class}">{ai_emoji} AI: {priority_display}</span>')
-    
-    # KEEP: QB Score badges
-    qb_score = article.get('qb_score', 0)
-    if qb_score >= 70:
-        qb_class = "qb-high"
-        qb_level = "QB: High"
-        qb_emoji = "🏆"
-    elif qb_score >= 40:
-        qb_class = "qb-medium"
-        qb_level = "QB: Medium"
-        qb_emoji = "🥉"
-    else:
-        qb_class = "qb-low"
-        qb_level = "QB: Low"
-        qb_emoji = "📊"
-    header_badges.append(f'<span class="qb-score {qb_class}">{qb_emoji} {qb_level}</span>')
-    
-    # AI Summary section - check for ai_summary field
+    # CRITICAL: AI Summary section - check for ai_summary field
     ai_summary_html = ""
     if article.get("ai_summary"):
         clean_summary = html.escape(article["ai_summary"].strip())
@@ -2891,13 +2928,9 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
         if not any(domain in url for domain in ["finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"]):
             return None
         
-        # ENHANCED: Skip Yahoo author pages, video files, and video subdomains
-        video_patterns = [
-            "/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov", ".wmv", ".flv",
-            "video.finance.yahoo.com", "video.yahoo.com", "/video/", "/videos/"
-        ]
-        if any(pattern in url.lower() for pattern in video_patterns):
-            LOG.info(f"Skipping Yahoo video/author page: {url}")
+        # Skip Yahoo author pages and video files
+        if any(skip_pattern in url for skip_pattern in ["/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov"]):
+            LOG.info(f"Skipping Yahoo author/video page: {url}")
             return None
             
         LOG.info(f"Extracting Yahoo Finance source from: {url}")
@@ -2959,9 +2992,8 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                                 'ca.finance.yahoo.com' not in candidate_url and
                                 not candidate_url.startswith('//') and
                                 '.' in parsed.netloc and
-                                # Enhanced validation to exclude video URLs
-                                not any(vid_ext in candidate_url.lower() for vid_ext in ['.mp4', '.avi', '.mov', '.wmv', '.flv']) and
-                                not any(vid_pattern in candidate_url.lower() for vid_pattern in ['/video/', '/videos/', 'video.']) and
+                                # Enhanced validation to exclude problematic URLs
+                                not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.mp4', '.avi', '.mov')) and
                                 not '/api/' in candidate_url.lower() and
                                 not 'yimg.com' in candidate_url.lower() and
                                 not '/author/' in candidate_url.lower() and
@@ -2977,6 +3009,31 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                     LOG.debug(f"Processing match failed: {e}")
                     continue
         
+        # Enhanced fallback patterns that exclude author pages and videos
+        fallback_patterns = [
+            # Only match URLs that are likely to be news articles (not author pages)
+            r'https://(?!finance\.yahoo\.com|ca\.finance\.yahoo\.com|s\.yimg\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/(?!author/)[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
+            r'https://stockstory\.org/[^\s"<>]*',
+        ]
+        
+        for pattern in fallback_patterns:
+            matches = re.finditer(pattern, html_content)
+            for match in matches:
+                candidate_url = match.group(0).rstrip('",')
+                try:
+                    parsed = urlparse(candidate_url)
+                    if (parsed.scheme and parsed.netloc and
+                        # Additional validation for fallback URLs
+                        not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js', '.mp4', '.avi', '.mov')) and
+                        not '/api/' in candidate_url.lower() and
+                        not '/author/' in candidate_url.lower() and
+                        not 'yahoo-finance-video' in candidate_url.lower() and
+                        len(candidate_url) > 30):  # Minimum reasonable URL length
+                        LOG.info(f"Fallback extraction successful: {candidate_url}")
+                        return candidate_url
+                except Exception:
+                    continue
+        
         LOG.warning(f"No original source found for Yahoo URL: {url}")
         return None
         
@@ -2985,7 +3042,7 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
         return None
 
 def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
-    """Extract source from title with simple regex and improved validation"""
+    """Extract source from title with simple regex"""
     if not title:
         return title, None
     
@@ -3002,8 +3059,8 @@ def extract_source_from_title_smart(title: str) -> Tuple[str, Optional[str]]:
             source = match.group(1).strip()
             clean_title = re.sub(pattern, '', title).strip()
             
-            # FIXED: Allow 2+ characters (for abbreviations like "AP", "FT") and basic validation
-            if len(source) >= 2 and len(source) < 50 and not any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank", "defenseworld", "defense-world", "defensenews"]):
+            # FIXED: Allow 3 characters (for MSN, CNN, etc.) and basic validation
+            if 2 < len(source) < 50 and not any(spam in source.lower() for spam in ["marketbeat", "newser", "khodrobank"]):
                 return clean_title, source
     
     return title, None
@@ -5470,7 +5527,7 @@ class DomainResolver:
                 LOG.info(f"Advanced resolution: {url} -> {advanced_url}")
                 return advanced_url, domain, None
         
-        # Fall back to direct resolution
+        # Fall back to existing method (direct resolution + title extraction)
         try:
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -5485,31 +5542,17 @@ class DomainResolver:
         except:
             pass
         
-        # NEW: Enhanced title extraction with AI domain resolution
+        # Existing title extraction fallback
         if title and not contains_non_latin_script(title):
             clean_title, source = extract_source_from_title_smart(title)
             if source and not self._is_spam_source(source):
-                # First try database lookup
                 resolved_domain = self._resolve_publication_to_domain(source)
-                if resolved_domain and resolved_domain != "unknown-publication.com":
-                    LOG.info(f"Title resolution with AI: {source} -> {resolved_domain}")
+                if resolved_domain:
+                    LOG.info(f"Title resolution: {source} -> {resolved_domain}")
                     return url, resolved_domain, None
                 else:
-                    # Create a normalized domain and get formal name via AI
-                    normalized_source = source.lower().replace(' ', '').replace('the', '')
-                    fallback_domain = f"{normalized_source}.com"
-                    
-                    # Store the mapping using AI
-                    try:
-                        formal_name = self._get_from_ai(fallback_domain)
-                        if not formal_name:
-                            formal_name = source  # Use original source as formal name
-                        
-                        self._store_in_database(fallback_domain, formal_name, True)
-                        LOG.info(f"Created AI-powered domain mapping: {source} -> {fallback_domain} ({formal_name})")
-                        return url, fallback_domain, None
-                    except Exception as e:
-                        LOG.warning(f"Failed to create AI domain mapping for {source}: {e}")
+                    LOG.warning(f"Could not resolve publication '{source}' to domain")
+                    return url, "google-news-unresolved", None
         
         return url, "google-news-unresolved", None
     
@@ -7184,14 +7227,18 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
             cur.execute("""
                 SELECT 
                     f.id, f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.published_at,
+                    f.ticker, f.domain, f.quality_score, f.published_at,
                     f.found_at, f.category, f.original_source_url,
-                    f.search_keyword, f.ai_summary,
+                    f.search_keyword, f.ai_impact, f.ai_reasoning, f.ai_summary,
                     f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
-                    f.competitor_ticker, f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
+                    f.source_tier, f.event_multiplier, f.event_multiplier_reason,
+                    f.relevance_boost, f.relevance_boost_reason, f.numeric_bonus,
+                    f.penalty_multiplier, f.penalty_reason, f.competitor_ticker,
+                    f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
                     f.qb_score, f.qb_level, f.qb_reasoning, f.ai_analysis_ticker
                 FROM found_url f
                 WHERE f.found_at >= %s
+                    AND f.quality_score >= 15
                     AND (f.ticker = ANY(%s) OR f.ai_analysis_ticker = ANY(%s))
                 ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff, tickers, tickers))

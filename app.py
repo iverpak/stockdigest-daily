@@ -365,6 +365,7 @@ scrapingbee_stats = {
     "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
 }
 
+# Global Scrapfly statistics tracking  
 scrapfly_stats = {
     "requests_made": 0,
     "successful": 0,
@@ -1787,6 +1788,15 @@ def log_scrapfly_stats():
     
     if scrapfly_stats["failed"] > 0:
         LOG.warning(f"SCRAPFLY: {scrapfly_stats['failed']} requests failed")
+    
+    # Log top performing and failing domains
+    successful_domains = [(domain, stats) for domain, stats in scrapfly_stats["by_domain"].items() if stats["successes"] > 0]
+    failed_domains = [(domain, stats) for domain, stats in scrapfly_stats["by_domain"].items() if stats["successes"] == 0 and stats["attempts"] > 0]
+    
+    if successful_domains:
+        LOG.info(f"SCRAPFLY SUCCESS DOMAINS: {len(successful_domains)} domains working")
+    if failed_domains:
+        LOG.info(f"SCRAPFLY FAILED DOMAINS: {len(failed_domains)} domains blocked/failed")
 
 def reset_enhanced_scraping_stats():
     """Reset enhanced scraping stats for new run"""
@@ -7668,6 +7678,7 @@ def cron_ingest(
     total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
     total_scraping_success = (enhanced_scraping_stats["requests_success"] + 
                              enhanced_scraping_stats["playwright_success"] + 
+                             enhanced_scraping_stats.get("scrapfly_success", 0) +
                              enhanced_scraping_stats["scrapingbee_success"])
     overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
     

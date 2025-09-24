@@ -6707,10 +6707,10 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
     
     with db() as conn, conn.cursor() as cur:
-        # Enhanced query to get articles analyzed from each ticker's perspective
+        # Enhanced query to get articles analyzed from each ticker's perspective - avoid duplicates
         if tickers:
             cur.execute("""
-                SELECT 
+                SELECT DISTINCT ON (f.url_hash, f.ticker)
                     f.id, f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.published_at,
                     f.found_at, f.category, f.original_source_url,
@@ -6721,11 +6721,13 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 FROM found_url f
                 WHERE f.found_at >= %s
                     AND (f.ticker = ANY(%s) OR f.ai_analysis_ticker = ANY(%s))
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+                ORDER BY f.url_hash, f.ticker, 
+                    CASE WHEN f.ai_analysis_ticker IS NOT NULL THEN 0 ELSE 1 END,
+                    COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff, tickers, tickers))
         else:
             cur.execute("""
-                SELECT 
+                SELECT DISTINCT ON (f.url_hash, f.ticker)
                     f.id, f.url, f.resolved_url, f.title, f.description,
                     f.ticker, f.domain, f.published_at,
                     f.found_at, f.category, f.original_source_url,
@@ -6735,7 +6737,9 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                     f.qb_score, f.qb_level, f.qb_reasoning, f.ai_analysis_ticker
                 FROM found_url f
                 WHERE f.found_at >= %s
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+                ORDER BY f.url_hash, f.ticker, 
+                    CASE WHEN f.ai_analysis_ticker IS NOT NULL THEN 0 ELSE 1 END,
+                    COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
             """, (cutoff,))
         
         # Group articles by target ticker (the ticker we're analyzing for)
@@ -6764,18 +6768,18 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         total_to_mark = 0
         if tickers:
             cur.execute("""
-                SELECT COUNT(*) as count
-                FROM found_url
-                WHERE found_at >= %s AND quality_score >= 15 
-                AND (ticker = ANY(%s) OR ai_analysis_ticker = ANY(%s))
-                AND NOT sent_in_digest
+                SELECT COUNT(DISTINCT (f.url_hash, f.ticker)) as count
+                FROM found_url f
+                WHERE f.found_at >= %s 
+                AND (f.ticker = ANY(%s) OR f.ai_analysis_ticker = ANY(%s))
+                AND NOT f.sent_in_digest
             """, (cutoff, tickers, tickers))
         else:
             cur.execute("""
-                SELECT COUNT(*) as count
-                FROM found_url
-                WHERE found_at >= %s AND quality_score >= 15 
-                AND NOT sent_in_digest
+                SELECT COUNT(DISTINCT (f.url_hash, f.ticker)) as count
+                FROM found_url f
+                WHERE f.found_at >= %s 
+                AND NOT f.sent_in_digest
             """, (cutoff,))
         
         result = cur.fetchone()
@@ -6786,7 +6790,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 cur.execute("""
                     UPDATE found_url
                     SET sent_in_digest = TRUE
-                    WHERE found_at >= %s AND quality_score >= 15 
+                    WHERE found_at >= %s 
                     AND (ticker = ANY(%s) OR ai_analysis_ticker = ANY(%s))
                     AND NOT sent_in_digest
                 """, (cutoff, tickers, tickers))
@@ -6794,7 +6798,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 cur.execute("""
                     UPDATE found_url
                     SET sent_in_digest = TRUE
-                    WHERE found_at >= %s AND quality_score >= 15
+                    WHERE found_at >= %s
                     AND NOT sent_in_digest
                 """, (cutoff,))
             
@@ -6819,7 +6823,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     
     # Enhanced subject with ticker list
     ticker_list = ', '.join(articles_by_ticker.keys())
-    subject = f"📊 Stock Intelligence: {ticker_list} - {total_articles} articles"
+    subject = f"Stock Intelligence: {ticker_list} - {total_articles} articles"
     success = send_email(subject, html, text_export)
     
     # Count by category and content scraping

@@ -6093,7 +6093,7 @@ CRITICAL REQUIREMENTS:
 - NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
 - Include specific numbers when available and cite sources using formal domain names exactly as written and nothing else: {source_name}. Cite them in parentheses, e.g., (Business Wire).
 - Assess competitor moves that could affect {company_name}'s performance
-- Keep to 5-6 sentences maximum
+- Keep to 7-8 sentences maximum
 
 FINANCIAL CONTEXT: {financial_context}
 INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'N/A'}

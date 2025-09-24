@@ -6333,61 +6333,37 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 # ------------------------------------------------------------------------------
 
 # Updated email sending function with text attachment
-def send_email(subject: str, html_body: str, to: str = None):
-    """Send email with HTML body displayed properly and optional text attachment"""
+def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
+    """Send email with HTML body only (no attachments)."""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
-    
+
     try:
         recipient = to or DIGEST_TO
-        
-        # Create multipart message with HTML as primary content
-        msg = MIMEMultipart('mixed')  # Use 'mixed' for attachments
+
+        # multipart/alternative for text + HTML, wrapped in mixed not needed if no attachments
+        msg = MIMEMultipart('alternative')
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient
-        
-        # Create multipart alternative for HTML/text content
-        msg_alternative = MIMEMultipart('alternative')
-        
-        # Add text version (fallback for very old email clients)
+
+        # Plain-text fallback
         text_body = "This email contains HTML content. Please view in an HTML-capable email client."
-        msg_alternative.attach(MIMEText(text_body, "plain", "utf-8"))
-        
-        # Add HTML body (this will be displayed by modern email clients)
-        msg_alternative.attach(MIMEText(html_body, "html", "utf-8"))
-        
-        # Attach the alternative part to main message
-        msg.attach(msg_alternative)
-        
-        # Add text attachment if provided and not empty
-        if text_attachment and len(text_attachment.strip()) > 0:
-            try:
-                # Create text attachment
-                attachment = MIMEText(text_attachment, "plain", "utf-8")
-                attachment.add_header(
-                    "Content-Disposition", 
-                    "attachment", 
-                    filename="ai_evaluation_data.txt"
-                )
-                msg.attach(attachment)
-                LOG.info(f"Added text attachment: {len(text_attachment)} characters")
-            except Exception as e:
-                LOG.warning(f"Failed to add text attachment: {e}")
-                # Continue without attachment rather than failing
-        
-        # Send email
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+
+        # HTML body
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             if SMTP_STARTTLS:
                 server.starttls()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
-        
-        attachment_info = f" with attachment ({len(text_attachment)} chars)" if text_attachment else " (no attachment)"
-        LOG.info(f"Email sent{attachment_info} to {recipient}")
+
+        LOG.info(f"Email sent to {recipient}")
         return True
-        
+
     except Exception as e:
         LOG.error(f"Email send failed: {e}")
         return False

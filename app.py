@@ -365,6 +365,14 @@ scrapingbee_stats = {
     "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
 }
 
+scrapfly_stats = {
+    "requests_made": 0,
+    "successful": 0,
+    "failed": 0,
+    "cost_estimate": 0.0,
+    "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
+}
+
 # Domains known to be problematic with ScrapingBee
 SCRAPINGBEE_PROBLEMATIC_DOMAINS = {
 }
@@ -374,11 +382,13 @@ enhanced_scraping_stats = {
     "total_attempts": 0,
     "requests_success": 0,
     "playwright_success": 0,
+    "scrapfly_success": 0,  # ADD THIS
     "scrapingbee_success": 0,
     "total_failures": 0,
     "by_method": {
         "requests": {"attempts": 0, "successes": 0},
         "playwright": {"attempts": 0, "successes": 0},
+        "scrapfly": {"attempts": 0, "successes": 0},  # ADD THIS
         "scrapingbee": {"attempts": 0, "successes": 0}
     }
 }
@@ -1146,6 +1156,134 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
     scrapingbee_stats["failed"] += 1
     return None, f"ScrapingBee failed after {max_retries + 1} attempts"
 
+def scrape_with_scrapfly(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Scrapfly scraping with improved text extraction and content cleaning
+    """
+    global scrapfly_stats, enhanced_scraping_stats
+    
+    for attempt in range(max_retries + 1):
+        try:
+            if not SCRAPFLY_API_KEY:
+                return None, "Scrapfly API key not configured"
+            
+            if normalize_domain(domain) in PAYWALL_DOMAINS:
+                return None, f"Paywall domain: {domain}"
+            
+            if attempt > 0:
+                delay = 2 ** attempt
+                LOG.info(f"SCRAPFLY RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
+                time.sleep(delay)
+            
+            LOG.info(f"SCRAPFLY: Starting scrape for {domain} (attempt {attempt + 1})")
+            
+            # Update usage stats
+            scrapfly_stats["requests_made"] += 1
+            scrapfly_stats["cost_estimate"] += 0.002  # Scrapfly is typically ~$0.002 per request
+            scrapfly_stats["by_domain"][domain]["attempts"] += 1
+            enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
+            
+            # Scrapfly API parameters
+            params = {
+                'key': SCRAPFLY_API_KEY,
+                'url': url,
+                'render_js': 'false',
+                'country': 'US',
+                'timeout': 15000,
+                'format': 'text',  # Get clean text instead of HTML
+                'extraction_template': 'article',  # Use their article extraction
+                'cache': 'false',
+                'ssl_verification': 'false'
+            }
+            
+            # Add anti-bot measures for problematic domains
+            if domain in ['simplywall.st', 'seekingalpha.com', 'zacks.com']:
+                params['asp'] = 'true'  # Anti-scraping protection
+                params['render_js'] = 'true'  # Enable JS rendering for dynamic content
+            
+            response = requests.get('https://api.scrapfly.io/scrape', 
+                                   params=params, 
+                                   timeout=30)
+            
+            if response.status_code == 200:
+                try:
+                    # Scrapfly returns JSON
+                    result = response.json()
+                    
+                    # Extract content based on format
+                    if params.get('format') == 'text':
+                        raw_content = result.get('result', {}).get('content', '')
+                    else:
+                        # Fallback to HTML parsing if needed
+                        html_content = result.get('result', {}).get('content', '')
+                        if html_content:
+                            # Use newspaper to extract from HTML
+                            article = newspaper.Article(url)
+                            article.set_html(html_content)
+                            article.parse()
+                            raw_content = article.text
+                        else:
+                            raw_content = ''
+                    
+                except Exception as json_error:
+                    LOG.warning(f"SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
+                    raw_content = response.text
+                
+                if not raw_content or len(raw_content.strip()) < 100:
+                    LOG.warning(f"SCRAPFLY: Insufficient raw content for {domain} (attempt {attempt + 1})")
+                    continue
+                
+                # Apply content cleaning to the extracted text
+                cleaned_content = clean_scraped_content(raw_content, url, domain)
+                
+                if not cleaned_content or len(cleaned_content.strip()) < 100:
+                    LOG.warning(f"SCRAPFLY: Content too short after cleaning for {domain}")
+                    continue
+                
+                # Validate cleaned content quality
+                is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
+                if is_valid:
+                    scrapfly_stats["successful"] += 1
+                    scrapfly_stats["by_domain"][domain]["successes"] += 1
+                    enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
+                    
+                    # Enhanced logging to show cleaning effectiveness
+                    raw_len = len(str(raw_content))
+                    clean_len = len(cleaned_content)
+                    reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0
+                    
+                    LOG.info(f"SCRAPFLY SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
+                    return cleaned_content, None
+                else:
+                    LOG.warning(f"SCRAPFLY: Content validation failed for {domain}: {validation_msg}")
+                    break
+            
+            elif response.status_code == 422:
+                LOG.warning(f"SCRAPFLY: Invalid parameters for {domain}")
+                break
+            
+            elif response.status_code == 429:
+                LOG.warning(f"SCRAPFLY: Rate limited for {domain} (attempt {attempt + 1})")
+                if attempt < max_retries:
+                    time.sleep(5)  # Longer delay for rate limits
+                    continue
+            
+            else:
+                LOG.warning(f"SCRAPFLY: HTTP {response.status_code} for {domain}")
+                if attempt < max_retries:
+                    continue
+                    
+        except requests.RequestException as e:
+            LOG.warning(f"SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
+            if attempt < max_retries:
+                continue
+        except Exception as e:
+            LOG.error(f"SCRAPFLY: Unexpected error for {domain}: {e}")
+            break
+    
+    scrapfly_stats["failed"] += 1
+    return None, f"Scrapfly failed after {max_retries + 1} attempts"
+
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
@@ -1524,7 +1662,7 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
 
 def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
-    3-tier content scraper: requests → Playwright → ScrapingBee with comprehensive tracking
+    3-tier content scraper: requests → Playwright → Scrapfly with comprehensive tracking
     """
     global enhanced_scraping_stats
     
@@ -1569,24 +1707,24 @@ def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: st
     
     LOG.info(f"TIER 2 FAILED: {domain} - {playwright_error}")
     
-    # TIER 3: Try ScrapingBee fallback
-    if SCRAPINGBEE_API_KEY:
-        LOG.info(f"TIER 3 (ScrapingBee): Attempting {domain}")
+    # TIER 3: Try Scrapfly fallback (CHANGED from ScrapingBee)
+    if SCRAPFLY_API_KEY:
+        LOG.info(f"TIER 3 (Scrapfly): Attempting {domain}")
         
-        scrapingbee_content, scrapingbee_error = scrape_with_scrapingbee(url, domain)
+        scrapfly_content, scrapfly_error = scrape_with_scrapfly(url, domain)
         
-        if scrapingbee_content:
-            enhanced_scraping_stats["scrapingbee_success"] += 1
+        if scrapfly_content:
+            enhanced_scraping_stats["scrapfly_success"] += 1
             _update_scraping_stats(category, keyword, True)
-            return scrapingbee_content, f"TIER 3 SUCCESS: {len(scrapingbee_content)} chars via ScrapingBee"
+            return scrapfly_content, f"TIER 3 SUCCESS: {len(scrapfly_content)} chars via Scrapfly"
         
-        LOG.info(f"TIER 3 FAILED: {domain} - {scrapingbee_error}")
+        LOG.info(f"TIER 3 FAILED: {domain} - {scrapfly_error}")
     else:
-        LOG.info(f"TIER 3 SKIPPED: ScrapingBee API key not configured")
+        LOG.info(f"TIER 3 SKIPPED: Scrapfly API key not configured")
     
     # All tiers failed
     enhanced_scraping_stats["total_failures"] += 1
-    return None, f"ALL TIERS FAILED - Requests: {error}, Playwright: {playwright_error}, ScrapingBee: {scrapingbee_error if SCRAPINGBEE_API_KEY else 'not configured'}"
+    return None, f"ALL TIERS FAILED - Requests: {error}, Playwright: {playwright_error}, Scrapfly: {scrapfly_error if SCRAPFLY_API_KEY else 'not configured'}"
 
 def log_enhanced_scraping_stats():
     """Log comprehensive scraping statistics across all methods"""
@@ -1597,8 +1735,9 @@ def log_enhanced_scraping_stats():
     
     requests_success = enhanced_scraping_stats["requests_success"]
     playwright_success = enhanced_scraping_stats["playwright_success"]
+    scrapfly_success = enhanced_scraping_stats["scrapfly_success"]  # ADD THIS
     scrapingbee_success = enhanced_scraping_stats["scrapingbee_success"]
-    total_success = requests_success + playwright_success + scrapingbee_success
+    total_success = requests_success + playwright_success + scrapfly_success + scrapingbee_success
     
     overall_rate = (total_success / total) * 100
     
@@ -1606,7 +1745,7 @@ def log_enhanced_scraping_stats():
     LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total})")
     LOG.info(f"  TIER 1 (Requests): {requests_success} successes / {enhanced_scraping_stats['by_method']['requests']['attempts']} attempts")
     LOG.info(f"  TIER 2 (Playwright): {playwright_success} successes / {enhanced_scraping_stats['by_method']['playwright']['attempts']} attempts")
-    LOG.info(f"  TIER 3 (ScrapingBee): {scrapingbee_success} successes / {enhanced_scraping_stats['by_method']['scrapingbee']['attempts']} attempts")
+    LOG.info(f"  TIER 3 (Scrapfly): {scrapfly_success} successes / {enhanced_scraping_stats['by_method']['scrapfly']['attempts']} attempts")
     
     # Calculate tier-specific success rates
     for method, stats in enhanced_scraping_stats["by_method"].items():
@@ -1636,21 +1775,45 @@ def log_scrapingbee_stats():
     if failed_domains:
         LOG.info(f"SCRAPINGBEE FAILED DOMAINS: {len(failed_domains)} domains blocked/failed")
 
+def log_scrapfly_stats():
+    """Scrapfly statistics logging"""
+    if scrapfly_stats["requests_made"] == 0:
+        LOG.info("SCRAPFLY: No requests made this run")
+        return
+    
+    success_rate = (scrapfly_stats["successful"] / scrapfly_stats["requests_made"]) * 100
+    LOG.info(f"SCRAPFLY FINAL: {success_rate:.1f}% success rate ({scrapfly_stats['successful']}/{scrapfly_stats['requests_made']})")
+    LOG.info(f"SCRAPFLY COST: ${scrapfly_stats['cost_estimate']:.3f} estimated")
+    
+    if scrapfly_stats["failed"] > 0:
+        LOG.warning(f"SCRAPFLY: {scrapfly_stats['failed']} requests failed")
+
 def reset_enhanced_scraping_stats():
     """Reset enhanced scraping stats for new run"""
-    global enhanced_scraping_stats, scrapingbee_stats
+    global enhanced_scraping_stats, scrapfly_stats, scrapingbee_stats
     enhanced_scraping_stats = {
         "total_attempts": 0,
         "requests_success": 0,
         "playwright_success": 0,
+        "scrapfly_success": 0,  # ADD THIS
         "scrapingbee_success": 0,
         "total_failures": 0,
         "by_method": {
             "requests": {"attempts": 0, "successes": 0},
             "playwright": {"attempts": 0, "successes": 0},
+            "scrapfly": {"attempts": 0, "successes": 0},  # ADD THIS
             "scrapingbee": {"attempts": 0, "successes": 0}
         }
     }
+    # Reset Scrapfly stats
+    scrapfly_stats = {
+        "requests_made": 0,
+        "successful": 0,
+        "failed": 0,
+        "cost_estimate": 0.0,
+        "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
+    }
+    # Keep ScrapingBee stats reset as well
     scrapingbee_stats = {
         "requests_made": 0,
         "successful": 0,
@@ -7496,6 +7659,7 @@ def cron_ingest(
     log_scraping_success_rates()
     log_enhanced_scraping_stats()
     log_scrapingbee_stats()
+    log_scrapfly_stats()
     
     processing_time = time.time() - start_time
     LOG.info(f"=== CRON INGEST COMPLETE (TICKER-SPECIFIC ANALYSIS) - Total time: {processing_time:.1f}s ===")

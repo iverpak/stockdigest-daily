@@ -2333,7 +2333,11 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
     """Basic feed ingestion with FIXED deduplication count tracking"""
-    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0, "blocked_insider_trading": 0}
+    stats = {
+        "processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, 
+        "blocked_non_latin": 0, "limit_reached": 0, "blocked_insider_trading": 0,
+        "yahoo_rejected": 0
+    }
     
     category = feed.get("category", "company")
     
@@ -2396,8 +2400,13 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 try:
                     resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
                     
+                    # CHECK FOR YAHOO REJECTION
                     if not resolved_url or not domain:
-                        stats["blocked_spam"] += 1
+                        if "yahoo.com" in url.lower():
+                            stats["yahoo_rejected"] += 1
+                            LOG.debug(f"YAHOO REJECTED: {title[:50]}...")
+                        else:
+                            stats["blocked_spam"] += 1
                         continue
                 except Exception as e:
                     LOG.warning(f"URL resolution failed for {url}: {e}")
@@ -2568,7 +2577,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
         "blocked_spam": stats["blocked_spam"],
         "blocked_non_latin": stats["blocked_non_latin"],
         "limit_reached": stats["limit_reached"],
-        "blocked_insider_trading": stats["blocked_insider_trading"]  # ADD THIS LINE
+        "blocked_insider_trading": stats["blocked_insider_trading"],
+        "yahoo_rejected": stats["yahoo_rejected"]  # ADD THIS LINE
     }
 
 def _check_ingestion_limit_with_existing_count(category: str, keyword: str, existing_count: int) -> bool:
@@ -4902,7 +4912,7 @@ class DomainResolver:
         try:
             if "news.google.com" in url:
                 return self._handle_google_news(url, title)
-            elif "finance.yahoo.com" in url:
+            elif any(yahoo_domain in url for yahoo_domain in ["finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com", "yahoo.com"]):
                 return self._handle_yahoo_finance(url)
             else:
                 return self._handle_direct_url(url)
@@ -4910,7 +4920,7 @@ class DomainResolver:
             LOG.warning(f"URL resolution failed for {url}: {e}")
             fallback_domain = urlparse(url).netloc.lower() if url else None
             return url, normalize_domain(fallback_domain), None
-
+    
     def _resolve_google_news_url_advanced(self, url: str) -> Optional[str]:
         """
         Advanced Google News URL resolution using internal API
@@ -5051,14 +5061,17 @@ class DomainResolver:
         return url, "google-news-unresolved", None
     
     def _handle_yahoo_finance(self, url):
-        """Handle Yahoo Finance URL resolution"""
+        """Handle Yahoo Finance URL resolution - reject all failures"""
         original_source = extract_yahoo_finance_source_optimized(url)
         if original_source:
             domain = normalize_domain(urlparse(original_source).netloc.lower())
             if not self._is_spam_domain(domain):
+                LOG.info(f"YAHOO SUCCESS: Resolved {url} -> {original_source}")
                 return original_source, domain, url
         
-        return url, normalize_domain(urlparse(url).netloc.lower()), None
+        # REJECT ALL FAILED YAHOO URLs - don't return Yahoo URLs to system
+        LOG.info(f"YAHOO REJECTED: Failed to resolve {url} - discarding")
+        return None, None, None
     
     def _handle_direct_url(self, url):
         """Handle direct URL"""
@@ -7061,7 +7074,8 @@ def cron_ingest(
         "total_duplicates": 0, 
         "total_spam_blocked": 0, 
         "total_limit_reached": 0,
-        "total_insider_trading_blocked": 0  # ADD THIS LINE
+        "total_insider_trading_blocked": 0,
+        "total_yahoo_rejected": 0  # ADD THIS
     }
     
     # Process feeds normally to get new articles
@@ -7073,7 +7087,8 @@ def cron_ingest(
             ingest_stats["total_duplicates"] += stats["duplicates"]
             ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
             ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
-            ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)  # ADD THIS LINE
+            ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)
+            ingest_stats["total_yahoo_rejected"] += stats.get("yahoo_rejected", 0)
         except Exception as e:
             LOG.error(f"Feed ingest failed for {feed['name']}: {e}")
             continue
@@ -7254,6 +7269,7 @@ def cron_ingest(
             "total_spam_blocked": ingest_stats["total_spam_blocked"],
             "total_limit_reached": ingest_stats["total_limit_reached"],
             "total_insider_trading_blocked": ingest_stats["total_insider_trading_blocked"],
+            "total_yahoo_rejected": ingest_stats["total_yahoo_rejected"],  # ADD THIS
             "total_articles_in_timeframe": total_articles
         },
         "phase_2_triage": {

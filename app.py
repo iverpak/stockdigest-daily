@@ -420,6 +420,7 @@ def _update_ingestion_stats(category: str, keyword: str):
     if category == "company":
         ingestion_stats["company_ingested"] += 1
         LOG.info(f"INGESTION: Company {ingestion_stats['company_ingested']}/{ingestion_stats['limits']['company']}")
+        LOG.info(f"INGESTION BLOCKS: Spam={stats['blocked_spam']}, Non-Latin={stats['blocked_non_latin']}, Insider Trading={stats.get('blocked_insider_trading', 0)}")
     
     elif category == "industry":
         if keyword not in ingestion_stats["industry_ingested_by_keyword"]:
@@ -435,6 +436,7 @@ def _update_ingestion_stats(category: str, keyword: str):
         ingestion_stats["competitor_ingested_by_keyword"][keyword] += 1
         keyword_count = ingestion_stats["competitor_ingested_by_keyword"][keyword]
         LOG.info(f"INGESTION: Competitor '{keyword}' {keyword_count}/{ingestion_stats['limits']['competitor_per_keyword']}")
+        LOG.info(f"INGESTION BLOCKS: Spam={stats['blocked_spam']}, Non-Latin={stats['blocked_non_latin']}, Insider Trading={stats.get('blocked_insider_trading', 0)}")
 
 def _check_ingestion_limit(category: str, keyword: str) -> bool:
     """Check if we can ingest more articles for this category/keyword - FIXED for competitor consolidation"""
@@ -1439,12 +1441,13 @@ scraping_session = create_scraping_session()
 def is_insider_trading_article(title: str) -> bool:
     """
     Detect insider trading/institutional flow articles that are typically low-value
+    Enhanced to catch more patterns
     """
     title_lower = title.lower()
     
-    # Insider trading patterns
+    # Executive transactions
     insider_patterns = [
-        # Executive transactions
+        # Existing patterns...
         r"\w+\s+(ceo|cfo|coo|president|director|officer|executive)\s+\w+\s+(sells?|buys?|purchases?)",
         r"(sells?|buys?|purchases?)\s+\$[\d,]+\.?\d*[km]?\s+(in\s+shares?|worth\s+of)",
         r"(insider|executive|officer|director|ceo|cfo)\s+(selling|buying|sold|bought)",
@@ -1454,6 +1457,14 @@ def is_insider_trading_article(title: str) -> bool:
         r"(invests?|buys?)\s+\$[\d,]+\.?\d*[km]?\s+in",
         r"shares?\s+(sold|bought)\s+by\s+",
         r"(increases?|decreases?|trims?|adds?\s+to)\s+(stake|position|holdings?)\s+in",
+        
+        # NEW: More aggressive patterns
+        r"(acquires?|sells?)\s+\d+\s+shares?",
+        r"(boosts?|cuts?|trims?)\s+(stake|holdings?|position)",
+        r"(takes?|builds?)\s+\$[\d,]+\.?\d*[km]?\s+(stake|position)",
+        r"(hedge fund|institutional|mutual fund)\s+.{0,20}(buys?|sells?|adds?|cuts?)",
+        r"(13f|form\s*4|schedule\s*13d)\s+(filing|report)",
+        r"(quarterly\s+)?(holdings?|portfolio)\s+(report|update|filing)",
         
         # Specific low-value phrases
         r"buys?\s+\d+\s+shares?",
@@ -1468,13 +1479,13 @@ def is_insider_trading_article(title: str) -> bool:
     # Check against patterns
     for pattern in insider_patterns:
         if re.search(pattern, title_lower):
+            LOG.debug(f"INSIDER PATTERN MATCH: '{pattern}' in '{title[:50]}...'")
             return True
     
-    # Additional heuristics
-    # Small dollar amounts (under $50M) with "sells" or "buys"
+    # Enhanced small dollar amount detection
     small_amount_pattern = r"\$(\d+(?:,\d{3})*(?:\.\d+)?)\s*([km])?"
     matches = re.findall(small_amount_pattern, title_lower)
-    if matches and any(word in title_lower for word in ["sells", "buys", "purchases", "sold", "bought"]):
+    if matches and any(word in title_lower for word in ["sells", "buys", "purchases", "sold", "bought", "stake", "position"]):
         for amount_str, unit in matches:
             try:
                 amount = float(amount_str.replace(",", ""))
@@ -1483,8 +1494,9 @@ def is_insider_trading_article(title: str) -> bool:
                 elif unit.lower() == 'm':
                     amount *= 1000000
                 
-                # Flag transactions under $50M as likely insider trading
-                if amount < 50000000:
+                # Flag transactions under $100M as likely insider trading (raised threshold)
+                if amount < 100000000:
+                    LOG.debug(f"SMALL AMOUNT DETECTED: ${amount:,.0f} in '{title[:50]}...'")
                     return True
             except:
                 continue
@@ -1858,18 +1870,9 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     global scraping_stats
     
     stats = {
-        "processed": 0, 
-        "inserted": 0, 
-        "duplicates": 0, 
-        "blocked_spam": 0, 
-        "blocked_non_latin": 0,
-        "content_scraped": 0,
-        "content_failed": 0,
-        "scraping_skipped": 0,
-        "ai_reanalyzed": 0,
-        "ai_scored": 0,
-        "basic_scored": 0,
-        "ai_summaries_generated": 0
+        "processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0,
+        "content_scraped": 0, "content_failed": 0, "scraping_skipped": 0, "ai_reanalyzed": 0,
+        "ai_scored": 0, "basic_scored": 0, "ai_summaries_generated": 0, "blocked_insider_trading": 0
     }
     
     scraped_domains = set()
@@ -1913,6 +1916,12 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 stats["blocked_spam"] += 1
                 continue
             
+            # NEW: Insider trading check - skip these articles entirely
+            if is_insider_trading_article(title):
+                stats["blocked_insider_trading"] += 1
+                LOG.debug(f"INSIDER TRADING BLOCKED: {title[:50]}...")
+                continue
+
             # COMPREHENSIVE URL RESOLUTION
             final_resolved_url = None
             final_domain = None
@@ -2131,11 +2140,26 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
-    return stats
+    # At the very end of the function, update the return statement:
+    return {
+        "processed": stats["processed"],
+        "inserted": stats["inserted"],
+        "duplicates": stats["duplicates"], 
+        "blocked_spam": stats["blocked_spam"],
+        "blocked_non_latin": stats["blocked_non_latin"],
+        "content_scraped": stats["content_scraped"],
+        "content_failed": stats["content_failed"],
+        "scraping_skipped": stats["scraping_skipped"],
+        "ai_reanalyzed": stats["ai_reanalyzed"],
+        "ai_scored": stats["ai_scored"],
+        "basic_scored": stats["basic_scored"],
+        "ai_summaries_generated": stats["ai_summaries_generated"],
+        "blocked_insider_trading": stats["blocked_insider_trading"]  # ADD THIS LINE
+    }
 
 def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
     """Basic feed ingestion with FIXED deduplication count tracking"""
-    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0}
+    stats = {"processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, "blocked_non_latin": 0, "limit_reached": 0, "blocked_insider_trading": 0}
     
     category = feed.get("category", "company")
     
@@ -2186,6 +2210,12 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     
                 if any(spam in title.lower() for spam in ["marketbeat", "newser", "khodrobank"]):
                     stats["blocked_spam"] += 1
+                    continue
+                
+                # NEW: Insider trading check - skip these articles entirely
+                if is_insider_trading_article(title):
+                    stats["blocked_insider_trading"] += 1
+                    LOG.debug(f"INSIDER TRADING BLOCKED: {title[:50]}...")
                     continue
                 
                 # COMPREHENSIVE URL RESOLUTION
@@ -2356,7 +2386,16 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
     except Exception as e:
         LOG.error(f"Feed processing error for {feed['name']}: {e}")
     
-    return stats
+    # At the very end of the function, update the return statement:
+    return {
+        "processed": stats["processed"],
+        "inserted": stats["inserted"], 
+        "duplicates": stats["duplicates"],
+        "blocked_spam": stats["blocked_spam"],
+        "blocked_non_latin": stats["blocked_non_latin"],
+        "limit_reached": stats["limit_reached"],
+        "blocked_insider_trading": stats["blocked_insider_trading"]  # ADD THIS LINE
+    }
 
 def _check_ingestion_limit_with_existing_count(category: str, keyword: str, existing_count: int) -> bool:
     """Check if we can ingest more articles considering existing count in database"""
@@ -7282,7 +7321,14 @@ def cron_ingest(
     if not feeds:
         return {"status": "no_feeds", "message": "No active feeds found"}
     
-    ingest_stats = {"total_processed": 0, "total_inserted": 0, "total_duplicates": 0, "total_spam_blocked": 0, "total_limit_reached": 0}
+    ingest_stats = {
+        "total_processed": 0, 
+        "total_inserted": 0, 
+        "total_duplicates": 0, 
+        "total_spam_blocked": 0, 
+        "total_limit_reached": 0,
+        "total_insider_trading_blocked": 0  # ADD THIS LINE
+    }
     
     # Process feeds normally to get new articles
     for feed in feeds:
@@ -7293,6 +7339,7 @@ def cron_ingest(
             ingest_stats["total_duplicates"] += stats["duplicates"]
             ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
             ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
+            ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)  # ADD THIS LINE
         except Exception as e:
             LOG.error(f"Feed ingest failed for {feed['name']}: {e}")
             continue
@@ -7467,6 +7514,7 @@ def cron_ingest(
         "phase_1_ingest": {
             **ingest_stats,
             "total_articles_in_timeframe": total_articles
+            "insider_trading_blocked": ingest_stats["total_insider_trading_blocked"]
         },
         "phase_2_triage": {
             "type": "pure_ai_triage_only",

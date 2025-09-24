@@ -7676,9 +7676,13 @@ def cron_ingest(
         "processing_time_seconds": round(processing_time, 1),
         "workflow": "ticker_specific_ai_analysis",
         "phase_1_ingest": {
-            **ingest_stats,
+            "total_processed": ingest_stats["total_processed"],
+            "total_inserted": ingest_stats["total_inserted"],
+            "total_duplicates": ingest_stats["total_duplicates"],
+            "total_spam_blocked": ingest_stats["total_spam_blocked"],
+            "total_limit_reached": ingest_stats["total_limit_reached"],
+            "total_insider_trading_blocked": ingest_stats["total_insider_trading_blocked"],
             "total_articles_in_timeframe": total_articles
-            "insider_trading_blocked": ingest_stats["total_insider_trading_blocked"]
         },
         "phase_2_triage": {
             "type": "pure_ai_triage_only",

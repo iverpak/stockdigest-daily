@@ -247,6 +247,7 @@ SPAM_DOMAINS = {
     "newser.com", "www.newser.com", "newser", 
     "khodrobank.com", "www.khodrobank.com", "khodrobank",
     "defenseworld.net", "defense-world.net", "defensenews.com",
+    "facebook.com"
 }
 
 QUALITY_DOMAINS = {
@@ -1231,7 +1232,7 @@ def scrape_with_scrapfly(
         "thefly.com", "streetinsider.com", "accesswire.com",
         "247wallst.com", "barchart.com", "telecompaper.com",
         "news.stocktradersdaily.com", "sharewise.com",
-        "video.media.yql.yahoo.com", "templates.cds.yahoo"
+        "video.media.yql.yahoo.com", "templates.cds.yahoo.com"
     }
 
     for attempt in range(max_retries + 1):

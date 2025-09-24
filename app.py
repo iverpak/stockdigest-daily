@@ -3104,7 +3104,7 @@ Full Content: {scraped_content[:10000]}
         data = {
             "model": OPENAI_MODEL,
             "input": prompt,
-            "max_output_tokens": 10000,
+            "max_output_tokens": 15000,
             "reasoning": {"effort": "medium"},
             "text": {"verbosity": "low"},
             "truncation": "auto"
@@ -4466,16 +4466,14 @@ class DomainResolver:
             'wsj.com': 'The Wall Street Journal',
             'cnbc.com': 'CNBC',
             'marketwatch.com': 'MarketWatch',
-            'finance.yahoo.com': 'Yahoo Finance',
-            'ca.finance.yahoo.com': 'Yahoo Finance',
-            'uk.finance.yahoo.com': 'Yahoo Finance',
             'seekingalpha.com': 'Seeking Alpha',
             'fool.com': 'The Motley Fool',
             'tipranks.com': 'TipRanks',
             'benzinga.com': 'Benzinga',
             'investors.com': "Investor's Business Daily",
             'barrons.com': "Barron's",
-            'ft.com': 'Financial Times'
+            'ft.com': 'Financial Times',
+            'theglobeandmail.com': 'The Globe and Mail',
         }
 
     def _resolve_publication_to_domain(self, publication_name: str) -> Optional[str]:

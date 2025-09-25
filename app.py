@@ -1463,17 +1463,6 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             ticker_data[field] = None  # Clear invalid ticker
                 
                 ticker_data_batch.append(ticker_data)
-                
-                if ticker_data_batch:
-                    try:
-                        with db() as conn, conn.cursor() as cur:
-                            # ... existing bulk insert code ...
-                            
-                            # Calculate proper counts AFTER successful insert
-                            imported = len([t for t in ticker_data_batch if not t['is_existing']])
-                            updated = len([t for t in ticker_data_batch if t['is_existing']])
-                            
-                            LOG.info(f"BULK INSERT COMPLETED: {len(ticker_data_batch)} records processed")
                     
             except Exception as e:
                 errors.append(f"Row {row_num}: {str(e)}")

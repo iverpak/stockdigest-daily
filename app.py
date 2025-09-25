@@ -8471,7 +8471,7 @@ def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
         return {"status": "error", "message": "OpenAI API key not configured"}
     
     LOG.info(f"Regenerating metadata for {body.ticker}")
-    metadata = ticker_manager.get_or_create_metadata(body.ticker, force_refresh=True)
+    metadata = ticker_manager.get_or_create_metadata(body.ticker)
     
     # Rebuild feeds
     feeds = feed_manager.create_feeds_for_ticker_enhanced(body.ticker, metadata)
@@ -9360,7 +9360,7 @@ def enhance_ticker_with_ai_endpoint(request: Request, ticker: str = Body(..., em
             }
         
         # Generate enhanced metadata
-        enhanced_metadata = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=True)
+        enhanced_metadata = get_or_create_enhanced_ticker_metadata(ticker)
         
         return {
             "status": "success",

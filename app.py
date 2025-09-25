@@ -7956,7 +7956,7 @@ def admin_init(request: Request, body: InitRequest):
         keywords = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
         # Build feed URLs for all categories using enhanced feed creation
-        feeds = create_feeds_for_ticker_enhanced(ticker, keywords)
+        feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, keywords)
         
         if not feeds:
             LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")

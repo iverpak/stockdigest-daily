@@ -634,8 +634,7 @@ def ensure_schema():
                 
                 -- Create simple unique constraint on the three columns
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
-                ON found_url(url_hash, ticker, ai_analysis_ticker) 
-                WHERE ai_analysis_ticker IS NOT NULL;
+                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
                 
                 -- Ticker reference table (NEW - replaces ticker_config)
                 CREATE TABLE IF NOT EXISTS ticker_reference (
@@ -7954,10 +7953,10 @@ def admin_init(request: Request, body: InitRequest):
         LOG.info(f"=== INITIALIZING TICKER: {ticker} ===")
         
         # Get or generate metadata with enhanced ticker reference integration
-        metadata = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=body.force_refresh)
+        keywords = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
         # Build feed URLs for all categories using enhanced feed creation
-        feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
+        feeds = create_feeds_for_ticker_enhanced(ticker, keywords)
         
         if not feeds:
             LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")

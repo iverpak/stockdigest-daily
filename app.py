@@ -8008,7 +8008,7 @@ def cron_ingest(
         "total_spam_blocked": 0, 
         "total_limit_reached": 0,
         "total_insider_trading_blocked": 0,
-        "total_yahoo_rejected": 0  # ADD THIS
+        "total_yahoo_rejected": 0
     }
     
     # Process feeds normally to get new articles
@@ -8114,6 +8114,9 @@ def cron_ingest(
     processed_count = 0
     LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process across all tickers")
     
+    # Track which tickers were successfully processed for GitHub update
+    successfully_processed_tickers = set()
+    
     for target_ticker in articles_by_ticker.keys():
         config = get_ticker_config(target_ticker)
         metadata = {
@@ -8121,6 +8124,7 @@ def cron_ingest(
             "competitors": config.get("competitors", []) if config else []
         }
         
+        ticker_success_count = 0
         selected = triage_results.get(target_ticker, {})
         
         for category in ["company", "industry", "competitor"]:
@@ -8153,6 +8157,7 @@ def cron_ingest(
                     # CRITICAL: Analyze from target_ticker's perspective
                     success = scrape_and_analyze_article_3tier(article, category, metadata, target_ticker)
                     if success:
+                        ticker_success_count += 1
                         # Check if we reused existing data
                         if (article.get('scraped_content') and 
                             article.get('ai_summary') and 
@@ -8169,6 +8174,10 @@ def cron_ingest(
                 if processed_count % 10 == 0:
                     elapsed = time.time() - start_time
                     LOG.info(f"HEARTBEAT: {processed_count}/{total_articles_to_process} complete after {elapsed:.1f}s - keeping connection alive")
+        
+        # Track tickers that had successful processing
+        if ticker_success_count > 0:
+            successfully_processed_tickers.add(target_ticker)
     
     # Final heartbeat before completion
     elapsed = time.time() - start_time
@@ -8180,10 +8189,41 @@ def cron_ingest(
     log_scrapingbee_stats()
     log_scrapfly_stats()
     
-    processing_time = time.time() - start_time
-    LOG.info(f"=== CRON INGEST COMPLETE (TICKER-SPECIFIC ANALYSIS) - Total time: {processing_time:.1f}s ===")
+    # PHASE 5: Update specific processed tickers back to GitHub (ENHANCED)
+    github_update_result = {"status": "skipped", "message": "No tickers to update"}
     
-    # Enhanced return with optimization stats
+    if successfully_processed_tickers and github_sync_result["status"] == "success":
+        LOG.info("=== PHASE 5: UPDATING PROCESSED TICKERS ON GITHUB ===")
+        
+        processed_tickers_list = list(successfully_processed_tickers)
+        
+        try:
+            github_update_result = update_specific_tickers_on_github(
+                processed_tickers_list, 
+                f"Updated {len(processed_tickers_list)} tickers with AI analysis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            
+            if github_update_result["status"] == "success":
+                LOG.info(f"Successfully updated {len(processed_tickers_list)} tickers on GitHub")
+            else:
+                LOG.warning(f"Failed to update tickers on GitHub: {github_update_result.get('message', 'Unknown error')}")
+                
+        except Exception as e:
+            LOG.error(f"GitHub update failed: {e}")
+            github_update_result = {"status": "error", "message": str(e)}
+    
+    elif not successfully_processed_tickers:
+        LOG.info("=== PHASE 5 SKIPPED: No tickers had successful processing ===")
+        github_update_result = {"status": "skipped", "message": "No successfully processed tickers to update"}
+    
+    elif github_sync_result["status"] != "success":
+        LOG.info("=== PHASE 5 SKIPPED: GitHub sync failed at start ===")
+        github_update_result = {"status": "skipped", "message": "GitHub sync failed at start"}
+    
+    processing_time = time.time() - start_time
+    LOG.info(f"=== CRON INGEST COMPLETE (ENHANCED GITHUB INTEGRATION) - Total time: {processing_time:.1f}s ===")
+    
+    # Enhanced return with GitHub integration stats
     total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
     total_scraping_success = (enhanced_scraping_stats["requests_success"] + 
                              enhanced_scraping_stats["playwright_success"] + 
@@ -8194,7 +8234,25 @@ def cron_ingest(
     return {
         "status": "completed",
         "processing_time_seconds": round(processing_time, 1),
-        "workflow": "ticker_specific_ai_analysis",
+        "workflow": "enhanced_ticker_reference_with_github_integration",
+        
+        # NEW: GitHub integration results
+        "github_integration": {
+            "sync_from_github": {
+                "status": github_sync_result["status"],
+                "message": github_sync_result.get("message", ""),
+                "imported": github_sync_result.get("database_import", {}).get("imported", 0),
+                "updated": github_sync_result.get("database_import", {}).get("updated", 0)
+            },
+            "sync_to_github": {
+                "status": github_update_result["status"],
+                "message": github_update_result.get("message", ""),
+                "tickers_updated": list(successfully_processed_tickers) if successfully_processed_tickers else [],
+                "commit_sha": github_update_result.get("commit_sha", "")[:8] if github_update_result.get("commit_sha") else ""
+            }
+        },
+        
+        # Existing return structure
         "phase_1_ingest": {
             "total_processed": ingest_stats["total_processed"],
             "total_inserted": ingest_stats["total_inserted"],
@@ -8202,7 +8260,7 @@ def cron_ingest(
             "total_spam_blocked": ingest_stats["total_spam_blocked"],
             "total_limit_reached": ingest_stats["total_limit_reached"],
             "total_insider_trading_blocked": ingest_stats["total_insider_trading_blocked"],
-            "total_yahoo_rejected": ingest_stats["total_yahoo_rejected"],  # ADD THIS
+            "total_yahoo_rejected": ingest_stats["total_yahoo_rejected"],
             "total_articles_in_timeframe": total_articles
         },
         "phase_2_triage": {
@@ -8223,7 +8281,12 @@ def cron_ingest(
             "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
             "dynamic_limits": dynamic_limits
         },
-        "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective"
+        "phase_5_github_update": {
+            "successfully_processed_tickers": list(successfully_processed_tickers),
+            "github_update_status": github_update_result["status"]
+        },
+        "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective",
+        "message": "Enhanced workflow with bidirectional GitHub sync completed"
     }
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):

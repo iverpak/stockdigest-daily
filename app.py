@@ -634,7 +634,8 @@ def ensure_schema():
                 
                 -- Create simple unique constraint on the three columns
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
-                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
+                ON found_url(url_hash, ticker, ai_analysis_ticker) 
+                WHERE ai_analysis_ticker IS NOT NULL;
                 
                 -- Rest of schema...
                 CREATE TABLE IF NOT EXISTS ticker_config (
@@ -1316,7 +1317,8 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                 ticker_data['competitor_3_name'] = row.get('competitor_3_name', '').strip() or None
                 ticker_data['competitor_3_ticker'] = row.get('competitor_3_ticker', '').strip() or None
                 
-                # LEGACY SUPPORT: Handle old "competitors" field format if new fields are empty
+                # Handle both legacy and new CSV formats
+                # LEGACY SUPPORT: Handle old "competitors" field format
                 if (row.get('competitors', '').strip() and 
                     not any(ticker_data.get(f'competitor_{i}_name') for i in range(1, 4))):
                     legacy_competitors = row['competitors'].split(',')
@@ -1327,19 +1329,43 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             match = re.search(r'^(.+?)\s*\(([^)]+)\)$', comp)
                             if match:
                                 name = match.group(1).strip()
-                                ticker = match.group(2).strip()
-                                ticker_data[f'competitor_{i}_name'] = name
-                                ticker_data[f'competitor_{i}_ticker'] = ticker
+                                ticker_comp = match.group(2).strip()
+                                # Validate competitor ticker format
+                                normalized_ticker = normalize_ticker_format(ticker_comp)
+                                if validate_ticker_format(normalized_ticker):
+                                    ticker_data[f'competitor_{i}_name'] = name
+                                    ticker_data[f'competitor_{i}_ticker'] = normalized_ticker
+                                else:
+                                    LOG.warning(f"Invalid competitor ticker format: {ticker_comp}")
+                                    ticker_data[f'competitor_{i}_name'] = name
                             else:
                                 # Just a name without ticker
                                 ticker_data[f'competitor_{i}_name'] = comp
                 
-                # LEGACY SUPPORT: Handle old "industry_keywords" field if new fields are empty
+                # LEGACY SUPPORT: Handle old "industry_keywords" field
                 if (row.get('industry_keywords', '').strip() and 
                     not any(ticker_data.get(f'industry_keyword_{i}') for i in range(1, 4))):
                     legacy_keywords = [kw.strip() for kw in row['industry_keywords'].split(',') if kw.strip()]
                     for i, keyword in enumerate(legacy_keywords[:3], 1):
                         ticker_data[f'industry_keyword_{i}'] = keyword
+                
+                # Handle new format where competitors might be stored as arrays in JSON
+                if row.get('competitors_array'):
+                    try:
+                        import json
+                        competitors_list = json.loads(row['competitors_array']) if isinstance(row['competitors_array'], str) else row['competitors_array']
+                        for i, comp in enumerate(competitors_list[:3], 1):
+                            if isinstance(comp, dict):
+                                ticker_data[f'competitor_{i}_name'] = comp.get('name')
+                                ticker_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+                            elif isinstance(comp, str):
+                                # Handle string format
+                                match = re.search(r'^(.+?)\s*\(([^)]+)\)$', comp)
+                                if match:
+                                    ticker_data[f'competitor_{i}_name'] = match.group(1).strip()
+                                    ticker_data[f'competitor_{i}_ticker'] = normalize_ticker_format(match.group(2).strip())
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 
                 # Check if ticker already exists
                 existing = get_ticker_reference(ticker_data['ticker'])
@@ -6473,6 +6499,35 @@ Required JSON format:
                 return items
             return []
         
+        def _process_competitors(competitors_data):
+            """Ensure competitors are in proper format with name and ticker validation"""
+            processed = []
+            if not isinstance(competitors_data, list):
+                return processed
+            
+            for comp in competitors_data[:3]:
+                if isinstance(comp, dict):
+                    name = comp.get('name', '').strip()
+                    ticker = comp.get('ticker', '').strip()
+                    
+                    if name:  # Name is required
+                        processed_comp = {"name": name}
+                        if ticker:
+                            # Validate and normalize ticker
+                            normalized_ticker = normalize_ticker_format(ticker)
+                            if validate_ticker_format(normalized_ticker):
+                                processed_comp["ticker"] = normalized_ticker
+                            else:
+                                LOG.warning(f"AI provided invalid competitor ticker: {ticker}")
+                        processed.append(processed_comp)
+                elif isinstance(comp, str):
+                    # Handle string format as fallback
+                    name = comp.strip()
+                    if name:
+                        processed.append({"name": name})
+            
+            return processed
+        
         metadata.setdefault("ticker", ticker)
         metadata["name"] = company_name  # Use the provided company name
         metadata["company_name"] = company_name  # Ensure both fields are set
@@ -6483,7 +6538,7 @@ Required JSON format:
         
         # Normalize lists (no padding)
         metadata["industry_keywords"] = _list3(metadata.get("industry_keywords", []))
-        metadata["competitors"] = _list3(metadata.get("competitors", []))
+        metadata["competitors"] = _process_competitors(metadata.get("competitors", []))
         
         # Ensure nested objects exist
         sector_profile = metadata.setdefault("sector_profile", {})

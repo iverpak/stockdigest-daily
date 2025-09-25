@@ -44,14 +44,13 @@ import asyncio
 _openai_session = None
 
 def get_openai_session():
-    """Get a requests session with retry logic for OpenAI API calls"""
     global _openai_session
     if _openai_session is None:
         _openai_session = requests.Session()
         retry_strategy = Retry(
-            total=3,                    # up to 3 retries
-            backoff_factor=0.8,         # 0.8s, 1.6s, 3.2s delays
-            status_forcelist=(429, 500, 502, 503, 504),  # retry on these HTTP codes
+            total=3,
+            backoff_factor=2,           # CHANGE: 2s, 4s, 8s delays instead of 0.8s, 1.6s, 3.2s
+            status_forcelist=(429, 500, 502, 503, 504),
             allowed_methods=frozenset(["POST"])
         )
         _openai_session.mount("https://", HTTPAdapter(max_retries=retry_strategy))

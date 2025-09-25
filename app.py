@@ -735,17 +735,6 @@ def update_schema_for_content():
             ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
         """)
 
-def update_schema_for_enhanced_metadata():
-    """Add enhanced metadata fields to ticker_config table"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS sector VARCHAR(255);
-            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS industry VARCHAR(255);
-            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS sub_industry VARCHAR(255);
-            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS sector_profile JSONB;
-            ALTER TABLE ticker_config ADD COLUMN IF NOT EXISTS aliases_brands_assets JSONB;
-        """)
-
 def update_schema_for_qb_scores():
     """Add QB scoring fields to found_url table"""
     with db() as conn, conn.cursor() as cur:
@@ -3907,46 +3896,6 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     </div>
     """
 
-def get_ticker_config(ticker: str) -> Optional[Dict]:
-    """Get ticker configuration from ticker_reference table"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT ticker, company_name,
-                   industry_keyword_1, industry_keyword_2, industry_keyword_3,
-                   competitor_1_name, competitor_1_ticker,
-                   competitor_2_name, competitor_2_ticker,
-                   competitor_3_name, competitor_3_ticker
-            FROM ticker_reference
-            WHERE ticker = %s AND active = TRUE
-        """, (ticker,))
-        
-        result = cur.fetchone()
-        if not result:
-            return None
-        
-        # Convert to standard format
-        industry_keywords = [
-            result[f"industry_keyword_{i}"] 
-            for i in range(1, 4) 
-            if result.get(f"industry_keyword_{i}")
-        ]
-        
-        competitors = []
-        for i in range(1, 4):
-            name = result.get(f"competitor_{i}_name")
-            ticker = result.get(f"competitor_{i}_ticker")
-            if name:
-                comp = {"name": name}
-                if ticker:
-                    comp["ticker"] = ticker
-                competitors.append(comp)
-        
-        return {
-            "name": result["company_name"],
-            "industry_keywords": industry_keywords,
-            "competitors": competitors
-        }
-
 def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
     """Wrapper for backward compatibility"""
     return ticker_manager.get_or_create_metadata(ticker, force_refresh)
@@ -6256,7 +6205,7 @@ class TickerManager:
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
                     SELECT ticker, name, industry_keywords, competitors, ai_generated
-                    FROM ticker_config WHERE ticker = %s AND active = TRUE
+                    FROM ticker_reference WHERE ticker = %s AND active = TRUE
                 """, (ticker,))
                 config = cur.fetchone()
                 
@@ -6788,60 +6737,6 @@ def validate_metadata(metadata):
             warnings.append(f"Generic core input: '{inp}'")
     
     return warnings
-
-def store_ticker_metadata(ticker, name, sector, industry, sub_industry, 
-                         industry_keywords, competitors, sector_profile, aliases_brands_assets):
-    """
-    Store ticker metadata in database
-    """
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                # Check if ticker already exists
-                cur.execute("SELECT ticker FROM ticker_config WHERE ticker = %s", (ticker,))
-                exists = cur.fetchone()
-                
-                if exists:
-                    # Update existing
-                    cur.execute("""
-                        UPDATE ticker_config SET
-                            name = %s,
-                            sector = %s, 
-                            industry = %s,
-                            sub_industry = %s,
-                            industry_keywords = %s,
-                            competitors = %s,
-                            sector_profile = %s,
-                            aliases_brands_assets = %s,
-                            ai_generated = TRUE,
-                            updated_at = NOW()
-                        WHERE ticker = %s
-                    """, (
-                        name, sector, industry, sub_industry,
-                        industry_keywords, competitors,
-                        json.dumps(sector_profile), json.dumps(aliases_brands_assets),
-                        ticker
-                    ))
-                else:
-                    # Insert new
-                    cur.execute("""
-                        INSERT INTO ticker_config (
-                            ticker, name, sector, industry, sub_industry,
-                            industry_keywords, competitors, sector_profile, 
-                            aliases_brands_assets, ai_generated, active
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, TRUE)
-                    """, (
-                        ticker, name, sector, industry, sub_industry,
-                        industry_keywords, competitors,
-                        json.dumps(sector_profile), json.dumps(aliases_brands_assets)
-                    ))
-                
-                conn.commit()
-                return True
-                
-    except Exception as e:
-        print(f"Database error storing {ticker}: {e}")
-        return False
 
 def resolve_google_news_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Wrapper for backward compatibility"""

@@ -1462,19 +1462,14 @@ def import_ticker_reference_from_csv_content(csv_content: str):
         if ticker_data_batch:
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Get existing tickers to calculate update vs insert counts
-                    cur.execute("SELECT ticker FROM ticker_reference")
-                    existing_tickers = {row["ticker"] for row in cur.fetchall()}
-                    
-                    # Prepare data tuples for bulk insert
+                   
+                    # Prepare data tuples for bulk insert (fresh start, so everything is imported)
                     insert_data = []
+                    imported = len(ticker_data_batch)
+                    updated = 0
+                    
                     for ticker_data in ticker_data_batch:
-                        # Track if this will be an update or insert
-                        if ticker_data['ticker'] in existing_tickers:
-                            updated += 1
-                        else:
-                            imported += 1
-                            
+
                         insert_data.append((
                             ticker_data['ticker'], ticker_data['country'], ticker_data['company_name'],
                             ticker_data.get('industry'), ticker_data.get('sector'), ticker_data.get('sub_industry'),

@@ -723,7 +723,6 @@ def ensure_schema():
             except Exception as e:
                 LOG.warning(f"Schema cleanup warning: {e}")
 
-    update_schema_for_enhanced_metadata()
     update_schema_for_triage()
 
 # Add these fields to your database schema

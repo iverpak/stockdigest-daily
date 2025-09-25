@@ -48,9 +48,9 @@ def get_openai_session():
     if _openai_session is None:
         _openai_session = requests.Session()
         retry_strategy = Retry(
-            total=3,
-            backoff_factor=2,           # CHANGE: 2s, 4s, 8s delays instead of 0.8s, 1.6s, 3.2s
-            status_forcelist=(429, 500, 502, 503, 504),
+            total=2,                    # Reduce retry attempts
+            backoff_factor=5,           # Much longer delays: 5s, 25s
+            status_forcelist=(500, 502, 503, 504),  # Remove 429 from auto-retry
             allowed_methods=frozenset(["POST"])
         )
         _openai_session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
@@ -5308,31 +5308,25 @@ Use exactly 3 items per list. Be brief and specific."""
             "truncation": "auto"
         }
         
-        response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-        
-        # Handle 429 rate limiting with proper backoff
+        # Manual 429 handling with longer delays
+        response = None
         for attempt in range(3):
-            response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-            
-            if response.status_code == 200:
-                break
-            elif response.status_code == 429:
-                # Get retry-after header or use exponential backoff
-                retry_after = response.headers.get('retry-after')
-                if retry_after:
-                    wait_time = int(retry_after)
-                else:
-                    wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
-                
-                print(f"Rate limited (attempt {attempt + 1}/3), waiting {wait_time}s...")
+            try:
+                response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
+                if response.status_code != 429:
+                    break
+                # Handle 429 with exponential backoff
+                wait_time = min(60, (3 ** attempt) * 10)  # 10s, 30s, 90s, capped at 60s
+                print(f"Rate limited, waiting {wait_time}s before retry {attempt + 1}/3...")
                 time.sleep(wait_time)
-                
-                if attempt == 2:  # Last attempt
-                    print(f"API error {response.status_code} after retries: {response.text}")
-                    return None
-            else:
-                print(f"API error {response.status_code}: {response.text}")
-                return None
+            except Exception as e:
+                if attempt == 2:
+                    raise e
+                time.sleep(10)
+        
+        if not response or response.status_code != 200:
+            print(f"API error {response.status_code if response else 'None'}: {response.text if response else 'No response'}")
+            return None
         
         result = response.json()
         text = extract_text_from_responses(result)
@@ -5365,21 +5359,23 @@ Use exactly 3 items per list. Be brief and specific."""
                 "truncation": "auto"
             }
             
-            # Handle 429 for retry attempt too
+            # Manual 429 handling for retry too
+            retry_response = None
             for attempt in range(3):
-                retry_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=retry_data, timeout=(10, 180))
-                
-                if retry_response.status_code == 200:
-                    break
-                elif retry_response.status_code == 429:
-                    retry_after = retry_response.headers.get('retry-after')
-                    wait_time = int(retry_after) if retry_after else (2 ** attempt) * 5
-                    print(f"Rate limited on retry (attempt {attempt + 1}/3), waiting {wait_time}s...")
+                try:
+                    retry_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=retry_data, timeout=(10, 180))
+                    if retry_response.status_code != 429:
+                        break
+                    # Handle 429 with exponential backoff
+                    wait_time = min(60, (3 ** attempt) * 10)  # 10s, 30s, 90s
+                    print(f"Rate limited on retry, waiting {wait_time}s before attempt {attempt + 1}/3...")
                     time.sleep(wait_time)
-                else:
-                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise e
+                    time.sleep(10)
             
-            if retry_response.status_code == 200:
+            if retry_response and retry_response.status_code == 200:
                 retry_result = retry_response.json()
                 
                 # Log retry usage too

@@ -1160,7 +1160,14 @@ def get_ticker_reference(ticker: str):
 # Backwards compatability ticker_reference to ticker_config
 def get_ticker_config(ticker: str) -> Optional[Dict]:
     """Get ticker configuration from ticker_reference table with proper field conversion"""
+    LOG.info(f"DEBUG: get_ticker_config() called with ticker='{ticker}'")
+    
     with db() as conn, conn.cursor() as cur:
+        # Add debug query first
+        cur.execute("SELECT COUNT(*) as count FROM ticker_reference WHERE ticker = %s", (ticker,))
+        count_result = cur.fetchone()
+        LOG.info(f"DEBUG: Found {count_result['count'] if count_result else 0} records for ticker '{ticker}'")
+        
         cur.execute("""
             SELECT ticker, company_name,
                    industry_keyword_1, industry_keyword_2, industry_keyword_3,
@@ -1173,6 +1180,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
         """, (ticker,))
         
         result = cur.fetchone()
+        LOG.info(f"DEBUG: Raw database result: {result}")
         if not result:
             return None
         

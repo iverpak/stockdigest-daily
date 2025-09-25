@@ -6662,6 +6662,8 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
     config = get_ticker_config(normalized_ticker)
     
     if config and not force_refresh:
+        LOG.info(f"DEBUG: config exists: {bool(config)}, force_refresh: {force_refresh}")
+        LOG.info(f"DEBUG: config content: {config}")
         LOG.info(f"Found ticker reference data for {ticker}: {config['company_name']}")
         
         # Data is already in the correct format from get_ticker_config()

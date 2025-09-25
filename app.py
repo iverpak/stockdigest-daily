@@ -20,7 +20,7 @@ from urllib.robotparser import RobotFileParser
 
 import psycopg
 from psycopg.rows import dict_row
-from fastapi import FastAPI, Request, HTTPException, Query, Body
+from fastapi import FastAPI, Request, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
@@ -731,28 +731,30 @@ def update_schema_for_triage():
         """)
 
 # Core Ticker Reference Functions
-# 1. ENHANCED TICKER REFERENCE SCHEMA - With 6 competitor fields
+# 1. UPDATED SCHEMA - With 3 industry keyword columns and 6 competitor columns
 def ensure_ticker_reference_schema():
-    """Create/update ticker reference table with 6 separate competitor fields"""
+    """Create/update ticker reference table with 3 industry keywords + 6 competitor fields"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ticker_reference (
                 id SERIAL PRIMARY KEY,
-                ticker VARCHAR(20) UNIQUE NOT NULL,  -- Supports international formats like RY.TO
-                country VARCHAR(5) NOT NULL,         -- US, CA, UK, etc.
+                ticker VARCHAR(20) UNIQUE NOT NULL,
+                country VARCHAR(5) NOT NULL,
                 company_name VARCHAR(255) NOT NULL,
                 industry VARCHAR(255),
                 sector VARCHAR(255),
                 sub_industry VARCHAR(255),
-                exchange VARCHAR(20),                 -- NYSE, TSX, NASDAQ, etc.
-                currency VARCHAR(3),                  -- USD, CAD, GBP, etc.
-                market_cap_category VARCHAR(20),      -- Large, Mid, Small, Micro
+                exchange VARCHAR(20),
+                currency VARCHAR(3),
+                market_cap_category VARCHAR(20),
                 active BOOLEAN DEFAULT TRUE,
                 is_etf BOOLEAN DEFAULT FALSE,
-                yahoo_ticker VARCHAR(20),             -- Yahoo Finance specific ticker if different
+                yahoo_ticker VARCHAR(20),
                 
-                -- Industry Keywords (AI can fill if empty)
-                industry_keywords TEXT[],
+                -- 3 Industry Keywords (separate columns)
+                industry_keyword_1 VARCHAR(255),
+                industry_keyword_2 VARCHAR(255),
+                industry_keyword_3 VARCHAR(255),
                 
                 -- 6 Competitor fields (name + ticker pairs)
                 competitor_1_name VARCHAR(255),
@@ -769,23 +771,21 @@ def ensure_ticker_reference_schema():
                 -- Metadata tracking
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW(),
-                data_source VARCHAR(50) DEFAULT 'manual'  -- manual, csv_import, ai_generated, etc.
+                data_source VARCHAR(50) DEFAULT 'manual'
             );
             
-            -- Create indexes for performance
+            -- Create indexes
             CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
             CREATE INDEX IF NOT EXISTS idx_ticker_reference_country ON ticker_reference(country);
             CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
             CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
-            
-            -- Index for competitor lookups
-            CREATE INDEX IF NOT EXISTS idx_ticker_reference_competitors ON ticker_reference USING gin (
-                (ARRAY[competitor_1_ticker, competitor_2_ticker, competitor_3_ticker])
-            );
         """)
         
         # Add columns if they don't exist (for existing installations)
         columns_to_add = [
+            ("industry_keyword_1", "VARCHAR(255)"),
+            ("industry_keyword_2", "VARCHAR(255)"),
+            ("industry_keyword_3", "VARCHAR(255)"),
             ("competitor_1_name", "VARCHAR(255)"),
             ("competitor_1_ticker", "VARCHAR(20)"),
             ("competitor_2_name", "VARCHAR(255)"),
@@ -808,7 +808,7 @@ def ensure_ticker_reference_schema():
                 ADD COLUMN IF NOT EXISTS {column_name} {column_type};
             """)
         
-        LOG.info("Enhanced ticker_reference schema created/updated with 6 competitor fields")
+        LOG.info("Enhanced ticker_reference schema created/updated with 3 industry keywords + 6 competitor fields")
 
 # 2. INTERNATIONAL TICKER FORMAT VALIDATION
 def validate_ticker_format(ticker: str) -> bool:
@@ -1081,12 +1081,12 @@ def get_ticker_reference(ticker: str):
         # First try exact match
         cur.execute("""
             SELECT ticker, country, company_name, industry, sector, sub_industry,
-                   exchange, currency, market_cap_category, yahoo_ticker, active, 
-                   industry_keywords, ai_generated, ai_enhanced_at,
+                   exchange, currency, market_cap_category, yahoo_ticker, active, is_etf,
+                   industry_keyword_1, industry_keyword_2, industry_keyword_3,
                    competitor_1_name, competitor_1_ticker,
                    competitor_2_name, competitor_2_ticker,
                    competitor_3_name, competitor_3_ticker,
-                   created_at, updated_at, data_source
+                   ai_generated, ai_enhanced_at, created_at, updated_at, data_source
             FROM ticker_reference
             WHERE ticker = %s AND active = TRUE
         """, (normalized_ticker,))
@@ -1096,17 +1096,16 @@ def get_ticker_reference(ticker: str):
             return dict(result)
         
         # Fallback logic for Canadian tickers
-        # If user enters "RY" and we have "RY.TO", find it
         if not normalized_ticker.endswith('.TO') and len(normalized_ticker) <= 5:
             canadian_ticker = f"{normalized_ticker}.TO"
             cur.execute("""
                 SELECT ticker, country, company_name, industry, sector, sub_industry,
-                       exchange, currency, market_cap_category, yahoo_ticker, active, 
-                       industry_keywords, ai_generated, ai_enhanced_at,
+                       exchange, currency, market_cap_category, yahoo_ticker, active, is_etf,
+                       industry_keyword_1, industry_keyword_2, industry_keyword_3,
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
-                       created_at, updated_at, data_source
+                       ai_generated, ai_enhanced_at, created_at, updated_at, data_source
                 FROM ticker_reference
                 WHERE ticker = %s AND active = TRUE
             """, (canadian_ticker,))
@@ -1115,17 +1114,16 @@ def get_ticker_reference(ticker: str):
                 return dict(result)
         
         # Fallback logic for US tickers
-        # If user enters "RY.TO" but we also have "RY" (US listing), could offer both
         if '.TO' in normalized_ticker:
             us_ticker = normalized_ticker.replace('.TO', '')
             cur.execute("""
                 SELECT ticker, country, company_name, industry, sector, sub_industry,
-                       exchange, currency, market_cap_category, yahoo_ticker, active, 
-                       industry_keywords, ai_generated, ai_enhanced_at,
+                       exchange, currency, market_cap_category, yahoo_ticker, active, is_etf,
+                       industry_keyword_1, industry_keyword_2, industry_keyword_3,
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
-                       created_at, updated_at, data_source
+                       ai_generated, ai_enhanced_at, created_at, updated_at, data_source
                 FROM ticker_reference
                 WHERE ticker = %s AND active = TRUE
             """, (us_ticker,))
@@ -1138,7 +1136,7 @@ def get_ticker_reference(ticker: str):
 
 # 2. STORE TICKER REFERENCE - With 6 competitor fields
 def store_ticker_reference(ticker_data: dict) -> bool:
-    """Store or update ticker reference data with validation"""
+    """Store or update ticker reference data with 3 industry keywords + 6 competitor fields"""
     try:
         # Validate required fields
         required_fields = ['ticker', 'country', 'company_name']
@@ -1160,9 +1158,12 @@ def store_ticker_reference(ticker_data: dict) -> bool:
             ticker_data['yahoo_ticker'] = ticker_data['ticker']
         
         # Clean text fields to remove NULL bytes
-        text_fields = ['company_name', 'industry', 'sector', 'sub_industry', 'exchange', 
-                      'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
-                      'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker']
+        text_fields = [
+            'company_name', 'industry', 'sector', 'sub_industry', 'exchange',
+            'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
+            'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
+            'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker'
+        ]
         for field in text_fields:
             if ticker_data.get(field):
                 ticker_data[field] = clean_null_bytes(str(ticker_data[field]))
@@ -1182,17 +1183,19 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                 INSERT INTO ticker_reference (
                     ticker, country, company_name, industry, sector, sub_industry,
                     exchange, currency, market_cap_category, yahoo_ticker, active, is_etf,
-                    industry_keywords, ai_generated, data_source,
+                    industry_keyword_1, industry_keyword_2, industry_keyword_3,
                     competitor_1_name, competitor_1_ticker,
                     competitor_2_name, competitor_2_ticker,
-                    competitor_3_name, competitor_3_ticker
+                    competitor_3_name, competitor_3_ticker,
+                    ai_generated, data_source
                 ) VALUES (
                     %(ticker)s, %(country)s, %(company_name)s, %(industry)s, %(sector)s, %(sub_industry)s,
                     %(exchange)s, %(currency)s, %(market_cap_category)s, %(yahoo_ticker)s, %(active)s, %(is_etf)s,
-                    %(industry_keywords)s, %(ai_generated)s, %(data_source)s,
+                    %(industry_keyword_1)s, %(industry_keyword_2)s, %(industry_keyword_3)s,
                     %(competitor_1_name)s, %(competitor_1_ticker)s,
                     %(competitor_2_name)s, %(competitor_2_ticker)s,
-                    %(competitor_3_name)s, %(competitor_3_ticker)s
+                    %(competitor_3_name)s, %(competitor_3_ticker)s,
+                    %(ai_generated)s, %(data_source)s
                 )
                 ON CONFLICT (ticker) DO UPDATE SET
                     country = EXCLUDED.country,
@@ -1206,15 +1209,17 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                     yahoo_ticker = EXCLUDED.yahoo_ticker,
                     active = EXCLUDED.active,
                     is_etf = EXCLUDED.is_etf,
-                    industry_keywords = EXCLUDED.industry_keywords,
-                    ai_generated = EXCLUDED.ai_generated,
-                    data_source = EXCLUDED.data_source,
+                    industry_keyword_1 = EXCLUDED.industry_keyword_1,
+                    industry_keyword_2 = EXCLUDED.industry_keyword_2,
+                    industry_keyword_3 = EXCLUDED.industry_keyword_3,
                     competitor_1_name = EXCLUDED.competitor_1_name,
                     competitor_1_ticker = EXCLUDED.competitor_1_ticker,
                     competitor_2_name = EXCLUDED.competitor_2_name,
                     competitor_2_ticker = EXCLUDED.competitor_2_ticker,
                     competitor_3_name = EXCLUDED.competitor_3_name,
                     competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                    ai_generated = EXCLUDED.ai_generated,
+                    data_source = EXCLUDED.data_source,
                     updated_at = NOW()
             """, {
                 'ticker': ticker_data['ticker'],
@@ -1229,15 +1234,17 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                 'yahoo_ticker': ticker_data.get('yahoo_ticker', ticker_data['ticker']),
                 'active': ticker_data.get('active', True),
                 'is_etf': ticker_data.get('is_etf', False),
-                'industry_keywords': ticker_data.get('industry_keywords', []),
-                'ai_generated': ticker_data.get('ai_generated', False),
-                'data_source': ticker_data.get('data_source', 'api'),
+                'industry_keyword_1': ticker_data.get('industry_keyword_1'),
+                'industry_keyword_2': ticker_data.get('industry_keyword_2'),
+                'industry_keyword_3': ticker_data.get('industry_keyword_3'),
                 'competitor_1_name': ticker_data.get('competitor_1_name'),
                 'competitor_1_ticker': ticker_data.get('competitor_1_ticker'),
                 'competitor_2_name': ticker_data.get('competitor_2_name'),
                 'competitor_2_ticker': ticker_data.get('competitor_2_ticker'),
                 'competitor_3_name': ticker_data.get('competitor_3_name'),
-                'competitor_3_ticker': ticker_data.get('competitor_3_ticker')
+                'competitor_3_ticker': ticker_data.get('competitor_3_ticker'),
+                'ai_generated': ticker_data.get('ai_generated', False),
+                'data_source': ticker_data.get('data_source', 'api')
             })
             
             LOG.info(f"Successfully stored ticker reference: {ticker_data['ticker']} - {ticker_data['company_name']}")
@@ -1249,7 +1256,7 @@ def store_ticker_reference(ticker_data: dict) -> bool:
 
 # 3. CSV IMPORT - With 6 competitor fields support
 def import_ticker_reference_from_csv_content(csv_content: str):
-    """Import ticker reference data from CSV content string with 6 competitor fields"""
+    """Import ticker reference data from CSV with 3 industry keywords + 6 competitor fields"""
     ensure_ticker_reference_schema()
     
     imported = 0
@@ -1258,7 +1265,6 @@ def import_ticker_reference_from_csv_content(csv_content: str):
     skipped = 0
     
     try:
-        # Parse CSV from string content
         csv_reader = csv.DictReader(io.StringIO(csv_content))
         
         # Validate CSV headers
@@ -1297,35 +1303,24 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     'data_source': 'csv_import'
                 }
                 
-                # Handle industry keywords - parse comma-separated values
-                if row.get('industry_keywords', '').strip():
-                    keywords = [kw.strip() for kw in row['industry_keywords'].split(',') if kw.strip()]
-                    ticker_data['industry_keywords'] = keywords
+                # Handle 3 industry keyword fields
+                ticker_data['industry_keyword_1'] = row.get('industry_keyword_1', '').strip() or None
+                ticker_data['industry_keyword_2'] = row.get('industry_keyword_2', '').strip() or None
+                ticker_data['industry_keyword_3'] = row.get('industry_keyword_3', '').strip() or None
                 
                 # Handle 6 competitor fields
-                competitor_fields = [
-                    ('competitor_1_name', 'competitor_1_ticker'),
-                    ('competitor_2_name', 'competitor_2_ticker'),
-                    ('competitor_3_name', 'competitor_3_ticker')
-                ]
+                ticker_data['competitor_1_name'] = row.get('competitor_1_name', '').strip() or None
+                ticker_data['competitor_1_ticker'] = row.get('competitor_1_ticker', '').strip() or None
+                ticker_data['competitor_2_name'] = row.get('competitor_2_name', '').strip() or None
+                ticker_data['competitor_2_ticker'] = row.get('competitor_2_ticker', '').strip() or None
+                ticker_data['competitor_3_name'] = row.get('competitor_3_name', '').strip() or None
+                ticker_data['competitor_3_ticker'] = row.get('competitor_3_ticker', '').strip() or None
                 
-                for name_field, ticker_field in competitor_fields:
-                    name = row.get(name_field, '').strip()
-                    ticker = row.get(ticker_field, '').strip()
-                    
-                    if name and ticker:
-                        ticker_data[name_field] = name
-                        ticker_data[ticker_field] = ticker
-                    elif name and not ticker:
-                        # Have name but no ticker - this is okay, just store the name
-                        ticker_data[name_field] = name
-                    # If we have ticker but no name, skip both (incomplete data)
-                
-                # LEGACY SUPPORT: Handle old "competitors" field format
-                # If CSV has old format "Royal Bank (RY.TO),TD Bank (TD.TO)" parse it
-                if row.get('competitors', '').strip() and not any(ticker_data.get(f'competitor_{i}_name') for i in range(1, 4)):
+                # LEGACY SUPPORT: Handle old "competitors" field format if new fields are empty
+                if (row.get('competitors', '').strip() and 
+                    not any(ticker_data.get(f'competitor_{i}_name') for i in range(1, 4))):
                     legacy_competitors = row['competitors'].split(',')
-                    for i, comp in enumerate(legacy_competitors[:3], 1):  # Max 3 competitors
+                    for i, comp in enumerate(legacy_competitors[:3], 1):
                         comp = comp.strip()
                         if comp:
                             # Try to parse "Name (TICKER)" format
@@ -1338,6 +1333,13 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             else:
                                 # Just a name without ticker
                                 ticker_data[f'competitor_{i}_name'] = comp
+                
+                # LEGACY SUPPORT: Handle old "industry_keywords" field if new fields are empty
+                if (row.get('industry_keywords', '').strip() and 
+                    not any(ticker_data.get(f'industry_keyword_{i}') for i in range(1, 4))):
+                    legacy_keywords = [kw.strip() for kw in row['industry_keywords'].split(',') if kw.strip()]
+                    for i, keyword in enumerate(legacy_keywords[:3], 1):
+                        ticker_data[f'industry_keyword_{i}'] = keyword
                 
                 # Check if ticker already exists
                 existing = get_ticker_reference(ticker_data['ticker'])
@@ -1362,7 +1364,7 @@ def import_ticker_reference_from_csv_content(csv_content: str):
             "imported": imported,
             "updated": updated,
             "skipped": skipped,
-            "errors": errors[:10],  # Limit error display
+            "errors": errors[:10],
             "total_errors": len(errors),
             "message": f"Successfully processed {imported + updated} ticker references ({imported} new, {updated} updated)"
         }
@@ -1396,11 +1398,12 @@ def get_all_ticker_references(limit: int = None, offset: int = 0, country_filter
         
         cur.execute(f"""
             SELECT ticker, country, company_name, industry, sector, exchange, 
-                   currency, market_cap_category, ai_generated, ai_enhanced_at,
+                   currency, market_cap_category, 
+                   industry_keyword_1, industry_keyword_2, industry_keyword_3,
                    competitor_1_name, competitor_1_ticker,
                    competitor_2_name, competitor_2_ticker,
                    competitor_3_name, competitor_3_ticker,
-                   created_at, updated_at
+                   ai_generated, ai_enhanced_at, created_at, updated_at
             FROM ticker_reference
             {where_clause}
             ORDER BY ticker
@@ -1529,14 +1532,15 @@ def fetch_csv_from_github():
 
 # 2. EXPORT SQL TO CSV FORMAT - Generate CSV from current database
 def export_ticker_references_to_csv():
-    """Export all ticker references from database to CSV format"""
+    """Export all ticker references from database to CSV format with new structure"""
     try:
         with db() as conn, conn.cursor() as cur:
             # Get all active ticker references with all fields
             cur.execute("""
                 SELECT ticker, country, company_name, industry, sector, sub_industry,
                        exchange, currency, market_cap_category, active, is_etf, yahoo_ticker,
-                       industry_keywords, ai_generated, ai_enhanced_at,
+                       industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                       ai_generated, ai_enhanced_at,
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
@@ -1555,16 +1559,14 @@ def export_ticker_references_to_csv():
                 }
             
             # Build CSV content
-            import io
-            import csv
-            
             csv_buffer = io.StringIO()
             
-            # Define CSV headers
+            # Define CSV headers (matching your GitHub CSV structure)
             headers = [
                 'ticker', 'country', 'company_name', 'industry', 'sector', 'sub_industry',
                 'exchange', 'currency', 'market_cap_category', 'active', 'is_etf', 'yahoo_ticker',
-                'industry_keywords', 'ai_generated', 'ai_enhanced_at',
+                'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
+                'ai_generated', 'ai_enhanced_at',
                 'competitor_1_name', 'competitor_1_ticker',
                 'competitor_2_name', 'competitor_2_ticker',
                 'competitor_3_name', 'competitor_3_ticker',
@@ -1576,14 +1578,10 @@ def export_ticker_references_to_csv():
             
             # Write data rows
             for row in rows:
-                # Convert arrays and special types for CSV
                 csv_row = []
-                for i, value in enumerate(row):
+                for value in row:
                     if value is None:
                         csv_row.append('')
-                    elif isinstance(value, list):
-                        # Convert arrays to comma-separated strings
-                        csv_row.append(','.join(str(v) for v in value if v))
                     elif isinstance(value, bool):
                         csv_row.append('TRUE' if value else 'FALSE')
                     elif isinstance(value, datetime):
@@ -1611,6 +1609,7 @@ def export_ticker_references_to_csv():
             "status": "error",
             "message": f"Export failed: {str(e)}"
         }
+
 
 # 3. COMMIT CSV TO GITHUB - Push updated CSV back to repository
 def commit_csv_to_github(csv_content: str, commit_message: str = None):
@@ -6599,7 +6598,12 @@ def get_ticker_reference(ticker: str) -> Optional[Dict]:
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT ticker, country, company_name, industry, sector,
-                   exchange, active, industry_keywords, competitors, ai_generated
+                   exchange, active, 
+                   industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                   competitor_1_name, competitor_1_ticker,
+                   competitor_2_name, competitor_2_ticker,
+                   competitor_3_name, competitor_3_ticker,
+                   ai_generated
             FROM ticker_reference
             WHERE ticker = %s AND active = TRUE
         """, (ticker,))
@@ -8877,6 +8881,394 @@ def import_ticker_reference(request: Request, file_path: str = Body(..., embed=T
         
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+# Pydantic models for request bodies
+class TickerReferenceRequest(BaseModel):
+    ticker: str
+    country: str
+    company_name: str
+    industry: Optional[str] = None
+    sector: Optional[str] = None
+    sub_industry: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+    market_cap_category: Optional[str] = None
+    yahoo_ticker: Optional[str] = None
+    active: bool = True
+    is_etf: bool = False
+    industry_keyword_1: Optional[str] = None
+    industry_keyword_2: Optional[str] = None
+    industry_keyword_3: Optional[str] = None
+    competitor_1_name: Optional[str] = None
+    competitor_1_ticker: Optional[str] = None
+    competitor_2_name: Optional[str] = None
+    competitor_2_ticker: Optional[str] = None
+    competitor_3_name: Optional[str] = None
+    competitor_3_ticker: Optional[str] = None
+
+class GitHubSyncRequest(BaseModel):
+    commit_message: Optional[str] = None
+
+class UpdateTickersRequest(BaseModel):
+    tickers: List[str]
+    commit_message: Optional[str] = None
+
+# 1. GITHUB SYNC ENDPOINTS
+@APP.post("/admin/sync-ticker-reference-from-github")
+def sync_from_github(request: Request):
+    """Sync ticker reference data FROM GitHub TO database"""
+    require_admin(request)
+    
+    result = sync_ticker_references_from_github()
+    return result
+
+@APP.post("/admin/sync-ticker-reference-to-github")
+def sync_to_github(request: Request, body: GitHubSyncRequest):
+    """Sync ticker reference data FROM database TO GitHub"""
+    require_admin(request)
+    
+    result = sync_ticker_references_to_github(body.commit_message)
+    return result
+
+@APP.post("/admin/update-specific-tickers-on-github")
+def update_tickers_on_github(request: Request, body: UpdateTickersRequest):
+    """Update only specific tickers on GitHub (for post-processing sync)"""
+    require_admin(request)
+    
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+    
+    result = update_specific_tickers_on_github(body.tickers, body.commit_message)
+    return result
+
+# 2. CSV UPLOAD ENDPOINT
+@APP.post("/admin/upload-ticker-csv")
+async def upload_ticker_csv(request: Request, file: UploadFile = File(...)):
+    """Upload CSV file and import ticker reference data"""
+    require_admin(request)
+    
+    if not file.filename or not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="File must be a CSV file")
+    
+    try:
+        content = await file.read()
+        csv_content = content.decode('utf-8')
+        
+        result = import_ticker_reference_from_csv_content(csv_content)
+        return result
+        
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV file must be UTF-8 encoded")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}")
+
+# 3. INDIVIDUAL TICKER MANAGEMENT
+@APP.get("/admin/ticker-reference/{ticker}")
+def get_ticker_reference_endpoint(request: Request, ticker: str):
+    """Get specific ticker reference data"""
+    require_admin(request)
+    
+    ticker_data = get_ticker_reference(ticker)
+    if ticker_data:
+        return {
+            "status": "found",
+            "ticker": ticker,
+            "data": ticker_data
+        }
+    else:
+        return {
+            "status": "not_found",
+            "ticker": ticker,
+            "message": "Ticker reference not found"
+        }
+
+@APP.post("/admin/ticker-reference")
+def add_ticker_reference_endpoint(request: Request, body: TickerReferenceRequest):
+    """Add or update a single ticker reference manually"""
+    require_admin(request)
+    
+    ticker_data = {
+        'ticker': body.ticker,
+        'country': body.country,
+        'company_name': body.company_name,
+        'industry': body.industry,
+        'sector': body.sector,
+        'sub_industry': body.sub_industry,
+        'exchange': body.exchange,
+        'currency': body.currency,
+        'market_cap_category': body.market_cap_category,
+        'yahoo_ticker': body.yahoo_ticker,
+        'active': body.active,
+        'is_etf': body.is_etf,
+        'industry_keyword_1': body.industry_keyword_1,
+        'industry_keyword_2': body.industry_keyword_2,
+        'industry_keyword_3': body.industry_keyword_3,
+        'competitor_1_name': body.competitor_1_name,
+        'competitor_1_ticker': body.competitor_1_ticker,
+        'competitor_2_name': body.competitor_2_name,
+        'competitor_2_ticker': body.competitor_2_ticker,
+        'competitor_3_name': body.competitor_3_name,
+        'competitor_3_ticker': body.competitor_3_ticker,
+        'data_source': 'manual_api'
+    }
+    
+    success = store_ticker_reference(ticker_data)
+    
+    if success:
+        return {
+            "status": "success",
+            "ticker": body.ticker,
+            "message": f"Successfully stored ticker reference for {body.ticker}"
+        }
+    else:
+        return {
+            "status": "error",
+            "ticker": body.ticker,
+            "message": "Failed to store ticker reference"
+        }
+
+@APP.delete("/admin/ticker-reference/{ticker}")
+def delete_ticker_reference_endpoint(request: Request, ticker: str):
+    """Delete (deactivate) a ticker reference"""
+    require_admin(request)
+    
+    success = delete_ticker_reference(ticker)
+    
+    if success:
+        return {
+            "status": "success",
+            "ticker": ticker,
+            "message": f"Successfully deactivated ticker reference for {ticker}"
+        }
+    else:
+        return {
+            "status": "error",
+            "ticker": ticker,
+            "message": "Ticker reference not found or already inactive"
+        }
+
+# 4. BULK TICKER OPERATIONS
+@APP.get("/admin/ticker-references")
+def list_ticker_references(
+    request: Request,
+    limit: int = Query(default=50, description="Number of records to return"),
+    offset: int = Query(default=0, description="Number of records to skip"),
+    country: Optional[str] = Query(default=None, description="Filter by country (US, CA, etc.)")
+):
+    """List ticker references with pagination and filtering"""
+    require_admin(request)
+    
+    if limit > 1000:
+        raise HTTPException(status_code=400, detail="Limit cannot exceed 1000")
+    
+    try:
+        ticker_references = get_all_ticker_references(limit, offset, country)
+        total_count = count_ticker_references(country)
+        
+        return {
+            "status": "success",
+            "data": ticker_references,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count,
+                "returned": len(ticker_references)
+            },
+            "filter": {
+                "country": country
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve ticker references: {str(e)}")
+
+@APP.get("/admin/ticker-references/stats")
+def get_ticker_reference_stats(request: Request):
+    """Get statistics about ticker reference data"""
+    require_admin(request)
+    
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Total counts by country
+            cur.execute("""
+                SELECT country, COUNT(*) as count
+                FROM ticker_reference
+                WHERE active = TRUE
+                GROUP BY country
+                ORDER BY count DESC
+            """)
+            by_country = list(cur.fetchall())
+            
+            # AI enhancement status
+            cur.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN ai_generated THEN 1 END) as ai_enhanced,
+                    COUNT(CASE WHEN industry_keyword_1 IS NOT NULL THEN 1 END) as has_keywords,
+                    COUNT(CASE WHEN competitor_1_name IS NOT NULL THEN 1 END) as has_competitors
+                FROM ticker_reference
+                WHERE active = TRUE
+            """)
+            ai_stats = dict(cur.fetchone())
+            
+            # Recent updates
+            cur.execute("""
+                SELECT COUNT(*) as count
+                FROM ticker_reference
+                WHERE active = TRUE AND updated_at > NOW() - INTERVAL '7 days'
+            """)
+            recent_updates = cur.fetchone()["count"]
+            
+            return {
+                "status": "success",
+                "stats": {
+                    "total_active_tickers": sum(row["count"] for row in by_country),
+                    "by_country": by_country,
+                    "ai_enhancement": {
+                        "total_tickers": ai_stats["total"],
+                        "ai_enhanced": ai_stats["ai_enhanced"],
+                        "has_industry_keywords": ai_stats["has_keywords"],
+                        "has_competitors": ai_stats["has_competitors"]
+                    },
+                    "recent_updates_7_days": recent_updates
+                }
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+
+# 5. TICKER VALIDATION AND TESTING
+@APP.post("/admin/validate-ticker-format")
+def validate_ticker_endpoint(request: Request, ticker: str = Body(..., embed=True)):
+    """Test ticker format validation"""
+    require_admin(request)
+    
+    normalized = normalize_ticker_format(ticker)
+    is_valid = validate_ticker_format(normalized)
+    exchange_info = get_ticker_exchange_info(normalized)
+    
+    return {
+        "status": "success",
+        "original_ticker": ticker,
+        "normalized_ticker": normalized,
+        "is_valid": is_valid,
+        "exchange_info": exchange_info
+    }
+
+@APP.post("/admin/test-ticker-validation")
+def test_ticker_validation_endpoint(request: Request):
+    """Run comprehensive ticker validation tests"""
+    require_admin(request)
+    
+    test_results = test_ticker_validation()
+    return {
+        "status": "success",
+        "test_results": test_results
+    }
+
+# 6. ENHANCED METADATA INTEGRATION
+@APP.post("/admin/enhance-ticker-with-ai")
+def enhance_ticker_with_ai_endpoint(request: Request, ticker: str = Body(..., embed=True)):
+    """Enhance a specific ticker with AI-generated metadata"""
+    require_admin(request)
+    
+    if not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    try:
+        # Get current ticker data
+        ticker_data = get_ticker_reference(ticker)
+        if not ticker_data:
+            return {
+                "status": "error",
+                "message": f"Ticker {ticker} not found in reference database"
+            }
+        
+        # Generate enhanced metadata
+        enhanced_metadata = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=True)
+        
+        return {
+            "status": "success",
+            "ticker": ticker,
+            "original_data": ticker_data,
+            "enhanced_metadata": enhanced_metadata,
+            "message": f"Successfully enhanced {ticker} with AI-generated metadata"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "ticker": ticker,
+            "message": f"Failed to enhance ticker: {str(e)}"
+        }
+
+# 7. WORKFLOW INTEGRATION ENDPOINTS
+@APP.post("/admin/prepare-ticker-for-processing")
+def prepare_ticker_for_processing(request: Request, ticker: str = Body(..., embed=True)):
+    """Complete workflow: Sync from GitHub -> Get ticker metadata -> Ready for processing"""
+    require_admin(request)
+    
+    try:
+        # Step 1: Sync latest data from GitHub
+        LOG.info(f"Preparing {ticker} for processing - syncing from GitHub")
+        sync_result = sync_ticker_references_from_github()
+        
+        if sync_result["status"] != "success":
+            return {
+                "status": "error",
+                "message": f"GitHub sync failed: {sync_result.get('message', 'Unknown error')}"
+            }
+        
+        # Step 2: Get ticker data with enhancement
+        ticker_metadata = get_or_create_enhanced_ticker_metadata(ticker)
+        
+        # Step 3: Check if ticker has required data
+        ticker_reference = get_ticker_reference(ticker)
+        
+        return {
+            "status": "ready",
+            "ticker": ticker,
+            "github_sync": {
+                "imported": sync_result.get("database_import", {}).get("imported", 0),
+                "updated": sync_result.get("database_import", {}).get("updated", 0)
+            },
+            "ticker_reference": ticker_reference,
+            "enhanced_metadata": ticker_metadata,
+            "message": f"Ticker {ticker} is ready for processing"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "ticker": ticker,
+            "message": f"Preparation failed: {str(e)}"
+        }
+
+@APP.post("/admin/finalize-ticker-processing")
+def finalize_ticker_processing(request: Request, body: UpdateTickersRequest):
+    """Complete workflow: Update specific processed tickers back to GitHub"""
+    require_admin(request)
+    
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+    
+    try:
+        # Update the processed tickers back to GitHub
+        result = update_specific_tickers_on_github(body.tickers, body.commit_message)
+        
+        return {
+            "status": result["status"],
+            "processed_tickers": body.tickers,
+            "github_update": result,
+            "message": f"Finalized processing for {len(body.tickers)} tickers"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "tickers": body.tickers,
+            "message": f"Finalization failed: {str(e)}"
+        }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

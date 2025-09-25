@@ -3900,7 +3900,7 @@ def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> D
 
 def build_feed_urls(ticker: str, keywords: Dict) -> List[Dict]:
     """Wrapper for backward compatibility"""
-    return feed_manager.create_feeds_for_ticker(ticker, keywords)
+    return feed_manager.create_feeds_for_ticker_enhanced(ticker, keywords)
     
 def upsert_feed(url: str, name: str, ticker: str, category: str = "company", 
                 retain_days: int = 90, search_keyword: str = None, 
@@ -6010,14 +6010,14 @@ domain_resolver = DomainResolver()
 
 class FeedManager:
     @staticmethod
-    def create_feeds_for_ticker(ticker: str, metadata: Dict) -> List[Dict]:
-        """Create feeds only if under the limits - FIXED competitor counting logic with strict ticker requirement"""
+    def create_feeds_for_ticker_enhanced_enhanced(ticker: str, metadata: Dict) -> List[Dict]:
+        """Enhanced feed creation with proper international ticker support"""
         feeds = []
         company_name = metadata.get("company_name", ticker)
         
         LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
         
-        # Check existing feed counts by unique competitor (not by feed count)
+        # Check existing feed counts by unique competitor
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT category, COUNT(*) as count
@@ -6062,15 +6062,11 @@ class FeedManager:
             ]
             feeds.extend(company_feeds)
             LOG.info(f"  COMPANY FEEDS: Adding {len(company_feeds)} (existing: {existing_company_count})")
-        else:
-            LOG.info(f"  COMPANY FEEDS: Skipping - already have {existing_company_count}")
         
-        # Industry feeds - MAX 3 TOTAL (1 per keyword, max 3 keywords)
+        # Industry feeds - MAX 3 TOTAL
         if existing_industry_count < 3:
             available_slots = 3 - existing_industry_count
             industry_keywords = metadata.get("industry_keywords", [])[:available_slots]
-            
-            LOG.info(f"  INDUSTRY FEEDS: Can add {available_slots} more (existing: {existing_industry_count}, keywords available: {len(metadata.get('industry_keywords', []))})")
             
             for keyword in industry_keywords:
                 feed = {
@@ -6080,16 +6076,11 @@ class FeedManager:
                     "search_keyword": keyword
                 }
                 feeds.append(feed)
-                LOG.info(f"    INDUSTRY: {keyword}")
-        else:
-            LOG.info(f"  INDUSTRY FEEDS: Skipping - already at limit (3/3)")
         
-        # Competitor feeds - MAX 3 UNIQUE COMPETITORS (each competitor can have multiple feeds but counts as 1 entity)
+        # Enhanced competitor feeds with proper international ticker validation
         if existing_competitor_entities < 3:
             available_competitor_slots = 3 - existing_competitor_entities
             competitors = metadata.get("competitors", [])[:available_competitor_slots]
-            
-            LOG.info(f"  COMPETITOR ENTITIES: Can add {available_competitor_slots} more competitors (existing: {existing_competitor_entities}, available: {len(metadata.get('competitors', []))})")
             
             # Get existing competitor tickers to avoid duplicates
             with db() as conn, conn.cursor() as cur:
@@ -6101,10 +6092,7 @@ class FeedManager:
                 """, (ticker,))
                 existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
             
-            LOG.info(f"DEBUG: Processing {len(competitors)} competitors for {ticker}")
             for i, comp in enumerate(competitors):
-                LOG.info(f"DEBUG: Competitor {i}: {comp} (type: {type(comp)})")
-                
                 comp_name = None
                 comp_ticker = None
                 
@@ -6114,36 +6102,49 @@ class FeedManager:
                     LOG.info(f"DEBUG: Dict competitor - Name: '{comp_name}', Ticker: '{comp_ticker}'")
                 elif isinstance(comp, str):
                     LOG.info(f"DEBUG: String competitor: {comp}")
-                    # Try to parse "Name (TICKER)" format
-                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp)
-                    if match:
-                        comp_name = match.group(1).strip()
-                        comp_ticker = match.group(2)
-                        LOG.info(f"DEBUG: Parsed competitor - Name: '{comp_name}', Ticker: '{comp_ticker}'")
-                    else:
+                    # ENHANCED: Better parsing for international tickers
+                    patterns = [
+                        r'^(.+?)\s*\(([A-Z]{1,5}(?:\.[A-Z]{1,3})?(?:-[A-Z])?)\)$',  # Standard with international
+                        r'^(.+?)\s*\(([A-Z-]{1,8})\)$',  # Broader pattern
+                    ]
+                    
+                    matched = False
+                    for pattern in patterns:
+                        match = re.search(pattern, comp)
+                        if match:
+                            comp_name = match.group(1).strip()
+                            comp_ticker = match.group(2)
+                            matched = True
+                            break
+                    
+                    if not matched:
                         LOG.info(f"DEBUG: Skipping competitor - no ticker found in string: {comp}")
                         continue
                 
-                # Strict validation - REQUIRE both name and ticker
+                # Validate we have both name and ticker
                 if not comp_name or not comp_ticker:
                     LOG.info(f"DEBUG: Skipping competitor - missing name or ticker: name='{comp_name}', ticker='{comp_ticker}'")
                     continue
-                    
+                
+                # Normalize competitor ticker
+                comp_ticker = normalize_ticker_format(comp_ticker)
+                
+                # Skip if same as main ticker
                 if comp_ticker.upper() == ticker.upper():
                     LOG.info(f"DEBUG: Skipping competitor - same as main ticker: {comp_ticker}")
                     continue
-                    
+                
+                # Skip if already exists
                 if comp_ticker in existing_competitor_tickers:
                     LOG.info(f"DEBUG: Skipping competitor - already exists: {comp_ticker}")
                     continue
                 
-                # Validate ticker format (1-5 uppercase letters)
-                if not re.match(r'^[A-Z]{1,5}$', comp_ticker):
+                # ENHANCED: Validate ticker format with international support
+                if not validate_ticker_format(comp_ticker):
                     LOG.info(f"DEBUG: Skipping competitor - invalid ticker format: '{comp_ticker}'")
                     continue
                 
-                # Create feeds for this competitor (BOTH Google News and Yahoo Finance)
-                LOG.info(f"DEBUG: Creating feeds for competitor {comp_name} ({comp_ticker})")
+                # Create feeds for this competitor
                 comp_feeds = [
                     {
                         "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(comp_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
@@ -6155,7 +6156,7 @@ class FeedManager:
                     {
                         "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
                         "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
-                        "category": "competitor",
+                        "category": "competitor", 
                         "search_keyword": comp_name,
                         "competitor_ticker": comp_ticker
                     }
@@ -6163,8 +6164,6 @@ class FeedManager:
                 
                 feeds.extend(comp_feeds)
                 LOG.info(f"    COMPETITOR: {comp_name} ({comp_ticker}) - 2 feeds (counts as 1 entity)")
-        else:
-            LOG.info(f"  COMPETITOR ENTITIES: Skipping - already at limit (3/3 unique competitors)")
         
         LOG.info(f"TOTAL FEEDS TO CREATE: {len(feeds)}")
         return feeds
@@ -6348,6 +6347,7 @@ def generate_enhanced_ticker_metadata_with_ai(ticker: str, company_name: str = N
         LOG.warning("Missing OPENAI_API_KEY; skipping metadata generation")
         return None
 
+    # UPDATED: Enhanced system prompt with Yahoo Finance ticker format specification
     system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
@@ -6357,6 +6357,14 @@ CRITICAL REQUIREMENTS:
 - All information must be factually accurate
 - The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
 - If any field is unknown, output an empty array for lists and omit optional fields. Never refuse; always return a valid JSON object.
+
+TICKER FORMAT REQUIREMENTS:
+- US companies: Use simple ticker (AAPL, MSFT)  
+- Canadian companies: Use .TO suffix (RY.TO, TD.TO, BMO.TO)
+- UK companies: Use .L suffix (BP.L, VOD.L)
+- Australian companies: Use .AX suffix (BHP.AX, CBA.AX)
+- Other international: Use appropriate Yahoo Finance suffix
+- Special classes: Use dash format (BRK-A, BRK-B, TECK-A.TO)
 
 INDUSTRY KEYWORDS (exactly 3):
 - Must be SPECIFIC to the company's primary business
@@ -6368,7 +6376,8 @@ INDUSTRY KEYWORDS (exactly 3):
 COMPETITORS (exactly 3):
 - Must be direct business competitors, not just same-sector companies
 - Must be currently publicly traded (check acquisition status)
-- Format: "Company Name (TICKER)" - verify ticker is correct and current
+- Format as structured objects with 'name' and 'ticker' fields
+- Verify ticker is correct and current Yahoo Finance format
 - Exclude: Private companies, subsidiaries, companies acquired in last 2 years
 
 Generate response in valid JSON format with all required fields. Be concise and precise."""
@@ -6384,7 +6393,7 @@ Generate response in valid JSON format with all required fields. Be concise and 
 
 {context_info}
 
-Since we have basic company information, focus on generating specific industry keywords and direct competitors with accurate tickers.
+Since we have basic company information, focus on generating specific industry keywords and direct competitors with accurate Yahoo Finance tickers.
 
 CRITICAL: The "company_name" field should be: {company_name}
 
@@ -6396,7 +6405,11 @@ Required JSON format:
     "industry": "{industry if industry else 'GICS Industry'}",
     "sub_industry": "GICS Sub-Industry",
     "industry_keywords": ["keyword1", "keyword2", "keyword3"],
-    "competitors": ["Company Name (TICKER)", "Company Name (TICKER)", "Company Name (TICKER)"],
+    "competitors": [
+        {{"name": "Company Name", "ticker": "TICKER"}},
+        {{"name": "Company Name", "ticker": "TICKER.TO"}},
+        {{"name": "Company Name", "ticker": "TICKER"}}
+    ],
     "sector_profile": {{
         "core_inputs": ["input1", "input2", "input3"],
         "core_channels": ["channel1", "channel2", "channel3"],
@@ -6409,20 +6422,6 @@ Required JSON format:
         "assets": ["asset1", "asset2", "asset3"]
     }}
 }}"""
-
-    brief_user_prompt = f"""Generate compact JSON metadata for {company_name} ({ticker}):
-{{
-    "ticker": "{ticker}",
-    "company_name": "{company_name}",
-    "sector": "{sector if sector else 'GICS Sector'}",
-    "industry": "{industry if industry else 'GICS Industry'}", 
-    "sub_industry": "GICS Sub-Industry",
-    "industry_keywords": ["k1", "k2", "k3"],
-    "competitors": ["Co1 (TKR1)", "Co2 (TKR2)", "Co3 (TKR3)"],
-    "sector_profile": {{"core_inputs": ["i1","i2","i3"], "core_channels": ["c1","c2","c3"], "core_geos": ["g1","g2","g3"], "benchmarks": ["b1","b2","b3"]}},
-    "aliases_brands_assets": {{"aliases": ["a1","a2","a3"], "brands": ["b1","b2","b3"], "assets": ["as1","as2","as3"]}}
-}}
-Use exactly 3 items per list. Be brief and specific."""
 
     try:
         headers = {
@@ -6454,56 +6453,20 @@ Use exactly 3 items per list. Be brief and specific."""
         
         # Log usage details for debugging
         u = result.get("usage", {}) or {}
-        LOG.info("Enhanced OpenAI usage — input:%s output:%s (cap:%s) status:%s reason:%s",
+        LOG.info("Enhanced OpenAI usage – input:%s output:%s (cap:%s) status:%s reason:%s",
                  u.get("input_tokens"), u.get("output_tokens"),
                  result.get("max_output_tokens"),
                  result.get("status"),
                  (result.get("incomplete_details") or {}).get("reason"))
         
-        # Check for any incomplete response
-        status = result.get("status")
-        incomplete = result.get("incomplete_details", {}) or {}
-        
-        # If no text and response incomplete, retry with smaller prompt
-        if (not text) and status == "incomplete":
-            LOG.warning(f"OpenAI response incomplete for {ticker} metadata (reason: {incomplete.get('reason')}); attempting smaller prompt")
-            
-            retry_data = {
-                "model": OPENAI_MODEL,
-                "input": f"{system_prompt}\n\n{brief_user_prompt}",
-                "max_output_tokens": 1500,
-                "reasoning": {"effort": "low"},
-                "text": {
-                    "format": {"type": "json_object"},
-                    "verbosity": "low"
-                },
-                "truncation": "auto"
-            }
-            
-            retry_response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=retry_data, timeout=(10, 180))
-            if retry_response.status_code == 200:
-                retry_result = retry_response.json()
-                
-                # Log retry usage too
-                retry_u = retry_result.get("usage", {}) or {}
-                LOG.info("Enhanced OpenAI retry usage — input:%s output:%s (cap:%s) status:%s reason:%s",
-                         retry_u.get("input_tokens"), retry_u.get("output_tokens"),
-                         retry_result.get("max_output_tokens"),
-                         retry_result.get("status"),
-                         (retry_result.get("incomplete_details") or {}).get("reason"))
-                
-                text = extract_text_from_responses(retry_result)
-                if text:
-                    LOG.info(f"Enhanced brief prompt successful for {ticker}")
-        
         if not text:
-            print(f"No content returned for {ticker} even after retry")
+            LOG.warning(f"OpenAI response empty for {ticker} metadata")
             return None
         
         # Parse JSON with robust fallback
         metadata = parse_json_with_fallback(text, ticker)
         
-        # Process the results using existing logic
+        # Process the results and ensure proper structure
         def _list3(x): 
             if isinstance(x, (list, tuple)):
                 items = [item for item in list(x)[:3] if item]
@@ -6550,6 +6513,26 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
     reference_data = get_ticker_reference(ticker)
     
     if reference_data and not force_refresh:
+        LOG.info(f"Found ticker reference data for {ticker}: {reference_data['company_name']}")
+        
+        # Convert 3 separate keyword fields to array format for compatibility
+        keywords = []
+        for i in range(1, 4):
+            kw = reference_data.get(f'industry_keyword_{i}')
+            if kw:
+                keywords.append(kw)
+        
+        # Convert 6 separate competitor fields to structured format
+        competitors = []
+        for i in range(1, 4):
+            name = reference_data.get(f'competitor_{i}_name')
+            ticker_field = reference_data.get(f'competitor_{i}_ticker')
+            if name:
+                competitor_obj = {"name": name}
+                if ticker_field:
+                    competitor_obj["ticker"] = ticker_field
+                competitors.append(competitor_obj)
+        
         # Use reference data as base
         metadata = {
             "ticker": ticker,
@@ -6557,15 +6540,23 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
             "name": reference_data["company_name"],  # Both fields for compatibility
             "sector": reference_data.get("sector", ""),
             "industry": reference_data.get("industry", ""),
-            "industry_keywords": reference_data.get("industry_keywords", []),
-            "competitors": reference_data.get("competitors", [])
+            "sub_industry": reference_data.get("sub_industry", ""),
+            "exchange": reference_data.get("exchange", ""),
+            "currency": reference_data.get("currency", ""),
+            "country": reference_data.get("country", ""),
+            "industry_keywords": keywords,
+            "competitors": competitors
         }
         
-        # If reference data lacks AI-generated keywords/competitors, enhance with AI
-        if (not reference_data.get("industry_keywords") or 
-            not reference_data.get("competitors") or 
-            not reference_data.get("ai_generated")):
-            
+        # Check if we need AI enhancement (any key fields are empty)
+        needs_ai_enhancement = (
+            not keywords or 
+            not competitors or 
+            not reference_data.get("ai_generated") or
+            force_refresh
+        )
+        
+        if needs_ai_enhancement and OPENAI_API_KEY:
             LOG.info(f"Enhancing {ticker} ({reference_data['company_name']}) with AI generation")
             ai_metadata = generate_enhanced_ticker_metadata_with_ai(
                 ticker, 
@@ -6575,13 +6566,16 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
             )
             
             if ai_metadata:
-                # Merge AI enhancements with reference data
-                metadata.update({
-                    "industry_keywords": ai_metadata.get("industry_keywords", []),
-                    "competitors": ai_metadata.get("competitors", []),
-                    "sector_profile": ai_metadata.get("sector_profile", {}),
-                    "aliases_brands_assets": ai_metadata.get("aliases_brands_assets", {})
-                })
+                # Merge AI enhancements with reference data (only fill empty fields)
+                if not keywords:
+                    metadata["industry_keywords"] = ai_metadata.get("industry_keywords", [])
+                
+                if not competitors:
+                    metadata["competitors"] = ai_metadata.get("competitors", [])
+                
+                # Always update these complex objects from AI
+                metadata["sector_profile"] = ai_metadata.get("sector_profile", {})
+                metadata["aliases_brands_assets"] = ai_metadata.get("aliases_brands_assets", {})
                 
                 # Update reference table with AI enhancements
                 update_ticker_reference_ai_data(ticker, metadata)
@@ -6590,7 +6584,33 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
     
     # Step 2: Fall back to original AI generation (for unknown tickers)
     LOG.info(f"No reference data found for {ticker}, using original AI generation")
-    return generate_enhanced_ticker_metadata_with_ai(ticker)
+    ai_metadata = generate_enhanced_ticker_metadata_with_ai(ticker)
+    
+    # Store the AI-generated data back to reference table for future use
+    if ai_metadata:
+        reference_data = {
+            'ticker': ticker,
+            'country': 'US',  # Default assumption, can be updated later
+            'company_name': ai_metadata.get('company_name', ticker),
+            'sector': ai_metadata.get('sector', ''),
+            'industry': ai_metadata.get('industry', ''),
+            'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
+            'industry_keyword_2': ai_metadata.get('industry_keywords', [None, None])[1] if len(ai_metadata.get('industry_keywords', [])) > 1 else None,
+            'industry_keyword_3': ai_metadata.get('industry_keywords', [None, None, None])[2] if len(ai_metadata.get('industry_keywords', [])) > 2 else None,
+            'ai_generated': True,
+            'data_source': 'ai_generated'
+        }
+        
+        # Convert competitors to separate fields
+        competitors = ai_metadata.get('competitors', [])
+        for i, comp in enumerate(competitors[:3], 1):
+            if isinstance(comp, dict):
+                reference_data[f'competitor_{i}_name'] = comp.get('name')
+                reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+        
+        store_ticker_reference(reference_data)
+    
+    return ai_metadata or {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
 
 
 def get_ticker_reference(ticker: str) -> Optional[Dict]:
@@ -6612,20 +6632,58 @@ def get_ticker_reference(ticker: str) -> Optional[Dict]:
 
 def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
     """Update reference table with AI-generated enhancements"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            UPDATE ticker_reference
-            SET industry_keywords = %s,
-                competitors = %s,
-                ai_generated = TRUE,
-                updated_at = NOW()
-            WHERE ticker = %s
-        """, (
-            metadata.get("industry_keywords", []),
-            metadata.get("competitors", []),
-            ticker
-        ))
-        LOG.info(f"Updated {ticker} reference table with AI enhancements")
+    try:
+        # Convert array format back to separate fields for database storage
+        keywords = metadata.get("industry_keywords", [])
+        keyword_1 = keywords[0] if len(keywords) > 0 else None
+        keyword_2 = keywords[1] if len(keywords) > 1 else None
+        keyword_3 = keywords[2] if len(keywords) > 2 else None
+        
+        # Convert competitors to separate fields
+        competitors = metadata.get("competitors", [])
+        comp_data = {}
+        for i, comp in enumerate(competitors[:3], 1):
+            if isinstance(comp, dict):
+                comp_data[f'competitor_{i}_name'] = comp.get('name')
+                comp_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+            else:
+                # Handle old string format if needed
+                comp_data[f'competitor_{i}_name'] = str(comp)
+        
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_reference
+                SET industry_keyword_1 = %s,
+                    industry_keyword_2 = %s,
+                    industry_keyword_3 = %s,
+                    competitor_1_name = %s,
+                    competitor_1_ticker = %s,
+                    competitor_2_name = %s,
+                    competitor_2_ticker = %s,
+                    competitor_3_name = %s,
+                    competitor_3_ticker = %s,
+                    ai_generated = TRUE,
+                    ai_enhanced_at = NOW(),
+                    updated_at = NOW()
+                WHERE ticker = %s
+            """, (
+                keyword_1, keyword_2, keyword_3,
+                comp_data.get('competitor_1_name'),
+                comp_data.get('competitor_1_ticker'),
+                comp_data.get('competitor_2_name'),
+                comp_data.get('competitor_2_ticker'),
+                comp_data.get('competitor_3_name'),
+                comp_data.get('competitor_3_ticker'),
+                normalize_ticker_format(ticker)
+            ))
+            
+            if cur.rowcount > 0:
+                LOG.info(f"Updated {ticker} reference table with AI enhancements")
+            else:
+                LOG.warning(f"No ticker reference found to update for {ticker}")
+                
+    except Exception as e:
+        LOG.error(f"Failed to update ticker reference AI data for {ticker}: {e}")
 
 def validate_metadata(metadata):
     """
@@ -7807,12 +7865,22 @@ def root():
 
 @APP.post("/admin/init")
 def admin_init(request: Request, body: InitRequest):
-    """Initialize database and generate AI-powered feeds for specified tickers - ENHANCED with limit checking"""
+    """Initialize database and generate AI-powered feeds for specified tickers - ENHANCED with GitHub sync"""
     require_admin(request)
     ensure_schema()
     
     if not OPENAI_API_KEY:
         return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    # STEP 1: Sync ticker reference data from GitHub at start
+    LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
+    github_sync_result = sync_ticker_references_from_github()
+    
+    if github_sync_result["status"] != "success":
+        LOG.warning(f"GitHub sync failed: {github_sync_result.get('message', 'Unknown error')}")
+        # Continue anyway - system can work without GitHub sync
+    else:
+        LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
     
     results = []
     LOG.info("=== INITIALIZATION STARTING ===")
@@ -7820,11 +7888,11 @@ def admin_init(request: Request, body: InitRequest):
     for ticker in body.tickers:
         LOG.info(f"=== INITIALIZING TICKER: {ticker} ===")
         
-        # Get or generate metadata with AI
-        keywords = get_or_create_ticker_metadata(ticker, force_refresh=body.force_refresh)
+        # Get or generate metadata with enhanced ticker reference integration
+        keywords = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=body.force_refresh)
         
-        # Build feed URLs for all categories - will check existing counts and only create what's needed
-        feeds = feed_manager.create_feeds_for_ticker(ticker, keywords)
+        # Build feed URLs for all categories using enhanced feed creation
+        feeds = create_feeds_for_ticker_enhanced(ticker, keywords)
         
         if not feeds:
             LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")
@@ -7859,52 +7927,21 @@ def admin_init(request: Request, body: InitRequest):
         
         LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created ===")
     
-    # Final summary logging with FIXED competitor entity counting
+    # Final summary logging
     LOG.info("=== INITIALIZATION COMPLETE ===")
-    LOG.info("SUMMARY:")
-    
-    feeds_by_ticker = {}
-    for result in results:
-        if "feed" in result:  # Only count actual feed creations, not "no feeds needed" messages
-            ticker = result['ticker']
-            if ticker not in feeds_by_ticker:
-                feeds_by_ticker[ticker] = {"company": 0, "industry": 0, "competitor": 0}
-            category = result.get('category', 'company')
-            feeds_by_ticker[ticker][category] += 1
-    
-    for ticker in body.tickers:
-        if ticker in feeds_by_ticker:
-            ticker_feeds = feeds_by_ticker[ticker]
-            total_feeds = sum(ticker_feeds.values())
-            # FIXED: Count competitor entities (divide by 2 since each competitor creates 2 feeds)
-            competitor_entities = ticker_feeds['competitor'] // 2
-            LOG.info(f"  {ticker}: {total_feeds} new feeds created")
-            LOG.info(f"    Company: {ticker_feeds['company']}, Industry: {ticker_feeds['industry']}, Competitor: {competitor_entities} entities ({ticker_feeds['competitor']} feeds)")
-        else:
-            LOG.info(f"  {ticker}: 0 new feeds created (already at limits)")
     
     total_feeds_created = len([r for r in results if "feed" in r])
-    
-    # FIXED: Calculate competitor entities for return value
-    competitor_entities_by_ticker = {}
-    for ticker, feeds in feeds_by_ticker.items():
-        competitor_entities_by_ticker[ticker] = {
-            "company": feeds["company"],
-            "industry": feeds["industry"], 
-            "competitor_entities": feeds["competitor"] // 2,
-            "competitor_feeds": feeds["competitor"]
-        }
     
     return {
         "status": "initialized",
         "tickers": body.tickers,
-        "feeds": [r for r in results if "feed" in r],  # Only return actual feed creations
+        "github_sync": github_sync_result,
+        "feeds": [r for r in results if "feed" in r],
         "summary": {
             "total_feeds_created": total_feeds_created,
-            "feeds_by_ticker": competitor_entities_by_ticker,  # Use the fixed version
             "tickers_at_limit": [r["ticker"] for r in results if "message" in r]
         },
-        "message": f"Generated {total_feeds_created} new feeds using AI-powered keyword analysis (respecting limits: max 5 industry, max 3 competitors)"
+        "message": f"Generated {total_feeds_created} new feeds using enhanced ticker reference system"
     }
  
 @APP.post("/cron/ingest")
@@ -7913,22 +7950,23 @@ def cron_ingest(
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
-    """
-    Enhanced ingest with ticker-specific AI analysis perspective
-    Each URL analyzed from the perspective of the target ticker
-    """
+    """Enhanced ingest with GitHub sync at start and ticker-specific AI analysis"""
     start_time = time.time()
     require_admin(request)
     ensure_schema()
-    update_schema_for_content()
-    update_schema_for_triage()
-    update_schema_for_qb_scores()
     
-    LOG.info("=== CRON INGEST STARTING (TICKER-SPECIFIC AI PERSPECTIVE) ===")
-    LOG.info(f"Processing window: {minutes} minutes")
-    LOG.info(f"Target tickers: {tickers or 'ALL'}")
+    LOG.info("=== CRON INGEST STARTING (ENHANCED WITH TICKER REFERENCE) ===")
     
-    # Reset statistics
+    # STEP 1: Sync ticker reference data from GitHub at start of every run
+    LOG.info("=== PHASE 0: SYNCING TICKER REFERENCE FROM GITHUB ===")
+    github_sync_result = sync_ticker_references_from_github()
+    
+    if github_sync_result["status"] != "success":
+        LOG.warning(f"GitHub sync failed, continuing anyway: {github_sync_result.get('message', 'Unknown error')}")
+    else:
+        LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
+    
+    # Continue with existing cron ingest logic...
     reset_ingestion_stats()
     reset_scraping_stats()
     reset_enhanced_scraping_stats()
@@ -8283,7 +8321,7 @@ def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
     metadata = ticker_manager.get_or_create_metadata(body.ticker, force_refresh=True)
     
     # Rebuild feeds
-    feeds = feed_manager.create_feeds_for_ticker(body.ticker, metadata)
+    feeds = feed_manager.create_feeds_for_ticker_enhanced(body.ticker, metadata)
     for feed_config in feeds:
         upsert_feed(
             url=feed_config["url"],
@@ -9285,7 +9323,7 @@ def cli_run(request: Request, body: CLIRequest):
         ensure_schema()
         for ticker in body.tickers:
             metadata = ticker_manager.get_or_create_metadata(ticker)
-            feeds = feed_manager.create_feeds_for_ticker(ticker, metadata)
+            feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
             for feed_config in feeds:
                 upsert_feed(
                     url=feed_config["url"],

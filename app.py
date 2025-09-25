@@ -6064,7 +6064,7 @@ domain_resolver = DomainResolver()
 
 class FeedManager:
     @staticmethod
-    def create_feeds_for_ticker_enhanced_enhanced(ticker: str, metadata: Dict) -> List[Dict]:
+    def create_feeds_for_ticker_enhanced(ticker: str, metadata: Dict) -> List[Dict]:
         """Enhanced feed creation with proper international ticker support"""
         feeds = []
         company_name = metadata.get("company_name", ticker)

@@ -6658,9 +6658,11 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
     # Step 1: Use the new get_ticker_config wrapper for consistent data access
     config = get_ticker_config(normalized_ticker)
     LOG.info(f"DEBUG: config returned: {config}")
-    LOG.info(f"DEBUG: config truthy check: {bool(config)}")
+    LOG.info(f"DEBUG: config bool check: {bool(config)}")
+    LOG.info(f"DEBUG: force_refresh: {force_refresh}")
     
     if config and not force_refresh:
+        LOG.info("DEBUG: Entering enhancement path")
         LOG.info(f"DEBUG: config exists: {bool(config)}, force_refresh: {force_refresh}")
         LOG.info(f"DEBUG: config content: {config}")
         LOG.info(f"Found ticker reference data for {ticker}: {config['company_name']}")
@@ -6704,6 +6706,8 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                 update_ticker_reference_ai_data(ticker, metadata)
         
         return metadata
+    else:
+        LOG.info("DEBUG: Entering fallback AI generation path")
     
     # Step 2: Only fall back to AI if ticker truly not found and AI is configured
     if OPENAI_API_KEY:

@@ -1462,19 +1462,14 @@ def import_ticker_reference_from_csv_content(csv_content: str):
         if ticker_data_batch:
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Get existing tickers to calculate update vs insert counts
-                    cur.execute("SELECT ticker FROM ticker_reference")
-                    existing_tickers = {row[0] for row in cur.fetchall()}
-                    
-                    # Prepare data tuples for bulk insert
+                   
+                    # Prepare data tuples for bulk insert (fresh start, so everything is imported)
                     insert_data = []
+                    imported = len(ticker_data_batch)
+                    updated = 0
+                    
                     for ticker_data in ticker_data_batch:
-                        # Track if this will be an update or insert
-                        if ticker_data['ticker'] in existing_tickers:
-                            updated += 1
-                        else:
-                            imported += 1
-                            
+
                         insert_data.append((
                             ticker_data['ticker'], ticker_data['country'], ticker_data['company_name'],
                             ticker_data.get('industry'), ticker_data.get('sector'), ticker_data.get('sub_industry'),
@@ -6662,8 +6657,12 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
     
     # Step 1: Use the new get_ticker_config wrapper for consistent data access
     config = get_ticker_config(normalized_ticker)
+    LOG.info(f"DEBUG: config returned: {config}")
+    LOG.info(f"DEBUG: config bool check: {bool(config)}")
+    LOG.info(f"DEBUG: force_refresh: {force_refresh}")
     
     if config and not force_refresh:
+        LOG.info("DEBUG: Entering enhancement path")
         LOG.info(f"DEBUG: config exists: {bool(config)}, force_refresh: {force_refresh}")
         LOG.info(f"DEBUG: config content: {config}")
         LOG.info(f"Found ticker reference data for {ticker}: {config['company_name']}")
@@ -6680,15 +6679,14 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
             "competitors": config.get("competitors", [])
         }
         
-        # Only enhance with AI if key fields are missing AND force_refresh is True
+        # Only enhance with AI if key fields are missing
         needs_enhancement = (
             (not metadata["industry_keywords"] or not metadata["competitors"]) and 
-            OPENAI_API_KEY and 
-            force_refresh
+            OPENAI_API_KEY
         )
         
         if needs_enhancement:
-            LOG.info(f"AI enhancing {ticker} - missing fields with force_refresh=True")
+            LOG.info(f"Enhancing {ticker} with AI - keywords: {len(metadata.get('industry_keywords', []))}, competitors: {len(metadata.get('competitors', []))}")
             ai_metadata = generate_enhanced_ticker_metadata_with_ai(
                 ticker, 
                 config["company_name"],
@@ -6709,40 +6707,43 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
         
         return metadata
     
-    # Step 2: Only fall back to AI if ticker truly not found and AI is configured
-    if OPENAI_API_KEY:
-        LOG.info(f"No reference data found for {ticker}, generating with AI")
-        ai_metadata = generate_enhanced_ticker_metadata_with_ai(ticker)
+    else:
+        LOG.info("DEBUG: Entering fallback AI generation path")
         
-        # Store the AI-generated data back to reference table for future use
-        if ai_metadata:
-            reference_data = {
-                'ticker': normalized_ticker,
-                'country': 'US',
-                'company_name': ai_metadata.get('company_name', ticker),
-                'sector': ai_metadata.get('sector', ''),
-                'industry': ai_metadata.get('industry', ''),
-                'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
-                'industry_keyword_2': ai_metadata.get('industry_keywords', [None, None])[1] if len(ai_metadata.get('industry_keywords', [])) > 1 else None,
-                'industry_keyword_3': ai_metadata.get('industry_keywords', [None, None, None])[2] if len(ai_metadata.get('industry_keywords', [])) > 2 else None,
-                'ai_generated': True,
-                'data_source': 'ai_generated'
-            }
+        # Step 2: Only fall back to AI if ticker truly not found and AI is configured
+        if OPENAI_API_KEY:
+            LOG.info(f"No reference data found for {ticker}, generating with AI")
+            ai_metadata = generate_enhanced_ticker_metadata_with_ai(ticker)
             
-            # Convert competitors to separate fields
-            competitors = ai_metadata.get('competitors', [])
-            for i, comp in enumerate(competitors[:3], 1):
-                if isinstance(comp, dict):
-                    reference_data[f'competitor_{i}_name'] = comp.get('name')
-                    reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+            # Store the AI-generated data back to reference table for future use
+            if ai_metadata:
+                reference_data = {
+                    'ticker': normalized_ticker,
+                    'country': 'US',
+                    'company_name': ai_metadata.get('company_name', ticker),
+                    'sector': ai_metadata.get('sector', ''),
+                    'industry': ai_metadata.get('industry', ''),
+                    'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
+                    'industry_keyword_2': ai_metadata.get('industry_keywords', [None, None])[1] if len(ai_metadata.get('industry_keywords', [])) > 1 else None,
+                    'industry_keyword_3': ai_metadata.get('industry_keywords', [None, None, None])[2] if len(ai_metadata.get('industry_keywords', [])) > 2 else None,
+                    'ai_generated': True,
+                    'data_source': 'ai_generated'
+                }
+                
+                # Convert competitors to separate fields
+                competitors = ai_metadata.get('competitors', [])
+                for i, comp in enumerate(competitors[:3], 1):
+                    if isinstance(comp, dict):
+                        reference_data[f'competitor_{i}_name'] = comp.get('name')
+                        reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+                
+                store_ticker_reference(reference_data)
             
-            store_ticker_reference(reference_data)
+            return ai_metadata or {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
         
-        return ai_metadata or {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
-    
-    # Step 3: Final fallback
-    LOG.warning(f"No data found for {ticker} and no AI configured")
-    return {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
+        # Step 3: Final fallback
+        LOG.warning(f"No data found for {ticker} and no AI configured")
+        return {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
 
 def get_ticker_reference(ticker: str) -> Optional[Dict]:
     """Get ticker reference data from database"""
@@ -8470,7 +8471,7 @@ def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
         return {"status": "error", "message": "OpenAI API key not configured"}
     
     LOG.info(f"Regenerating metadata for {body.ticker}")
-    metadata = ticker_manager.get_or_create_metadata(body.ticker, force_refresh=True)
+    metadata = ticker_manager.get_or_create_metadata(body.ticker)
     
     # Rebuild feeds
     feeds = feed_manager.create_feeds_for_ticker_enhanced(body.ticker, metadata)

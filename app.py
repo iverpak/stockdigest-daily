@@ -7952,6 +7952,18 @@ def admin_init(request: Request, body: InitRequest):
         # Continue anyway - system can work without GitHub sync
     else:
         LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
+
+        # ADD THIS DEBUG CODE HERE
+        LOG.info("=== DEBUG: Testing ticker lookup immediately after import ===")
+        test_config = get_ticker_config("NVDA")
+        LOG.info(f"DEBUG: get_ticker_config('NVDA') returned: {test_config}")
+        
+        if test_config:
+            LOG.info(f"DEBUG: Found NVDA with keywords: {test_config.get('industry_keywords')}")
+            LOG.info(f"DEBUG: Found NVDA with competitors: {test_config.get('competitors')}")
+        else:
+            LOG.info("DEBUG: get_ticker_config() returned None - lookup failed!")
+        # END DEBUG CODE
     
     results = []
     LOG.info("=== INITIALIZATION STARTING ===")

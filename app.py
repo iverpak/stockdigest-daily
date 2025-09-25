@@ -6678,12 +6678,11 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
         # Only enhance with AI if key fields are missing AND force_refresh is True
         needs_enhancement = (
             (not metadata["industry_keywords"] or not metadata["competitors"]) and 
-            OPENAI_API_KEY and 
-            force_refresh
+            OPENAI_API_KEY
         )
         
         if needs_enhancement:
-            LOG.info(f"AI enhancing {ticker} - missing fields with force_refresh=True")
+            LOG.info(f"Enhancing {ticker} with AI - keywords: {len(metadata.get('industry_keywords', []))}, competitors: {len(metadata.get('competitors', []))}")
             ai_metadata = generate_enhanced_ticker_metadata_with_ai(
                 ticker, 
                 config["company_name"],

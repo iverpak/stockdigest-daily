@@ -1357,14 +1357,8 @@ def import_ticker_reference_from_csv_content(csv_content: str):
         
         LOG.info(f"CSV headers found: {csv_reader.fieldnames}")
         
-        # First pass: collect all ticker data and check for existing records
+        # Collect all ticker data for bulk processing
         ticker_data_batch = []
-        existing_tickers = set()
-        
-        # Get all existing tickers in one query
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT ticker FROM ticker_reference")
-            existing_tickers = {row[0] for row in cur.fetchall()}
         
         for row_num, row in enumerate(csv_reader, start=2):
             try:
@@ -1375,9 +1369,6 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                 
                 # Build ticker data from CSV row
                 ticker = row.get('ticker', '').strip()
-                
-                # Track if this is an update or insert
-                is_existing = ticker in existing_tickers
                 
                 ticker_data = {
                     'ticker': ticker,
@@ -1393,8 +1384,7 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     'active': str(row.get('active', 'TRUE')).upper() in ('TRUE', '1', 'YES', 'Y'),
                     'is_etf': str(row.get('is_etf', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
                     'data_source': 'csv_import',
-                    'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
-                    'is_existing': is_existing
+                    'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y')
                 }
                 
                 # Handle 3 industry keyword fields
@@ -1468,13 +1458,23 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                 errors.append(f"Row {row_num}: {str(e)}")
                 continue
         
-        # Second pass: bulk insert/update all valid data
+        # Bulk insert all valid data in single transaction
         if ticker_data_batch:
             try:
                 with db() as conn, conn.cursor() as cur:
+                    # Get existing tickers to calculate update vs insert counts
+                    cur.execute("SELECT ticker FROM ticker_reference")
+                    existing_tickers = {row[0] for row in cur.fetchall()}
+                    
                     # Prepare data tuples for bulk insert
                     insert_data = []
                     for ticker_data in ticker_data_batch:
+                        # Track if this will be an update or insert
+                        if ticker_data['ticker'] in existing_tickers:
+                            updated += 1
+                        else:
+                            imported += 1
+                            
                         insert_data.append((
                             ticker_data['ticker'], ticker_data['country'], ticker_data['company_name'],
                             ticker_data.get('industry'), ticker_data.get('sector'), ticker_data.get('sub_industry'),
@@ -1535,6 +1535,8 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     "updated": 0,
                     "errors": [str(e)]
                 }
+        else:
+            LOG.warning("No valid ticker data found to import")
         
         LOG.info(f"CSV Import completed: {imported} imported, {updated} updated, {len(errors)} errors, {skipped} skipped")
         

@@ -4746,8 +4746,11 @@ class DomainResolver:
             if not self._is_spam_domain(domain):
                 LOG.info(f"Advanced resolution: {url} -> {advanced_url}")
                 return advanced_url, domain, None
+            else:
+                LOG.info(f"SPAM REJECTED: Advanced resolution found spam domain {domain}")
+                return None, None, None  # Reject entirely, don't fall back
         
-        # Fall back to existing method (direct resolution + title extraction)
+        # Fall back to direct resolution method
         try:
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -4759,17 +4762,24 @@ class DomainResolver:
                 if not self._is_spam_domain(domain):
                     LOG.info(f"Direct resolution: {url} -> {final_url}")
                     return final_url, domain, None
+                else:
+                    LOG.info(f"SPAM REJECTED: Direct resolution found spam domain {domain}")
+                    return None, None, None  # Reject entirely
         except:
             pass
         
-        # Existing title extraction fallback
+        # Title extraction fallback - also check for spam
         if title and not contains_non_latin_script(title):
             clean_title, source = extract_source_from_title_smart(title)
             if source and not self._is_spam_source(source):
                 resolved_domain = self._resolve_publication_to_domain(source)
                 if resolved_domain:
-                    LOG.info(f"Title resolution: {source} -> {resolved_domain}")
-                    return url, resolved_domain, None
+                    if not self._is_spam_domain(resolved_domain):
+                        LOG.info(f"Title resolution: {source} -> {resolved_domain}")
+                        return url, resolved_domain, None
+                    else:
+                        LOG.info(f"SPAM REJECTED: Title resolution found spam domain {resolved_domain}")
+                        return None, None, None
                 else:
                     LOG.warning(f"Could not resolve publication '{source}' to domain")
                     return url, "google-news-unresolved", None

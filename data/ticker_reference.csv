@@ -1,6 +1,7 @@
-country,ticker,company_name,industry,sector,active,exchange,industry_keywords,competitors,ai_generated,created_at,updated_at
-US,NVDA,NVIDIA Corporation,Semiconductors,Technology,,,,,,,
-US,MSFT,Microsoft Corporation,Software - Infrastructure,Technology,,,,,,,
-US,AAPL,Apple Inc.,Consumer Electronics,Technology,,,,,,,
-US,GOOGL,Alphabet Inc.,Internet Content & Information,Communication Services,,,,,,,
-US,AMZN,"Amazon.com, Inc.",Internet Retail,Consumer Discretionary,,,,,,,
+ticker,country,company_name,industry,sector,sub_industry,exchange,currency,market_cap_category,active,is_etf,yahoo_ticker,industry_keyword_1,industry_keyword_2,industry_keyword_3,ai_generated,ai_enhanced_at,competitor_1_name,competitor_1_ticker,competitor_2_name,competitor_2_ticker,competitor_3_name,competitor_3_ticker,created_at,updated_at,data_source
+NVDA,US,NVIDIA Corporation,Semiconductors,Technology,,,,,,,NVDA,,,,,,,,,,,,,,
+MSFT,US,Microsoft Corporation,Software - Infrastructure,Technology,,,,,,,MSFT,,,,,,,,,,,,,,
+AAPL,US,Apple Inc.,Consumer Electronics,Technology,,,,,,,AAPL,,,,,,,,,,,,,,
+GOOGL,US,Alphabet Inc.,Internet Content & Information,Communication Services,,,,,,,GOOGL,,,,,,,,,,,,,,
+AMZN,US,"Amazon.com, Inc.",Internet Retail,Consumer Discretionary,,,,,,,AMZN,,,,,,,,,,,,,,
+META,US,"Meta Platforms, Inc.",Internet Content & Information,Communication Services,,,,,,,META,,,,,,,,,,,,,,

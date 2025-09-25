@@ -1157,6 +1157,53 @@ def get_ticker_reference(ticker: str):
     
     return None
 
+# Backwards compatability ticker_reference to ticker_config
+def get_ticker_config(ticker: str) -> Optional[Dict]:
+    """Get ticker configuration from ticker_reference table with proper field conversion"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT ticker, company_name,
+                   industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                   competitor_1_name, competitor_1_ticker,
+                   competitor_2_name, competitor_2_ticker,
+                   competitor_3_name, competitor_3_ticker,
+                   sector, industry, sub_industry
+            FROM ticker_reference
+            WHERE ticker = %s AND active = TRUE
+        """, (ticker,))
+        
+        result = cur.fetchone()
+        if not result:
+            return None
+        
+        # Convert 3 separate keyword fields back to array format
+        industry_keywords = []
+        for i in range(1, 4):
+            keyword = result.get(f"industry_keyword_{i}")
+            if keyword and keyword.strip():
+                industry_keywords.append(keyword.strip())
+        
+        # Convert 6 separate competitor fields back to structured format
+        competitors = []
+        for i in range(1, 4):
+            name = result.get(f"competitor_{i}_name")
+            ticker_field = result.get(f"competitor_{i}_ticker")
+            if name and name.strip():
+                comp = {"name": name.strip()}
+                if ticker_field and ticker_field.strip():
+                    comp["ticker"] = ticker_field.strip()
+                competitors.append(comp)
+        
+        return {
+            "name": result["company_name"],
+            "company_name": result["company_name"],  # Some functions expect this field name
+            "industry_keywords": industry_keywords,
+            "competitors": competitors,
+            "sector": result.get("sector", ""),
+            "industry": result.get("industry", ""),
+            "sub_industry": result.get("sub_industry", "")
+        }
+
 # 2. STORE TICKER REFERENCE - With 6 competitor fields
 def store_ticker_reference(ticker_data: dict) -> bool:
     """Store or update ticker reference data with 3 industry keywords + 6 competitor fields"""
@@ -1279,7 +1326,7 @@ def store_ticker_reference(ticker_data: dict) -> bool:
 
 # 3. CSV IMPORT - With 6 competitor fields support
 def import_ticker_reference_from_csv_content(csv_content: str):
-    """Import ticker reference data from CSV with 3 industry keywords + 6 competitor fields"""
+    """Import ticker reference data from CSV with 3 industry keywords + 6 competitor fields - BULK OPTIMIZED"""
     ensure_ticker_reference_schema()
     
     imported = 0
@@ -1302,6 +1349,15 @@ def import_ticker_reference_from_csv_content(csv_content: str):
         
         LOG.info(f"CSV headers found: {csv_reader.fieldnames}")
         
+        # First pass: collect all ticker data and check for existing records
+        ticker_data_batch = []
+        existing_tickers = set()
+        
+        # Get all existing tickers in one query
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT ticker FROM ticker_reference")
+            existing_tickers = {row[0] for row in cur.fetchall()}
+        
         for row_num, row in enumerate(csv_reader, start=2):
             try:
                 # Skip empty rows
@@ -1310,8 +1366,13 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     continue
                 
                 # Build ticker data from CSV row
+                ticker = row.get('ticker', '').strip()
+                
+                # Track if this is an update or insert
+                is_existing = ticker in existing_tickers
+                
                 ticker_data = {
-                    'ticker': row.get('ticker', '').strip(),
+                    'ticker': ticker,
                     'country': row.get('country', '').strip().upper(),
                     'company_name': row.get('company_name', '').strip(),
                     'industry': row.get('industry', '').strip() or None,
@@ -1320,10 +1381,12 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     'exchange': row.get('exchange', '').strip() or None,
                     'currency': row.get('currency', '').strip().upper() or None,
                     'market_cap_category': row.get('market_cap_category', '').strip() or None,
-                    'yahoo_ticker': row.get('yahoo_ticker', '').strip() or None,
+                    'yahoo_ticker': row.get('yahoo_ticker', '').strip() or ticker,
                     'active': str(row.get('active', 'TRUE')).upper() in ('TRUE', '1', 'YES', 'Y'),
                     'is_etf': str(row.get('is_etf', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
-                    'data_source': 'csv_import'
+                    'data_source': 'csv_import',
+                    'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
+                    'is_existing': is_existing
                 }
                 
                 # Handle 3 industry keyword fields
@@ -1339,7 +1402,6 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                 ticker_data['competitor_3_name'] = row.get('competitor_3_name', '').strip() or None
                 ticker_data['competitor_3_ticker'] = row.get('competitor_3_ticker', '').strip() or None
                 
-                # Handle both legacy and new CSV formats
                 # LEGACY SUPPORT: Handle old "competitors" field format
                 if (row.get('competitors', '').strip() and 
                     not any(ticker_data.get(f'competitor_{i}_name') for i in range(1, 4))):
@@ -1371,39 +1433,106 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     for i, keyword in enumerate(legacy_keywords[:3], 1):
                         ticker_data[f'industry_keyword_{i}'] = keyword
                 
-                # Handle new format where competitors might be stored as arrays in JSON
-                if row.get('competitors_array'):
-                    try:
-                        import json
-                        competitors_list = json.loads(row['competitors_array']) if isinstance(row['competitors_array'], str) else row['competitors_array']
-                        for i, comp in enumerate(competitors_list[:3], 1):
-                            if isinstance(comp, dict):
-                                ticker_data[f'competitor_{i}_name'] = comp.get('name')
-                                ticker_data[f'competitor_{i}_ticker'] = comp.get('ticker')
-                            elif isinstance(comp, str):
-                                # Handle string format
-                                match = re.search(r'^(.+?)\s*\(([^)]+)\)$', comp)
-                                if match:
-                                    ticker_data[f'competitor_{i}_name'] = match.group(1).strip()
-                                    ticker_data[f'competitor_{i}_ticker'] = normalize_ticker_format(match.group(2).strip())
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                # Clean NULL bytes from text fields
+                text_fields = [
+                    'company_name', 'industry', 'sector', 'sub_industry', 'exchange',
+                    'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
+                    'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
+                    'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker'
+                ]
+                for field in text_fields:
+                    if ticker_data.get(field):
+                        ticker_data[field] = clean_null_bytes(str(ticker_data[field]))
                 
-                # Check if ticker already exists
-                existing = get_ticker_reference(ticker_data['ticker'])
+                # Normalize competitor tickers
+                competitor_ticker_fields = ['competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker']
+                for field in competitor_ticker_fields:
+                    if ticker_data.get(field):
+                        ticker_data[field] = normalize_ticker_format(ticker_data[field])
+                        # Validate competitor ticker format
+                        if not validate_ticker_format(ticker_data[field]):
+                            LOG.warning(f"Invalid competitor ticker format: {ticker_data[field]}")
+                            ticker_data[field] = None  # Clear invalid ticker
                 
-                # Store the data
-                if store_ticker_reference(ticker_data):
-                    if existing:
-                        updated += 1
-                    else:
-                        imported += 1
+                ticker_data_batch.append(ticker_data)
+                
+                # Count for final reporting
+                if is_existing:
+                    updated += 1
                 else:
-                    errors.append(f"Row {row_num}: Failed to store {ticker_data['ticker']}")
+                    imported += 1
                     
             except Exception as e:
                 errors.append(f"Row {row_num}: {str(e)}")
                 continue
+        
+        # Second pass: bulk insert/update all valid data
+        if ticker_data_batch:
+            try:
+                with db() as conn, conn.cursor() as cur:
+                    # Prepare data tuples for bulk insert
+                    insert_data = []
+                    for ticker_data in ticker_data_batch:
+                        insert_data.append((
+                            ticker_data['ticker'], ticker_data['country'], ticker_data['company_name'],
+                            ticker_data.get('industry'), ticker_data.get('sector'), ticker_data.get('sub_industry'),
+                            ticker_data.get('exchange'), ticker_data.get('currency'), ticker_data.get('market_cap_category'),
+                            ticker_data.get('yahoo_ticker'), ticker_data.get('active', True), ticker_data.get('is_etf', False),
+                            ticker_data.get('industry_keyword_1'), ticker_data.get('industry_keyword_2'), ticker_data.get('industry_keyword_3'),
+                            ticker_data.get('competitor_1_name'), ticker_data.get('competitor_1_ticker'),
+                            ticker_data.get('competitor_2_name'), ticker_data.get('competitor_2_ticker'),
+                            ticker_data.get('competitor_3_name'), ticker_data.get('competitor_3_ticker'),
+                            ticker_data.get('ai_generated', False), ticker_data.get('data_source', 'csv_import')
+                        ))
+                    
+                    # Single bulk INSERT with ON CONFLICT handling
+                    cur.executemany("""
+                        INSERT INTO ticker_reference (
+                            ticker, country, company_name, industry, sector, sub_industry,
+                            exchange, currency, market_cap_category, yahoo_ticker, active, is_etf,
+                            industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                            competitor_1_name, competitor_1_ticker,
+                            competitor_2_name, competitor_2_ticker,
+                            competitor_3_name, competitor_3_ticker,
+                            ai_generated, data_source
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (ticker) DO UPDATE SET
+                            country = EXCLUDED.country,
+                            company_name = EXCLUDED.company_name,
+                            industry = EXCLUDED.industry,
+                            sector = EXCLUDED.sector,
+                            sub_industry = EXCLUDED.sub_industry,
+                            exchange = EXCLUDED.exchange,
+                            currency = EXCLUDED.currency,
+                            market_cap_category = EXCLUDED.market_cap_category,
+                            yahoo_ticker = EXCLUDED.yahoo_ticker,
+                            active = EXCLUDED.active,
+                            is_etf = EXCLUDED.is_etf,
+                            industry_keyword_1 = EXCLUDED.industry_keyword_1,
+                            industry_keyword_2 = EXCLUDED.industry_keyword_2,
+                            industry_keyword_3 = EXCLUDED.industry_keyword_3,
+                            competitor_1_name = EXCLUDED.competitor_1_name,
+                            competitor_1_ticker = EXCLUDED.competitor_1_ticker,
+                            competitor_2_name = EXCLUDED.competitor_2_name,
+                            competitor_2_ticker = EXCLUDED.competitor_2_ticker,
+                            competitor_3_name = EXCLUDED.competitor_3_name,
+                            competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                            ai_generated = EXCLUDED.ai_generated,
+                            data_source = EXCLUDED.data_source,
+                            updated_at = NOW()
+                    """, insert_data)
+                    
+                    LOG.info(f"BULK INSERT COMPLETED: {len(insert_data)} records processed in single transaction")
+                    
+            except Exception as e:
+                LOG.error(f"Bulk insert failed: {e}")
+                return {
+                    "status": "error", 
+                    "message": f"Bulk insert failed: {str(e)}",
+                    "imported": 0,
+                    "updated": 0,
+                    "errors": [str(e)]
+                }
         
         LOG.info(f"CSV Import completed: {imported} imported, {updated} updated, {len(errors)} errors, {skipped} skipped")
         
@@ -1770,9 +1899,12 @@ def sync_ticker_references_from_github():
     # Step 2: Import CSV into database
     import_result = import_ticker_reference_from_csv_content(fetch_result["csv_content"])
     
-    # Combine results
+    # Combine results - Fix status logic
+    sync_status = "success" if import_result["status"] == "completed" else "error"
+    success_message = f"GitHub sync successful: {import_result.get('imported', 0)} imported, {import_result.get('updated', 0)} updated"
+    
     return {
-        "status": import_result["status"],
+        "status": sync_status,
         "github_fetch": {
             "csv_size": len(fetch_result["csv_content"]),
             "file_sha": fetch_result["file_info"]["sha"][:8]
@@ -1783,7 +1915,7 @@ def sync_ticker_references_from_github():
             "skipped": import_result.get("skipped", 0),
             "errors": import_result.get("total_errors", 0)
         },
-        "message": f"Sync completed: {import_result.get('imported', 0)} imported, {import_result.get('updated', 0)} updated"
+        "message": success_message if sync_status == "success" else f"GitHub sync failed: {import_result.get('message', 'Unknown error')}"
     }
 
 def sync_ticker_references_to_github(commit_message: str = None):
@@ -6518,113 +6650,93 @@ Required JSON format:
         print(f"Error generating enhanced metadata for {ticker}: {e}")
         return None
 
-
 def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
     """Get ticker metadata with reference table lookup first, then AI enhancement"""
     
-    # Step 1: Check ticker_reference table
-    reference_data = get_ticker_reference(ticker)
+    # Normalize ticker format for consistent lookup
+    normalized_ticker = normalize_ticker_format(ticker)
     
-    if reference_data and not force_refresh:
-        LOG.info(f"Found ticker reference data for {ticker}: {reference_data['company_name']}")
+    # Step 1: Use the new get_ticker_config wrapper for consistent data access
+    config = get_ticker_config(normalized_ticker)
+    
+    if config and not force_refresh:
+        LOG.info(f"Found ticker reference data for {ticker}: {config['company_name']}")
         
-        # Convert 3 separate keyword fields to array format for compatibility
-        keywords = []
-        for i in range(1, 4):
-            kw = reference_data.get(f'industry_keyword_{i}')
-            if kw:
-                keywords.append(kw)
-        
-        # Convert 6 separate competitor fields to structured format
-        competitors = []
-        for i in range(1, 4):
-            name = reference_data.get(f'competitor_{i}_name')
-            ticker_field = reference_data.get(f'competitor_{i}_ticker')
-            if name:
-                competitor_obj = {"name": name}
-                if ticker_field:
-                    competitor_obj["ticker"] = ticker_field
-                competitors.append(competitor_obj)
-        
-        # Use reference data as base
+        # Data is already in the correct format from get_ticker_config()
         metadata = {
             "ticker": ticker,
-            "company_name": reference_data["company_name"],
-            "name": reference_data["company_name"],  # Both fields for compatibility
-            "sector": reference_data.get("sector", ""),
-            "industry": reference_data.get("industry", ""),
-            "sub_industry": reference_data.get("sub_industry", ""),
-            "exchange": reference_data.get("exchange", ""),
-            "currency": reference_data.get("currency", ""),
-            "country": reference_data.get("country", ""),
-            "industry_keywords": keywords,
-            "competitors": competitors
+            "company_name": config["company_name"],
+            "name": config["company_name"],
+            "sector": config.get("sector", ""),
+            "industry": config.get("industry", ""),
+            "sub_industry": config.get("sub_industry", ""),
+            "industry_keywords": config.get("industry_keywords", []),
+            "competitors": config.get("competitors", [])
         }
         
-        # Check if we need AI enhancement (any key fields are empty)
-        needs_ai_enhancement = (
-            not keywords or 
-            not competitors or 
-            not reference_data.get("ai_generated") or
+        # Only enhance with AI if key fields are missing AND force_refresh is True
+        needs_enhancement = (
+            (not metadata["industry_keywords"] or not metadata["competitors"]) and 
+            OPENAI_API_KEY and 
             force_refresh
         )
         
-        if needs_ai_enhancement and OPENAI_API_KEY:
-            LOG.info(f"Enhancing {ticker} ({reference_data['company_name']}) with AI generation")
+        if needs_enhancement:
+            LOG.info(f"AI enhancing {ticker} - missing fields with force_refresh=True")
             ai_metadata = generate_enhanced_ticker_metadata_with_ai(
                 ticker, 
-                reference_data["company_name"],
-                reference_data.get("sector", ""),
-                reference_data.get("industry", "")
+                config["company_name"],
+                config.get("sector", ""),
+                config.get("industry", "")
             )
             
             if ai_metadata:
-                # Merge AI enhancements with reference data (only fill empty fields)
-                if not keywords:
+                # Only fill empty fields, don't overwrite existing data
+                if not metadata["industry_keywords"]:
                     metadata["industry_keywords"] = ai_metadata.get("industry_keywords", [])
                 
-                if not competitors:
+                if not metadata["competitors"]:
                     metadata["competitors"] = ai_metadata.get("competitors", [])
-                
-                # Always update these complex objects from AI
-                metadata["sector_profile"] = ai_metadata.get("sector_profile", {})
-                metadata["aliases_brands_assets"] = ai_metadata.get("aliases_brands_assets", {})
                 
                 # Update reference table with AI enhancements
                 update_ticker_reference_ai_data(ticker, metadata)
         
         return metadata
     
-    # Step 2: Fall back to original AI generation (for unknown tickers)
-    LOG.info(f"No reference data found for {ticker}, using original AI generation")
-    ai_metadata = generate_enhanced_ticker_metadata_with_ai(ticker)
-    
-    # Store the AI-generated data back to reference table for future use
-    if ai_metadata:
-        reference_data = {
-            'ticker': ticker,
-            'country': 'US',  # Default assumption, can be updated later
-            'company_name': ai_metadata.get('company_name', ticker),
-            'sector': ai_metadata.get('sector', ''),
-            'industry': ai_metadata.get('industry', ''),
-            'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
-            'industry_keyword_2': ai_metadata.get('industry_keywords', [None, None])[1] if len(ai_metadata.get('industry_keywords', [])) > 1 else None,
-            'industry_keyword_3': ai_metadata.get('industry_keywords', [None, None, None])[2] if len(ai_metadata.get('industry_keywords', [])) > 2 else None,
-            'ai_generated': True,
-            'data_source': 'ai_generated'
-        }
+    # Step 2: Only fall back to AI if ticker truly not found and AI is configured
+    if OPENAI_API_KEY:
+        LOG.info(f"No reference data found for {ticker}, generating with AI")
+        ai_metadata = generate_enhanced_ticker_metadata_with_ai(ticker)
         
-        # Convert competitors to separate fields
-        competitors = ai_metadata.get('competitors', [])
-        for i, comp in enumerate(competitors[:3], 1):
-            if isinstance(comp, dict):
-                reference_data[f'competitor_{i}_name'] = comp.get('name')
-                reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+        # Store the AI-generated data back to reference table for future use
+        if ai_metadata:
+            reference_data = {
+                'ticker': normalized_ticker,
+                'country': 'US',
+                'company_name': ai_metadata.get('company_name', ticker),
+                'sector': ai_metadata.get('sector', ''),
+                'industry': ai_metadata.get('industry', ''),
+                'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
+                'industry_keyword_2': ai_metadata.get('industry_keywords', [None, None])[1] if len(ai_metadata.get('industry_keywords', [])) > 1 else None,
+                'industry_keyword_3': ai_metadata.get('industry_keywords', [None, None, None])[2] if len(ai_metadata.get('industry_keywords', [])) > 2 else None,
+                'ai_generated': True,
+                'data_source': 'ai_generated'
+            }
+            
+            # Convert competitors to separate fields
+            competitors = ai_metadata.get('competitors', [])
+            for i, comp in enumerate(competitors[:3], 1):
+                if isinstance(comp, dict):
+                    reference_data[f'competitor_{i}_name'] = comp.get('name')
+                    reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+            
+            store_ticker_reference(reference_data)
         
-        store_ticker_reference(reference_data)
+        return ai_metadata or {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
     
-    return ai_metadata or {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
-
+    # Step 3: Final fallback
+    LOG.warning(f"No data found for {ticker} and no AI configured")
+    return {"ticker": ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
 
 def get_ticker_reference(ticker: str) -> Optional[Dict]:
     """Get ticker reference data from database"""
@@ -8360,22 +8472,6 @@ def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
         "feeds_created": len(feeds)
     }
 
-@APP.get("/admin/ticker-configs")
-def list_ticker_configs(request: Request):
-    """List all ticker configurations"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT ticker, name, industry_keywords, competitors, ai_generated, 
-                   created_at, updated_at
-            FROM ticker_config
-            WHERE active = TRUE
-            ORDER BY ticker
-        """)
-        configs = list(cur.fetchall())
-    
-    return {"configs": configs, "total": len(configs)}
 
 @APP.post("/admin/force-digest")
 def force_digest(request: Request, body: ForceDigestRequest):
@@ -8466,8 +8562,8 @@ def wipe_database(request: Request):
         deleted_stats["feeds"] = cur.rowcount
         
         # Delete all ticker configurations (keywords, competitors, etc.)
-        cur.execute("DELETE FROM ticker_config")
-        deleted_stats["ticker_configs"] = cur.rowcount
+        cur.execute("DELETE FROM ticker_reference")  
+        deleted_stats["ticker_references"] = cur.rowcount
         
         LOG.warning(f"DATABASE WIPED: {deleted_stats}")
     
@@ -8494,8 +8590,8 @@ def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
         deleted_stats["feeds"] = cur.rowcount
         
         # Delete ticker configuration
-        cur.execute("DELETE FROM ticker_config WHERE ticker = %s", (ticker,))
-        deleted_stats["ticker_config"] = cur.rowcount
+        cur.execute("DELETE FROM ticker_reference WHERE ticker = %s", (ticker,))
+        deleted_stats["ticker_reference"] = cur.rowcount
         
         LOG.info(f"Wiped all data for ticker {ticker}: {deleted_stats}")
     
@@ -8636,7 +8732,7 @@ def get_stats(
         cur.execute("""
             SELECT COUNT(*) as total, 
                    COUNT(CASE WHEN ai_generated THEN 1 END) as ai_generated
-            FROM ticker_config
+            FROM ticker_reference
             WHERE active = TRUE
         """)
         ai_stats = cur.fetchone()

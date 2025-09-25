@@ -1176,7 +1176,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                    competitor_3_name, competitor_3_ticker,
                    sector, industry, sub_industry
             FROM ticker_reference
-            WHERE ticker = %s AND active = TRUE
+            WHERE ticker = %s
         """, (ticker,))
         
         result = cur.fetchone()

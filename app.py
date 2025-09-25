@@ -6657,6 +6657,8 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
     
     # Step 1: Use the new get_ticker_config wrapper for consistent data access
     config = get_ticker_config(normalized_ticker)
+    LOG.info(f"DEBUG: config returned: {config}")
+    LOG.info(f"DEBUG: config truthy check: {bool(config)}")
     
     if config and not force_refresh:
         LOG.info(f"DEBUG: config exists: {bool(config)}, force_refresh: {force_refresh}")

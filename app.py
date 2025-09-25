@@ -1464,7 +1464,7 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                 with db() as conn, conn.cursor() as cur:
                     # Get existing tickers to calculate update vs insert counts
                     cur.execute("SELECT ticker FROM ticker_reference")
-                    existing_tickers = {row[0] for row in cur.fetchall()}
+                    existing_tickers = {row["ticker"] for row in cur.fetchall()}
                     
                     # Prepare data tuples for bulk insert
                     insert_data = []

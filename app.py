@@ -637,22 +637,50 @@ def ensure_schema():
                 ON found_url(url_hash, ticker, ai_analysis_ticker) 
                 WHERE ai_analysis_ticker IS NOT NULL;
                 
-                -- Rest of schema...
-                CREATE TABLE IF NOT EXISTS ticker_config (
-                    ticker VARCHAR(10) PRIMARY KEY,
-                    name VARCHAR(255),
-                    industry_keywords TEXT[],
-                    competitors TEXT[],
-                    active BOOLEAN DEFAULT TRUE,
-                    ai_generated BOOLEAN DEFAULT FALSE,
-                    sector VARCHAR(255),
+                -- Ticker reference table (NEW - replaces ticker_config)
+                CREATE TABLE IF NOT EXISTS ticker_reference (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) UNIQUE NOT NULL,
+                    country VARCHAR(5) NOT NULL,
+                    company_name VARCHAR(255) NOT NULL,
                     industry VARCHAR(255),
+                    sector VARCHAR(255),
                     sub_industry VARCHAR(255),
-                    sector_profile JSONB,
-                    aliases_brands_assets JSONB,
+                    exchange VARCHAR(20),
+                    currency VARCHAR(3),
+                    market_cap_category VARCHAR(20),
+                    active BOOLEAN DEFAULT TRUE,
+                    is_etf BOOLEAN DEFAULT FALSE,
+                    yahoo_ticker VARCHAR(20),
+                    
+                    -- 3 Industry Keywords (separate columns)
+                    industry_keyword_1 VARCHAR(255),
+                    industry_keyword_2 VARCHAR(255),
+                    industry_keyword_3 VARCHAR(255),
+                    
+                    -- 6 Competitor fields (name + ticker pairs)
+                    competitor_1_name VARCHAR(255),
+                    competitor_1_ticker VARCHAR(20),
+                    competitor_2_name VARCHAR(255),
+                    competitor_2_ticker VARCHAR(20),
+                    competitor_3_name VARCHAR(255),
+                    competitor_3_ticker VARCHAR(20),
+                    
+                    -- AI Enhancement tracking
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    ai_enhanced_at TIMESTAMP,
+                    
+                    -- Metadata tracking
                     created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW()
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    data_source VARCHAR(50) DEFAULT 'manual'
                 );
+                
+                -- Create indexes for ticker_reference
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_country ON ticker_reference(country);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
                 
                 CREATE TABLE IF NOT EXISTS domain_names (
                     domain VARCHAR(255) PRIMARY KEY,
@@ -687,6 +715,13 @@ def ensure_schema():
                     UNIQUE(ticker, parent_ticker)
                 );
             """)
+            
+            # Clean up old ticker_config table (fresh start)
+            try:
+                cur.execute("DROP TABLE IF EXISTS ticker_config CASCADE")
+                LOG.info("Dropped old ticker_config table for fresh start")
+            except Exception as e:
+                LOG.warning(f"Schema cleanup warning: {e}")
 
     update_schema_for_enhanced_metadata()
     update_schema_for_triage()
@@ -3874,51 +3909,45 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     </div>
     """
 
-def upsert_ticker_config(ticker: str, metadata: Dict, ai_generated: bool = False):
-    """Insert or update ticker configuration with enhanced competitor structure"""
-    with db() as conn, conn.cursor() as cur:
-        # Convert new competitor format to store both name and ticker info
-        competitors_for_db = []
-        raw_competitors = metadata.get("competitors", [])
-        
-        for comp in raw_competitors:
-            if isinstance(comp, dict):
-                # New format - store as "Name (TICKER)" or just "Name" if no ticker
-                if comp.get('ticker'):
-                    competitors_for_db.append(f"{comp['name']} ({comp['ticker']})")
-                else:
-                    competitors_for_db.append(comp['name'])
-            else:
-                # Old format - just the string
-                competitors_for_db.append(str(comp))
-        
-        cur.execute("""
-            INSERT INTO ticker_config (ticker, name, industry_keywords, competitors, ai_generated)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (ticker) DO UPDATE
-            SET name = EXCLUDED.name,
-                industry_keywords = EXCLUDED.industry_keywords,
-                competitors = EXCLUDED.competitors,
-                ai_generated = EXCLUDED.ai_generated,
-                updated_at = NOW()
-        """, (
-            ticker,
-            metadata.get("company_name", ticker),
-            metadata.get("industry_keywords", []),
-            competitors_for_db,
-            ai_generated
-        ))
-
 def get_ticker_config(ticker: str) -> Optional[Dict]:
-    """Get ticker configuration from database with complete metadata extraction"""
+    """Get ticker configuration from ticker_reference table"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT ticker, name, industry_keywords, competitors, ai_generated,
-                   sector, industry, sub_industry, sector_profile, aliases_brands_assets
-            FROM ticker_config
+            SELECT ticker, company_name,
+                   industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                   competitor_1_name, competitor_1_ticker,
+                   competitor_2_name, competitor_2_ticker,
+                   competitor_3_name, competitor_3_ticker
+            FROM ticker_reference
             WHERE ticker = %s AND active = TRUE
         """, (ticker,))
-        return cur.fetchone()
+        
+        result = cur.fetchone()
+        if not result:
+            return None
+        
+        # Convert to standard format
+        industry_keywords = [
+            result[f"industry_keyword_{i}"] 
+            for i in range(1, 4) 
+            if result.get(f"industry_keyword_{i}")
+        ]
+        
+        competitors = []
+        for i in range(1, 4):
+            name = result.get(f"competitor_{i}_name")
+            ticker = result.get(f"competitor_{i}_ticker")
+            if name:
+                comp = {"name": name}
+                if ticker:
+                    comp["ticker"] = ticker
+                competitors.append(comp)
+        
+        return {
+            "name": result["company_name"],
+            "industry_keywords": industry_keywords,
+            "competitors": competitors
+        }
 
 def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
     """Wrapper for backward compatibility"""
@@ -6268,7 +6297,7 @@ class TickerManager:
     
     @staticmethod
     def store_metadata(ticker: str, metadata: Dict):
-        """Store enhanced ticker metadata in database with robust error handling"""
+        """Store enhanced ticker metadata in ticker_reference table only"""
         
         # Handle None or invalid metadata
         if not metadata or not isinstance(metadata, dict):
@@ -6279,9 +6308,7 @@ class TickerManager:
                 "competitors": [],
                 "sector": "",
                 "industry": "",
-                "sub_industry": "",
-                "sector_profile": {},
-                "aliases_brands_assets": {}
+                "sub_industry": ""
             }
         
         # Ensure required fields exist with defaults
@@ -6291,71 +6318,55 @@ class TickerManager:
         metadata.setdefault("sector", "")
         metadata.setdefault("industry", "")
         metadata.setdefault("sub_industry", "")
-        metadata.setdefault("sector_profile", {})
-        metadata.setdefault("aliases_brands_assets", {})
         
-        # Convert competitors to storage format
-        competitors_for_db = []
-        structured_competitors = []  # Keep structured format for competitor_metadata table
+        # Convert arrays to separate fields for ticker_reference table
+        industry_keywords = metadata.get("industry_keywords", [])
+        competitors = metadata.get("competitors", [])
         
-        try:
-            for comp in metadata.get("competitors", []):
-                if isinstance(comp, dict):
-                    structured_competitors.append(comp)  # For new table
-                    if comp.get('ticker'):
-                        competitors_for_db.append(f"{comp['name']} ({comp['ticker']})")
-                    else:
-                        competitors_for_db.append(comp.get('name', 'Unknown'))
-                else:
-                    competitors_for_db.append(str(comp))
-        except Exception as e:
-            LOG.warning(f"Error processing competitors for {ticker}: {e}")
-            competitors_for_db = []
-            structured_competitors = []
+        ticker_data = {
+            'ticker': ticker,
+            'country': 'US',  # Default - can be enhanced later
+            'company_name': metadata.get("company_name", ticker),
+            'sector': metadata.get("sector", ""),
+            'industry': metadata.get("industry", ""),
+            'sub_industry': metadata.get("sub_industry", ""),
+            'ai_generated': True,
+            'data_source': 'ai_enhanced'
+        }
         
-        try:
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO ticker_config (
-                        ticker, name, industry_keywords, competitors, ai_generated,
-                        sector, industry, sub_industry, sector_profile, aliases_brands_assets
-                    ) VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s)
-                    ON CONFLICT (ticker) DO UPDATE
-                    SET name = EXCLUDED.name, 
-                        industry_keywords = EXCLUDED.industry_keywords,
-                        competitors = EXCLUDED.competitors, 
-                        sector = EXCLUDED.sector,
-                        industry = EXCLUDED.industry,
-                        sub_industry = EXCLUDED.sub_industry,
-                        sector_profile = EXCLUDED.sector_profile,
-                        aliases_brands_assets = EXCLUDED.aliases_brands_assets,
-                        updated_at = NOW()
-                """, (
-                    ticker, 
-                    metadata.get("company_name", ticker),
-                    metadata.get("industry_keywords", []), 
-                    competitors_for_db,
-                    metadata.get("sector", ""),
-                    metadata.get("industry", ""),
-                    metadata.get("sub_industry", ""),
-                    json.dumps(metadata.get("sector_profile", {})),
-                    json.dumps(metadata.get("aliases_brands_assets", {}))
-                ))
+        # Map 3 industry keywords to separate fields
+        for i, keyword in enumerate(industry_keywords[:3], 1):
+            if keyword and keyword.strip():
+                ticker_data[f'industry_keyword_{i}'] = keyword.strip()
+        
+        # Map 3 competitors to separate name/ticker fields
+        for i, comp in enumerate(competitors[:3], 1):
+            if isinstance(comp, dict):
+                name = comp.get('name', '').strip()
+                ticker_field = comp.get('ticker', '').strip()
                 
-                LOG.info(f"Successfully stored metadata for {ticker}")
-                
-        except Exception as e:
-            LOG.error(f"Database error storing metadata for {ticker}: {e}")
-            # Don't raise - we want the system to continue with fallback data
-            return
+                if name:
+                    ticker_data[f'competitor_{i}_name'] = name
+                    if ticker_field:
+                        # Validate and normalize competitor ticker
+                        normalized_ticker = normalize_ticker_format(ticker_field)
+                        if validate_ticker_format(normalized_ticker):
+                            ticker_data[f'competitor_{i}_ticker'] = normalized_ticker
+                        else:
+                            LOG.warning(f"Invalid competitor ticker format for {name}: {ticker_field}")
+            elif isinstance(comp, str) and comp.strip():
+                # Handle string format as fallback
+                ticker_data[f'competitor_{i}_name'] = comp.strip()
         
-        # Store competitor metadata in dedicated table (with error handling)
-        if structured_competitors:
-            try:
-                store_competitor_metadata(ticker, structured_competitors)
-            except Exception as e:
-                LOG.warning(f"Failed to store competitor metadata for {ticker}: {e}")
-                # Continue - this is not critical
+        # Store in ticker_reference table ONLY
+        try:
+            success = store_ticker_reference(ticker_data)
+            if success:
+                LOG.info(f"Successfully stored metadata for {ticker} in ticker_reference")
+            else:
+                LOG.error(f"Failed to store ticker_reference for {ticker}")
+        except Exception as e:
+            LOG.error(f"Database error storing ticker_reference for {ticker}: {e}")
 
 
 # Global instances

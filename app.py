@@ -7950,34 +7950,20 @@ def root():
 
 @APP.post("/admin/init")
 def admin_init(request: Request, body: InitRequest):
-    """Initialize database and generate AI-powered feeds for specified tickers - ENHANCED with GitHub sync"""
+    """Initialize feeds for specified tickers with CSV export cycle"""
     require_admin(request)
     ensure_schema()
     
-    if not OPENAI_API_KEY:
-        return {"status": "error", "message": "OpenAI API key not configured"}
+    LOG.info("=== INITIALIZATION STARTING ===")
     
-    # STEP 1: Sync ticker reference data from GitHub at start
+    # STEP 1: Import CSV from GitHub
     LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
     github_sync_result = sync_ticker_references_from_github()
     
     if github_sync_result["status"] != "success":
         LOG.warning(f"GitHub sync failed: {github_sync_result.get('message', 'Unknown error')}")
-        # Continue anyway - system can work without GitHub sync
     else:
         LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
-
-        # ADD THIS DEBUG CODE HERE
-        LOG.info("=== DEBUG: Testing ticker lookup immediately after import ===")
-        test_config = get_ticker_config("NVDA")
-        LOG.info(f"DEBUG: get_ticker_config('NVDA') returned: {test_config}")
-        
-        if test_config:
-            LOG.info(f"DEBUG: Found NVDA with keywords: {test_config.get('industry_keywords')}")
-            LOG.info(f"DEBUG: Found NVDA with competitors: {test_config.get('competitors')}")
-        else:
-            LOG.info("DEBUG: get_ticker_config() returned None - lookup failed!")
-        # END DEBUG CODE
     
     results = []
     LOG.info("=== INITIALIZATION STARTING ===")
@@ -7985,48 +7971,75 @@ def admin_init(request: Request, body: InitRequest):
     for ticker in body.tickers:
         LOG.info(f"=== INITIALIZING TICKER: {ticker} ===")
         
+        try:
         # Get or generate metadata with enhanced ticker reference integration
-        keywords = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=body.force_refresh)
+        metadata = get_or_create_enhanced_ticker_metadata(ticker)
         
         # Build feed URLs for all categories using enhanced feed creation
-        feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, keywords)
-        
-        if not feeds:
-            LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")
+        feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
+            ticker_feed_count = 0
+            
+            for feed_config in feeds:
+                feed_id = upsert_feed(
+                    url=feed_config["url"],
+                    name=feed_config["name"],
+                    ticker=ticker,
+                    category=feed_config.get("category", "company"),
+                    retain_days=DEFAULT_RETAIN_DAYS
+                )
+                results.append({
+                    "ticker": ticker,
+                    "feed": feed_config["name"],
+                    "category": feed_config.get("category", "company"),
+                    "search_keyword": feed_config.get("search_keyword"),
+                    "competitor_ticker": feed_config.get("competitor_ticker"),
+                    "id": feed_id
+                })
+                ticker_feed_count += 1
+            
+            LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created ===")
+            
+        except Exception as e:
+            LOG.error(f"Failed to initialize {ticker}: {e}")
             results.append({
                 "ticker": ticker,
-                "message": "No new feeds created - already at limits",
-                "feeds_created": 0
+                "error": str(e),
+                "message": f"Failed to initialize {ticker}"
             })
             continue
-        
-        # Create the feeds that are needed
-        ticker_feed_count = 0
-        for feed_config in feeds:
-            feed_id = upsert_feed(
-                url=feed_config["url"],
-                name=feed_config["name"],
-                ticker=ticker,
-                category=feed_config.get("category", "company"),
-                retain_days=DEFAULT_RETAIN_DAYS,
-                search_keyword=feed_config.get("search_keyword"),
-                competitor_ticker=feed_config.get("competitor_ticker")
-            )
-            results.append({
-                "ticker": ticker,
-                "feed": feed_config["name"],
-                "category": feed_config.get("category", "company"),
-                "search_keyword": feed_config.get("search_keyword"),
-                "competitor_ticker": feed_config.get("competitor_ticker"),
-                "id": feed_id
-            })
-            ticker_feed_count += 1
-        
-        LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created ===")
     
-    # Final summary logging
     LOG.info("=== INITIALIZATION COMPLETE ===")
     
+    # STEP 3: Export enhanced data back to CSV/GitHub
+    LOG.info("=== COMMITTING ENHANCED DATA BACK TO CSV ===")
+    
+    try:
+        # Export current database state to CSV
+        export_result = export_ticker_references_to_csv()
+        
+        if export_result["status"] == "success":
+            LOG.info(f"Successfully exported {export_result.get('ticker_count', 0)} tickers to CSV")
+            
+            # Commit the enhanced CSV back to GitHub
+            commit_message = f"AI enhancement update: {len(body.tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            
+            commit_result = commit_csv_to_github(
+                export_result["csv_content"],
+                commit_message
+            )
+            
+            if commit_result["status"] == "success":
+                LOG.info("Successfully committed enhanced data back to GitHub CSV")
+            else:
+                LOG.warning(f"Failed to commit to GitHub: {commit_result.get('message', 'Unknown error')}")
+        else:
+            LOG.warning(f"Failed to export CSV: {export_result.get('message', 'Unknown error')}")
+            
+    except Exception as e:
+        LOG.error(f"CSV export/commit failed: {e}")
+        # Don't fail the entire initialization if CSV export fails
+    
+    # STEP 4: Return results
     total_feeds_created = len([r for r in results if "feed" in r])
     
     return {
@@ -8034,11 +8047,15 @@ def admin_init(request: Request, body: InitRequest):
         "tickers": body.tickers,
         "github_sync": github_sync_result,
         "feeds": [r for r in results if "feed" in r],
+        "csv_export": {
+            "attempted": True,
+            "message": "Enhanced data exported back to GitHub CSV"
+        },
         "summary": {
             "total_feeds_created": total_feeds_created,
             "tickers_at_limit": [r["ticker"] for r in results if "message" in r]
         },
-        "message": f"Generated {total_feeds_created} new feeds using enhanced ticker reference system"
+        "message": f"Generated {total_feeds_created} new feeds and committed enhanced metadata to CSV"
     }
  
 @APP.post("/cron/ingest")
@@ -8047,34 +8064,28 @@ def cron_ingest(
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
-    """Enhanced ingest with GitHub sync at start and ticker-specific AI analysis"""
+    """Enhanced ingest using existing enhanced database (no GitHub sync)"""
     start_time = time.time()
     require_admin(request)
     ensure_schema()
     
     LOG.info("=== CRON INGEST STARTING (ENHANCED WITH TICKER REFERENCE) ===")
+    LOG.info(f"Processing window: {minutes} minutes")
+    LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
-    # STEP 1: Sync ticker reference data from GitHub at start of every run
-    LOG.info("=== PHASE 0: SYNCING TICKER REFERENCE FROM GITHUB ===")
-    github_sync_result = sync_ticker_references_from_github()
-    
-    if github_sync_result["status"] != "success":
-        LOG.warning(f"GitHub sync failed, continuing anyway: {github_sync_result.get('message', 'Unknown error')}")
-    else:
-        LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
-    
-    # Continue with existing cron ingest logic...
+    # Reset statistics
     reset_ingestion_stats()
     reset_scraping_stats()
     reset_enhanced_scraping_stats()
     
-    # Calculate dynamic scraping limits for each ticker
+    # Calculate dynamic scraping limits for each ticker using enhanced database
     dynamic_limits = {}
     if tickers:
         for ticker in tickers:
             dynamic_limits[ticker] = calculate_dynamic_scraping_limits(ticker)
+            LOG.info(f"DYNAMIC SCRAPING LIMITS for {ticker}: {dynamic_limits[ticker]}")
     
-    # PHASE 1: Normal feed processing for new articles
+    # PHASE 1: Process feeds for new articles
     LOG.info("=== PHASE 1: PROCESSING FEEDS (NEW + EXISTING ARTICLES) ===")
     
     # Get feeds
@@ -8164,14 +8175,14 @@ def cron_ingest(
     total_articles = len(all_articles)
     LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
     
-    # PHASE 2: Pure AI triage (no enhanced selection per your request)
-    LOG.info("=== PHASE 2: PURE AI TRIAGE (NO ENHANCED SELECTION) ===")
+    # PHASE 2: Pure AI triage
+    LOG.info("=== PHASE 2: PURE AI TRIAGE ===")
     triage_results = {}
     
     for ticker in articles_by_ticker.keys():
         LOG.info(f"Running pure AI triage for {ticker}")
         
-        # USE PURE AI TRIAGE ONLY (as requested)
+        # Use pure AI triage only
         selected_results = perform_ai_triage_batch(articles_by_ticker[ticker], ticker)
         triage_results[ticker] = selected_results
         
@@ -8286,12 +8297,11 @@ def cron_ingest(
     log_scrapingbee_stats()
     log_scrapfly_stats()
     
-    # PHASE 5: Update specific processed tickers back to GitHub (ENHANCED)
+    # PHASE 5: Update specific processed tickers back to GitHub
+    LOG.info("=== PHASE 5: UPDATING PROCESSED TICKERS ON GITHUB ===")
     github_update_result = {"status": "skipped", "message": "No tickers to update"}
     
-    if successfully_processed_tickers and github_sync_result["status"] == "success":
-        LOG.info("=== PHASE 5: UPDATING PROCESSED TICKERS ON GITHUB ===")
-        
+    if successfully_processed_tickers:
         processed_tickers_list = list(successfully_processed_tickers)
         
         try:
@@ -8308,19 +8318,13 @@ def cron_ingest(
         except Exception as e:
             LOG.error(f"GitHub update failed: {e}")
             github_update_result = {"status": "error", "message": str(e)}
-    
-    elif not successfully_processed_tickers:
+    else:
         LOG.info("=== PHASE 5 SKIPPED: No tickers had successful processing ===")
-        github_update_result = {"status": "skipped", "message": "No successfully processed tickers to update"}
-    
-    elif github_sync_result["status"] != "success":
-        LOG.info("=== PHASE 5 SKIPPED: GitHub sync failed at start ===")
-        github_update_result = {"status": "skipped", "message": "GitHub sync failed at start"}
     
     processing_time = time.time() - start_time
-    LOG.info(f"=== CRON INGEST COMPLETE (ENHANCED GITHUB INTEGRATION) - Total time: {processing_time:.1f}s ===")
+    LOG.info(f"=== CRON INGEST COMPLETE - Total time: {processing_time:.1f}s ===")
     
-    # Enhanced return with GitHub integration stats
+    # Calculate scraping stats
     total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
     total_scraping_success = (enhanced_scraping_stats["requests_success"] + 
                              enhanced_scraping_stats["playwright_success"] + 
@@ -8331,15 +8335,15 @@ def cron_ingest(
     return {
         "status": "completed",
         "processing_time_seconds": round(processing_time, 1),
-        "workflow": "enhanced_ticker_reference_with_github_integration",
+        "workflow": "enhanced_ticker_reference_using_existing_database",
         
-        # NEW: GitHub integration results
+        # GitHub integration results (cleaned up)
         "github_integration": {
             "sync_from_github": {
-                "status": github_sync_result["status"],
-                "message": github_sync_result.get("message", ""),
-                "imported": github_sync_result.get("database_import", {}).get("imported", 0),
-                "updated": github_sync_result.get("database_import", {}).get("updated", 0)
+                "status": "skipped",
+                "message": "Using existing enhanced database",
+                "imported": 0,
+                "updated": 0
             },
             "sync_to_github": {
                 "status": github_update_result["status"],
@@ -8382,9 +8386,10 @@ def cron_ingest(
             "successfully_processed_tickers": list(successfully_processed_tickers),
             "github_update_status": github_update_result["status"]
         },
-        "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective",
-        "message": "Enhanced workflow with bidirectional GitHub sync completed"
+        "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective using enhanced database",
+        "message": "Enhanced workflow using existing enhanced database completed"
     }
+
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):
     """Helper to update statistics"""

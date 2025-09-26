@@ -57,15 +57,6 @@ from memory_monitor import (
     full_resource_cleanup
 )
 
-from memory_monitor import (
-    memory_monitor,
-    monitor_phase,
-    resource_cleanup_context,
-    track_resource,
-    full_resource_cleanup,
-    cleanup_async_tasks
-)
-
 # Global session for OpenAI API calls with retries
 _openai_session = None
 
@@ -8077,8 +8068,8 @@ async def cron_ingest(
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
+    """Enhanced ingest with comprehensive memory monitoring"""
     async with TICKER_PROCESSING_LOCK:
-        """Enhanced ingest with comprehensive memory monitoring"""
         start_time = time.time()
         require_admin(request)
         ensure_schema()

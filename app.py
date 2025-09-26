@@ -9611,6 +9611,31 @@ async def force_cleanup():
         "cleanup_result": cleanup_result
     }
 
+@APP.post("/admin/commit-csv-to-github")
+async def commit_csv_to_github_endpoint():
+    """HTTP endpoint to export DB to CSV and commit to GitHub"""
+    try:
+        # Step 1: Export database to CSV
+        export_result = export_ticker_references_to_csv()
+        if export_result["status"] != "success":
+            return export_result
+        
+        # Step 2: Commit CSV to GitHub
+        commit_result = commit_csv_to_github(export_result["csv_content"])
+        
+        return {
+            "status": commit_result["status"],
+            "export_info": {
+                "ticker_count": export_result["ticker_count"],
+                "csv_size": len(export_result["csv_content"])
+            },
+            "github_commit": commit_result,
+            "message": f"Exported {export_result['ticker_count']} tickers and committed to GitHub"
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands
 # ------------------------------------------------------------------------------

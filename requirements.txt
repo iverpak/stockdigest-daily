@@ -11,3 +11,4 @@ lxml_html_clean
 playwright==1.40.0
 openai>=1.0.0
 python-multipart
+psutil>=5.9.0

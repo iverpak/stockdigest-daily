@@ -8104,12 +8104,13 @@ def admin_init(request: Request, body: InitRequest):
     }
  
 @APP.post("/cron/ingest")
+@APP.post("/cron/ingest")
 def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
-    """Enhanced ingest using existing enhanced database (no GitHub sync)"""
+    """Enhanced ingest using existing enhanced database (no GitHub sync during processing)"""
     start_time = time.time()
     require_admin(request)
     ensure_schema()
@@ -8267,7 +8268,7 @@ def cron_ingest(
     processed_count = 0
     LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process across all tickers")
     
-    # Track which tickers were successfully processed for GitHub update
+    # Track which tickers were successfully processed for potential future GitHub update
     successfully_processed_tickers = set()
     
     for target_ticker in articles_by_ticker.keys():
@@ -8342,30 +8343,6 @@ def cron_ingest(
     log_scrapingbee_stats()
     log_scrapfly_stats()
     
-    # PHASE 5: Update specific processed tickers back to GitHub
-    LOG.info("=== PHASE 5: UPDATING PROCESSED TICKERS ON GITHUB ===")
-    github_update_result = {"status": "skipped", "message": "No tickers to update"}
-    
-    if successfully_processed_tickers:
-        processed_tickers_list = list(successfully_processed_tickers)
-        
-        try:
-            github_update_result = update_specific_tickers_on_github(
-                processed_tickers_list, 
-                f"Updated {len(processed_tickers_list)} tickers with AI analysis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            
-            if github_update_result["status"] == "success":
-                LOG.info(f"Successfully updated {len(processed_tickers_list)} tickers on GitHub")
-            else:
-                LOG.warning(f"Failed to update tickers on GitHub: {github_update_result.get('message', 'Unknown error')}")
-                
-        except Exception as e:
-            LOG.error(f"GitHub update failed: {e}")
-            github_update_result = {"status": "error", "message": str(e)}
-    else:
-        LOG.info("=== PHASE 5 SKIPPED: No tickers had successful processing ===")
-    
     processing_time = time.time() - start_time
     LOG.info(f"=== CRON INGEST COMPLETE - Total time: {processing_time:.1f}s ===")
     
@@ -8382,23 +8359,6 @@ def cron_ingest(
         "processing_time_seconds": round(processing_time, 1),
         "workflow": "enhanced_ticker_reference_using_existing_database",
         
-        # GitHub integration results (cleaned up)
-        "github_integration": {
-            "sync_from_github": {
-                "status": "skipped",
-                "message": "Using existing enhanced database",
-                "imported": 0,
-                "updated": 0
-            },
-            "sync_to_github": {
-                "status": github_update_result["status"],
-                "message": github_update_result.get("message", ""),
-                "tickers_updated": list(successfully_processed_tickers) if successfully_processed_tickers else [],
-                "commit_sha": github_update_result.get("commit_sha", "")[:8] if github_update_result.get("commit_sha") else ""
-            }
-        },
-        
-        # Existing return structure
         "phase_1_ingest": {
             "total_processed": ingest_stats["total_processed"],
             "total_inserted": ingest_stats["total_inserted"],
@@ -8427,12 +8387,9 @@ def cron_ingest(
             "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
             "dynamic_limits": dynamic_limits
         },
-        "phase_5_github_update": {
-            "successfully_processed_tickers": list(successfully_processed_tickers),
-            "github_update_status": github_update_result["status"]
-        },
-        "ticker_specific_analysis": f"Each URL analyzed from target ticker's perspective using enhanced database",
-        "message": "Enhanced workflow using existing enhanced database completed"
+        "successfully_processed_tickers": list(successfully_processed_tickers),
+        "message": "Processing completed successfully - ready for digest and GitHub sync",
+        "github_sync_required": len(successfully_processed_tickers) > 0
     }
 
 
@@ -9500,6 +9457,60 @@ def finalize_ticker_processing(request: Request, body: UpdateTickersRequest):
             "status": "error",
             "tickers": body.tickers,
             "message": f"Finalization failed: {str(e)}"
+        }
+
+@APP.post("/admin/sync-processed-tickers-to-github")
+def sync_processed_tickers_to_github(request: Request, body: UpdateTickersRequest):
+    """Final step: Sync all processed ticker enhancements back to GitHub"""
+    require_admin(request)
+    
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+    
+    LOG.info(f"=== SYNCING {len(body.tickers)} PROCESSED TICKERS TO GITHUB ===")
+    
+    try:
+        # Get current successfully processed tickers that have AI enhancements
+        successfully_enhanced_tickers = []
+        
+        with db() as conn, conn.cursor() as cur:
+            # Check which tickers actually have AI enhancements
+            cur.execute("""
+                SELECT DISTINCT ticker 
+                FROM ticker_reference 
+                WHERE ticker = ANY(%s) 
+                AND ai_generated = TRUE 
+                AND (industry_keyword_1 IS NOT NULL OR competitor_1_name IS NOT NULL)
+            """, (body.tickers,))
+            
+            successfully_enhanced_tickers = [row["ticker"] for row in cur.fetchall()]
+        
+        if not successfully_enhanced_tickers:
+            return {
+                "status": "no_changes", 
+                "message": "No tickers found with AI enhancements to sync",
+                "requested_tickers": body.tickers
+            }
+        
+        # Sync only the enhanced tickers back to GitHub
+        commit_message = body.commit_message or f"AI enhancement update: {len(successfully_enhanced_tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        github_result = update_specific_tickers_on_github(successfully_enhanced_tickers, commit_message)
+        
+        return {
+            "status": github_result["status"],
+            "requested_tickers": body.tickers,
+            "enhanced_tickers": successfully_enhanced_tickers,
+            "github_sync": github_result,
+            "message": f"Synced {len(successfully_enhanced_tickers)} enhanced tickers to GitHub"
+        }
+        
+    except Exception as e:
+        LOG.error(f"Failed to sync processed tickers to GitHub: {e}")
+        return {
+            "status": "error",
+            "message": f"GitHub sync failed: {str(e)}",
+            "tickers": body.tickers
         }
 
 # ------------------------------------------------------------------------------

@@ -8050,11 +8050,11 @@ def cron_ingest(
     """Enhanced ingest with GitHub sync at start and ticker-specific AI analysis"""
     start_time = time.time()
     require_admin(request)
-    #ensure_schema()
+    ensure_schema()
     
     LOG.info("=== CRON INGEST STARTING (ENHANCED WITH TICKER REFERENCE) ===")
     
-     STEP 1: Sync ticker reference data from GitHub at start of every run
+    # STEP 1: Sync ticker reference data from GitHub at start of every run
     LOG.info("=== PHASE 0: SYNCING TICKER REFERENCE FROM GITHUB ===")
     github_sync_result = sync_ticker_references_from_github()
     

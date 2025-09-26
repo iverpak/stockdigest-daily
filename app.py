@@ -1158,179 +1158,227 @@ def get_ticker_reference(ticker: str):
     return None
 
 # Backwards compatability ticker_reference to ticker_config
-def get_ticker_config(ticker: str) -> Optional[Dict]:
-    """Get ticker configuration from ticker_reference table with proper field conversion"""
-    LOG.info(f"DEBUG: get_ticker_config() called with ticker='{ticker}'")
+def import_ticker_reference_from_csv_content(csv_content: str):
+    """Import ticker reference data from CSV with 3 industry keywords + 6 competitor fields - BULK OPTIMIZED"""
+    ensure_ticker_reference_schema()
     
-    with db() as conn, conn.cursor() as cur:
-        # Add debug query first
-        cur.execute("SELECT COUNT(*) as count FROM ticker_reference WHERE ticker = %s", (ticker,))
-        count_result = cur.fetchone()
-        LOG.info(f"DEBUG: Found {count_result['count'] if count_result else 0} records for ticker '{ticker}'")
+    imported = 0
+    updated = 0
+    errors = []
+    skipped = 0
+    
+    try:
+        csv_reader = csv.DictReader(io.StringIO(csv_content))
         
-        cur.execute("""
-            SELECT ticker, company_name,
-                   industry_keyword_1, industry_keyword_2, industry_keyword_3,
-                   competitor_1_name, competitor_1_ticker,
-                   competitor_2_name, competitor_2_ticker,
-                   competitor_3_name, competitor_3_ticker,
-                   sector, industry, sub_industry
-            FROM ticker_reference
-            WHERE ticker = %s
-        """, (ticker,))
+        # Validate CSV headers
+        required_headers = ['ticker', 'country', 'company_name']
+        missing_headers = [h for h in required_headers if h not in csv_reader.fieldnames]
+        if missing_headers:
+            return {
+                "status": "error",
+                "message": f"Missing required CSV columns: {missing_headers}",
+                "imported": 0, "updated": 0, "errors": []
+            }
         
-        result = cur.fetchone()
-        LOG.info(f"DEBUG: Raw database result: {result}")
-        if not result:
-            return None
+        LOG.info(f"CSV headers found: {csv_reader.fieldnames}")
         
-        # Convert 3 separate keyword fields back to array format
-        industry_keywords = []
-        for i in range(1, 4):
-            keyword = result.get(f"industry_keyword_{i}")
-            if keyword and keyword.strip():
-                industry_keywords.append(keyword.strip())
+        # Collect all ticker data for bulk processing
+        ticker_data_batch = []
         
-        # Convert 6 separate competitor fields back to structured format
-        competitors = []
-        for i in range(1, 4):
-            name = result.get(f"competitor_{i}_name")
-            ticker_field = result.get(f"competitor_{i}_ticker")
-            if name and name.strip():
-                comp = {"name": name.strip()}
-                if ticker_field and ticker_field.strip():
-                    comp["ticker"] = ticker_field.strip()
-                competitors.append(comp)
+        for row_num, row in enumerate(csv_reader, start=2):
+            try:
+                # Skip empty rows
+                if not row.get('ticker', '').strip() or not row.get('company_name', '').strip():
+                    skipped += 1
+                    continue
+                
+                # Build ticker data from CSV row
+                ticker = row.get('ticker', '').strip()
+                
+                ticker_data = {
+                    'ticker': ticker,
+                    'country': row.get('country', '').strip().upper(),
+                    'company_name': row.get('company_name', '').strip(),
+                    'industry': row.get('industry', '').strip() or None,
+                    'sector': row.get('sector', '').strip() or None,
+                    'sub_industry': row.get('sub_industry', '').strip() or None,
+                    'exchange': row.get('exchange', '').strip() or None,
+                    'currency': row.get('currency', '').strip().upper() or None,
+                    'market_cap_category': row.get('market_cap_category', '').strip() or None,
+                    'yahoo_ticker': row.get('yahoo_ticker', '').strip() or ticker,
+                    'active': str(row.get('active', 'TRUE')).upper() in ('TRUE', '1', 'YES', 'Y'),
+                    'is_etf': str(row.get('is_etf', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
+                    'data_source': 'csv_import',
+                    'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y')
+                }
+                
+                # Handle 3 industry keyword fields
+                ticker_data['industry_keyword_1'] = row.get('industry_keyword_1', '').strip() or None
+                ticker_data['industry_keyword_2'] = row.get('industry_keyword_2', '').strip() or None
+                ticker_data['industry_keyword_3'] = row.get('industry_keyword_3', '').strip() or None
+                
+                # Handle 6 competitor fields
+                ticker_data['competitor_1_name'] = row.get('competitor_1_name', '').strip() or None
+                ticker_data['competitor_1_ticker'] = row.get('competitor_1_ticker', '').strip() or None
+                ticker_data['competitor_2_name'] = row.get('competitor_2_name', '').strip() or None
+                ticker_data['competitor_2_ticker'] = row.get('competitor_2_ticker', '').strip() or None
+                ticker_data['competitor_3_name'] = row.get('competitor_3_name', '').strip() or None
+                ticker_data['competitor_3_ticker'] = row.get('competitor_3_ticker', '').strip() or None
+                
+                # LEGACY SUPPORT: Handle old "competitors" field format
+                if (row.get('competitors', '').strip() and 
+                    not any(ticker_data.get(f'competitor_{i}_name') for i in range(1, 4))):
+                    legacy_competitors = row['competitors'].split(',')
+                    for i, comp in enumerate(legacy_competitors[:3], 1):
+                        comp = comp.strip()
+                        if comp:
+                            # Try to parse "Name (TICKER)" format
+                            match = re.search(r'^(.+?)\s*\(([^)]+)\)$', comp)
+                            if match:
+                                name = match.group(1).strip()
+                                ticker_comp = match.group(2).strip()
+                                # Validate competitor ticker format
+                                normalized_ticker = normalize_ticker_format(ticker_comp)
+                                if validate_ticker_format(normalized_ticker):
+                                    ticker_data[f'competitor_{i}_name'] = name
+                                    ticker_data[f'competitor_{i}_ticker'] = normalized_ticker
+                                else:
+                                    LOG.warning(f"Invalid competitor ticker format: {ticker_comp}")
+                                    ticker_data[f'competitor_{i}_name'] = name
+                            else:
+                                # Just a name without ticker
+                                ticker_data[f'competitor_{i}_name'] = comp
+                
+                # LEGACY SUPPORT: Handle old "industry_keywords" field
+                if (row.get('industry_keywords', '').strip() and 
+                    not any(ticker_data.get(f'industry_keyword_{i}') for i in range(1, 4))):
+                    legacy_keywords = [kw.strip() for kw in row['industry_keywords'].split(',') if kw.strip()]
+                    for i, keyword in enumerate(legacy_keywords[:3], 1):
+                        ticker_data[f'industry_keyword_{i}'] = keyword
+                
+                # Clean NULL bytes from text fields
+                text_fields = [
+                    'company_name', 'industry', 'sector', 'sub_industry', 'exchange',
+                    'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
+                    'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
+                    'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker'
+                ]
+                for field in text_fields:
+                    if ticker_data.get(field):
+                        ticker_data[field] = clean_null_bytes(str(ticker_data[field]))
+                
+                # Normalize competitor tickers
+                competitor_ticker_fields = ['competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker']
+                for field in competitor_ticker_fields:
+                    if ticker_data.get(field):
+                        ticker_data[field] = normalize_ticker_format(ticker_data[field])
+                        # Validate competitor ticker format
+                        if not validate_ticker_format(ticker_data[field]):
+                            LOG.warning(f"Invalid competitor ticker format: {ticker_data[field]}")
+                            ticker_data[field] = None  # Clear invalid ticker
+                
+                ticker_data_batch.append(ticker_data)
+                    
+            except Exception as e:
+                errors.append(f"Row {row_num}: {str(e)}")
+                continue
+        
+        # Bulk insert all valid data in single transaction
+        if ticker_data_batch:
+            try:
+                with db() as conn, conn.cursor() as cur:
+                   
+                    # Prepare data tuples for bulk insert (fresh start, so everything is imported)
+                    insert_data = []
+                    imported = len(ticker_data_batch)
+                    updated = 0
+                    
+                    for ticker_data in ticker_data_batch:
+
+                        insert_data.append((
+                            ticker_data['ticker'], ticker_data['country'], ticker_data['company_name'],
+                            ticker_data.get('industry'), ticker_data.get('sector'), ticker_data.get('sub_industry'),
+                            ticker_data.get('exchange'), ticker_data.get('currency'), ticker_data.get('market_cap_category'),
+                            ticker_data.get('yahoo_ticker'), ticker_data.get('active', True), ticker_data.get('is_etf', False),
+                            ticker_data.get('industry_keyword_1'), ticker_data.get('industry_keyword_2'), ticker_data.get('industry_keyword_3'),
+                            ticker_data.get('competitor_1_name'), ticker_data.get('competitor_1_ticker'),
+                            ticker_data.get('competitor_2_name'), ticker_data.get('competitor_2_ticker'),
+                            ticker_data.get('competitor_3_name'), ticker_data.get('competitor_3_ticker'),
+                            ticker_data.get('ai_generated', False), ticker_data.get('data_source', 'csv_import')
+                        ))
+                    
+                    # Single bulk INSERT with ON CONFLICT handling
+                    cur.executemany("""
+                        INSERT INTO ticker_reference (
+                            ticker, country, company_name, industry, sector, sub_industry,
+                            exchange, currency, market_cap_category, yahoo_ticker, active, is_etf,
+                            industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                            competitor_1_name, competitor_1_ticker,
+                            competitor_2_name, competitor_2_ticker,
+                            competitor_3_name, competitor_3_ticker,
+                            ai_generated, data_source
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (ticker) DO UPDATE SET
+                            country = EXCLUDED.country,
+                            company_name = EXCLUDED.company_name,
+                            industry = EXCLUDED.industry,
+                            sector = EXCLUDED.sector,
+                            sub_industry = EXCLUDED.sub_industry,
+                            exchange = EXCLUDED.exchange,
+                            currency = EXCLUDED.currency,
+                            market_cap_category = EXCLUDED.market_cap_category,
+                            yahoo_ticker = EXCLUDED.yahoo_ticker,
+                            active = EXCLUDED.active,
+                            is_etf = EXCLUDED.is_etf,
+                            industry_keyword_1 = EXCLUDED.industry_keyword_1,
+                            industry_keyword_2 = EXCLUDED.industry_keyword_2,
+                            industry_keyword_3 = EXCLUDED.industry_keyword_3,
+                            competitor_1_name = EXCLUDED.competitor_1_name,
+                            competitor_1_ticker = EXCLUDED.competitor_1_ticker,
+                            competitor_2_name = EXCLUDED.competitor_2_name,
+                            competitor_2_ticker = EXCLUDED.competitor_2_ticker,
+                            competitor_3_name = EXCLUDED.competitor_3_name,
+                            competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                            ai_generated = EXCLUDED.ai_generated,
+                            data_source = EXCLUDED.data_source,
+                            updated_at = NOW()
+                    """, insert_data)
+                    
+                    LOG.info(f"BULK INSERT COMPLETED: {len(insert_data)} records processed in single transaction")
+                    
+            except Exception as e:
+                LOG.error(f"Bulk insert failed: {e}")
+                return {
+                    "status": "error", 
+                    "message": f"Bulk insert failed: {str(e)}",
+                    "imported": 0,
+                    "updated": 0,
+                    "errors": [str(e)]
+                }
+        else:
+            LOG.warning("No valid ticker data found to import")
+        
+        LOG.info(f"CSV Import completed: {imported} imported, {updated} updated, {len(errors)} errors, {skipped} skipped")
         
         return {
-            "name": result["company_name"],
-            "company_name": result["company_name"],  # Some functions expect this field name
-            "industry_keywords": industry_keywords,
-            "competitors": competitors,
-            "sector": result.get("sector", ""),
-            "industry": result.get("industry", ""),
-            "sub_industry": result.get("sub_industry", "")
+            "status": "completed",
+            "imported": imported,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors[:10],
+            "total_errors": len(errors),
+            "message": f"Successfully processed {imported + updated} ticker references ({imported} new, {updated} updated)"
         }
-
-# 2. STORE TICKER REFERENCE - With 6 competitor fields
-def store_ticker_reference(ticker_data: dict) -> bool:
-    """Store or update ticker reference data with 3 industry keywords + 6 competitor fields"""
-    try:
-        # Validate required fields
-        required_fields = ['ticker', 'country', 'company_name']
-        for field in required_fields:
-            if not ticker_data.get(field):
-                LOG.warning(f"Missing required field '{field}' for ticker reference")
-                return False
         
-        # Normalize ticker format
-        ticker_data['ticker'] = normalize_ticker_format(ticker_data['ticker'])
-        
-        # Validate ticker format
-        if not validate_ticker_format(ticker_data['ticker']):
-            LOG.warning(f"Invalid ticker format: {ticker_data['ticker']}")
-            return False
-        
-        # Set yahoo_ticker if not provided
-        if not ticker_data.get('yahoo_ticker'):
-            ticker_data['yahoo_ticker'] = ticker_data['ticker']
-        
-        # Clean text fields to remove NULL bytes
-        text_fields = [
-            'company_name', 'industry', 'sector', 'sub_industry', 'exchange',
-            'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
-            'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
-            'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker'
-        ]
-        for field in text_fields:
-            if ticker_data.get(field):
-                ticker_data[field] = clean_null_bytes(str(ticker_data[field]))
-        
-        # Normalize competitor tickers
-        competitor_ticker_fields = ['competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker']
-        for field in competitor_ticker_fields:
-            if ticker_data.get(field):
-                ticker_data[field] = normalize_ticker_format(ticker_data[field])
-                # Validate competitor ticker format
-                if not validate_ticker_format(ticker_data[field]):
-                    LOG.warning(f"Invalid competitor ticker format: {ticker_data[field]}")
-                    ticker_data[field] = None  # Clear invalid ticker
-        
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO ticker_reference (
-                    ticker, country, company_name, industry, sector, sub_industry,
-                    exchange, currency, market_cap_category, yahoo_ticker, active, is_etf,
-                    industry_keyword_1, industry_keyword_2, industry_keyword_3,
-                    competitor_1_name, competitor_1_ticker,
-                    competitor_2_name, competitor_2_ticker,
-                    competitor_3_name, competitor_3_ticker,
-                    ai_generated, data_source
-                ) VALUES (
-                    %(ticker)s, %(country)s, %(company_name)s, %(industry)s, %(sector)s, %(sub_industry)s,
-                    %(exchange)s, %(currency)s, %(market_cap_category)s, %(yahoo_ticker)s, %(active)s, %(is_etf)s,
-                    %(industry_keyword_1)s, %(industry_keyword_2)s, %(industry_keyword_3)s,
-                    %(competitor_1_name)s, %(competitor_1_ticker)s,
-                    %(competitor_2_name)s, %(competitor_2_ticker)s,
-                    %(competitor_3_name)s, %(competitor_3_ticker)s,
-                    %(ai_generated)s, %(data_source)s
-                )
-                ON CONFLICT (ticker) DO UPDATE SET
-                    country = EXCLUDED.country,
-                    company_name = EXCLUDED.company_name,
-                    industry = EXCLUDED.industry,
-                    sector = EXCLUDED.sector,
-                    sub_industry = EXCLUDED.sub_industry,
-                    exchange = EXCLUDED.exchange,
-                    currency = EXCLUDED.currency,
-                    market_cap_category = EXCLUDED.market_cap_category,
-                    yahoo_ticker = EXCLUDED.yahoo_ticker,
-                    active = EXCLUDED.active,
-                    is_etf = EXCLUDED.is_etf,
-                    industry_keyword_1 = EXCLUDED.industry_keyword_1,
-                    industry_keyword_2 = EXCLUDED.industry_keyword_2,
-                    industry_keyword_3 = EXCLUDED.industry_keyword_3,
-                    competitor_1_name = EXCLUDED.competitor_1_name,
-                    competitor_1_ticker = EXCLUDED.competitor_1_ticker,
-                    competitor_2_name = EXCLUDED.competitor_2_name,
-                    competitor_2_ticker = EXCLUDED.competitor_2_ticker,
-                    competitor_3_name = EXCLUDED.competitor_3_name,
-                    competitor_3_ticker = EXCLUDED.competitor_3_ticker,
-                    ai_generated = EXCLUDED.ai_generated,
-                    data_source = EXCLUDED.data_source,
-                    updated_at = NOW()
-            """, {
-                'ticker': ticker_data['ticker'],
-                'country': ticker_data['country'],
-                'company_name': ticker_data['company_name'],
-                'industry': ticker_data.get('industry'),
-                'sector': ticker_data.get('sector'),
-                'sub_industry': ticker_data.get('sub_industry'),
-                'exchange': ticker_data.get('exchange'),
-                'currency': ticker_data.get('currency'),
-                'market_cap_category': ticker_data.get('market_cap_category'),
-                'yahoo_ticker': ticker_data.get('yahoo_ticker', ticker_data['ticker']),
-                'active': ticker_data.get('active', True),
-                'is_etf': ticker_data.get('is_etf', False),
-                'industry_keyword_1': ticker_data.get('industry_keyword_1'),
-                'industry_keyword_2': ticker_data.get('industry_keyword_2'),
-                'industry_keyword_3': ticker_data.get('industry_keyword_3'),
-                'competitor_1_name': ticker_data.get('competitor_1_name'),
-                'competitor_1_ticker': ticker_data.get('competitor_1_ticker'),
-                'competitor_2_name': ticker_data.get('competitor_2_name'),
-                'competitor_2_ticker': ticker_data.get('competitor_2_ticker'),
-                'competitor_3_name': ticker_data.get('competitor_3_name'),
-                'competitor_3_ticker': ticker_data.get('competitor_3_ticker'),
-                'ai_generated': ticker_data.get('ai_generated', False),
-                'data_source': ticker_data.get('data_source', 'api')
-            })
-            
-            LOG.info(f"Successfully stored ticker reference: {ticker_data['ticker']} - {ticker_data['company_name']}")
-            return True
-            
     except Exception as e:
-        LOG.error(f"Failed to store ticker reference for {ticker_data.get('ticker')}: {e}")
-        return False
+        LOG.error(f"CSV parsing failed: {e}")
+        return {
+            "status": "error", 
+            "message": f"CSV parsing failed: {str(e)}",
+            "imported": 0,
+            "updated": 0,
+            "errors": [str(e)]
+        }
 
 # 3. CSV IMPORT - With 6 competitor fields support
 def import_ticker_reference_from_csv_content(csv_content: str):

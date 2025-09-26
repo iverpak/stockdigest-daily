@@ -1381,7 +1381,7 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     'currency': row.get('currency', '').strip().upper() or None,
                     'market_cap_category': row.get('market_cap_category', '').strip() or None,
                     'yahoo_ticker': row.get('yahoo_ticker', '').strip() or ticker,
-                    'active': str(row.get('active', 'TRUE')).upper() in ('TRUE', '1', 'YES', 'Y'),
+                    'active': str(row.get('active', 'true')).lower() in ('true', '1', 'yes', 'y', 't'),
                     'is_etf': str(row.get('is_etf', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
                     'data_source': 'csv_import',
                     'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y')
@@ -1722,7 +1722,6 @@ def export_ticker_references_to_csv():
                        competitor_3_name, competitor_3_ticker,
                        created_at, updated_at, data_source
                 FROM ticker_reference
-                WHERE active = true
                 ORDER BY ticker
             """)
             

@@ -6768,7 +6768,6 @@ def get_ticker_reference(ticker: str) -> Optional[Dict]:
         """, (ticker,))
         return cur.fetchone()
 
-
 def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
     """Update reference table with AI-generated enhancements"""
     try:
@@ -6778,16 +6777,23 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
         keyword_2 = keywords[1] if len(keywords) > 1 else None
         keyword_3 = keywords[2] if len(keywords) > 2 else None
         
-        # Convert competitors to separate fields
+        # Convert competitors to separate fields - Initialize all fields
         competitors = metadata.get("competitors", [])
-        comp_data = {}
+        comp_data = {
+            'competitor_1_name': None, 'competitor_1_ticker': None,
+            'competitor_2_name': None, 'competitor_2_ticker': None,
+            'competitor_3_name': None, 'competitor_3_ticker': None
+        }
+        
         for i, comp in enumerate(competitors[:3], 1):
             if isinstance(comp, dict):
                 comp_data[f'competitor_{i}_name'] = comp.get('name')
                 comp_data[f'competitor_{i}_ticker'] = comp.get('ticker')
             else:
                 # Handle old string format if needed
-                comp_data[f'competitor_{i}_name'] = str(comp)
+                comp_data[f'competitor_{i}_name'] = str(comp) if comp else None
+        
+        LOG.info(f"DEBUG: Updating {ticker} with keywords={[keyword_1, keyword_2, keyword_3]} and competitors={comp_data}")
         
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
@@ -6807,12 +6813,12 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                 WHERE ticker = %s
             """, (
                 keyword_1, keyword_2, keyword_3,
-                comp_data.get('competitor_1_name'),
-                comp_data.get('competitor_1_ticker'),
-                comp_data.get('competitor_2_name'),
-                comp_data.get('competitor_2_ticker'),
-                comp_data.get('competitor_3_name'),
-                comp_data.get('competitor_3_ticker'),
+                comp_data['competitor_1_name'],
+                comp_data['competitor_1_ticker'],
+                comp_data['competitor_2_name'],
+                comp_data['competitor_2_ticker'],
+                comp_data['competitor_3_name'],
+                comp_data['competitor_3_ticker'],
                 normalize_ticker_format(ticker)
             ))
             

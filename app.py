@@ -1708,6 +1708,7 @@ def fetch_csv_from_github():
 
 # 2. EXPORT SQL TO CSV FORMAT - Generate CSV from current database
 def export_ticker_references_to_csv():
+    LOG.info("🚨 EXPORT FUNCTION CALLED - UPDATED VERSION WITH DEBUG 🚨")
     """Export all ticker references from database to CSV format with new structure"""
     try:
         with db() as conn, conn.cursor() as cur:

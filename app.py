@@ -1858,7 +1858,7 @@ def commit_csv_to_github(csv_content: str, commit_message: str = None):
         # Prepare commit data
         if not commit_message:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-            commit_message = f"[skip ci] Update ticker reference data - {timestamp}"
+            commit_message = f"[skip render] Update ticker reference data - {timestamp}"
         
         # Encode content to base64
         encoded_content = base64.b64encode(csv_content.encode('utf-8')).decode('utf-8')
@@ -1952,11 +1952,11 @@ def sync_ticker_references_to_github(commit_message: str = None):
     if export_result["status"] != "success":
         return export_result
     
-    # Step 2: Add [skip ci] to commit message if none provided
+    # Step 2: Add [skip render] to commit message if none provided
     if not commit_message:
-        commit_message = f"[skip ci] Update ticker reference data - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}"
-    elif not commit_message.startswith("[skip ci]"):
-        commit_message = f"[skip ci] {commit_message}"
+        commit_message = f"[skip render] Update ticker reference data - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+    elif not commit_message.startswith("[skip render]"):
+        commit_message = f"[skip render] {commit_message}"
     
     # Step 3: Commit CSV to GitHub
     commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
@@ -2028,7 +2028,7 @@ def update_specific_tickers_on_github(tickers: list, commit_message: str = None)
             
             # Step 5: Commit back to GitHub
             if not commit_message:
-                commit_message = f"[skip ci] Update ticker data for: {', '.join(tickers)}"
+                commit_message = f"[skip render] Update ticker data for: {', '.join(tickers)}"
             
             commit_result = commit_csv_to_github(updated_csv_content, commit_message)
             commit_result["updated_tickers"] = updated_count
@@ -8072,7 +8072,7 @@ def admin_init(request: Request, body: InitRequest):
             LOG.info(f"Successfully exported {export_result.get('ticker_count', 0)} tickers to CSV")
             
             # Commit the enhanced CSV back to GitHub
-            commit_message = f"[skip ci] AI enhancement update: {len(body.tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            commit_message = f"[skip render] AI enhancement update: {len(body.tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
             commit_result = commit_csv_to_github(
                 export_result["csv_content"],
@@ -9499,7 +9499,7 @@ def sync_processed_tickers_to_github(request: Request, body: UpdateTickersReques
             }
         
         # Sync only the enhanced tickers back to GitHub
-        commit_message = body.commit_message or f"[skip ci] AI enhancement update: {len(successfully_enhanced_tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"        
+        commit_message = body.commit_message or f"[skip render] AI enhancement update: {len(successfully_enhanced_tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"        
         github_result = update_specific_tickers_on_github(successfully_enhanced_tickers, commit_message)
         
         return {

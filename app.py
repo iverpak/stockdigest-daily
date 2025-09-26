@@ -56,6 +56,8 @@ from memory_monitor import (
     resource_cleanup_context,
     full_resource_cleanup
 )
+# Add this test line:
+LOG.info("MEMORY MONITOR IMPORTED SUCCESSFULLY")
 
 # Global session for OpenAI API calls with retries
 _openai_session = None
@@ -8069,13 +8071,16 @@ async def cron_ingest(
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """Enhanced ingest with comprehensive memory monitoring"""
+    LOG.info("FUNCTION STARTED - BEFORE LOCK")
     async with TICKER_PROCESSING_LOCK:
+        LOG.info("LOCK ACQUIRED - TESTING MEMORY MONITOR")
         start_time = time.time()
         require_admin(request)
         ensure_schema()
         
         # START MEMORY MONITORING
         memory_monitor.start_monitoring()
+        LOG.info("MEMORY MONITOR START: SUCCESS")
         memory_monitor.take_snapshot("CRON_INGEST_START")
         
         LOG.info("=== CRON INGEST STARTING (ENHANCED WITH MEMORY MONITORING) ===")

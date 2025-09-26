@@ -42,12 +42,20 @@ from collections import defaultdict
 from playwright.sync_api import sync_playwright
 import asyncio
 
-import gc
 import os
-import psutil
 import tracemalloc
 from functools import wraps
 import threading
+
+import gc
+import psutil
+import tracemalloc
+from memory_monitor import (
+    memory_monitor,
+    monitor_phase,
+    resource_cleanup_context,
+    full_resource_cleanup
+)
 
 from memory_monitor import (
     memory_monitor,
@@ -9586,39 +9594,25 @@ def sync_processed_tickers_to_github(request: Request, body: UpdateTickersReques
             "tickers": body.tickers
         }
 
-@app.get("/admin/memory-status")
-async def get_memory_status():
-    """Get current memory and resource usage"""
-    from memory_monitor import memory_monitor, _RESOURCE_TRACKER
-    import gc
-    
-    info = memory_monitor.get_memory_info()
-    info["resource_tracker"] = _RESOURCE_TRACKER.copy()
-    info["gc_stats"] = {
-        "objects": len(gc.get_objects()),
-        "generations": gc.get_stats()
-    }
-    return info
+@APP.get("/admin/memory")
+async def get_memory_info():
+    """Get current memory usage"""
+    return memory_monitor.get_memory_info()
 
-@app.get("/admin/memory-snapshots")
+@APP.get("/admin/memory-snapshots")
 async def get_memory_snapshots():
-    """Get all memory snapshots taken during processing"""
-    from memory_monitor import memory_monitor
-    
+    """Get all memory snapshots"""
     return {
         "snapshots": memory_monitor.snapshots,
-        "tracemalloc_top": memory_monitor.get_tracemalloc_top(),
-        "total_snapshots": len(memory_monitor.snapshots)
+        "tracemalloc_top": memory_monitor.get_tracemalloc_top() if memory_monitor.tracemalloc_started else []
     }
 
-@app.post("/admin/force-cleanup")
+@APP.post("/admin/force-cleanup")
 async def force_cleanup():
-    """Force comprehensive resource cleanup"""
-    from memory_monitor import full_resource_cleanup
-    
-    cleanup_result = await full_resource_cleanup()
+    """Force garbage collection"""
+    cleanup_result = memory_monitor.force_garbage_collection()
     return {
-        "status": "success",
+        "status": "success", 
         "cleanup_result": cleanup_result
     }
 

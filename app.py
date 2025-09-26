@@ -8066,7 +8066,7 @@ def admin_init(request: Request, body: InitRequest):
     }
  
 @APP.post("/cron/ingest")
-def cron_ingest(
+async def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
@@ -8374,7 +8374,7 @@ def cron_ingest(
         
         try:
             # Force comprehensive cleanup
-            cleanup_result = await full_resource_cleanup()
+            cleanup_result = full_resource_cleanup()
             memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
             LOG.info(f"Final cleanup completed: {cleanup_result}")
         except Exception as cleanup_error:

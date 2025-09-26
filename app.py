@@ -3169,7 +3169,7 @@ def reset_enhanced_scraping_stats():
         "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
     }
 
-def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dict, analysis_ticker: str) -> bool:
+async def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dict, analysis_ticker: str) -> bool:
     """Scrape content and run AI analysis for a single article from specific ticker's perspective"""
     try:
         article_id = article["id"]
@@ -3213,7 +3213,7 @@ def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dic
             scrape_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
             
             if scrape_domain not in PAYWALL_DOMAINS and scrape_domain not in PROBLEMATIC_SCRAPE_DOMAINS:
-                content, status = safe_content_scraper_with_3tier_fallback(
+                content, status = await safe_content_scraper_with_3tier_fallback(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
                 
@@ -8362,10 +8362,8 @@ async def cron_ingest(
             memory_monitor.take_snapshot("BEFORE_FINAL_CLEANUP")
             
             try:
-                # Force comprehensive cleanup
-                cleanup_result = full_resource_cleanup()
+                await full_resource_cleanup()  # Single call with await
                 memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
-                await full_resource_cleanup()
                 LOG.info("=== PERFORMING FINAL CLEANUP ===")
             except Exception as cleanup_error:
                 LOG.error(f"Error during final cleanup: {cleanup_error}")

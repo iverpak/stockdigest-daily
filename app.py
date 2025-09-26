@@ -1944,99 +1944,45 @@ def sync_ticker_references_from_github():
     }
 
 def sync_ticker_references_to_github(commit_message: str = None):
-    """Complete workflow: Export database to CSV and push to GitHub"""
-    LOG.info("=== Starting full sync to GitHub ===")
+    """Export database to CSV format (no GitHub commit)"""
+    LOG.info("=== Exporting ticker references to CSV format ===")
     
-    # Step 1: Export database to CSV
+    # Export database to CSV
     export_result = export_ticker_references_to_csv()
-    if export_result["status"] != "success":
-        return export_result
     
-    # Step 2: Add [skip render] to commit message if none provided
-    if not commit_message:
-        commit_message = f"[skip render] Update ticker reference data - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}"
-    elif not commit_message.startswith("[skip render]"):
-        commit_message = f"[skip render] {commit_message}"
-    
-    # Step 3: Commit CSV to GitHub
-    commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
-    
-    # Combine results
     return {
-        "status": commit_result["status"],
+        "status": export_result["status"],
         "database_export": {
-            "ticker_count": export_result["ticker_count"],
-            "csv_size": len(export_result["csv_content"])
+            "ticker_count": export_result.get("ticker_count", 0),
+            "csv_size": len(export_result.get("csv_content", ""))
         },
-        "github_commit": {
-            "commit_sha": commit_result.get("commit_sha", "")[:8] if commit_result.get("commit_sha") else "",
-            "commit_url": commit_result.get("commit_url", "")
-        } if commit_result["status"] == "success" else {"error": commit_result.get("message", "")},
-        "message": commit_result.get("message", "Unknown error")
+        "message": f"Exported {export_result.get('ticker_count', 0)} ticker references to CSV format"
     }
 
 # 5. SELECTIVE TICKER UPDATE - Update specific tickers only
 def update_specific_tickers_on_github(tickers: list, commit_message: str = None):
-    """Update only specific tickers in the GitHub CSV (advanced operation)"""
+    """Update specific tickers in CSV format (no GitHub commit)"""
     if not tickers:
         return {"status": "error", "message": "No tickers specified"}
     
-    LOG.info(f"=== Updating specific tickers on GitHub: {tickers} ===")
+    LOG.info(f"=== Updating specific tickers in CSV format: {tickers} ===")
     
-    # Step 1: Fetch current CSV from GitHub
-    fetch_result = fetch_csv_from_github()
-    if fetch_result["status"] != "success":
-        return fetch_result
-    
-    # Step 2: Parse current CSV
     try:
-        current_csv = io.StringIO(fetch_result["csv_content"])
-        reader = csv.DictReader(current_csv)
-        rows = list(reader)
-        current_csv.close()
+        # Get current CSV from database export
+        export_result = export_ticker_references_to_csv()
+        if export_result["status"] != "success":
+            return export_result
         
-        # Step 3: Update specified tickers with database data
-        updated_count = 0
-        for ticker in tickers:
-            ticker_data = get_ticker_reference(ticker)
-            if ticker_data:
-                # Find and update the row
-                for i, row in enumerate(rows):
-                    if normalize_ticker_format(row['ticker']) == normalize_ticker_format(ticker):
-                        # Update row with database data
-                        for key, value in ticker_data.items():
-                            if key in row:
-                                if isinstance(value, list):
-                                    row[key] = ','.join(str(v) for v in value if v)
-                                elif isinstance(value, bool):
-                                    row[key] = 'TRUE' if value else 'FALSE'
-                                elif value is not None:
-                                    row[key] = str(value)
-                                else:
-                                    row[key] = ''
-                        updated_count += 1
-                        break
+        # Parse and validate the updated data
+        updated_csv_content = export_result["csv_content"]
         
-        # Step 4: Regenerate CSV
-        csv_buffer = io.StringIO()
-        if rows:
-            writer = csv.DictWriter(csv_buffer, fieldnames=reader.fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-            updated_csv_content = csv_buffer.getvalue()
-            csv_buffer.close()
-            
-            # Step 5: Commit back to GitHub
-            if not commit_message:
-                commit_message = f"[skip render] Update ticker data for: {', '.join(tickers)}"
-            
-            commit_result = commit_csv_to_github(updated_csv_content, commit_message)
-            commit_result["updated_tickers"] = updated_count
-            
-            return commit_result
-        else:
-            return {"status": "error", "message": "No data to update"}
-            
+        return {
+            "status": "success", 
+            "updated_tickers": len(tickers),
+            "csv_content": updated_csv_content,
+            "message": f"Updated {len(tickers)} tickers in CSV format"
+        }
+        
     except Exception as e:
         LOG.error(f"Failed to update specific tickers: {e}")
         return {"status": "error", "message": f"Update failed: {str(e)}"}
@@ -7988,7 +7934,7 @@ def root():
 
 @APP.post("/admin/init")
 def admin_init(request: Request, body: InitRequest):
-    """Initialize feeds for specified tickers with CSV export cycle"""
+    """Initialize feeds for specified tickers with CSV preparation (no GitHub commit)"""
     require_admin(request)
     ensure_schema()
     
@@ -8060,37 +8006,23 @@ def admin_init(request: Request, body: InitRequest):
     
     LOG.info("=== INITIALIZATION COMPLETE ===")
     
-    # STEP 3: Export enhanced data back to CSV/GitHub
-    LOG.info("=== COMMITTING ENHANCED DATA BACK TO CSV ===")
+    # STEP 3: Prepare enhanced data for export (no GitHub commit)
+    LOG.info("=== PREPARING ENHANCED DATA FOR EXPORT ===")
     csv_export_status = "not_attempted"
     
     try:
-        # Export current database state to CSV
+        # Export current database state to CSV format
         export_result = export_ticker_references_to_csv()
         
         if export_result["status"] == "success":
-            LOG.info(f"Successfully exported {export_result.get('ticker_count', 0)} tickers to CSV")
-            
-            # Commit the enhanced CSV back to GitHub
-            commit_message = f"[skip render] AI enhancement update: {len(body.tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            
-            commit_result = commit_csv_to_github(
-                export_result["csv_content"],
-                commit_message
-            )
-            
-            if commit_result["status"] == "success":
-                LOG.info("Successfully committed enhanced data back to GitHub CSV")
-                csv_export_status = "success"
-            else:
-                LOG.warning(f"Failed to commit to GitHub: {commit_result.get('message', 'Unknown error')}")
-                csv_export_status = "commit_failed"
+            LOG.info(f"Successfully prepared {export_result.get('ticker_count', 0)} tickers for export")
+            csv_export_status = "success"
         else:
-            LOG.warning(f"Failed to export CSV: {export_result.get('message', 'Unknown error')}")
+            LOG.warning(f"Failed to prepare CSV: {export_result.get('message', 'Unknown error')}")
             csv_export_status = "export_failed"
             
     except Exception as e:
-        LOG.error(f"CSV export/commit failed: {e}")
+        LOG.error(f"CSV preparation failed: {e}")
         csv_export_status = "error"
     
     # STEP 4: Return results
@@ -8106,7 +8038,7 @@ def admin_init(request: Request, body: InitRequest):
             "total_feeds_created": total_feeds_created,
             "tickers_at_limit": [r["ticker"] for r in results if "message" in r]
         },
-        "message": f"Generated {total_feeds_created} new feeds and committed enhanced metadata to CSV"
+        "message": f"Generated {total_feeds_created} new feeds and prepared enhanced metadata for export"
     }
  
 @APP.post("/cron/ingest")
@@ -9467,13 +9399,13 @@ def finalize_ticker_processing(request: Request, body: UpdateTickersRequest):
 
 @APP.post("/admin/sync-processed-tickers-to-github")
 def sync_processed_tickers_to_github(request: Request, body: UpdateTickersRequest):
-    """Final step: Sync all processed ticker enhancements back to GitHub"""
+    """Prepare processed ticker data for sync (no GitHub commit)"""
     require_admin(request)
     
     if not body.tickers:
         return {"status": "error", "message": "No tickers specified"}
     
-    LOG.info(f"=== SYNCING {len(body.tickers)} PROCESSED TICKERS TO GITHUB ===")
+    LOG.info(f"=== PREPARING {len(body.tickers)} PROCESSED TICKERS FOR SYNC ===")
     
     try:
         # Get current successfully processed tickers that have AI enhancements
@@ -9494,27 +9426,26 @@ def sync_processed_tickers_to_github(request: Request, body: UpdateTickersReques
         if not successfully_enhanced_tickers:
             return {
                 "status": "no_changes", 
-                "message": "No tickers found with AI enhancements to sync",
+                "message": "No tickers found with AI enhancements",
                 "requested_tickers": body.tickers
             }
         
-        # Sync only the enhanced tickers back to GitHub
-        commit_message = body.commit_message or f"[skip render] AI enhancement update: {len(successfully_enhanced_tickers)} tickers processed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"        
-        github_result = update_specific_tickers_on_github(successfully_enhanced_tickers, commit_message)
+        # Export the enhanced data to CSV format
+        export_result = export_ticker_references_to_csv()
         
         return {
-            "status": github_result["status"],
+            "status": "ready_for_sync",
             "requested_tickers": body.tickers,
             "enhanced_tickers": successfully_enhanced_tickers,
-            "github_sync": github_result,
-            "message": f"Synced {len(successfully_enhanced_tickers)} enhanced tickers to GitHub"
+            "csv_content": export_result.get("csv_content", ""),
+            "message": f"Prepared {len(successfully_enhanced_tickers)} enhanced tickers for sync"
         }
         
     except Exception as e:
-        LOG.error(f"Failed to sync processed tickers to GitHub: {e}")
+        LOG.error(f"Failed to prepare processed tickers: {e}")
         return {
             "status": "error",
-            "message": f"GitHub sync failed: {str(e)}",
+            "message": f"Preparation failed: {str(e)}",
             "tickers": body.tickers
         }
 

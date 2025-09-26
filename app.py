@@ -8315,7 +8315,7 @@ async def cron_ingest(
                             
                             # CRITICAL: Analyze from target_ticker's perspective with resource tracking
                             with resource_cleanup_context("article_scraping"):
-                                success = scrape_and_analyze_article_3tier(article, category, metadata, target_ticker)
+                                success = await scrape_and_analyze_article_3tier(article, category, metadata, target_ticker)
                             
                             if success:
                                 ticker_success_count += 1

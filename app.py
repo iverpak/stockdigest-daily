@@ -1770,7 +1770,8 @@ def export_ticker_references_to_csv():
                     if i < 3:
                         LOG.info(f"DEBUG: Processing row {i}: ticker={row.get('ticker', 'NO_TICKER')}")
                     
-                    for j, value in enumerate(row):
+                    for header in headers:
+                        value = row[header]
                         if value is None:
                             csv_row.append('')
                         elif isinstance(value, bool):

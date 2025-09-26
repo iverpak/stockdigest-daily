@@ -1722,7 +1722,7 @@ def export_ticker_references_to_csv():
                        competitor_3_name, competitor_3_ticker,
                        created_at, updated_at, data_source
                 FROM ticker_reference
-                WHERE active = TRUE
+                WHERE active = true
                 ORDER BY ticker
             """)
             

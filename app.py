@@ -8058,7 +8058,6 @@ def admin_init(request: Request, body: InitRequest):
     }
  
 @APP.post("/cron/ingest")
-@APP.post("/cron/ingest")
 def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),

@@ -7978,11 +7978,21 @@ def admin_init(request: Request, body: InitRequest):
         LOG.info(f"=== INITIALIZING TICKER: {ticker} ===")
         
         try:
-        # Get or generate metadata with enhanced ticker reference integration
-        metadata = get_or_create_enhanced_ticker_metadata(ticker)
-        
-        # Build feed URLs for all categories using enhanced feed creation
-        feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
+            # Get or generate metadata with enhanced ticker reference integration
+            metadata = get_or_create_enhanced_ticker_metadata(ticker)
+            
+            # Build feed URLs for all categories using enhanced feed creation
+            feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
+            
+            if not feeds:
+                LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")
+                results.append({
+                    "ticker": ticker,
+                    "message": "No new feeds created - already at limits",
+                    "feeds_created": 0
+                })
+                continue
+            
             ticker_feed_count = 0
             
             for feed_config in feeds:
@@ -7991,7 +8001,9 @@ def admin_init(request: Request, body: InitRequest):
                     name=feed_config["name"],
                     ticker=ticker,
                     category=feed_config.get("category", "company"),
-                    retain_days=DEFAULT_RETAIN_DAYS
+                    retain_days=DEFAULT_RETAIN_DAYS,
+                    search_keyword=feed_config.get("search_keyword"),
+                    competitor_ticker=feed_config.get("competitor_ticker")
                 )
                 results.append({
                     "ticker": ticker,
@@ -8018,6 +8030,7 @@ def admin_init(request: Request, body: InitRequest):
     
     # STEP 3: Export enhanced data back to CSV/GitHub
     LOG.info("=== COMMITTING ENHANCED DATA BACK TO CSV ===")
+    csv_export_status = "not_attempted"
     
     try:
         # Export current database state to CSV
@@ -8036,14 +8049,17 @@ def admin_init(request: Request, body: InitRequest):
             
             if commit_result["status"] == "success":
                 LOG.info("Successfully committed enhanced data back to GitHub CSV")
+                csv_export_status = "success"
             else:
                 LOG.warning(f"Failed to commit to GitHub: {commit_result.get('message', 'Unknown error')}")
+                csv_export_status = "commit_failed"
         else:
             LOG.warning(f"Failed to export CSV: {export_result.get('message', 'Unknown error')}")
+            csv_export_status = "export_failed"
             
     except Exception as e:
         LOG.error(f"CSV export/commit failed: {e}")
-        # Don't fail the entire initialization if CSV export fails
+        csv_export_status = "error"
     
     # STEP 4: Return results
     total_feeds_created = len([r for r in results if "feed" in r])
@@ -8052,11 +8068,8 @@ def admin_init(request: Request, body: InitRequest):
         "status": "initialized",
         "tickers": body.tickers,
         "github_sync": github_sync_result,
+        "csv_export_status": csv_export_status,
         "feeds": [r for r in results if "feed" in r],
-        "csv_export": {
-            "attempted": True,
-            "message": "Enhanced data exported back to GitHub CSV"
-        },
         "summary": {
             "total_feeds_created": total_feeds_created,
             "tickers_at_limit": [r["ticker"] for r in results if "message" in r]

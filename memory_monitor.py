@@ -264,21 +264,22 @@ def monitor_phase(phase_name: str):
 # =============================================================================
 
 async def cleanup_async_tasks():
-    """Clean up any pending async tasks"""
-    tasks = [task for task in asyncio.all_tasks() if not task.done()]
-    if tasks:
-        logging.warning(f"CLEANUP: Found {len(tasks)} pending async tasks")
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        
-        # Wait for cancellation
-        try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception as e:
-            logging.error(f"Error cleaning up async tasks: {e}")
+    """Safe cleanup - avoid cancelling server/system tasks"""
+    # DO NOT use asyncio.all_tasks() - it includes uvicorn/server tasks
+    # which causes recursive cancellation errors
     
-    return len(tasks)
+    logging.info("CLEANUP: Skipping async task cleanup to prevent recursion")
+    
+    # If you need to track specific tasks, maintain your own task list:
+    # tracked_tasks = getattr(cleanup_async_tasks, '_my_tasks', [])
+    # cancelled = 0
+    # for task in tracked_tasks:
+    #     if not task.done():
+    #         task.cancel()
+    #         cancelled += 1
+    # return cancelled
+    
+    return 0
 
 def cleanup_database_connections():
     """Clean up database connections - customize for your DB library"""
@@ -302,23 +303,31 @@ def cleanup_playwright_resources():
     pass
 
 async def full_resource_cleanup():
-    """Perform comprehensive resource cleanup"""
-    logging.info("Starting full resource cleanup...")
+    """Perform safe resource cleanup without dangerous task cancellation"""
+    logging.info("Starting safe resource cleanup...")
     
-    # Clean up async tasks
-    cancelled_tasks = await cleanup_async_tasks()
+    # SKIP the dangerous async task cleanup that causes recursion
+    cancelled_tasks = 0  # Don't call cleanup_async_tasks()
     
-    # Clean up database connections
-    cleanup_database_connections()
+    # Safe cleanup operations only
+    try:
+        cleanup_database_connections()
+    except Exception as e:
+        logging.error(f"Database cleanup error: {e}")
     
-    # Clean up Playwright
-    cleanup_playwright_resources()
+    try:
+        cleanup_playwright_resources()
+    except Exception as e:
+        logging.error(f"Playwright cleanup error: {e}")
     
-    # Force garbage collection
-    gc_stats = memory_monitor.force_garbage_collection()
+    # Force garbage collection (this is always safe)
+    try:
+        gc_stats = memory_monitor.force_garbage_collection()
+    except Exception as e:
+        logging.error(f"Garbage collection error: {e}")
+        gc_stats = {"objects_freed": 0}
     
-    # Log final resource state
-    logging.info(f"CLEANUP COMPLETE: Cancelled {cancelled_tasks} tasks, freed {gc_stats['objects_freed']} objects")
+    logging.info(f"SAFE CLEANUP COMPLETE: freed {gc_stats.get('objects_freed', 0)} objects")
     logging.info(f"FINAL RESOURCE STATE: {_RESOURCE_TRACKER}")
     
     return {

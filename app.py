@@ -56,8 +56,6 @@ from memory_monitor import (
     resource_cleanup_context,
     full_resource_cleanup
 )
-# Add this test line:
-LOG.info("MEMORY MONITOR IMPORTED SUCCESSFULLY")
 
 # Global session for OpenAI API calls with retries
 _openai_session = None

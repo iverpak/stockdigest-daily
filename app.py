@@ -3004,7 +3004,7 @@ async def safe_content_scraper_with_3tier_fallback(url: str, domain: str, catego
     global enhanced_scraping_stats
     
     # Check limits first
-    if not check_scraping_limit(category, keyword):  # Fixed: removed asterisks
+    if not _check_scraping_limit(category, keyword):  # Fixed: removed asterisks
         if category == "company":
             return None, f"Company limit reached ({scraping_stats['company_scraped']}/{scraping_stats['limits']['company']})"
         elif category == "industry":

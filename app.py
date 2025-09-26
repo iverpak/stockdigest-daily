@@ -9408,7 +9408,7 @@ def enhance_ticker_with_ai_endpoint(request: Request, ticker: str = Body(..., em
             }
         
         # Generate enhanced metadata
-        enhanced_metadata = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=True)
+        enhanced_metadata = get_or_create_enhanced_ticker_metadata(ticker)
         
         return {
             "status": "success",

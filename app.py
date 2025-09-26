@@ -6650,184 +6650,107 @@ Required JSON format:
         return None
 
 def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
-    """Get ticker metadata with reference table lookup first, then AI enhancement and persistence.
-
-    Behavior:
-      - If a config row exists:
-          * If force_refresh=True → generate AI and UPDATE existing row.
-          * Else → enhance only if keywords/competitors are missing/blank, then UPDATE.
-      - If no config row exists:
-          * If AI is available → generate AI and INSERT a new row.
-          * Else → return a minimal stub.
-    """
-
-    # --- Helpers ------------------------------------------------------------
-    def _clean_keywords(kws: List[str]) -> List[str]:
-        if not kws:
-            return []
-        # Trim, drop blanks, dedupe preserving order, limit 3
-        seen = set()
-        out = []
-        for k in kws:
-            if not isinstance(k, str):
-                continue
-            k2 = k.strip()
-            if not k2 or k2 in seen:
-                continue
-            seen.add(k2)
-            out.append(k2)
-            if len(out) >= 3:
-                break
-        return out
-
-    def _clean_competitors(comps: List[Dict]) -> List[Dict]:
-        if not comps:
-            return []
-        out = []
-        for c in comps:
-            if not isinstance(c, dict):
-                continue
-            name = (c.get("name") or "").strip()
-            tick = (c.get("ticker") or "").strip()
-            # Keep if at least one of name/ticker present
-            if name or tick:
-                out.append({"name": name or None, "ticker": tick or None})
-            if len(out) >= 3:
-                break
-        return out
-
-    def _needs_enhancement(meta: Dict) -> bool:
-        # After cleaning, enhancement is needed if either list is empty
-        return (len(meta.get("industry_keywords") or []) == 0 or
-                len(meta.get("competitors") or []) == 0)
-
-    # --- Normalize & fetch --------------------------------------------------
+    """Get ticker metadata with reference table lookup first, then AI enhancement"""
+    
+    # Normalize ticker format for consistent lookup
     normalized_ticker = normalize_ticker_format(ticker)
+    
+    # Step 1: Use the new get_ticker_config wrapper for consistent data access
     config = get_ticker_config(normalized_ticker)
-    LOG.info(f"DEBUG get_or_create_enhanced_ticker_metadata: "
-             f"ticker={ticker} normalized={normalized_ticker} "
-             f"config_exists={bool(config)} force_refresh={force_refresh}")
-
-    # Compose base metadata (from config if present)
+    LOG.info(f"DEBUG: config returned: {config}")
+    LOG.info(f"DEBUG: config bool check: {bool(config)}")
+    LOG.info(f"DEBUG: force_refresh: {force_refresh}")
+    
+    # === MINIMAL CHANGE: handle both force_refresh and normal path inside the config branch ===
     if config:
-        company_name = config.get("company_name") or ticker
+        LOG.info("DEBUG: Entering enhancement path")
+        LOG.info(f"DEBUG: config exists: {bool(config)}, force_refresh: {force_refresh}")
+        LOG.info(f"DEBUG: config content: {config}")
+        LOG.info(f"Found ticker reference data for {ticker}: {config['company_name']}")
+        
+        # Data is already in the correct format from get_ticker_config()
         metadata = {
-            "ticker": normalized_ticker,          # keep normalized for downstream consistency
-            "company_name": company_name,
-            "name": company_name,
-            "sector": config.get("sector", "") or "",
-            "industry": config.get("industry", "") or "",
-            "sub_industry": config.get("sub_industry", "") or "",
-            "industry_keywords": _clean_keywords(config.get("industry_keywords") or []),
-            "competitors": _clean_competitors(config.get("competitors") or []),
+            "ticker": normalized_ticker,  # keep normalized for consistency
+            "company_name": config["company_name"],
+            "name": config["company_name"],
+            "sector": config.get("sector", ""),
+            "industry": config.get("industry", ""),
+            "sub_industry": config.get("sub_industry", ""),
+            "industry_keywords": config.get("industry_keywords", []),
+            "competitors": config.get("competitors", [])
         }
-
-        # FORCE REFRESH PATH: always generate and UPDATE existing row
-        if force_refresh and OPENAI_API_KEY:
-            LOG.info(f"Force-refreshing AI metadata for {normalized_ticker}")
+        
+        # === MINIMAL CHANGE: Enhancement happens if force_refresh OR fields are missing (and AI is available)
+        needs_enhancement = (
+            OPENAI_API_KEY and (
+                force_refresh or
+                not metadata["industry_keywords"] or
+                not metadata["competitors"]
+            )
+        )
+        
+        if needs_enhancement:
+            LOG.info(f"Enhancing {ticker} with AI - "
+                     f"keywords: {len(metadata.get('industry_keywords', []))}, "
+                     f"competitors: {len(metadata.get('competitors', []))}, "
+                     f"force_refresh={force_refresh}")
+            
             ai_metadata = generate_enhanced_ticker_metadata_with_ai(
-                normalized_ticker,
-                company_name,
-                metadata["sector"],
-                metadata["industry"],
-            ) or {}
-
-            # Merge only where empty to respect existing curated data
-            if len(metadata["industry_keywords"]) == 0:
-                metadata["industry_keywords"] = _clean_keywords(ai_metadata.get("industry_keywords") or [])
-            if len(metadata["competitors"]) == 0:
-                metadata["competitors"] = _clean_competitors(ai_metadata.get("competitors") or [])
-
-            # Persist to the existing DB row using the **normalized** key
-            update_ticker_reference_ai_data(normalized_ticker, metadata)
-            return metadata
-
-        # NON-FORCE path: enhance only if missing/blank, then UPDATE
-        if OPENAI_API_KEY and _needs_enhancement(metadata):
-            LOG.info(f"Enhancing {normalized_ticker} with AI due to missing fields")
-            ai_metadata = generate_enhanced_ticker_metadata_with_ai(
-                normalized_ticker,
-                company_name,
-                metadata["sector"],
-                metadata["industry"],
-            ) or {}
-
-            if len(metadata["industry_keywords"]) == 0:
-                metadata["industry_keywords"] = _clean_keywords(ai_metadata.get("industry_keywords") or [])
-            if len(metadata["competitors"]) == 0:
-                metadata["competitors"] = _clean_competitors(ai_metadata.get("competitors") or [])
-
-            # Only update if we actually filled something
-            if not _needs_enhancement(metadata):
+                normalized_ticker, 
+                config["company_name"],
+                config.get("sector", ""),
+                config.get("industry", "")
+            )
+            
+            if ai_metadata:
+                # Only fill empty fields, don't overwrite existing data
+                if not metadata["industry_keywords"]:
+                    metadata["industry_keywords"] = ai_metadata.get("industry_keywords", [])
+                
+                if not metadata["competitors"]:
+                    metadata["competitors"] = ai_metadata.get("competitors", [])
+                
+                # === MINIMAL CHANGE: update using the NORMALIZED ticker so the row matches
                 update_ticker_reference_ai_data(normalized_ticker, metadata)
-
-        # Either we enhanced (and possibly updated) or data was already complete
+        
         return metadata
-
-    # --- No config row exists ----------------------------------------------
-    LOG.info("DEBUG: No existing reference row; entering AI generation/insert path")
-
+    
+    # === No config row, fallback to AI generation + INSERT (unchanged logic) ===
+    LOG.info("DEBUG: Entering fallback AI generation path")
+    
     if OPENAI_API_KEY:
-        ai_metadata = generate_enhanced_ticker_metadata_with_ai(normalized_ticker) or {}
-        # If we got something, store a brand-new reference row
+        LOG.info(f"No reference data found for {ticker}, generating with AI")
+        ai_metadata = generate_enhanced_ticker_metadata_with_ai(normalized_ticker)
+        
+        # Store the AI-generated data back to reference table for future use
         if ai_metadata:
-            kws = _clean_keywords(ai_metadata.get("industry_keywords") or [])
-            comps = _clean_competitors(ai_metadata.get("competitors") or [])
-
             reference_data = {
-                "ticker": normalized_ticker,
-                "country": ai_metadata.get("country") or "US",
-                "company_name": ai_metadata.get("company_name") or ticker,
-                "sector": ai_metadata.get("sector") or "",
-                "industry": ai_metadata.get("industry") or "",
-                "industry_keyword_1": kws[0] if len(kws) > 0 else None,
-                "industry_keyword_2": kws[1] if len(kws) > 1 else None,
-                "industry_keyword_3": kws[2] if len(kws) > 2 else None,
-                "ai_generated": True,
-                "data_source": "ai_generated",
+                'ticker': normalized_ticker,
+                'country': 'US',
+                'company_name': ai_metadata.get('company_name', ticker),
+                'sector': ai_metadata.get('sector', ''),
+                'industry': ai_metadata.get('industry', ''),
+                'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
+                'industry_keyword_2': ai_metadata.get('industry_keywords', [None, None])[1] if len(ai_metadata.get('industry_keywords', [])) > 1 else None,
+                'industry_keyword_3': ai_metadata.get('industry_keywords', [None, None, None])[2] if len(ai_metadata.get('industry_keywords', [])) > 2 else None,
+                'ai_generated': True,
+                'data_source': 'ai_generated'
             }
-            for i, comp in enumerate(comps[:3], 1):
-                reference_data[f"competitor_{i}_name"] = comp.get("name")
-                reference_data[f"competitor_{i}_ticker"] = comp.get("ticker")
-
+            
+            # Convert competitors to separate fields
+            competitors = ai_metadata.get('competitors', [])
+            for i, comp in enumerate(competitors[:3], 1):
+                if isinstance(comp, dict):
+                    reference_data[f'competitor_{i}_name'] = comp.get('name')
+                    reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+            
             store_ticker_reference(reference_data)
-
-            # Return a normalized metadata dict for the caller
-            return {
-                "ticker": normalized_ticker,
-                "company_name": reference_data["company_name"],
-                "name": reference_data["company_name"],
-                "sector": reference_data["sector"],
-                "industry": reference_data["industry"],
-                "sub_industry": "",
-                "industry_keywords": kws,
-                "competitors": comps,
-            }
-
-        # AI didn’t return anything useful
-        return {
-            "ticker": normalized_ticker,
-            "company_name": ticker,
-            "name": ticker,
-            "sector": "",
-            "industry": "",
-            "sub_industry": "",
-            "industry_keywords": [],
-            "competitors": [],
-        }
-
-    # --- Final fallback: no config and no AI configured ---------------------
+        
+        return ai_metadata or {"ticker": normalized_ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
+    
+    # Step 3: Final fallback
     LOG.warning(f"No data found for {ticker} and no AI configured")
-    return {
-        "ticker": normalized_ticker,
-        "company_name": ticker,
-        "name": ticker,
-        "sector": "",
-        "industry": "",
-        "sub_industry": "",
-        "industry_keywords": [],
-        "competitors": [],
-    }
+    return {"ticker": normalized_ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
 
 def get_ticker_reference(ticker: str) -> Optional[Dict]:
     """Get ticker reference data from database"""

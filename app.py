@@ -914,8 +914,8 @@ def normalize_ticker_format(ticker: str) -> str:
     # Convert to uppercase and strip whitespace
     normalized = ticker.upper().strip()
     
-    # Remove any quotes or extra characters
-    normalized = normalized.replace('"', '').replace("'", "")
+    # Remove quotes and invalid characters (keep only alphanumeric, dots, dashes)
+    normalized = re.sub(r'[^A-Z0-9.-]', '', normalized)
     
     # Handle common exchange variations and map to Yahoo Finance standard
     exchange_mappings = {
@@ -939,55 +939,41 @@ def normalize_ticker_format(ticker: str) -> str:
         # German variations
         '.FRA': '.DE',
         '.XETRA': '.DE',
+        
+        # US exchange suffixes to remove
+        '.NYSE': '',
+        '.NASDAQ': '',
+        '.OTC': '',
     }
     
     # Apply exchange mappings
     for old_suffix, new_suffix in exchange_mappings.items():
         if normalized.endswith(old_suffix):
-            normalized = normalized.replace(old_suffix, new_suffix)
+            normalized = normalized[:-len(old_suffix)] + new_suffix
             break
-    
-    # Handle special character replacements
-    character_replacements = {
-        # Replace common separators with standard dash
-        '_': '-',
-        '.': '.',  # Keep dots as-is for exchange suffixes
-        ' ': '',   # Remove spaces
-    }
-    
-    # Apply character replacements (but preserve exchange suffixes)
-    parts = normalized.split('.')
-    base_ticker = parts[0]
-    
-    # Clean the base ticker part only
-    for old_char, new_char in character_replacements.items():
-        if old_char != '.':  # Don't replace dots in base ticker
-            base_ticker = base_ticker.replace(old_char, new_char)
-    
-    # Reconstruct with exchange suffix if it exists
-    if len(parts) > 1:
-        normalized = f"{base_ticker}.{parts[1]}"
-    else:
-        normalized = base_ticker
     
     # Handle edge cases
     edge_case_mappings = {
         # Berkshire Hathaway
         'BRKA': 'BRK-A',
         'BRKB': 'BRK-B',
-        'BERKSHIREA': 'BRK-A',
-        'BERKSHIREB': 'BRK-B',
         
         # Common Canadian bank shortcuts
         'ROYALBANK.TO': 'RY.TO',
-        'TD.TO': 'TD.TO',  # Already correct
         'SCOTIABANK.TO': 'BNS.TO',
-        'BMO.TO': 'BMO.TO',  # Already correct
     }
     
     # Apply edge case mappings
     if normalized in edge_case_mappings:
         normalized = edge_case_mappings[normalized]
+    
+    # Replace underscores with dashes in base ticker only
+    if '.' in normalized:
+        parts = normalized.split('.')
+        parts[0] = parts[0].replace('_', '-')
+        normalized = '.'.join(parts)
+    else:
+        normalized = normalized.replace('_', '-')
     
     return normalized
 
@@ -8379,7 +8365,8 @@ async def cron_ingest(
                 # Force comprehensive cleanup
                 cleanup_result = full_resource_cleanup()
                 memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
-                LOG.info(f"Final cleanup completed: {cleanup_result}")
+                await full_resource_cleanup()
+                LOG.info("=== PERFORMING FINAL CLEANUP ===")
             except Exception as cleanup_error:
                 LOG.error(f"Error during final cleanup: {cleanup_error}")
                 memory_monitor.take_snapshot("CLEANUP_ERROR")

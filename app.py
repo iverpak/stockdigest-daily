@@ -39,7 +39,7 @@ from urllib3.util.retry import Retry
 
 from collections import defaultdict
 
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 import asyncio
 
 import os
@@ -2193,9 +2193,9 @@ def create_scraping_session():
     return session
 
 # Add this function after your existing extract_article_content function
-def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
+async def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Memory-optimized article extraction using Playwright with enhanced content cleaning
+    Memory-optimized article extraction using Playwright with enhanced content cleaning (ASYNC VERSION)
     """
     try:
         # Check for known paywall domains first
@@ -2204,9 +2204,9 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
         
         LOG.info(f"PLAYWRIGHT: Starting browser for {domain}")
         
-        with sync_playwright() as p:
+        async with async_playwright() as p:
             # Launch browser with memory optimization
-            browser = p.chromium.launch(
+            browser = await p.chromium.launch(
                 headless=True,
                 args=[
                     '--no-sandbox',
@@ -2227,13 +2227,13 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
             LOG.info(f"PLAYWRIGHT: Browser launched, navigating to {url}")
             
             # Create new page with smaller viewport to save memory
-            page = browser.new_page(
+            page = await browser.new_page(
                 viewport={'width': 1280, 'height': 720},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
             
             # Set additional headers to look more human
-            page.set_extra_http_headers({
+            await page.set_extra_http_headers({
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Accept-Encoding': 'gzip, deflate',
@@ -2244,11 +2244,11 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
             
             try:
                 # REDUCED TIMEOUT - 15 seconds instead of 30
-                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
                 
                 # Shorter wait for dynamic content
-                page.wait_for_timeout(1000)
+                await page.wait_for_timeout(1000)
                 
                 # Try multiple content extraction methods
                 raw_content = None
@@ -2256,9 +2256,9 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 
                 # Method 1: Try article tag first
                 try:
-                    article_element = page.query_selector('article')
+                    article_element = await page.query_selector('article')
                     if article_element:
-                        raw_content = article_element.inner_text()
+                        raw_content = await article_element.inner_text()
                         extraction_method = "article tag"
                 except Exception:
                     pass
@@ -2277,9 +2277,9 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                     ]
                     for selector in selectors:
                         try:
-                            element = page.query_selector(selector)
+                            element = await page.query_selector(selector)
                             if element:
-                                temp_content = element.inner_text()
+                                temp_content = await element.inner_text()
                                 if temp_content and len(temp_content.strip()) > 200:
                                     raw_content = temp_content
                                     extraction_method = f"selector: {selector}"
@@ -2290,7 +2290,7 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                 # Method 3: Smart body text extraction (removes navigation/ads)
                 if not raw_content or len(raw_content.strip()) < 200:
                     try:
-                        raw_content = page.evaluate("""
+                        raw_content = await page.evaluate("""
                             () => {
                                 // Remove unwanted elements
                                 const unwanted = document.querySelectorAll(`
@@ -2322,7 +2322,7 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
                         extraction_method = "smart body extraction"
                     except Exception:
                         try:
-                            raw_content = page.evaluate("() => document.body ? document.body.innerText : ''")
+                            raw_content = await page.evaluate("() => document.body ? document.body.innerText : ''")
                             extraction_method = "fallback body text"
                         except Exception:
                             raw_content = None
@@ -2333,7 +2333,7 @@ def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Opti
             finally:
                 # Always close browser to free memory
                 try:
-                    browser.close()
+                    await browser.close()
                 except Exception:
                     pass
             
@@ -3011,14 +3011,14 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
     except Exception as e:
         return None, f"Scraping error: {str(e)}"
 
-def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+async def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
     3-tier content scraper: requests → Playwright → Scrapfly with comprehensive tracking
     """
     global enhanced_scraping_stats
     
     # Check limits first
-    if not _check_scraping_limit(category, keyword):
+    if not check_scraping_limit(category, keyword):  # Fixed: removed asterisks
         if category == "company":
             return None, f"Company limit reached ({scraping_stats['company_scraped']}/{scraping_stats['limits']['company']})"
         elif category == "industry":
@@ -3039,7 +3039,7 @@ def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: st
     if content:
         enhanced_scraping_stats["requests_success"] += 1
         enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
-        _update_scraping_stats(category, keyword, True)
+        update_scraping_stats(category, keyword, True)  # Fixed: removed asterisks
         return content, f"TIER 1 SUCCESS: {len(content)} chars via requests"
     
     LOG.info(f"TIER 1 FAILED: {domain} - {error}")
@@ -3048,12 +3048,13 @@ def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: st
     LOG.info(f"TIER 2 (Playwright): Attempting {domain}")
     enhanced_scraping_stats["by_method"]["playwright"]["attempts"] += 1
     
-    playwright_content, playwright_error = extract_article_content_with_playwright(url, domain)
+    # This is already correctly using await with the async Playwright function
+    playwright_content, playwright_error = await extract_article_content_with_playwright(url, domain)
     
     if playwright_content:
         enhanced_scraping_stats["playwright_success"] += 1
         enhanced_scraping_stats["by_method"]["playwright"]["successes"] += 1
-        _update_scraping_stats(category, keyword, True)
+        update_scraping_stats(category, keyword, True)  # Fixed: removed asterisks
         return playwright_content, f"TIER 2 SUCCESS: {len(playwright_content)} chars via Playwright"
     
     LOG.info(f"TIER 2 FAILED: {domain} - {playwright_error}")
@@ -3066,7 +3067,7 @@ def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: st
         
         if scrapfly_content:
             enhanced_scraping_stats["scrapfly_success"] += 1
-            _update_scraping_stats(category, keyword, True)
+            update_scraping_stats(category, keyword, True)  # Fixed: removed asterisks
             return scrapfly_content, f"TIER 3 SUCCESS: {len(scrapfly_content)} chars via Scrapfly"
         
         LOG.info(f"TIER 3 FAILED: {domain} - {scrapfly_error}")

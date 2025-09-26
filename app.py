@@ -3265,7 +3265,7 @@ async def scrape_and_analyze_article_3tier(article: Dict, category: str, metadat
         LOG.error(f"Failed to analyze article {article.get('id')} from {analysis_ticker}'s perspective: {e}")
         return False
 
-def _update_scraping_stats(category: str, keyword: str, success: bool):
+def update_scraping_stats(category: str, keyword: str, success: bool):
     """Helper to update scraping statistics"""
     global scraping_stats
     

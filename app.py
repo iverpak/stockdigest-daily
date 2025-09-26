@@ -1711,7 +1711,7 @@ def export_ticker_references_to_csv():
     """Export all ticker references from database to CSV format with new structure"""
     try:
         with db() as conn, conn.cursor() as cur:
-            # Get all active ticker references with all fields
+            # Get all ticker references with all fields
             cur.execute("""
                 SELECT ticker, country, company_name, industry, sector, sub_industry,
                        exchange, currency, market_cap_category, active, is_etf, yahoo_ticker,
@@ -1726,12 +1726,18 @@ def export_ticker_references_to_csv():
             """)
             
             rows = cur.fetchall()
+            LOG.info(f"DEBUG: Retrieved {len(rows)} rows from database")
             
             if not rows:
+                LOG.error("DEBUG: No rows returned from database query")
                 return {
                     "status": "error",
                     "message": "No ticker references found in database"
                 }
+            
+            # Debug: Show first row structure
+            LOG.info(f"DEBUG: First row sample: {dict(rows[0]) if rows else 'No rows'}")
+            LOG.info(f"DEBUG: Row has {len(rows[0])} columns")
             
             # Build CSV content
             csv_buffer = io.StringIO()
@@ -1748,28 +1754,48 @@ def export_ticker_references_to_csv():
                 'created_at', 'updated_at', 'data_source'
             ]
             
+            LOG.info(f"DEBUG: Header has {len(headers)} columns")
+            
             writer = csv.writer(csv_buffer)
             writer.writerow(headers)
             
-            # Write data rows
-            for row in rows:
-                csv_row = []
-                for value in row:
-                    if value is None:
-                        csv_row.append('')
-                    elif isinstance(value, bool):
-                        csv_row.append('TRUE' if value else 'FALSE')
-                    elif isinstance(value, datetime):
-                        csv_row.append(value.isoformat())
-                    else:
-                        csv_row.append(str(value))
-                
-                writer.writerow(csv_row)
+            # Write data rows with debug info
+            rows_written = 0
+            for i, row in enumerate(rows):
+                try:
+                    csv_row = []
+                    
+                    # Debug first few rows
+                    if i < 3:
+                        LOG.info(f"DEBUG: Processing row {i}: ticker={row.get('ticker', 'NO_TICKER')}")
+                    
+                    for j, value in enumerate(row):
+                        if value is None:
+                            csv_row.append('')
+                        elif isinstance(value, bool):
+                            csv_row.append('TRUE' if value else 'FALSE')
+                        elif isinstance(value, datetime):
+                            csv_row.append(value.isoformat())
+                        else:
+                            csv_row.append(str(value))
+                    
+                    # Debug row length
+                    if i < 3:
+                        LOG.info(f"DEBUG: Row {i} has {len(csv_row)} values")
+                    
+                    writer.writerow(csv_row)
+                    rows_written += 1
+                    
+                except Exception as row_error:
+                    LOG.error(f"DEBUG: Error processing row {i}: {row_error}")
+                    continue
             
             csv_content = csv_buffer.getvalue()
             csv_buffer.close()
             
-            LOG.info(f"Exported {len(rows)} ticker references to CSV format ({len(csv_content)} characters)")
+            LOG.info(f"DEBUG: Wrote {rows_written} data rows to CSV")
+            LOG.info(f"DEBUG: CSV content length: {len(csv_content)} characters")
+            LOG.info(f"DEBUG: CSV starts with: {csv_content[:200]}...")
             
             return {
                 "status": "success",
@@ -1784,7 +1810,6 @@ def export_ticker_references_to_csv():
             "status": "error",
             "message": f"Export failed: {str(e)}"
         }
-
 
 # 3. COMMIT CSV TO GITHUB - Push updated CSV back to repository
 def commit_csv_to_github(csv_content: str, commit_message: str = None):

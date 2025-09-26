@@ -8069,19 +8069,20 @@ async def cron_ingest(
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
 ):
     """Enhanced ingest with comprehensive memory monitoring"""
-    LOG.info("FUNCTION STARTED - BEFORE LOCK")
     async with TICKER_PROCESSING_LOCK:
-        LOG.info("LOCK ACQUIRED - TESTING MEMORY MONITOR")
         start_time = time.time()
         require_admin(request)
         ensure_schema()
         
-        # START MEMORY MONITORING
-        memory_monitor.start_monitoring()
-        LOG.info("MEMORY MONITOR START: SUCCESS")
-        memory_monitor.take_snapshot("CRON_INGEST_START")
+        # Initialize memory monitoring with error handling
+        try:
+            memory_monitor.start_monitoring()
+            memory_monitor.take_snapshot("CRON_INGEST_START")
+            LOG.info("=== CRON INGEST STARTING (WITH MEMORY MONITORING) ===")
+        except Exception as e:
+            LOG.error(f"Memory monitoring failed to start: {e}")
+            LOG.info("=== CRON INGEST STARTING (WITHOUT MEMORY MONITORING) ===")
         
-        LOG.info("=== CRON INGEST STARTING (ENHANCED WITH MEMORY MONITORING) ===")
         LOG.info(f"Processing window: {minutes} minutes")
         LOG.info(f"Target tickers: {tickers or 'ALL'}")
         

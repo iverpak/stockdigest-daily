@@ -8039,8 +8039,15 @@ async def admin_init(request: Request, body: InitRequest):
                             """, sql_params)
 
                             # DEBUG: Check what PostgreSQL executed
-                            LOG.info(f"POSTGRES EXECUTED: {cur.query}")
-                            LOG.info(f"POSTGRES MOGRIFIED: {cur.mogrify(cur.statement, sql_params)}")
+                            LOG.info(f"POSTGRES MOGRIFIED: {cur.mogrify('''
+                                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+                                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                                ON CONFLICT (url) DO UPDATE SET 
+                                    name = EXCLUDED.name, 
+                                    category = EXCLUDED.category,
+                                    active = TRUE
+                                RETURNING id;
+                            ''', sql_params).decode('utf-8')}")
 
                             result = cur.fetchone()
                             if result:

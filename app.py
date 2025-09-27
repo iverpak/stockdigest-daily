@@ -8027,16 +8027,23 @@ async def admin_init(request: Request, body: InitRequest):
                             )
                             LOG.info(f"DEBUG SQL PARAMS: {sql_params}")
                             
-                            # Direct SQL insert using the same cursor/transaction
-                            cur.execute("""
-                                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
-                                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-                                ON CONFLICT (url) DO UPDATE SET 
-                                    name = EXCLUDED.name, 
-                                    category = EXCLUDED.category,
-                                    active = TRUE
-                                RETURNING id;
-                            """, sql_params)
+                            # TEMPORARY TEST - Use direct string formatting to bypass parameter binding
+                            search_keyword = feed_config.get("search_keyword", "").replace("'", "''")  # Escape quotes
+                            feed_name = feed_config["name"].replace("'", "''")  # Escape quotes
+                            feed_url = feed_config["url"].replace("'", "''")  # Escape quotes
+                            
+                            sql_query = f"""
+                            INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+                            VALUES ('{feed_url}', '{feed_name}', '{current_ticker}', '{feed_config.get("category", "company")}', {DEFAULT_RETAIN_DAYS}, TRUE, '{search_keyword}', NULL)
+                            ON CONFLICT (url) DO UPDATE SET 
+                                name = EXCLUDED.name, 
+                                category = EXCLUDED.category,
+                                active = TRUE
+                            RETURNING id;
+                            """
+                            
+                            LOG.info(f"DIRECT SQL TEST: Inserting ticker='{current_ticker}'")
+                            cur.execute(sql_query)
                             
                             result = cur.fetchone()
                             if result:

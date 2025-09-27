@@ -73,6 +73,7 @@ SCRAPE_BATCH_SIZE = int(os.getenv("SCRAPE_BATCH_SIZE", "2"))
 OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "2"))
 PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "2"))
 SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "4"))
+TRIAGE_MAX_CONCURRENCY = int(os.getenv("TRIAGE_MAX_CONCURRENCY", "2"))
 
 # Global semaphores for concurrent processing
 OPENAI_SEM = BoundedSemaphore(OPENAI_MAX_CONCURRENCY)
@@ -84,14 +85,16 @@ _async_semaphores_initialized = False
 async_openai_sem = None
 async_playwright_sem = None
 async_scrapfly_sem = None
+async_triage_sem = None
 
 def init_async_semaphores():
     """Initialize async semaphores - called once per event loop"""
-    global _async_semaphores_initialized, async_openai_sem, async_playwright_sem, async_scrapfly_sem
+    global _async_semaphores_initialized, async_openai_sem, async_playwright_sem, async_scrapfly_sem, async_triage_sem
     if not _async_semaphores_initialized:
         async_openai_sem = asyncio.Semaphore(OPENAI_MAX_CONCURRENCY)
         async_playwright_sem = asyncio.Semaphore(PLAYWRIGHT_MAX_CONCURRENCY)
         async_scrapfly_sem = asyncio.Semaphore(SCRAPFLY_MAX_CONCURRENCY)
+        async_triage_sem = asyncio.Semaphore(TRIAGE_MAX_CONCURRENCY)
         _async_semaphores_initialized = True
 
 def get_openai_session():
@@ -5481,149 +5484,8 @@ def _safe_json_loads(s: str) -> Dict:
     LOG.error("Failed to parse JSON. First 200 chars:\n" + s[:200])
     return {"selected_ids": [], "selected": [], "skipped": []}
 
-def _make_triage_request_full(system_prompt: str, payload: dict) -> List[Dict]:
-    """Make structured triage request to OpenAI with integer priority storage"""
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        # Extract target info for constraint enforcement
-        target_cap = payload.get('target_cap', 10)
-        total_items = len(payload.get('items', []))
-        effective_cap = min(target_cap, total_items)
-        
-        # Updated schema to use integer priorities
-        triage_schema = {
-            "type": "object",
-            "properties": {
-                "selected_ids": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "maxItems": effective_cap,
-                    "minItems": effective_cap
-                },
-                "selected": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "integer"},
-                            "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
-                            "likely_repeat": {"type": "boolean"},
-                            "repeat_key": {"type": "string"},
-                            "why": {"type": "string"},
-                            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
-                        },
-                        "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
-                        "additionalProperties": False
-                    },
-                    "maxItems": effective_cap,
-                    "minItems": effective_cap
-                },
-                "skipped": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "integer"},
-                            "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
-                            "likely_repeat": {"type": "boolean"},
-                            "repeat_key": {"type": "string"},
-                            "why": {"type": "string"},
-                            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
-                        },
-                        "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            "required": ["selected_ids", "selected", "skipped"],
-            "additionalProperties": False
-        }
-        
-        # Updated system prompt to specify integer priorities
-        constrained_system_prompt = f"""{system_prompt}
-
-CRITICAL SELECTION CONSTRAINT:
-You MUST select EXACTLY {effective_cap} articles from the {total_items} provided.
-Be highly selective. Choose only the {effective_cap} BEST articles based on the criteria above.
-
-Your selected_ids array must contain exactly {effective_cap} integers.
-Your selected array must contain exactly {effective_cap} objects.
-
-PRIORITY SCALE (use integers):
-- 1 = High priority (most important articles requiring immediate scraping)
-- 2 = Medium priority (moderate importance)
-- 3 = Low priority (lower importance, backup selections)
-
-Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
-        
-        data = {
-            "model": OPENAI_MODEL,
-            "reasoning": {"effort": "medium"},
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "triage_results",
-                    "schema": triage_schema,
-                    "strict": True
-                },
-                "verbosity": "low"
-            },
-            "input": f"{constrained_system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
-            "max_output_tokens": 20000,
-            "truncation": "auto"
-        }
-        
-        response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-        
-        if response.status_code != 200:
-            LOG.error(f"OpenAI triage API error {response.status_code}: {response.text}")
-            return []
-        
-        result = response.json()
-        content = extract_text_from_responses(result)
-        
-        if not content:
-            LOG.error("OpenAI returned no text content for triage")
-            return []
-        
-        try:
-            triage_result = json.loads(content)
-        except json.JSONDecodeError as e:
-            LOG.error(f"JSON parsing failed for triage: {e}")
-            return []
-        
-        selected_articles = []
-        for selected_item in triage_result.get("selected", []):
-            if selected_item["id"] < total_items:
-                result_item = {
-                    "id": selected_item["id"],
-                    "scrape_priority": normalize_priority_to_int(selected_item["scrape_priority"]),
-                    "why": selected_item["why"],
-                    "confidence": selected_item["confidence"],
-                    "likely_repeat": selected_item["likely_repeat"],
-                    "repeat_key": selected_item["repeat_key"]
-                }
-                selected_articles.append(result_item)
-        
-        # Enforce the cap at the code level as final safeguard
-        if len(selected_articles) > effective_cap:
-            LOG.warning(f"Code-level cap enforcement: Trimming {len(selected_articles)} to {effective_cap}")
-            selected_articles = selected_articles[:effective_cap]
-        
-        return selected_articles
-        
-    except Exception as e:
-        LOG.error(f"Triage request failed: {str(e)}")
-        return []
-
-def triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, aliases_brands_assets: Dict, sector_profile: Dict) -> List[Dict]:
-    """
-    Enhanced company triage with explicit selection constraints
-    """
+async def triage_company_articles_full(articles: List[Dict], ticker: str, company_name: str, aliases_brands_assets: Dict, sector_profile: Dict) -> List[Dict]:
+    """Enhanced company triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
@@ -5645,6 +5507,55 @@ def triage_company_articles_full(articles: List[Dict], ticker: str, company_name
         "ticker": ticker,
         "company_name": company_name,
         "items": items
+    }
+
+    # Triage schema
+    triage_schema = {
+        "type": "object",
+        "properties": {
+            "selected_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "maxItems": target_cap,
+                "minItems": target_cap
+            },
+            "selected": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "likely_repeat": {"type": "boolean"},
+                        "repeat_key": {"type": "string"},
+                        "why": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                    },
+                    "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                    "additionalProperties": False
+                },
+                "maxItems": target_cap,
+                "minItems": target_cap
+            },
+            "skipped": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "likely_repeat": {"type": "boolean"},
+                        "repeat_key": {"type": "string"},
+                        "why": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                    },
+                    "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                    "additionalProperties": False
+                }
+            }
+        },
+        "required": ["selected_ids", "selected", "skipped"],
+        "additionalProperties": False
     }
 
     system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPANY articles about {company_name} ({ticker}).
@@ -5676,14 +5587,89 @@ EXCLUDE COMPLETELY:
 
 CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. If fewer than {target_cap} articles meet the criteria, select the best available but never exceed {target_cap}.
 
-The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
+CRITICAL SELECTION CONSTRAINT:
+You MUST select EXACTLY {target_cap} articles from the {len(articles)} provided.
+Be highly selective. Choose only the {target_cap} BEST articles based on the criteria above.
 
-    return _make_triage_request_full(system_prompt, payload)
+Your selected_ids array must contain exactly {target_cap} integers.
+Your selected array must contain exactly {target_cap} objects.
 
-def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[Dict]:
-    """
-    Enhanced industry triage with explicit selection constraints
-    """
+PRIORITY SCALE (use integers):
+- 1 = High priority (most important articles requiring immediate scraping)
+- 2 = Medium priority (moderate importance)
+- 3 = Low priority (lower importance, backup selections)
+
+Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "reasoning": {"effort": "medium"},
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "triage_results",
+                    "schema": triage_schema,
+                    "strict": True
+                },
+                "verbosity": "low"
+            },
+            "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
+            "max_output_tokens": 20000,
+            "truncation": "auto"
+        }
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"OpenAI triage API error {response.status}: {error_text}")
+                    return []
+                
+                result = await response.json()
+                content = extract_text_from_responses(result)
+                
+                if not content:
+                    LOG.error("OpenAI returned no text content for triage")
+                    return []
+                
+                try:
+                    triage_result = json.loads(content)
+                except json.JSONDecodeError as e:
+                    LOG.error(f"JSON parsing failed for triage: {e}")
+                    return []
+                
+                selected_articles = []
+                for selected_item in triage_result.get("selected", []):
+                    if selected_item["id"] < len(articles):
+                        result_item = {
+                            "id": selected_item["id"],
+                            "scrape_priority": normalize_priority_to_int(selected_item["scrape_priority"]),
+                            "why": selected_item["why"],
+                            "confidence": selected_item["confidence"],
+                            "likely_repeat": selected_item["likely_repeat"],
+                            "repeat_key": selected_item["repeat_key"]
+                        }
+                        selected_articles.append(result_item)
+                
+                # Enforce the cap at the code level as final safeguard
+                if len(selected_articles) > target_cap:
+                    LOG.warning(f"Code-level cap enforcement: Trimming {len(selected_articles)} to {target_cap}")
+                    selected_articles = selected_articles[:target_cap]
+                
+                return selected_articles
+        
+    except Exception as e:
+        LOG.error(f"Async triage request failed: {str(e)}")
+        return []
+
+async def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[Dict]:
+    """Enhanced industry triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
@@ -5708,6 +5694,55 @@ def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_prof
         "industry_keywords": industry_keywords,
         "sector_profile": sector_profile,
         "items": items
+    }
+
+    # Triage schema
+    triage_schema = {
+        "type": "object",
+        "properties": {
+            "selected_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "maxItems": target_cap,
+                "minItems": target_cap
+            },
+            "selected": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "likely_repeat": {"type": "boolean"},
+                        "repeat_key": {"type": "string"},
+                        "why": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                    },
+                    "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                    "additionalProperties": False
+                },
+                "maxItems": target_cap,
+                "minItems": target_cap
+            },
+            "skipped": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "likely_repeat": {"type": "boolean"},
+                        "repeat_key": {"type": "string"},
+                        "why": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0"}
+                    },
+                    "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                    "additionalProperties": False
+                }
+            }
+        },
+        "required": ["selected_ids", "selected", "skipped"],
+        "additionalProperties": False
     }
 
     system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for INDUSTRY articles.
@@ -5740,14 +5775,89 @@ EXCLUDE COMPLETELY:
 
 CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. Never exceed {target_cap} selections.
 
-The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
+CRITICAL SELECTION CONSTRAINT:
+You MUST select EXACTLY {target_cap} articles from the {len(articles)} provided.
+Be highly selective. Choose only the {target_cap} BEST articles based on the criteria above.
 
-    return _make_triage_request_full(system_prompt, payload)
+Your selected_ids array must contain exactly {target_cap} integers.
+Your selected array must contain exactly {target_cap} objects.
 
-def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[Dict]:
-    """
-    Enhanced competitor triage with explicit selection constraints
-    """
+PRIORITY SCALE (use integers):
+- 1 = High priority (most important articles requiring immediate scraping)
+- 2 = Medium priority (moderate importance)
+- 3 = Low priority (lower importance, backup selections)
+
+Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "reasoning": {"effort": "medium"},
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "triage_results",
+                    "schema": triage_schema,
+                    "strict": True
+                },
+                "verbosity": "low"
+            },
+            "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
+            "max_output_tokens": 20000,
+            "truncation": "auto"
+        }
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"OpenAI triage API error {response.status}: {error_text}")
+                    return []
+                
+                result = await response.json()
+                content = extract_text_from_responses(result)
+                
+                if not content:
+                    LOG.error("OpenAI returned no text content for triage")
+                    return []
+                
+                try:
+                    triage_result = json.loads(content)
+                except json.JSONDecodeError as e:
+                    LOG.error(f"JSON parsing failed for triage: {e}")
+                    return []
+                
+                selected_articles = []
+                for selected_item in triage_result.get("selected", []):
+                    if selected_item["id"] < len(articles):
+                        result_item = {
+                            "id": selected_item["id"],
+                            "scrape_priority": normalize_priority_to_int(selected_item["scrape_priority"]),
+                            "why": selected_item["why"],
+                            "confidence": selected_item["confidence"],
+                            "likely_repeat": selected_item["likely_repeat"],
+                            "repeat_key": selected_item["repeat_key"]
+                        }
+                        selected_articles.append(result_item)
+                
+                # Enforce the cap at the code level as final safeguard
+                if len(selected_articles) > target_cap:
+                    LOG.warning(f"Code-level cap enforcement: Trimming {len(selected_articles)} to {target_cap}")
+                    selected_articles = selected_articles[:target_cap]
+                
+                return selected_articles
+        
+    except Exception as e:
+        LOG.error(f"Async triage request failed: {str(e)}")
+        return []
+
+async def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[Dict]:
+    """Enhanced competitor triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
@@ -5772,6 +5882,55 @@ def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: Li
         "competitors": competitors,
         "sector_profile": sector_profile,
         "items": items
+    }
+
+    # Triage schema
+    triage_schema = {
+        "type": "object",
+        "properties": {
+            "selected_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "maxItems": target_cap,
+                "minItems": target_cap
+            },
+            "selected": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "likely_repeat": {"type": "boolean"},
+                        "repeat_key": {"type": "string"},
+                        "why": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                    },
+                    "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                    "additionalProperties": False
+                },
+                "maxItems": target_cap,
+                "minItems": target_cap
+            },
+            "skipped": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "likely_repeat": {"type": "boolean"},
+                        "repeat_key": {"type": "string"},
+                        "why": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0"}
+                    },
+                    "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
+                    "additionalProperties": False
+                }
+            }
+        },
+        "required": ["selected_ids", "selected", "skipped"],
+        "additionalProperties": False
     }
 
     system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPETITOR articles.
@@ -5806,9 +5965,219 @@ EXCLUDE COMPLETELY:
 
 CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. Never exceed {target_cap} selections.
 
-The response will be automatically formatted as structured JSON with selected_ids, selected, and skipped arrays."""
+CRITICAL SELECTION CONSTRAINT:
+You MUST select EXACTLY {target_cap} articles from the {len(articles)} provided.
+Be highly selective. Choose only the {target_cap} BEST articles based on the criteria above.
 
-    return _make_triage_request_full(system_prompt, payload)
+Your selected_ids array must contain exactly {target_cap} integers.
+Your selected array must contain exactly {target_cap} objects.
+
+PRIORITY SCALE (use integers):
+- 1 = High priority (most important articles requiring immediate scraping)
+- 2 = Medium priority (moderate importance)
+- 3 = Low priority (lower importance, backup selections)
+
+Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": OPENAI_MODEL,
+            "reasoning": {"effort": "medium"},
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "triage_results",
+                    "schema": triage_schema,
+                    "strict": True
+                },
+                "verbosity": "low"
+            },
+            "input": f"{system_prompt}\n\n{json.dumps(payload, separators=(',', ':'))}",
+            "max_output_tokens": 20000,
+            "truncation": "auto"
+        }
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"OpenAI triage API error {response.status}: {error_text}")
+                    return []
+                
+                result = await response.json()
+                content = extract_text_from_responses(result)
+                
+                if not content:
+                    LOG.error("OpenAI returned no text content for triage")
+                    return []
+                
+                try:
+                    triage_result = json.loads(content)
+                except json.JSONDecodeError as e:
+                    LOG.error(f"JSON parsing failed for triage: {e}")
+                    return []
+                
+                selected_articles = []
+                for selected_item in triage_result.get("selected", []):
+                    if selected_item["id"] < len(articles):
+                        result_item = {
+                            "id": selected_item["id"],
+                            "scrape_priority": normalize_priority_to_int(selected_item["scrape_priority"]),
+                            "why": selected_item["why"],
+                            "confidence": selected_item["confidence"],
+                            "likely_repeat": selected_item["likely_repeat"],
+                            "repeat_key": selected_item["repeat_key"]
+                        }
+                        selected_articles.append(result_item)
+                
+                # Enforce the cap at the code level as final safeguard
+                if len(selected_articles) > target_cap:
+                    LOG.warning(f"Code-level cap enforcement: Trimming {len(selected_articles)} to {target_cap}")
+                    selected_articles = selected_articles[:target_cap]
+                
+                return selected_articles
+        
+    except Exception as e:
+        LOG.error(f"Async triage request failed: {str(e)}")
+        return []
+
+async def perform_ai_triage_with_batching_async(
+    articles_by_category: Dict[str, List[Dict]], 
+    ticker: str, 
+    triage_batch_size: int = 2
+) -> Dict[str, List[Dict]]:
+    """
+    Perform AI triage with configurable async batching across categories
+    """
+    if not OPENAI_API_KEY:
+        LOG.warning("OpenAI API key not configured - skipping triage")
+        return {"company": [], "industry": [], "competitor": []}
+    
+    # Ensure async semaphores are initialized
+    init_async_semaphores()
+    
+    selected_results = {"company": [], "industry": [], "competitor": []}
+    
+    # Get ticker metadata for enhanced prompts
+    config = get_ticker_config(ticker)
+    company_name = config.get("name", ticker) if config else ticker
+    
+    LOG.info(f"=== ASYNC TRIAGE BATCH PROCESSING: batch_size={triage_batch_size} ===")
+    
+    # PHASE 1: Company articles - Single call (no batching needed for 1 call)
+    company_articles = articles_by_category.get("company", [])
+    if company_articles:
+        LOG.info(f"Starting async company triage: {len(company_articles)} articles")
+        try:
+            async with async_triage_sem:
+                selected = await triage_company_articles_full(company_articles, ticker, company_name, {}, {})
+                selected_results["company"] = selected
+                LOG.info(f"Company triage complete: selected {len(selected)} articles")
+        except Exception as e:
+            LOG.error(f"Company triage failed: {e}")
+    
+    # PHASE 2: Industry articles - Batch by keyword
+    industry_articles = articles_by_category.get("industry", [])
+    if industry_articles:
+        # Group by search_keyword
+        industry_by_keyword = {}
+        for idx, article in enumerate(industry_articles):
+            keyword = article.get("search_keyword", "unknown")
+            if keyword not in industry_by_keyword:
+                industry_by_keyword[keyword] = []
+            industry_by_keyword[keyword].append({"article": article, "original_idx": idx})
+        
+        LOG.info(f"Starting async industry triage: {len(industry_articles)} articles across {len(industry_by_keyword)} keywords")
+        
+        # Create batches of keyword groups
+        keyword_items = list(industry_by_keyword.items())
+        industry_tasks = []
+        
+        for i in range(0, len(keyword_items), triage_batch_size):
+            batch = keyword_items[i:i + triage_batch_size]
+            task = process_industry_batch_async(batch, ticker, selected_results)
+            industry_tasks.append(task)
+        
+        # Execute industry batches
+        if industry_tasks:
+            await asyncio.gather(*industry_tasks, return_exceptions=True)
+        
+        LOG.info(f"Industry triage complete: selected {len(selected_results['industry'])} articles total")
+    
+    # PHASE 3: Competitor articles - Batch by competitor
+    competitor_articles = articles_by_category.get("competitor", [])
+    if competitor_articles:
+        # Group by competitor_ticker (primary) or search_keyword (fallback)
+        competitor_by_entity = {}
+        for idx, article in enumerate(competitor_articles):
+            entity_key = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+            if entity_key not in competitor_by_entity:
+                competitor_by_entity[entity_key] = []
+            competitor_by_entity[entity_key].append({"article": article, "original_idx": idx})
+        
+        LOG.info(f"Starting async competitor triage: {len(competitor_articles)} articles across {len(competitor_by_entity)} competitors")
+        
+        # Create batches of competitor groups
+        competitor_items = list(competitor_by_entity.items())
+        competitor_tasks = []
+        
+        for i in range(0, len(competitor_items), triage_batch_size):
+            batch = competitor_items[i:i + triage_batch_size]
+            task = process_competitor_batch_async(batch, ticker, selected_results)
+            competitor_tasks.append(task)
+        
+        # Execute competitor batches
+        if competitor_tasks:
+            await asyncio.gather(*competitor_tasks, return_exceptions=True)
+        
+        LOG.info(f"Competitor triage complete: selected {len(selected_results['competitor'])} articles total")
+    
+    return selected_results
+
+async def process_industry_batch_async(batch, ticker, selected_results):
+    """Process a batch of industry keyword groups"""
+    for keyword, keyword_articles in batch:
+        try:
+            LOG.info(f"Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
+            triage_articles = [item["article"] for item in keyword_articles]
+            
+            async with async_triage_sem:
+                selected = await triage_industry_articles_full(triage_articles, ticker, {}, [])
+            
+            # Map back to original indices
+            for selected_item in selected:
+                original_idx = keyword_articles[selected_item["id"]]["original_idx"]
+                selected_item["id"] = original_idx
+                selected_results["industry"].append(selected_item)
+            
+            LOG.info(f"Industry keyword '{keyword}': selected {len(selected)} articles")
+        except Exception as e:
+            LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
+
+async def process_competitor_batch_async(batch, ticker, selected_results):
+    """Process a batch of competitor groups"""
+    for entity_key, entity_articles in batch:
+        try:
+            LOG.info(f"Processing competitor '{entity_key}': {len(entity_articles)} articles")
+            triage_articles = [item["article"] for item in entity_articles]
+            
+            async with async_triage_sem:
+                selected = await triage_competitor_articles_full(triage_articles, ticker, [], {})
+            
+            # Map back to original indices
+            for selected_item in selected:
+                original_idx = entity_articles[selected_item["id"]]["original_idx"]
+                selected_item["id"] = original_idx
+                selected_results["competitor"].append(selected_item)
+            
+            LOG.info(f"Competitor '{entity_key}': selected {len(selected)} articles")
+        except Exception as e:
+            LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
 
 class TriageItem(BaseModel):
     id: int
@@ -8166,6 +8535,7 @@ class CLIRequest(BaseModel):
     action: str
     tickers: List[str]
     minutes: int = 1440
+    triage_batch_size: int = 2
 
 # ------------------------------------------------------------------------------
 # API Routes
@@ -8388,7 +8758,8 @@ async def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest"),
-    batch_size: int = Query(default=None, description="Batch size for concurrent processing")
+    batch_size: int = Query(default=None, description="Batch size for concurrent processing"),
+    triage_batch_size: int = Query(default=2, description="Batch size for triage processing")
 ):
     """Enhanced ingest with comprehensive memory monitoring and async batch processing"""
     async with TICKER_PROCESSING_LOCK:
@@ -8583,7 +8954,7 @@ async def cron_ingest(
                 
                 with resource_cleanup_context("ai_triage"):
                     # Use pure AI triage only
-                    selected_results = perform_ai_triage_batch(articles_by_ticker[ticker], ticker)
+                    selected_results = await perform_ai_triage_with_batching_async(articles_by_ticker[ticker], ticker, triage_batch_size)
                     triage_results[ticker] = selected_results
                 
                 memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")

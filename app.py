@@ -4017,17 +4017,45 @@ def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
                 competitor_ticker: str = None) -> int:
     """Simplified feed upsert with category storage"""
     LOG.info(f"DEBUG: Upserting feed - ticker: {ticker}, name: {name}, category: {category}, search_keyword: {search_keyword}")
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
-            VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-            ON CONFLICT (url) DO UPDATE SET 
-                name = EXCLUDED.name, 
-                category = EXCLUDED.category,
-                active = TRUE
-            RETURNING id;
-        """, (url, name, ticker, category, retain_days, search_keyword, competitor_ticker))
-        return cur.fetchone()["id"]
+    
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                ON CONFLICT (url) DO UPDATE SET 
+                    name = EXCLUDED.name, 
+                    category = EXCLUDED.category,
+                    active = TRUE
+                RETURNING id;
+            """, (url, name, ticker, category, retain_days, search_keyword, competitor_ticker))
+            
+            result = cur.fetchone()
+            
+            if result:
+                feed_id = result["id"]
+                LOG.info(f"DEBUG: Feed upsert SUCCESS - ID: {feed_id}, category: {category}")
+                
+                # IMMEDIATE VERIFICATION
+                cur.execute("""
+                    SELECT id, category, name FROM source_feed 
+                    WHERE id = %s AND active = TRUE
+                """, (feed_id,))
+                verification = cur.fetchone()
+                
+                if verification:
+                    LOG.info(f"DEBUG: Feed verification SUCCESS - {verification}")
+                else:
+                    LOG.error(f"DEBUG: Feed verification FAILED - feed {feed_id} not found after insert")
+                
+                return feed_id
+            else:
+                LOG.error(f"DEBUG: Feed upsert returned no result for {ticker} {category}")
+                return None
+                
+    except Exception as e:
+        LOG.error(f"DEBUG: Feed upsert EXCEPTION for {ticker} {category}: {e}")
+        return None
 
 def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
     """Get all active feeds, optionally filtered by tickers"""

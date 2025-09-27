@@ -7999,33 +7999,49 @@ async def admin_init(request: Request, body: InitRequest):
                     })
                     continue
                 
-                ticker_feed_count = 0
-                
-                for feed_config in feeds:
-                    feed_id = upsert_feed(
-                        url=feed_config["url"],
-                        name=feed_config["name"],
-                        ticker=ticker,
-                        category=feed_config.get("category", "company"),
-                        retain_days=DEFAULT_RETAIN_DAYS,
-                        search_keyword=feed_config.get("search_keyword"),
-                        competitor_ticker=feed_config.get("competitor_ticker")
-                    )
-                    results.append({
-                        "ticker": ticker,
-                        "feed": feed_config["name"],
-                        "category": feed_config.get("category", "company"),
-                        "search_keyword": feed_config.get("search_keyword"),
-                        "competitor_ticker": feed_config.get("competitor_ticker"),
-                        "id": feed_id
-                    })
-                    ticker_feed_count += 1
-                
-                LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created ===")
-                
-                # DEBUG: Immediate feed verification after creation
+                # FIXED: Single transaction for all feed operations
                 try:
-                    with db() as conn, conn.cursor() as cur:
+                    with db() as conn, conn.cursor() as cur:  # Single connection for all feeds
+                        ticker_feed_count = 0
+                        
+                        for feed_config in feeds:
+                            # Direct SQL insert using the same cursor/transaction
+                            cur.execute("""
+                                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+                                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                                ON CONFLICT (url) DO UPDATE SET 
+                                    name = EXCLUDED.name, 
+                                    category = EXCLUDED.category,
+                                    active = TRUE
+                                RETURNING id;
+                            """, (
+                                feed_config["url"], 
+                                feed_config["name"], 
+                                ticker,
+                                feed_config.get("category", "company"), 
+                                DEFAULT_RETAIN_DAYS,
+                                feed_config.get("search_keyword"), 
+                                feed_config.get("competitor_ticker")
+                            ))
+                            
+                            result = cur.fetchone()
+                            if result:
+                                feed_id = result['id']
+                                ticker_feed_count += 1
+                                LOG.info(f"Created feed ID {feed_id}: {feed_config['name']} (category: {feed_config.get('category', 'company')})")
+                                
+                                results.append({
+                                    "ticker": ticker,
+                                    "feed": feed_config["name"],
+                                    "category": feed_config.get("category", "company"),
+                                    "search_keyword": feed_config.get("search_keyword"),
+                                    "competitor_ticker": feed_config.get("competitor_ticker"),
+                                    "id": feed_id
+                                })
+                            else:
+                                LOG.error(f"Failed to create feed: {feed_config['name']}")
+                        
+                        # Verification using the SAME connection/transaction
                         cur.execute("""
                             SELECT category, COUNT(*) as count, 
                                    STRING_AGG(name, ' | ') as feed_names
@@ -8036,15 +8052,28 @@ async def admin_init(request: Request, body: InitRequest):
                         """, (ticker,))
                         
                         immediate_check = list(cur.fetchall())
-                        LOG.info(f"IMMEDIATE FEED VERIFICATION for {ticker}:")
+                        LOG.info(f"SAME-TRANSACTION VERIFICATION for {ticker}:")
                         for feed_row in immediate_check:
                             LOG.info(f"  {ticker} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
                         
-                        if not any(row['category'] == 'company' for row in immediate_check):
-                            LOG.error(f"CRITICAL: {ticker} missing company feeds immediately after creation!")
+                        # Check for company feeds
+                        has_company_feeds = any(row['category'] == 'company' for row in immediate_check)
+                        if not has_company_feeds and any(f.get('category') == 'company' for f in feeds):
+                            LOG.error(f"CRITICAL: {ticker} missing company feeds in same transaction!")
+                        else:
+                            LOG.info(f"SUCCESS: {ticker} has all expected feed categories")
                             
-                except Exception as debug_e:
-                    LOG.error(f"Feed verification failed for {ticker}: {debug_e}")
+                    # Connection closes here, committing the transaction
+                    LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created and committed ===")
+                    
+                except Exception as db_e:
+                    LOG.error(f"Database transaction failed for {ticker}: {db_e}")
+                    results.append({
+                        "ticker": ticker,
+                        "error": str(db_e),
+                        "message": f"Failed to create feeds for {ticker}"
+                    })
+                    continue
                 
             except Exception as e:
                 LOG.error(f"Failed to initialize {ticker}: {e}")

@@ -8007,7 +8007,11 @@ async def admin_init(request: Request, body: InitRequest):
                 
                 # FIXED: Single transaction for all feed operations
                 try:
-                    with db() as conn, conn.cursor() as cur:  # Single connection for all feeds
+                    with db() as conn, conn.cursor() as cur:
+                        # DEBUG: Check connection state
+                        cur.execute("SELECT current_setting('application_name'), pg_backend_pid()")
+                        conn_info = cur.fetchone()
+                        LOG.info(f"CONNECTION DEBUG: app={conn_info[0]}, pid={conn_info[1]}")
                         ticker_feed_count = 0
                         feed_ids_created = []  # Collect IDs for verification
                         

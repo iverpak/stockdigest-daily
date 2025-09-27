@@ -8147,39 +8147,50 @@ async def admin_init(request: Request, body: InitRequest):
         
         results = []
         
+        # CRITICAL: Process each ticker in complete isolation to prevent variable corruption
         for ticker in body.tickers:
-            # FIXED: Use ticker directly - NO intermediate variable assignment
-            LOG.info(f"=== INITIALIZING TICKER: {ticker} ===")
+            # STEP 1: Create isolated ticker variable to prevent corruption
+            isolated_ticker = str(ticker).strip()  # Force new string object
+            
+            LOG.info(f"=== INITIALIZING TICKER: {isolated_ticker} ===")
             
             try:
-                # Get or generate metadata with enhanced ticker reference integration
-                metadata = get_or_create_enhanced_ticker_metadata(ticker)
+                # STEP 2: Get or generate metadata with enhanced ticker reference integration
+                metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker)
                 
-                # Build feed URLs for all categories using enhanced feed creation
-                feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
+                # STEP 3: Build feed URLs for all categories using enhanced feed creation
+                feeds = feed_manager.create_feeds_for_ticker_enhanced(isolated_ticker, metadata)
                 
                 if not feeds:
-                    LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")
+                    LOG.info(f"=== {isolated_ticker}: No new feeds needed - already at limits ===")
                     results.append({
-                        "ticker": ticker,
+                        "ticker": isolated_ticker,
                         "message": "No new feeds created - already at limits",
                         "feeds_created": 0
                     })
                     continue
                 
-                # Single transaction for all feed operations
+                # STEP 4: CRITICAL SECTION - Single transaction for all feed operations with complete isolation
                 try:
                     with db() as conn, conn.cursor() as cur:
                         ticker_feed_count = 0
                         feed_ids_created = []
                         
-                        LOG.info(f"Starting feed creation for {ticker}, creating {len(feeds)} feeds")
+                        LOG.info(f"Starting feed creation for {isolated_ticker}, creating {len(feeds)} feeds")
                         
                         for feed_config in feeds:
-                            # BULLETPROOF: Log exactly what we're about to insert
-                            LOG.info(f"DEBUG FEED INSERT: ticker={ticker}, feed_name={feed_config['name']}, category={feed_config.get('category', 'company')}")
+                            # CRITICAL: Create completely isolated variables for each feed to prevent corruption
+                            isolated_feed_ticker = str(isolated_ticker)  # Force isolation per feed
+                            isolated_feed_name = str(feed_config['name'])
+                            isolated_feed_url = str(feed_config["url"])
+                            isolated_feed_category = str(feed_config.get("category", "company"))
+                            isolated_search_keyword = str(feed_config.get("search_keyword", "")) if feed_config.get("search_keyword") else None
+                            isolated_competitor_ticker = str(feed_config.get("competitor_ticker", "")) if feed_config.get("competitor_ticker") else None
                             
-                            # Use parameterized query to prevent SQL injection and ensure proper binding
+                            # BULLETPROOF: Log exactly what we're about to insert with isolated variables
+                            LOG.info(f"DEBUG FEED INSERT: ticker={isolated_feed_ticker}, feed_name={isolated_feed_name}, category={isolated_feed_category}")
+                            
+                            # Use parameterized query with completely isolated variables
                             cur.execute("""
                                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
                                 VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
@@ -8189,13 +8200,13 @@ async def admin_init(request: Request, body: InitRequest):
                                     active = TRUE
                                 RETURNING id;
                             """, (
-                                feed_config["url"], 
-                                feed_config["name"], 
-                                ticker,  # FIXED: Use ticker directly
-                                feed_config.get("category", "company"), 
+                                isolated_feed_url,
+                                isolated_feed_name,
+                                isolated_feed_ticker,  # CRITICAL: Use isolated ticker variable
+                                isolated_feed_category,
                                 DEFAULT_RETAIN_DAYS,
-                                feed_config.get("search_keyword"), 
-                                feed_config.get("competitor_ticker")
+                                isolated_search_keyword,
+                                isolated_competitor_ticker
                             ))
                             
                             result = cur.fetchone()
@@ -8204,28 +8215,28 @@ async def admin_init(request: Request, body: InitRequest):
                                 feed_ids_created.append(feed_id)
                                 ticker_feed_count += 1
                                 
-                                # CRITICAL: Validate inserted data matches intent
+                                # CRITICAL: Immediate validation to catch corruption
                                 cur.execute("SELECT ticker, name FROM source_feed WHERE id = %s", (feed_id,))
                                 validation_check = cur.fetchone()
-                                if validation_check['ticker'] != ticker:
-                                    LOG.error(f"DATA CORRUPTION DETECTED: Expected ticker={ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
-                                    raise Exception(f"Feed inserted with wrong ticker: expected {ticker}, got {validation_check['ticker']}")
+                                if validation_check['ticker'] != isolated_feed_ticker:
+                                    LOG.error(f"DATA CORRUPTION DETECTED: Expected ticker={isolated_feed_ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
+                                    raise Exception(f"Feed inserted with wrong ticker: expected {isolated_feed_ticker}, got {validation_check['ticker']}")
                                 
-                                LOG.info(f"Created feed ID {feed_id}: {feed_config['name']} (category: {feed_config.get('category', 'company')})")
+                                LOG.info(f"Created feed ID {feed_id}: {isolated_feed_name} (category: {isolated_feed_category})")
                                 
                                 results.append({
-                                    "ticker": ticker,
-                                    "feed": feed_config["name"],
-                                    "category": feed_config.get("category", "company"),
-                                    "search_keyword": feed_config.get("search_keyword"),
-                                    "competitor_ticker": feed_config.get("competitor_ticker"),
+                                    "ticker": isolated_feed_ticker,
+                                    "feed": isolated_feed_name,
+                                    "category": isolated_feed_category,
+                                    "search_keyword": isolated_search_keyword,
+                                    "competitor_ticker": isolated_competitor_ticker,
                                     "id": feed_id
                                 })
                             else:
-                                LOG.error(f"Failed to create feed: {feed_config['name']}")
+                                LOG.error(f"Failed to create feed: {isolated_feed_name}")
                         
                         # Final verification using the same connection/transaction
-                        LOG.info(f"Verifying feeds created for {ticker}")
+                        LOG.info(f"Verifying feeds created for {isolated_ticker}")
                         
                         # Verify the specific feed IDs we just created
                         if feed_ids_created:
@@ -8241,11 +8252,11 @@ async def admin_init(request: Request, body: InitRequest):
                             
                             # BULLETPROOF: Verify ALL feeds have correct ticker
                             for feed_check in direct_check:
-                                if feed_check['ticker'] != ticker:
-                                    LOG.error(f"POST-INSERT CORRUPTION: Feed {feed_check['id']} has ticker {feed_check['ticker']}, expected {ticker}")
+                                if feed_check['ticker'] != isolated_ticker:
+                                    LOG.error(f"POST-INSERT CORRUPTION: Feed {feed_check['id']} has ticker {feed_check['ticker']}, expected {isolated_ticker}")
                                     raise Exception(f"Post-insert validation failed: feed has wrong ticker")
                         
-                        # Summary query
+                        # Summary query for final verification
                         cur.execute("""
                             SELECT category, COUNT(*) as count, 
                                    STRING_AGG(name, ' | ') as feed_names
@@ -8253,38 +8264,38 @@ async def admin_init(request: Request, body: InitRequest):
                             WHERE ticker = %s AND active = TRUE 
                             GROUP BY category
                             ORDER BY category
-                        """, (ticker,))
+                        """, (isolated_ticker,))
                         
                         immediate_check = list(cur.fetchall())
-                        LOG.info(f"Final feed counts for {ticker}:")
+                        LOG.info(f"Final feed counts for {isolated_ticker}:")
                         for feed_row in immediate_check:
-                            LOG.info(f"  {ticker} | {feed_row['category']} | Count: {feed_row['count']}")
+                            LOG.info(f"  {isolated_ticker} | {feed_row['category']} | Count: {feed_row['count']}")
                         
                         # Check for company feeds
                         has_company_feeds = any(row['category'] == 'company' for row in immediate_check)
                         if not has_company_feeds and any(f.get('category') == 'company' for f in feeds):
-                            LOG.error(f"CRITICAL: {ticker} missing company feeds in same transaction!")
+                            LOG.error(f"CRITICAL: {isolated_ticker} missing company feeds in same transaction!")
                         else:
-                            LOG.info(f"SUCCESS: {ticker} has all expected feed categories")
+                            LOG.info(f"SUCCESS: {isolated_ticker} has all expected feed categories")
                             
                     # Connection closes here, committing the transaction
-                    LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created and committed ===")
+                    LOG.info(f"=== COMPLETED {isolated_ticker}: {ticker_feed_count} new feeds created and committed ===")
                     
                 except Exception as db_e:
-                    LOG.error(f"Database transaction failed for {ticker}: {db_e}")
+                    LOG.error(f"Database transaction failed for {isolated_ticker}: {db_e}")
                     results.append({
-                        "ticker": ticker,
+                        "ticker": isolated_ticker,
                         "error": str(db_e),
-                        "message": f"Failed to create feeds for {ticker}"
+                        "message": f"Failed to create feeds for {isolated_ticker}"
                     })
                     continue
                 
             except Exception as e:
-                LOG.error(f"Failed to initialize {ticker}: {e}")
+                LOG.error(f"Failed to initialize {isolated_ticker}: {e}")
                 results.append({
-                    "ticker": ticker,
+                    "ticker": isolated_ticker,
                     "error": str(e),
-                    "message": f"Failed to initialize {ticker}"
+                    "message": f"Failed to initialize {isolated_ticker}"
                 })
                 continue
         

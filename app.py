@@ -46,6 +46,9 @@ import os
 import tracemalloc
 from functools import wraps
 import threading
+from threading import BoundedSemaphore
+
+import aiohttp
 
 import gc
 import psutil
@@ -64,6 +67,32 @@ import asyncio
 
 # Global ticker processing lock
 TICKER_PROCESSING_LOCK = asyncio.Lock()
+
+# Concurrency Configuration and Semaphores
+SCRAPE_BATCH_SIZE = int(os.getenv("SCRAPE_BATCH_SIZE", "2"))
+OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "2"))
+PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "2"))
+SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "4"))
+
+# Global semaphores for concurrent processing
+OPENAI_SEM = BoundedSemaphore(OPENAI_MAX_CONCURRENCY)
+PLAYWRIGHT_SEM = BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENCY)  
+SCRAPFLY_SEM = BoundedSemaphore(SCRAPFLY_MAX_CONCURRENCY)
+
+# Async semaphores for async operations
+_async_semaphores_initialized = False
+async_openai_sem = None
+async_playwright_sem = None
+async_scrapfly_sem = None
+
+def init_async_semaphores():
+    """Initialize async semaphores - called once per event loop"""
+    global _async_semaphores_initialized, async_openai_sem, async_playwright_sem, async_scrapfly_sem
+    if not _async_semaphores_initialized:
+        async_openai_sem = asyncio.Semaphore(OPENAI_MAX_CONCURRENCY)
+        async_playwright_sem = asyncio.Semaphore(PLAYWRIGHT_MAX_CONCURRENCY)
+        async_scrapfly_sem = asyncio.Semaphore(SCRAPFLY_MAX_CONCURRENCY)
+        _async_semaphores_initialized = True
 
 def get_openai_session():
     """Get a requests session with retry logic for OpenAI API calls"""
@@ -2465,18 +2494,9 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
     scrapingbee_stats["failed"] += 1
     return None, f"ScrapingBee failed after {max_retries + 1} attempts"
 
-def scrape_with_scrapfly(
-    url: str,
-    domain: str,
-    max_retries: int = 2,
-    base_params: dict | None = None,
-) -> Tuple[Optional[str], Optional[str]]:
+async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    Scrapfly scraping with improved text extraction and content cleaning.
-    - Uses client-side retries/backoff here (do not rely on Scrapfly retry).
-    - Does NOT send 'timeout' in Scrapfly params (prevents 400 when retry is enabled server-side).
-    - Cranks up anti-bot only for domains in LOCAL_SCRAPFLY_ANTIBOT.
-    Returns: (cleaned_content, error_message)
+    Async Scrapfly scraping with improved text extraction and content cleaning.
     """
     global scrapfly_stats, enhanced_scraping_stats
 
@@ -2489,7 +2509,7 @@ def scrape_with_scrapfly(
     def _matches(host: str, dom: str) -> bool:
         return host == dom or host.endswith("." + dom)
 
-    # Local list affects ONLY this function (you said you’ll empty the global list upstream)
+    # Local list for anti-bot domains
     LOCAL_SCRAPFLY_ANTIBOT = {
         "simplywall.st", "seekingalpha.com", "zacks.com", "benzinga.com",
         "cnbc.com", "investing.com", "gurufocus.com", "fool.com",
@@ -2510,27 +2530,26 @@ def scrape_with_scrapfly(
 
             if attempt > 0:
                 delay = 2 ** attempt
-                LOG.info(f"SCRAPFLY RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
-                time.sleep(delay)
+                LOG.info(f"ASYNC SCRAPFLY RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
+                await asyncio.sleep(delay)
 
-            LOG.info(f"SCRAPFLY: Starting scrape for {domain} (attempt {attempt + 1})")
+            LOG.info(f"ASYNC SCRAPFLY: Starting scrape for {domain} (attempt {attempt + 1})")
 
-            # --- usage stats
+            # Update usage stats
             scrapfly_stats["requests_made"] += 1
-            scrapfly_stats["cost_estimate"] += 0.002  # rough est.
+            scrapfly_stats["cost_estimate"] += 0.002
             scrapfly_stats["by_domain"][domain]["attempts"] += 1
             enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
 
             host = _host(url)
 
-            # --- Build Scrapfly params (NO 'timeout' here; keep client timeout in requests.get)
+            # Build Scrapfly params (NO 'timeout' here; keep client timeout in aiohttp)
             params = {
                 "key": SCRAPFLY_API_KEY,
                 "url": url,
                 "render_js": False,
                 "country": "us",
                 "cache": False,
-                **(base_params or {}),
             }
 
             # Toggle anti-bot/JS only for local list
@@ -2538,83 +2557,81 @@ def scrape_with_scrapfly(
                 params["asp"] = True
                 params["render_js"] = True
 
-            response = requests.get("https://api.scrapfly.io/scrape", params=params, timeout=30)
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
+                    if response.status == 200:
+                        try:
+                            result = await response.json()
+                            html_content = result.get("result", {}).get("content", "") or ""
+                        except Exception as json_error:
+                            LOG.warning(f"ASYNC SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
+                            html_content = await response.text() or ""
 
-            # ---- Status handling
-            if response.status_code == 200:
-                try:
-                    result = response.json()
-                    html_content = result.get("result", {}).get("content", "") or ""
-                except Exception as json_error:
-                    LOG.warning(f"SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
-                    html_content = response.text or ""
+                        # Extract text from HTML
+                        raw_content = ""
+                        if html_content:
+                            try:
+                                article = newspaper.Article(url)
+                                article.set_html(html_content)
+                                article.parse()
+                                raw_content = article.text or ""
+                            except Exception as e:
+                                LOG.warning(f"ASYNC SCRAPFLY: Newspaper parse failed for {domain}: {e}")
+                                raw_content = html_content
 
-                # Extract text from HTML (don't rely on unsupported API-side text formats)
-                raw_content = ""
-                if html_content:
-                    try:
-                        article = newspaper.Article(url)
-                        article.set_html(html_content)
-                        article.parse()
-                        raw_content = article.text or ""
-                    except Exception as e:
-                        LOG.warning(f"SCRAPFLY: Newspaper parse failed for {domain}: {e}")
-                        raw_content = html_content
+                        if not raw_content or len(raw_content.strip()) < 100:
+                            LOG.warning(f"ASYNC SCRAPFLY: Insufficient raw content for {domain} (attempt {attempt + 1})")
+                            continue
 
-                if not raw_content or len(raw_content.strip()) < 100:
-                    LOG.warning(f"SCRAPFLY: Insufficient raw content for {domain} (attempt {attempt + 1})")
-                    continue
+                        cleaned_content = clean_scraped_content(raw_content, url, domain)
+                        if not cleaned_content or len(cleaned_content.strip()) < 100:
+                            LOG.warning(f"ASYNC SCRAPFLY: Content too short after cleaning for {domain}")
+                            continue
 
-                cleaned_content = clean_scraped_content(raw_content, url, domain)
-                if not cleaned_content or len(cleaned_content.strip()) < 100:
-                    LOG.warning(f"SCRAPFLY: Content too short after cleaning for {domain}")
-                    continue
+                        is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
+                        if not is_valid:
+                            LOG.warning(f"ASYNC SCRAPFLY: Content validation failed for {domain}: {validation_msg}")
+                            break
 
-                is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
-                if not is_valid:
-                    LOG.warning(f"SCRAPFLY: Content validation failed for {domain}: {validation_msg}")
-                    break
+                        # Success stats
+                        scrapfly_stats["successful"] += 1
+                        scrapfly_stats["by_domain"][domain]["successes"] += 1
+                        enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
 
-                # success stats
-                scrapfly_stats["successful"] += 1
-                scrapfly_stats["by_domain"][domain]["successes"] += 1
-                enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
+                        raw_len = len(str(raw_content))
+                        clean_len = len(cleaned_content)
+                        reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0.0
+                        LOG.info(f"ASYNC SCRAPFLY SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
+                        return cleaned_content, None
 
-                raw_len = len(str(raw_content))
-                clean_len = len(cleaned_content)
-                reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0.0
-                LOG.info(f"SCRAPFLY SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
-                return cleaned_content, None
+                    elif response.status == 422:
+                        error_text = await response.text()
+                        LOG.warning(f"ASYNC SCRAPFLY: 422 invalid parameters for {domain} body: {error_text[:500]}")
+                        break
 
-            elif response.status_code == 422:
-                LOG.warning(f"SCRAPFLY: 422 invalid parameters for {domain} body: {response.text[:500]}")
-                break
+                    elif response.status == 429:
+                        LOG.warning(f"ASYNC SCRAPFLY: 429 rate limited for {domain} (attempt {attempt + 1})")
+                        if attempt < max_retries:
+                            await asyncio.sleep(5)
+                            continue
 
-            elif response.status_code == 429:
-                LOG.warning(f"SCRAPFLY: 429 rate limited for {domain} (attempt {attempt + 1})")
-                if attempt < max_retries:
-                    time.sleep(5)
-                    continue
+                    else:
+                        error_text = await response.text()
+                        req_id = response.headers.get("x-request-id") or response.headers.get("cf-ray")
+                        LOG.warning(
+                            f"ASYNC SCRAPFLY: HTTP {response.status} for {domain} "
+                            f"(attempt {attempt + 1}) id={req_id} body: {error_text[:500]}"
+                        )
+                        if attempt < max_retries:
+                            continue
 
-            else:
-                req_id = response.headers.get("x-request-id") or response.headers.get("cf-ray")
-                LOG.warning(
-                    f"SCRAPFLY: HTTP {response.status_code} for {domain} "
-                    f"(attempt {attempt + 1}) id={req_id} body: {response.text[:500]}"
-                )
-                if attempt < max_retries:
-                    continue
-
-        except requests.RequestException as e:
-            LOG.warning(f"SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
+        except Exception as e:
+            LOG.warning(f"ASYNC SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
             if attempt < max_retries:
                 continue
-        except Exception as e:
-            LOG.error(f"SCRAPFLY: Unexpected error for {domain}: {e}")
-            break
 
     scrapfly_stats["failed"] += 1
-    return None, f"Scrapfly failed after {max_retries + 1} attempts"
+    return None, f"Async Scrapfly failed after {max_retries + 1} attempts"
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
@@ -2989,14 +3006,14 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
     except Exception as e:
         return None, f"Scraping error: {str(e)}"
 
-async def safe_content_scraper_with_3tier_fallback(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
-    3-tier content scraper: requests → Playwright → Scrapfly with comprehensive tracking
+    Async 3-tier content scraper: requests → Playwright → Scrapfly with comprehensive tracking
     """
     global enhanced_scraping_stats
     
     # Check limits first
-    if not _check_scraping_limit(category, keyword):  # Fixed: removed asterisks
+    if not _check_scraping_limit(category, keyword):
         if category == "company":
             return None, f"Company limit reached ({scraping_stats['company_scraped']}/{scraping_stats['limits']['company']})"
         elif category == "industry":
@@ -3006,55 +3023,73 @@ async def safe_content_scraper_with_3tier_fallback(url: str, domain: str, catego
             keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
             return None, f"Competitor '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['competitor_per_keyword']})"
     
+    # Ensure async semaphores are initialized
+    init_async_semaphores()
+    
     enhanced_scraping_stats["total_attempts"] += 1
     
     # TIER 1: Try standard requests-based scraping
-    LOG.info(f"TIER 1 (Requests): Attempting {domain}")
+    LOG.info(f"ASYNC TIER 1 (Requests): Attempting {domain}")
     enhanced_scraping_stats["by_method"]["requests"]["attempts"] += 1
     
-    content, error = safe_content_scraper(url, domain, scraped_domains)
+    # Use thread pool for sync requests call
+    import asyncio
+    loop = asyncio.get_event_loop()
     
-    if content:
-        enhanced_scraping_stats["requests_success"] += 1
-        enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
-        update_scraping_stats(category, keyword, True)  # Fixed: removed asterisks
-        return content, f"TIER 1 SUCCESS: {len(content)} chars via requests"
+    try:
+        content, error = await loop.run_in_executor(None, safe_content_scraper, url, domain, scraped_domains)
+        
+        if content:
+            enhanced_scraping_stats["requests_success"] += 1
+            enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
+            update_scraping_stats(category, keyword, True)
+            return content, f"ASYNC TIER 1 SUCCESS: {len(content)} chars via requests"
+    except Exception as e:
+        error = str(e)
     
-    LOG.info(f"TIER 1 FAILED: {domain} - {error}")
+    LOG.info(f"ASYNC TIER 1 FAILED: {domain} - {error}")
     
     # TIER 2: Try Playwright fallback
-    LOG.info(f"TIER 2 (Playwright): Attempting {domain}")
+    LOG.info(f"ASYNC TIER 2 (Playwright): Attempting {domain}")
     enhanced_scraping_stats["by_method"]["playwright"]["attempts"] += 1
     
-    # This is already correctly using await with the async Playwright function
-    playwright_content, playwright_error = await extract_article_content_with_playwright(url, domain)
+    async with async_playwright_sem:
+        try:
+            playwright_content, playwright_error = await extract_article_content_with_playwright(url, domain)
+            
+            if playwright_content:
+                enhanced_scraping_stats["playwright_success"] += 1
+                enhanced_scraping_stats["by_method"]["playwright"]["successes"] += 1
+                update_scraping_stats(category, keyword, True)
+                return playwright_content, f"ASYNC TIER 2 SUCCESS: {len(playwright_content)} chars via Playwright"
+        except Exception as e:
+            playwright_error = str(e)
     
-    if playwright_content:
-        enhanced_scraping_stats["playwright_success"] += 1
-        enhanced_scraping_stats["by_method"]["playwright"]["successes"] += 1
-        update_scraping_stats(category, keyword, True)  # Fixed: removed asterisks
-        return playwright_content, f"TIER 2 SUCCESS: {len(playwright_content)} chars via Playwright"
+    LOG.info(f"ASYNC TIER 2 FAILED: {domain} - {playwright_error}")
     
-    LOG.info(f"TIER 2 FAILED: {domain} - {playwright_error}")
-    
-    # TIER 3: Try Scrapfly fallback (CHANGED from ScrapingBee)
+    # TIER 3: Try Scrapfly fallback
     if SCRAPFLY_API_KEY:
-        LOG.info(f"TIER 3 (Scrapfly): Attempting {domain}")
+        LOG.info(f"ASYNC TIER 3 (Scrapfly): Attempting {domain}")
         
-        scrapfly_content, scrapfly_error = scrape_with_scrapfly(url, domain)
+        async with async_scrapfly_sem:
+            try:
+                scrapfly_content, scrapfly_error = await scrape_with_scrapfly_async(url, domain)
+                
+                if scrapfly_content:
+                    enhanced_scraping_stats["scrapfly_success"] += 1
+                    update_scraping_stats(category, keyword, True)
+                    return scrapfly_content, f"ASYNC TIER 3 SUCCESS: {len(scrapfly_content)} chars via Scrapfly"
+            except Exception as e:
+                scrapfly_error = str(e)
         
-        if scrapfly_content:
-            enhanced_scraping_stats["scrapfly_success"] += 1
-            update_scraping_stats(category, keyword, True)  # Fixed: removed asterisks
-            return scrapfly_content, f"TIER 3 SUCCESS: {len(scrapfly_content)} chars via Scrapfly"
-        
-        LOG.info(f"TIER 3 FAILED: {domain} - {scrapfly_error}")
+        LOG.info(f"ASYNC TIER 3 FAILED: {domain} - {scrapfly_error}")
     else:
-        LOG.info(f"TIER 3 SKIPPED: Scrapfly API key not configured")
+        LOG.info(f"ASYNC TIER 3 SKIPPED: Scrapfly API key not configured")
+        scrapfly_error = "not configured"
     
     # All tiers failed
     enhanced_scraping_stats["total_failures"] += 1
-    return None, f"ALL TIERS FAILED - Requests: {error}, Playwright: {playwright_error}, Scrapfly: {scrapfly_error if SCRAPFLY_API_KEY else 'not configured'}"
+    return None, f"ALL ASYNC TIERS FAILED - Requests: {error}, Playwright: {playwright_error}, Scrapfly: {scrapfly_error if SCRAPFLY_API_KEY else 'not configured'}"
 
 def log_enhanced_scraping_stats():
     """Log comprehensive scraping statistics across all methods"""
@@ -3161,104 +3196,226 @@ def reset_enhanced_scraping_stats():
         "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
     }
 
-async def scrape_and_analyze_article_3tier(article: Dict, category: str, metadata: Dict, analysis_ticker: str) -> bool:
-    """Scrape content and run AI analysis for a single article from specific ticker's perspective"""
+async def process_article_batch_async(articles_batch: List[Dict], category: str, metadata: Dict, analysis_ticker: str) -> List[Dict]:
+    """
+    Process a batch of articles concurrently: scraping → AI summarization → database update
+    Returns list of results for each article in the batch
+    """
+    batch_size = len(articles_batch)
+    LOG.info(f"BATCH START: Processing {batch_size} articles from {analysis_ticker}'s perspective")
+    
+    results = []
+    
+    # Phase 1: Concurrent scraping for all articles in batch
+    LOG.info(f"BATCH PHASE 1: Concurrent scraping of {batch_size} articles")
+    
+    scraping_tasks = []
+    for i, article in enumerate(articles_batch):
+        task = scrape_single_article_async(article, category, metadata, analysis_ticker, i)
+        scraping_tasks.append(task)
+    
+    # Execute all scraping tasks concurrently, don't let one failure kill others
+    scraping_results = await asyncio.gather(*scraping_tasks, return_exceptions=True)
+    
+    # Phase 2: Concurrent AI summarization for successfully scraped articles
+    successful_scrapes = []
+    for i, result in enumerate(scraping_results):
+        if isinstance(result, Exception):
+            LOG.error(f"BATCH SCRAPING ERROR: Article {i} failed: {result}")
+            results.append({
+                "article_id": articles_batch[i]["id"],
+                "success": False,
+                "error": f"Scraping failed: {str(result)}",
+                "scraped_content": None,
+                "ai_summary": None
+            })
+        elif result["success"]:
+            successful_scrapes.append((i, result))
+            
+    if successful_scrapes:
+        LOG.info(f"BATCH PHASE 2: AI summarization of {len(successful_scrapes)} successful scrapes")
+        
+        ai_tasks = []
+        for i, scrape_result in successful_scrapes:
+            task = generate_ai_summary_for_scraped_article(
+                scrape_result["scraped_content"], 
+                articles_batch[i]["title"], 
+                analysis_ticker,
+                articles_batch[i].get("description", "")
+            )
+            ai_tasks.append((i, task))
+        
+        # Execute AI summarization concurrently
+        ai_results = await asyncio.gather(*[task for _, task in ai_tasks], return_exceptions=True)
+        
+        # Combine scraping and AI results
+        for j, (original_idx, _) in enumerate(ai_tasks):
+            scrape_result = next(result for i, result in successful_scrapes if i == original_idx)
+            ai_result = ai_results[j]
+            
+            if isinstance(ai_result, Exception):
+                LOG.error(f"BATCH AI ERROR: Article {original_idx} failed: {ai_result}")
+                ai_summary = None
+            else:
+                ai_summary = ai_result
+            
+            results.append({
+                "article_id": articles_batch[original_idx]["id"],
+                "article_idx": original_idx,
+                "success": True,
+                "scraped_content": scrape_result["scraped_content"],
+                "ai_summary": ai_summary,
+                "content_scraped_at": scrape_result["content_scraped_at"],
+                "scraping_error": None
+            })
+    
+    # Add failed scraping results
+    for i, result in enumerate(scraping_results):
+        if isinstance(result, Exception) or not result["success"]:
+            if not any(r["article_id"] == articles_batch[i]["id"] for r in results):
+                results.append({
+                    "article_id": articles_batch[i]["id"],
+                    "article_idx": i,
+                    "success": False,
+                    "error": str(result) if isinstance(result, Exception) else result.get("error", "Unknown error"),
+                    "scraped_content": None,
+                    "ai_summary": None
+                })
+    
+    # Phase 3: Batch database update
+    LOG.info(f"BATCH PHASE 3: Database update for {len(results)} articles")
+    successful_updates = 0
+    
     try:
-        article_id = article["id"]
+        with db() as conn, conn.cursor() as cur:
+            for result in results:
+                if result["success"]:
+                    article = articles_batch[result["article_idx"]]
+                    
+                    clean_content = clean_null_bytes(result["scraped_content"]) if result["scraped_content"] else None
+                    clean_summary = clean_null_bytes(result["ai_summary"]) if result["ai_summary"] else None
+                    
+                    cur.execute("""
+                        INSERT INTO found_url (
+                            url, resolved_url, url_hash, title, description, ticker, domain,
+                            published_at, category, search_keyword, 
+                            scraped_content, content_scraped_at, scraping_failed, scraping_error,
+                            ai_summary, ai_analysis_ticker, competitor_ticker, triage_priority
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                        DO UPDATE SET
+                            scraped_content = EXCLUDED.scraped_content,
+                            content_scraped_at = EXCLUDED.content_scraped_at,
+                            ai_summary = EXCLUDED.ai_summary,
+                            updated_at = NOW()
+                    """, (
+                        article.get("url"), article.get("resolved_url"), article.get("url_hash"), 
+                        article.get("title"), article.get("description"), analysis_ticker, 
+                        article.get("domain"), article.get("published_at"), category, 
+                        article.get("search_keyword"), clean_content, result.get("content_scraped_at"), 
+                        False, None, clean_summary, analysis_ticker, 
+                        article.get("competitor_ticker"), 
+                        normalize_priority_to_int(article.get("triage_priority", 2))
+                    ))
+                    successful_updates += 1
+                else:
+                    # Update with scraping failure
+                    article = articles_batch[result["article_idx"]]
+                    cur.execute("""
+                        INSERT INTO found_url (
+                            url, resolved_url, url_hash, title, description, ticker, domain,
+                            published_at, category, search_keyword, 
+                            scraped_content, content_scraped_at, scraping_failed, scraping_error,
+                            ai_analysis_ticker, competitor_ticker, triage_priority
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
+                        DO UPDATE SET
+                            scraping_failed = EXCLUDED.scraping_failed,
+                            scraping_error = EXCLUDED.scraping_error,
+                            updated_at = NOW()
+                    """, (
+                        article.get("url"), article.get("resolved_url"), article.get("url_hash"),
+                        article.get("title"), article.get("description"), analysis_ticker,
+                        article.get("domain"), article.get("published_at"), category,
+                        article.get("search_keyword"), None, None, True, 
+                        clean_null_bytes(result.get("error", "")), analysis_ticker,
+                        article.get("competitor_ticker"),
+                        normalize_priority_to_int(article.get("triage_priority", 2))
+                    ))
+        
+        LOG.info(f"BATCH COMPLETE: {successful_updates}/{len(results)} articles successfully updated in database")
+        
+    except Exception as e:
+        LOG.error(f"BATCH DATABASE ERROR: Failed to update batch results: {e}")
+    
+    return results
+
+async def scrape_single_article_async(article: Dict, category: str, metadata: Dict, analysis_ticker: str, article_idx: int) -> Dict:
+    """Scrape a single article asynchronously"""
+    try:
         resolved_url = article.get("resolved_url") or article.get("url")
         domain = article.get("domain", "unknown")
         title = article.get("title", "")
-        url_hash = article.get("url_hash")
         
-        # Check if this URL already has analysis from this ticker's perspective
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT scraped_content, ai_summary
-                FROM found_url 
-                WHERE url_hash = %s AND ai_analysis_ticker = %s
-            """, (url_hash, analysis_ticker))
-            existing_analysis = cur.fetchone()
-        
-        if (existing_analysis and 
-            existing_analysis["scraped_content"] and 
-            existing_analysis["ai_summary"]):
-            
-            LOG.info(f"REUSING ANALYSIS: Article {article_id} already analyzed from {analysis_ticker}'s perspective")
-            return True
-        
-        # Get keyword for limit tracking - FIXED: Consistent competitor logic
+        # Get keyword for limit tracking
         if category == "company":
             keyword = analysis_ticker
         elif category == "competitor":
-             # FIXED: Consistent competitor keyword logic
             keyword = article.get("competitor_ticker", "unknown")
             if keyword == "unknown":
                 keyword = article.get("search_keyword", "unknown")
         else:
             keyword = article.get("search_keyword", "unknown")
         
-        # Initialize content variables
-        scraped_content = None
-        scraping_error = None
-        content_scraped_at = None
-        scraping_failed = False
-        ai_summary = None
-        
         if resolved_url and resolved_url.startswith(('http://', 'https://')):
             scrape_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
             
             if scrape_domain not in PAYWALL_DOMAINS and scrape_domain not in PROBLEMATIC_SCRAPE_DOMAINS:
-                content, status = await safe_content_scraper_with_3tier_fallback(
+                content, status = await safe_content_scraper_with_3tier_fallback_async(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
                 
                 if content:
-                    scraped_content = clean_null_bytes(content)
-                    content_scraped_at = datetime.now(timezone.utc)
-                    # Generate AI summary after successful scraping
-                    ai_summary = generate_ai_individual_summary(scraped_content, title, analysis_ticker)
-                    if ai_summary:
-                        ai_summary = clean_null_bytes(ai_summary)
-                        LOG.info(f"AI SUMMARY GENERATED for {analysis_ticker}: {len(ai_summary)} chars - '{ai_summary[:100]}...'")
-                    else:
-                        LOG.warning(f"AI SUMMARY FAILED for {analysis_ticker}: {title[:50]}...")
-                        ai_summary = None
+                    return {
+                        "success": True,
+                        "scraped_content": content,
+                        "content_scraped_at": datetime.now(timezone.utc),
+                        "error": None
+                    }
                 else:
-                    scraping_failed = True
-                    scraping_error = clean_null_bytes(status or "")
-                    return False
-        
-        # Store with analysis_ticker perspective
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO found_url (
-                    url, resolved_url, url_hash, title, description, ticker, domain,
-                    published_at, category, search_keyword, 
-                    scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                    ai_summary, ai_analysis_ticker, competitor_ticker, triage_priority
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
-                DO UPDATE SET
-                    scraped_content = EXCLUDED.scraped_content,
-                    content_scraped_at = EXCLUDED.content_scraped_at,
-                    ai_summary = EXCLUDED.ai_summary,
-                    updated_at = NOW()
-            """, (
-                article.get("url"), resolved_url, url_hash, title, 
-                article.get("description"), analysis_ticker, domain, 
-                article.get("published_at"), category, article.get("search_keyword"),
-                scraped_content, content_scraped_at, scraping_failed, 
-                clean_null_bytes(scraping_error or ""), clean_null_bytes(ai_summary or ""),
-                analysis_ticker, article.get("competitor_ticker"),
-                normalize_priority_to_int(article.get("triage_priority", 2))
-            ))
-        
-        LOG.info(f"TICKER-SPECIFIC ANALYSIS: {title[:50]}... analyzed from {analysis_ticker}'s perspective with AI summary")
-        return scraped_content is not None
-        
+                    return {
+                        "success": False,
+                        "error": status or "Failed to scrape content",
+                        "scraped_content": None
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Skipped problematic domain: {scrape_domain}",
+                    "scraped_content": None
+                }
+        else:
+            return {
+                "success": False,
+                "error": "Invalid or missing URL",
+                "scraped_content": None
+            }
+            
     except Exception as e:
-        LOG.error(f"Failed to analyze article {article.get('id')} from {analysis_ticker}'s perspective: {e}")
-        return False
+        LOG.error(f"Article scraping failed for article {article_idx}: {e}")
+        return {
+            "success": False,
+            "error": f"Exception during scraping: {str(e)}",
+            "scraped_content": None
+        }
+
+async def generate_ai_summary_for_scraped_article(scraped_content: str, title: str, ticker: str, description: str = "") -> Optional[str]:
+    """Generate AI summary for a scraped article"""
+    try:
+        return await generate_ai_individual_summary_async(scraped_content, title, ticker, description)
+    except Exception as e:
+        LOG.error(f"AI summary generation failed: {e}")
+        return None
 
 def update_scraping_stats(category: str, keyword: str, success: bool):
     """Helper to update scraping statistics"""
@@ -4345,18 +4502,22 @@ def _fallback_quality_score(title: str, domain: str, ticker: str, description: s
     
     return max(20.0, min(80.0, base_score))
 
-def generate_ai_individual_summary(scraped_content: str, title: str, ticker: str, description: str = "") -> Optional[str]:
-    """Generate enhanced hedge fund analyst summary with specific financial context and materiality assessment"""
+async def generate_ai_individual_summary_async(scraped_content: str, title: str, ticker: str, description: str = "") -> Optional[str]:
+    """Async version of AI summary generation with semaphore control"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         LOG.warning(f"AI summary generation skipped - API key: {bool(OPENAI_API_KEY)}, content length: {len(scraped_content) if scraped_content else 0}")
         return None
     
-    try:
-        config = get_ticker_config(ticker)
-        company_name = config.get("name", ticker) if config else ticker
-        sector = config.get("sector", "") if config else ""
-        
-        prompt = f"""You are a hedge-fund analyst. Write a 5–7 sentence summary that is 100% EXTRACTIVE.
+    # Ensure async semaphores are initialized
+    init_async_semaphores()
+    
+    async with async_openai_sem:
+        try:
+            config = get_ticker_config(ticker)
+            company_name = config.get("name", ticker) if config else ticker
+            sector = config.get("sector", "") if config else ""
+            
+            prompt = f"""You are a hedge-fund analyst. Write a 5–7 sentence summary that is 100% EXTRACTIVE.
 
 Rules (hard):
 - Use ONLY facts explicitly present in the provided text (no outside knowledge, no inference, no estimates).
@@ -4373,48 +4534,50 @@ Full Content: {scraped_content[:10000]}
 
 """
 
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": OPENAI_MODEL,
-            "input": prompt,
-            "max_output_tokens": 15000,
-            "reasoning": {"effort": "medium"},
-            "text": {"verbosity": "low"},
-            "truncation": "auto"
-        }
-        
-        LOG.info(f"Generating AI summary for {ticker} - Content: {len(scraped_content)} chars, Title: {title[:50]}...")
-        
-        response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-        
-        if response.status_code == 200:
-            result = response.json()
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
             
-            u = result.get("usage", {}) or {}
-            LOG.info("AI Enhanced Summary usage — input:%s output:%s (cap:%s) status:%s reason:%s",
-                     u.get("input_tokens"), u.get("output_tokens"),
-                     result.get("max_output_tokens"),
-                     result.get("status"),
-                     (result.get("incomplete_details") or {}).get("reason"))
+            data = {
+                "model": OPENAI_MODEL,
+                "input": prompt,
+                "max_output_tokens": 15000,
+                "reasoning": {"effort": "medium"},
+                "text": {"verbosity": "low"},
+                "truncation": "auto"
+            }
             
-            summary = extract_text_from_responses(result)
-            if summary and len(summary.strip()) > 10:
-                LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars - '{summary[:100]}...'")
-                return summary.strip()
-            else:
-                LOG.warning(f"AI summary empty or too short for {ticker}: '{summary}'")
-                return None
-        else:
-            LOG.error(f"AI summary API error {response.status_code} for {ticker}: {response.text}")
+            LOG.info(f"Generating AI summary for {ticker} - Content: {len(scraped_content)} chars, Title: {title[:50]}...")
+            
+            # Use asyncio-compatible HTTP client
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        
+                        u = result.get("usage", {}) or {}
+                        LOG.info("AI Enhanced Summary usage – input:%s output:%s (cap:%s) status:%s reason:%s",
+                                 u.get("input_tokens"), u.get("output_tokens"),
+                                 result.get("max_output_tokens"),
+                                 result.get("status"),
+                                 (result.get("incomplete_details") or {}).get("reason"))
+                        
+                        summary = extract_text_from_responses(result)
+                        if summary and len(summary.strip()) > 10:
+                            LOG.info(f"Generated AI summary for {ticker}: {len(summary)} chars - '{summary[:100]}...'")
+                            return summary.strip()
+                        else:
+                            LOG.warning(f"AI summary empty or too short for {ticker}: '{summary}'")
+                            return None
+                    else:
+                        error_text = await response.text()
+                        LOG.error(f"AI summary API error {response.status} for {ticker}: {error_text}")
+                        return None
+                        
+        except Exception as e:
+            LOG.error(f"AI enhanced summary generation failed for {ticker}: {e}")
             return None
-            
-    except Exception as e:
-        LOG.error(f"AI enhanced summary generation failed for {ticker}: {e}")
-        return None
 
 def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
@@ -8158,10 +8321,17 @@ async def admin_init(request: Request, body: InitRequest):
 async def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),
-    tickers: List[str] = Query(default=None, description="Specific tickers to ingest")
+    tickers: List[str] = Query(default=None, description="Specific tickers to ingest"),
+    batch_size: int = Query(default=None, description="Batch size for concurrent processing")
 ):
-    """Enhanced ingest with comprehensive memory monitoring"""
+    """Enhanced ingest with comprehensive memory monitoring and async batch processing"""
     async with TICKER_PROCESSING_LOCK:
+        # Set batch size from parameter or environment variable
+        global SCRAPE_BATCH_SIZE
+        if batch_size is not None:
+            SCRAPE_BATCH_SIZE = max(1, min(batch_size, 10))  # Limit between 1-10
+            LOG.info(f"BATCH SIZE OVERRIDE: Using batch_size={SCRAPE_BATCH_SIZE} from API parameter")
+        
         start_time = time.time()
         require_admin(request)
         ensure_schema()
@@ -8170,13 +8340,14 @@ async def cron_ingest(
         try:
             memory_monitor.start_monitoring()
             memory_monitor.take_snapshot("CRON_INGEST_START")
-            LOG.info("=== CRON INGEST STARTING (WITH MEMORY MONITORING) ===")
+            LOG.info("=== CRON INGEST STARTING (WITH MEMORY MONITORING & ASYNC BATCHES) ===")
         except Exception as e:
             LOG.error(f"Memory monitoring failed to start: {e}")
             LOG.info("=== CRON INGEST STARTING (WITHOUT MEMORY MONITORING) ===")
         
         LOG.info(f"Processing window: {minutes} minutes")
         LOG.info(f"Target tickers: {tickers or 'ALL'}")
+        LOG.info(f"Batch size: {SCRAPE_BATCH_SIZE}")
         
         try:
             # Reset statistics
@@ -8184,6 +8355,9 @@ async def cron_ingest(
             reset_scraping_stats()
             reset_enhanced_scraping_stats()
             memory_monitor.take_snapshot("STATS_RESET")
+            
+            # Initialize async semaphores
+            init_async_semaphores()
             
             # Calculate dynamic scraping limits for each ticker using enhanced database
             dynamic_limits = {}
@@ -8378,8 +8552,8 @@ async def cron_ingest(
             LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
             memory_monitor.take_snapshot("PHASE3_COMPLETE")
             
-            # PHASE 4: Ticker-specific content scraping and analysis (WITH MEMORY MONITORING)
-            LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS ===")
+            # PHASE 4: Ticker-specific content scraping and analysis (WITH ASYNC BATCH PROCESSING)
+            LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS (ASYNC BATCHES) ===")
             memory_monitor.take_snapshot("PHASE4_START")
             scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
             
@@ -8391,9 +8565,9 @@ async def cron_ingest(
                     total_articles_to_process += len(selected.get(category, []))
             
             processed_count = 0
-            LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process across all tickers")
+            LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process in batches of {SCRAPE_BATCH_SIZE}")
             
-            # Track which tickers were successfully processed for potential future GitHub update
+            # Track which tickers were successfully processed
             successfully_processed_tickers = set()
             
             for target_ticker in articles_by_ticker.keys():
@@ -8408,80 +8582,96 @@ async def cron_ingest(
                 ticker_success_count = 0
                 selected = triage_results.get(target_ticker, {})
                 
+                # Collect all selected articles for this ticker across categories
+                all_selected_articles = []
                 for category in ["company", "industry", "competitor"]:
                     category_selected = selected.get(category, [])
                     
                     for item in category_selected:
-                        processed_count += 1
-                        
-                        # MEMORY MONITORING: Every 5 articles
-                        if processed_count % 5 == 0:
-                            elapsed = time.time() - start_time
-                            memory_monitor.take_snapshot(f"SCRAPING_ARTICLE_{processed_count}")
-                            current_memory = memory_monitor.get_memory_info()
-                            
-                            LOG.info(f"HEARTBEAT: Processing article {processed_count}/{total_articles_to_process} - {category} for {target_ticker} ({elapsed:.1f}s elapsed)")
-                            LOG.info(f"HEARTBEAT: Progress {(processed_count/total_articles_to_process)*100:.1f}% - Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
-                            LOG.info(f"MEMORY: {current_memory['memory_mb']:.1f}MB, CPU: {current_memory['cpu_percent']:.1f}%")
-                            
-                            # Force garbage collection if memory gets high
-                            if current_memory["memory_mb"] > 800:  # 800MB threshold
-                                LOG.warning(f"HIGH MEMORY USAGE: {current_memory['memory_mb']:.1f}MB - forcing garbage collection")
-                                gc_stats = memory_monitor.force_garbage_collection()
-                                memory_monitor.take_snapshot(f"SCRAPING_POST_GC_{processed_count}")
-                                LOG.info(f"GC: Freed {gc_stats['objects_freed']} objects")
-                        
                         article_idx = item["id"]
                         if article_idx < len(articles_by_ticker[target_ticker][category]):
                             article = articles_by_ticker[target_ticker][category][article_idx]
+                            all_selected_articles.append({
+                                "article": article,
+                                "category": category,
+                                "item": item
+                            })
+                
+                # Process articles in batches
+                total_batches = (len(all_selected_articles) + SCRAPE_BATCH_SIZE - 1) // SCRAPE_BATCH_SIZE
+                LOG.info(f"TICKER {target_ticker}: Processing {len(all_selected_articles)} articles in {total_batches} batches of {SCRAPE_BATCH_SIZE}")
+                
+                for batch_num in range(total_batches):
+                    start_idx = batch_num * SCRAPE_BATCH_SIZE
+                    end_idx = min(start_idx + SCRAPE_BATCH_SIZE, len(all_selected_articles))
+                    batch = all_selected_articles[start_idx:end_idx]
+                    
+                    LOG.info(f"TICKER {target_ticker}: Processing batch {batch_num + 1}/{total_batches} ({len(batch)} articles)")
+                    
+                    # Prepare batch for processing
+                    batch_articles = []
+                    batch_categories = []
+                    for selected_article in batch:
+                        batch_articles.append(selected_article["article"])
+                        batch_categories.append(selected_article["category"])
+                    
+                    # Process batch asynchronously
+                    try:
+                        batch_results = await process_article_batch_async(
+                            batch_articles, 
+                            batch_categories[0],  # Use first category as primary (they should be similar in batch)
+                            metadata, 
+                            target_ticker
+                        )
+                        
+                        # Update statistics based on batch results
+                        for result in batch_results:
+                            processed_count += 1
                             
-                            # Get appropriate keyword for limit checking
-                            if category == "company":
-                                keyword = target_ticker
-                            elif category == "competitor":
-                                keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
-                            else:
-                                keyword = article.get("search_keyword", "unknown")
-                            
-                            if not _check_scraping_limit(category, keyword):
-                                continue
-                            
-                            # CRITICAL: Analyze from target_ticker's perspective with resource tracking
-                            with resource_cleanup_context("article_scraping"):
-                                success = await scrape_and_analyze_article_3tier(article, category, metadata, target_ticker)
-                            
-                            if success:
+                            if result["success"]:
                                 ticker_success_count += 1
-                                # Check if we reused existing data
-                                if (article.get('scraped_content') and 
-                                    article.get('ai_summary') and 
-                                    article.get('ai_impact') and
-                                    article.get('ai_analysis_ticker') == target_ticker):
-                                    scraping_final_stats["reused_existing"] += 1
-                                else:
+                                if result.get("scraped_content") and result.get("ai_summary"):
                                     scraping_final_stats["scraped"] += 1
                                     scraping_final_stats["ai_analyzed"] += 1
+                                elif result.get("scraped_content"):
+                                    scraping_final_stats["reused_existing"] += 1
                             else:
                                 scraping_final_stats["failed"] += 1
                         
-                        # Additional heartbeat for very large batches (every 10 articles)
-                        if processed_count % 10 == 0:
-                            elapsed = time.time() - start_time
-                            LOG.info(f"HEARTBEAT: {processed_count}/{total_articles_to_process} complete after {elapsed:.1f}s - keeping connection alive")
+                        # MEMORY MONITORING: Every batch
+                        elapsed = time.time() - start_time
+                        memory_monitor.take_snapshot(f"BATCH_{batch_num + 1}_COMPLETE")
+                        current_memory = memory_monitor.get_memory_info()
+                        
+                        LOG.info(f"BATCH COMPLETE: {batch_num + 1}/{total_batches} for {target_ticker} - {processed_count}/{total_articles_to_process} total ({elapsed:.1f}s elapsed)")
+                        LOG.info(f"BATCH STATS: Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
+                        LOG.info(f"MEMORY: {current_memory['memory_mb']:.1f}MB, CPU: {current_memory['cpu_percent']:.1f}%")
+                        
+                        # Force garbage collection if memory gets high
+                        if current_memory["memory_mb"] > 800:  # 800MB threshold
+                            LOG.warning(f"HIGH MEMORY USAGE: {current_memory['memory_mb']:.1f}MB - forcing garbage collection")
+                            gc_stats = memory_monitor.force_garbage_collection()
+                            memory_monitor.take_snapshot(f"BATCH_POST_GC_{batch_num + 1}")
+                            LOG.info(f"GC: Freed {gc_stats['objects_freed']} objects")
                             
-                            # Additional memory monitoring for every 10 articles
-                            current_memory = memory_monitor.get_memory_info()
-                            LOG.info(f"MEMORY CHECKPOINT: {current_memory['memory_mb']:.1f}MB, FDs: {current_memory['file_descriptors']}, Threads: {current_memory['threads']}")
+                    except Exception as e:
+                        LOG.error(f"BATCH PROCESSING ERROR: Batch {batch_num + 1} for {target_ticker} failed: {e}")
+                        # Mark articles in failed batch as failed
+                        for _ in batch:
+                            processed_count += 1
+                            scraping_final_stats["failed"] += 1
+                        continue
                 
                 # Track tickers that had successful processing
                 if ticker_success_count > 0:
                     successfully_processed_tickers.add(target_ticker)
                 
+                LOG.info(f"TICKER {target_ticker} COMPLETE: {ticker_success_count} successful articles")
                 memory_monitor.take_snapshot(f"TICKER_COMPLETE_{target_ticker}")
             
             # Final heartbeat before completion
             elapsed = time.time() - start_time
-            LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in {elapsed:.1f}s")
+            LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in batches in {elapsed:.1f}s")
             LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
             memory_monitor.take_snapshot("PHASE4_COMPLETE")
             
@@ -8497,7 +8687,7 @@ async def cron_ingest(
             try:
                 await full_resource_cleanup()  # Single call with await
                 memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
-                LOG.info("=== PERFORMING FINAL CLEANUP ===")
+                LOG.info("=== FINAL CLEANUP COMPLETE ===")
             except Exception as cleanup_error:
                 LOG.error(f"Error during final cleanup: {cleanup_error}")
                 memory_monitor.take_snapshot("CLEANUP_ERROR")
@@ -8520,7 +8710,8 @@ async def cron_ingest(
             response = {
                 "status": "completed",
                 "processing_time_seconds": round(processing_time, 1),
-                "workflow": "enhanced_ticker_reference_with_memory_monitoring",
+                "workflow": "enhanced_ticker_reference_with_async_batch_processing",
+                "batch_size_used": SCRAPE_BATCH_SIZE,
                 
                 "phase_1_ingest": {
                     "total_processed": ingest_stats["total_processed"],
@@ -8538,23 +8729,31 @@ async def cron_ingest(
                     "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()}
                 },
                 "phase_3_quick_email": {"sent": quick_email_sent},
-                "phase_4_scraping": {
+                "phase_4_async_batch_scraping": {
                     **scraping_final_stats,
                     "overall_success_rate": f"{overall_scraping_rate:.1f}%",
                     "tier_breakdown": {
                         "requests_success": enhanced_scraping_stats["requests_success"],
                         "playwright_success": enhanced_scraping_stats["playwright_success"],
+                        "scrapfly_success": enhanced_scraping_stats.get("scrapfly_success", 0),
                         "scrapingbee_success": enhanced_scraping_stats["scrapingbee_success"],
                         "total_attempts": total_scraping_attempts
                     },
                     "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
-                    "dynamic_limits": dynamic_limits
+                    "scrapfly_cost": f"${scrapfly_stats['cost_estimate']:.3f}",
+                    "dynamic_limits": dynamic_limits,
+                    "batch_processing": {
+                        "batch_size": SCRAPE_BATCH_SIZE,
+                        "total_articles": total_articles_to_process,
+                        "articles_per_batch": SCRAPE_BATCH_SIZE,
+                        "estimated_batches": total_articles_to_process // SCRAPE_BATCH_SIZE if total_articles_to_process > 0 else 0
+                    }
                 },
                 "successfully_processed_tickers": list(successfully_processed_tickers),
-                "message": "Processing completed successfully with memory monitoring",
+                "message": f"Processing completed successfully with async batch processing (batch_size={SCRAPE_BATCH_SIZE})",
                 "github_sync_required": len(successfully_processed_tickers) > 0,
                 
-                # NEW: Memory monitoring data
+                # Memory monitoring data
                 "memory_monitoring": {
                     "enabled": True,
                     "total_snapshots": len(memory_monitor.snapshots),
@@ -8589,6 +8788,7 @@ async def cron_ingest(
             return {
                 "status": "critical_error",
                 "message": str(e),
+                "batch_size_used": SCRAPE_BATCH_SIZE,
                 "memory_monitoring": {
                     "snapshots_taken": len(memory_monitor.snapshots),
                     "memory_at_crash": current_memory,

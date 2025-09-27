@@ -6273,11 +6273,11 @@ class DomainResolver:
             else:
                 LOG.info(f"SPAM REJECTED: Yahoo resolution found spam domain {domain}")
                 return None, None, None
-    
-    # UPDATED: Keep Yahoo Finance URLs when resolution fails (they're easy to scrape)
-    yahoo_domain = normalize_domain(urlparse(url).netloc.lower())
-    LOG.info(f"YAHOO RESOLUTION FAILED: Keeping Yahoo URL for direct scraping: {url}")
-    return url, yahoo_domain, None
+        
+        # UPDATED: Keep Yahoo Finance URLs when resolution fails (they're easy to scrape)
+        yahoo_domain = normalize_domain(urlparse(url).netloc.lower())
+        LOG.info(f"YAHOO RESOLUTION FAILED: Keeping Yahoo URL for direct scraping: {url}")
+        return url, yahoo_domain, None
     
     def _handle_direct_url(self, url):
         """Handle direct URL"""

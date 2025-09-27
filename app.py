@@ -8003,6 +8003,7 @@ async def admin_init(request: Request, body: InitRequest):
                 try:
                     with db() as conn, conn.cursor() as cur:  # Single connection for all feeds
                         ticker_feed_count = 0
+                        feed_ids_created = []  # Collect IDs for verification
                         
                         for feed_config in feeds:
                             # Direct SQL insert using the same cursor/transaction
@@ -8027,6 +8028,7 @@ async def admin_init(request: Request, body: InitRequest):
                             result = cur.fetchone()
                             if result:
                                 feed_id = result['id']
+                                feed_ids_created.append(feed_id)  # Track created feed IDs
                                 ticker_feed_count += 1
                                 LOG.info(f"Created feed ID {feed_id}: {feed_config['name']} (category: {feed_config.get('category', 'company')})")
                                 
@@ -8041,7 +8043,22 @@ async def admin_init(request: Request, body: InitRequest):
                             else:
                                 LOG.error(f"Failed to create feed: {feed_config['name']}")
                         
-                        # Verification using the SAME connection/transaction
+                        # Enhanced verification using the SAME connection/transaction
+                        LOG.info(f"DEBUG: Checking feeds immediately after creation for {ticker}")
+                        
+                        # First, verify the specific feed IDs we just created
+                        if feed_ids_created:
+                            placeholders = ','.join(['%s'] * len(feed_ids_created))
+                            cur.execute(f"""
+                                SELECT id, category, name, ticker, active 
+                                FROM source_feed 
+                                WHERE id IN ({placeholders})
+                            """, feed_ids_created)
+                            
+                            direct_check = list(cur.fetchall())
+                            LOG.info(f"DIRECT ID CHECK for {ticker}: {direct_check}")
+                        
+                        # Then do the grouped query
                         cur.execute("""
                             SELECT category, COUNT(*) as count, 
                                    STRING_AGG(name, ' | ') as feed_names
@@ -8052,7 +8069,7 @@ async def admin_init(request: Request, body: InitRequest):
                         """, (ticker,))
                         
                         immediate_check = list(cur.fetchall())
-                        LOG.info(f"SAME-TRANSACTION VERIFICATION for {ticker}:")
+                        LOG.info(f"GROUPED CHECK for {ticker}:")
                         for feed_row in immediate_check:
                             LOG.info(f"  {ticker} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
                         

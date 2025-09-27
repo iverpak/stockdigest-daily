@@ -8011,6 +8011,9 @@ async def admin_init(request: Request, body: InitRequest):
                         feed_ids_created = []  # Collect IDs for verification
                         
                         for feed_config in feeds:
+                            LOG.info(f"DEBUG: About to insert - ticker={ticker}, current_ticker={current_ticker}")
+                            LOG.info(f"DEBUG: Feed config: {feed_config}")   
+                            
                             # Direct SQL insert using the same cursor/transaction
                             cur.execute("""
                                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)

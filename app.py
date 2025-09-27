@@ -8015,8 +8015,18 @@ async def admin_init(request: Request, body: InitRequest):
                         LOG.info(f"DEBUG PRE-INSERT: ticker='{ticker}', current_ticker='{current_ticker}'")
                         
                         for feed_config in feeds:
-                            # DEBUG: Check ticker values for each feed
-                            LOG.info(f"DEBUG FEED-INSERT: ticker='{ticker}', current_ticker='{current_ticker}', feed='{feed_config.get('name', 'unknown')}')")
+                            # DEBUG: Check exact SQL parameters
+                            sql_params = (
+                                feed_config["url"], 
+                                feed_config["name"], 
+                                current_ticker,  
+                                feed_config.get("category", "company"), 
+                                DEFAULT_RETAIN_DAYS,
+                                feed_config.get("search_keyword"), 
+                                feed_config.get("competitor_ticker")
+                            )
+                            LOG.info(f"DEBUG SQL PARAMS: {sql_params}")
+                            
                             # Direct SQL insert using the same cursor/transaction
                             cur.execute("""
                                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
@@ -8026,15 +8036,7 @@ async def admin_init(request: Request, body: InitRequest):
                                     category = EXCLUDED.category,
                                     active = TRUE
                                 RETURNING id;
-                            """, (
-                                feed_config["url"], 
-                                feed_config["name"], 
-                                current_ticker,  # Use current_ticker instead of ticker
-                                feed_config.get("category", "company"), 
-                                DEFAULT_RETAIN_DAYS,
-                                feed_config.get("search_keyword"), 
-                                feed_config.get("competitor_ticker")
-                            ))
+                            """, sql_params)
                             
                             result = cur.fetchone()
                             if result:

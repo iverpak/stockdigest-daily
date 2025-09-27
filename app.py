@@ -165,10 +165,14 @@ def parse_json_with_fallback(text: str, ticker: str = "") -> dict:
         }
 
 def clean_null_bytes(text: str) -> str:
-    """Remove NULL bytes that cause PostgreSQL errors"""
+    """Remove NULL bytes and other problematic characters that cause PostgreSQL errors"""
     if not text:
         return text
-    return text.replace('\x00', '').replace('\0', '')
+    # Remove NULL bytes, control characters, and other problematic Unicode
+    cleaned = text.replace('\x00', '').replace('\0', '')
+    # Remove other control characters that can cause XML/database issues
+    cleaned = ''.join(char for char in cleaned if ord(char) >= 32 or char in '\n\r\t')
+    return cleaned
 
 def normalize_priority_to_int(priority):
     """Normalize priority to consistent integer format (1=High, 2=Medium, 3=Low)"""
@@ -2496,7 +2500,7 @@ def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tupl
 
 async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    Async Scrapfly scraping with improved text extraction and content cleaning.
+    Async Scrapfly scraping with improved text extraction, content cleaning, and video URL filtering.
     """
     global scrapfly_stats, enhanced_scraping_stats
 
@@ -2509,6 +2513,11 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
     def _matches(host: str, dom: str) -> bool:
         return host == dom or host.endswith("." + dom)
 
+    # EARLY FILTER: Reject video URLs before any processing
+    if "video.media.yql.yahoo.com" in url:
+        LOG.warning(f"ASYNC SCRAPFLY: Rejecting video URL: {url}")
+        return None, "Video URL not supported"
+
     # Local list for anti-bot domains
     LOCAL_SCRAPFLY_ANTIBOT = {
         "simplywall.st", "seekingalpha.com", "zacks.com", "benzinga.com",
@@ -2516,8 +2525,8 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
         "insidermonkey.com", "nasdaq.com", "markets.financialcontent.com",
         "thefly.com", "streetinsider.com", "accesswire.com",
         "247wallst.com", "barchart.com", "telecompaper.com",
-        "news.stocktradersdaily.com", "sharewise.com",
-        "video.media.yql.yahoo.com", "templates.cds.yahoo.com"
+        "news.stocktradersdaily.com", "sharewise.com"
+        # Removed video.media.yql.yahoo.com since we filter it out earlier
     }
 
     for attempt in range(max_retries + 1):
@@ -2552,8 +2561,8 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                 "cache": "false",      # Convert boolean to string
             }
             
-            # Toggle anti-bot/JS only for local list
-            if any(_matches(host, d) for d in LOCAL_SCRAPFLY_ANTIBOT):
+            # Toggle anti-bot/JS only for local list, but not for video URLs
+            if any(_matches(host, d) for d in LOCAL_SCRAPFLY_ANTIBOT) and "video.media" not in host:
                 params["asp"] = "true"        # Convert boolean to string
                 params["render_js"] = "true"  # Convert boolean to string
 
@@ -2606,7 +2615,12 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
 
                     elif response.status == 422:
                         error_text = await response.text()
-                        LOG.warning(f"ASYNC SCRAPFLY: 422 invalid parameters for {domain} body: {error_text[:500]}")
+                        # Check if this is a video URL causing the error
+                        if "video.media" in url:
+                            LOG.warning(f"ASYNC SCRAPFLY: Video URL caused 422 error, skipping: {url}")
+                            return None, "Video URL not supported"
+                        else:
+                            LOG.warning(f"ASYNC SCRAPFLY: 422 invalid parameters for {domain} body: {error_text[:500]}")
                         break
 
                     elif response.status == 429:
@@ -2626,6 +2640,9 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                             continue
 
         except Exception as e:
+            if "video.media" in url:
+                LOG.warning(f"ASYNC SCRAPFLY: Video URL caused exception, skipping: {url}")
+                return None, "Video URL not supported"
             LOG.warning(f"ASYNC SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
             if attempt < max_retries:
                 continue
@@ -2663,12 +2680,15 @@ def clean_scraped_content(content: str, url: str = "", domain: str = "") -> str:
         return ""
     
     original_length = len(content)
+
+    # Stage 0: Remove NULL bytes and control characters FIRST
+    content = clean_null_bytes(content)
     
     # Stage 1: Remove obvious binary/encoded data
     # Remove sequences that look like binary data or encoding artifacts
-    content = re.sub(r'[¿½]{3,}.*?[¿½]{3,}', '', content)  # Remove sequences with encoding markers
-    content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]+', '', content)  # Remove control characters
-    content = re.sub(r'[A-Za-z0-9+/]{50,}={0,2}', '', content)  # Remove base64-like sequences
+    content = re.sub(r'[Â¿Â½]{3,}.*?[Â¿Â½]{3,}', '', content)
+    content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]+', '', content)
+    content = re.sub(r'[A-Za-z0-9+/]{50,}={0,2}', '', content)
     
     # Stage 2: Remove HTML/CSS/JavaScript remnants
     # Remove HTML tags that newspaper3k might have missed
@@ -2773,6 +2793,9 @@ def clean_scraped_content(content: str, url: str = "", domain: str = "") -> str:
     
     # Final cleanup
     content = content.strip()
+
+    # Final NULL byte check
+    content = clean_null_bytes(content)
     
     # Log cleaning effectiveness
     final_length = len(content)
@@ -2830,14 +2853,18 @@ def calculate_intelligent_delay(domain):
     return delay, reason
 
 def scrape_with_backoff(url, max_retries=3):
-    """Enhanced scraping with exponential backoff for 500, 429, 503 errors"""
+    """Enhanced scraping with better timeout handling for slow domains"""
+    domain = normalize_domain(urlparse(url).netloc.lower())
+    
+    # Longer timeout for known slow domains
+    timeout = 30 if domain in ["businesswire.com", "globenewswire.com"] else 15
+    
     for attempt in range(max_retries):
         try:
-            response = scraping_session.get(url, timeout=15)
+            response = scraping_session.get(url, timeout=timeout)
             if response.status_code == 200:
                 return response
-            elif response.status_code in [429, 500, 503]:  # Added 500
-                # Server error or rate limited - wait with exponential backoff
+            elif response.status_code in [429, 500, 503, 504]:  # Added 504
                 delay = (2 ** attempt) + random.uniform(0, 1)
                 LOG.info(f"HTTP {response.status_code} error, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})")
                 time.sleep(delay)
@@ -2845,13 +2872,15 @@ def scrape_with_backoff(url, max_retries=3):
                     LOG.warning(f"Max retries reached for {url} after {response.status_code} errors")
                     return None
             else:
-                # For other errors (404, 403, etc.), don't retry
                 LOG.warning(f"HTTP {response.status_code} for {url}, not retrying")
                 return None
         except requests.RequestException as e:
-            delay = (2 ** attempt) + random.uniform(0, 1)
-            LOG.warning(f"Request failed, retrying in {delay:.1f}s: {e}")
-            time.sleep(delay)
+            if attempt < max_retries - 1:
+                delay = (2 ** attempt) + random.uniform(0, 1)
+                LOG.warning(f"Request failed, retrying in {delay:.1f}s: {e}")
+                time.sleep(delay)
+            else:
+                LOG.warning(f"Final retry failed for {url}: {e}")
     
     return None
 
@@ -2896,26 +2925,34 @@ def log_scraping_success_rates():
     LOG.info("=" * 60)
 
 def validate_scraped_content(content, url, domain):
-    """Enhanced content validation for cleaned content"""
+    """Enhanced content validation with relaxed requirements for quality domains"""
     if not content or len(content.strip()) < 100:
         return False, "Content too short"
     
+    # RELAXED REQUIREMENTS for quality domains
+    domain_normalized = normalize_domain(domain)
+    is_quality_domain = domain_normalized in QUALITY_DOMAINS
+    
     # Check content-to-boilerplate ratio
     sentences = [s.strip() for s in content.split('.') if s.strip()]
-    if len(sentences) < 3:
-        return False, "Insufficient sentences"
+    min_sentences = 2 if is_quality_domain else 3  # RELAXED for quality domains
     
-    # Check for repetitive content (often indicates scraping issues)
+    if len(sentences) < min_sentences:
+        return False, f"Insufficient sentences (need {min_sentences}, got {len(sentences)})"
+    
+    # Check for repetitive content
     words = content.lower().split()
-    if len(words) > 0 and len(set(words)) / len(words) < 0.3:  # Less than 30% unique words
-        return False, "Repetitive content detected"
+    if len(words) > 0:
+        unique_ratio = len(set(words)) / len(words)
+        min_ratio = 0.25 if is_quality_domain else 0.3  # RELAXED for quality domains
+        if unique_ratio < min_ratio:
+            return False, "Repetitive content detected"
     
     # Check if content is mostly technical/code-like
     technical_chars = len(re.findall(r'[{}();:=<>]', content))
-    if technical_chars > len(content) * 0.1:  # More than 10% technical characters
+    max_technical = 0.15 if is_quality_domain else 0.1  # RELAXED for quality domains
+    if technical_chars > len(content) * max_technical:
         return False, "Content appears to be technical/code data"
-    
-    # REMOVED: Sentence structure validation that was rejecting legitimate articles
     
     return True, "Valid content"
 
@@ -4286,15 +4323,19 @@ def contains_non_latin_script(text: str) -> bool:
     return False
 
 def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
-    """Enhanced Yahoo Finance source extraction - handles all Yahoo Finance domains and author pages"""
+    """Enhanced Yahoo Finance source extraction - handles all Yahoo Finance domains and filters out video URLs"""
     try:
         # Expand the domain check to include regional Yahoo Finance
         if not any(domain in url for domain in ["finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"]):
             return None
         
-        # Skip Yahoo author pages and video files
-        if any(skip_pattern in url for skip_pattern in ["/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov"]):
-            LOG.info(f"Skipping Yahoo author/video page: {url}")
+        # Skip Yahoo author pages, video files, AND video.media.yql.yahoo.com
+        skip_patterns = [
+            "/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov",
+            "video.media.yql.yahoo.com"  # Block video URLs
+        ]
+        if any(skip_pattern in url for skip_pattern in skip_patterns):
+            LOG.info(f"Skipping Yahoo video/author page: {url}")
             return None
             
         LOG.info(f"Extracting Yahoo Finance source from: {url}")
@@ -4354,6 +4395,7 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                                 len(candidate_url) > 20 and
                                 'finance.yahoo.com' not in candidate_url and
                                 'ca.finance.yahoo.com' not in candidate_url and
+                                'video.media.yql.yahoo.com' not in candidate_url and  # Block video URLs
                                 not candidate_url.startswith('//') and
                                 '.' in parsed.netloc and
                                 # Enhanced validation to exclude problematic URLs
@@ -4373,10 +4415,10 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                     LOG.debug(f"Processing match failed: {e}")
                     continue
         
-        # Enhanced fallback patterns that exclude author pages and videos
+        # Enhanced fallback patterns that exclude author pages, videos, and problematic URLs
         fallback_patterns = [
-            # Only match URLs that are likely to be news articles (not author pages)
-            r'https://(?!finance\.yahoo\.com|ca\.finance\.yahoo\.com|s\.yimg\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/(?!author/)[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
+            # Only match URLs that are likely to be news articles (not author pages or videos)
+            r'https://(?!finance\.yahoo\.com|ca\.finance\.yahoo\.com|s\.yimg\.com|video\.media\.yql\.yahoo\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/(?!author/)[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
             r'https://stockstory\.org/[^\s"<>]*',
         ]
         
@@ -4392,6 +4434,7 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                         not '/api/' in candidate_url.lower() and
                         not '/author/' in candidate_url.lower() and
                         not 'yahoo-finance-video' in candidate_url.lower() and
+                        'video.media.yql.yahoo.com' not in candidate_url and  # Block video URLs
                         len(candidate_url) > 30):  # Minimum reasonable URL length
                         LOG.info(f"Fallback extraction successful: {candidate_url}")
                         return candidate_url
@@ -6220,17 +6263,21 @@ class DomainResolver:
         return url, "google-news-unresolved", None
     
     def _handle_yahoo_finance(self, url):
-        """Handle Yahoo Finance URL resolution - reject all failures"""
+        """Handle Yahoo Finance URL resolution - keep Yahoo URLs when resolution fails"""
         original_source = extract_yahoo_finance_source_optimized(url)
         if original_source:
             domain = normalize_domain(urlparse(original_source).netloc.lower())
             if not self._is_spam_domain(domain):
                 LOG.info(f"YAHOO SUCCESS: Resolved {url} -> {original_source}")
                 return original_source, domain, url
-        
-        # REJECT ALL FAILED YAHOO URLs - don't return Yahoo URLs to system
-        LOG.info(f"YAHOO REJECTED: Failed to resolve {url} - discarding")
-        return None, None, None
+            else:
+                LOG.info(f"SPAM REJECTED: Yahoo resolution found spam domain {domain}")
+                return None, None, None
+    
+    # UPDATED: Keep Yahoo Finance URLs when resolution fails (they're easy to scrape)
+    yahoo_domain = normalize_domain(urlparse(url).netloc.lower())
+    LOG.info(f"YAHOO RESOLUTION FAILED: Keeping Yahoo URL for direct scraping: {url}")
+    return url, yahoo_domain, None
     
     def _handle_direct_url(self, url):
         """Handle direct URL"""

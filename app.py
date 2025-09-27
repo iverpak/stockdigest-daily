@@ -734,14 +734,6 @@ def ensure_schema():
                     UNIQUE(ticker, parent_ticker)
                 );
             """)
-            
-            # Clean up old ticker_config table (fresh start)
-            try:
-                cur.execute("DROP TABLE IF EXISTS ticker_config CASCADE")
-                LOG.info("Dropped old ticker_config table for fresh start")
-            except Exception as e:
-                LOG.warning(f"Schema cleanup warning: {e}")
-
     update_schema_for_triage()
 
 # Add these fields to your database schema

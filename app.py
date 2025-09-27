@@ -8037,7 +8037,11 @@ async def admin_init(request: Request, body: InitRequest):
                                     active = TRUE
                                 RETURNING id;
                             """, sql_params)
-                            
+
+                            # DEBUG: Check what PostgreSQL executed
+                            LOG.info(f"POSTGRES EXECUTED: {cur.query}")
+                            LOG.info(f"POSTGRES MOGRIFIED: {cur.mogrify(cur.statement, sql_params)}")
+
                             result = cur.fetchone()
                             if result:
                                 feed_id = result['id']

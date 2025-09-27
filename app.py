@@ -8019,34 +8019,26 @@ async def admin_init(request: Request, body: InitRequest):
                         LOG.info(f"DEBUG PRE-INSERT: ticker='{ticker}', current_ticker='{current_ticker}'")
                         
                         for feed_config in feeds:
-                            # DEBUG: Check exact SQL parameters
-                            sql_params = (
-                                feed_config["url"], 
-                                feed_config["name"], 
-                                current_ticker,  
-                                feed_config.get("category", "company"), 
-                                DEFAULT_RETAIN_DAYS,
-                                feed_config.get("search_keyword"), 
-                                feed_config.get("competitor_ticker")
-                            )
-                            LOG.info(f"DEBUG SQL PARAMS: {sql_params}")
+                            # Isolate ticker value to prevent corruption during loop
+                            isolated_ticker = str(current_ticker)  # Force a new string copy
+                            LOG.info(f"LOOP START: isolated_ticker='{isolated_ticker}', current_ticker='{current_ticker}'")
                             
-                            # TEMPORARY TEST - Use direct string formatting to bypass parameter binding
+                            # TEMPORARY TEST - Use direct string formatting with isolated ticker
                             search_keyword = feed_config.get("search_keyword", "").replace("'", "''")  # Escape quotes
                             feed_name = feed_config["name"].replace("'", "''")  # Escape quotes
                             feed_url = feed_config["url"].replace("'", "''")  # Escape quotes
-                            
+                        
                             sql_query = f"""
                             INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
-                            VALUES ('{feed_url}', '{feed_name}', '{current_ticker}', '{feed_config.get("category", "company")}', {DEFAULT_RETAIN_DAYS}, TRUE, '{search_keyword}', NULL)
+                            VALUES ('{feed_url}', '{feed_name}', '{isolated_ticker}', '{feed_config.get("category", "company")}', {DEFAULT_RETAIN_DAYS}, TRUE, '{search_keyword}', NULL)
                             ON CONFLICT (url) DO UPDATE SET 
                                 name = EXCLUDED.name, 
                                 category = EXCLUDED.category,
                                 active = TRUE
                             RETURNING id;
                             """
-                            
-                            LOG.info(f"DIRECT SQL TEST: Inserting ticker='{current_ticker}'")
+                        
+                            LOG.info(f"DIRECT SQL TEST: Inserting isolated_ticker='{isolated_ticker}'")
                             cur.execute(sql_query)
                             
                             result = cur.fetchone()

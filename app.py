@@ -8118,16 +8118,44 @@ async def cron_ingest(
             
             memory_monitor.take_snapshot("FEEDS_LOADED")
             
+            # DEBUG: Check what feeds exist before processing
+            with resource_cleanup_context("debug_feed_check"):
+                with db() as conn, conn.cursor() as cur:
+                    if tickers:
+                        cur.execute("""
+                            SELECT ticker, category, COUNT(*) as count, 
+                                   STRING_AGG(name, ' | ') as feed_names
+                            FROM source_feed 
+                            WHERE ticker = ANY(%s) AND active = TRUE
+                            GROUP BY ticker, category
+                            ORDER BY ticker, category
+                        """, (tickers,))
+                    else:
+                        cur.execute("""
+                            SELECT ticker, category, COUNT(*) as count,
+                                   STRING_AGG(name, ' | ') as feed_names
+                            FROM source_feed 
+                            WHERE active = TRUE
+                            GROUP BY ticker, category
+                            ORDER BY ticker, category
+                        """)
+                    
+                    feed_debug = list(cur.fetchall())
+                    LOG.info("=== FEED DEBUG BEFORE PROCESSING ===")
+                    for feed_row in feed_debug:
+                        LOG.info(f"  {feed_row['ticker']} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
+                    LOG.info("=== END FEED DEBUG ===")
+            
             ingest_stats = {
                 "total_processed": 0, 
-                "total_inserted": 0, 
+                "total_inserted": 0,
                 "total_duplicates": 0, 
                 "total_spam_blocked": 0, 
                 "total_limit_reached": 0,
                 "total_insider_trading_blocked": 0,
                 "total_yahoo_rejected": 0
             }
-            
+
             # Process feeds normally to get new articles
             for i, feed in enumerate(feeds):
                 try:

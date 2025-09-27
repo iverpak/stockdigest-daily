@@ -8146,23 +8146,22 @@ async def admin_init(request: Request, body: InitRequest):
             LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
         
         results = []
-        LOG.info("=== INITIALIZATION STARTING ===")
         
         for ticker in body.tickers:
-            current_ticker = ticker  # Capture ticker to avoid scope issues
-            LOG.info(f"=== INITIALIZING TICKER: {current_ticker} ===")
+            # FIXED: Use ticker directly - NO intermediate variable assignment
+            LOG.info(f"=== INITIALIZING TICKER: {ticker} ===")
             
             try:
                 # Get or generate metadata with enhanced ticker reference integration
-                metadata = get_or_create_enhanced_ticker_metadata(current_ticker)
+                metadata = get_or_create_enhanced_ticker_metadata(ticker)
                 
                 # Build feed URLs for all categories using enhanced feed creation
-                feeds = feed_manager.create_feeds_for_ticker_enhanced(current_ticker, metadata)
+                feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
                 
                 if not feeds:
-                    LOG.info(f"=== {current_ticker}: No new feeds needed - already at limits ===")
+                    LOG.info(f"=== {ticker}: No new feeds needed - already at limits ===")
                     results.append({
-                        "ticker": current_ticker,
+                        "ticker": ticker,
                         "message": "No new feeds created - already at limits",
                         "feeds_created": 0
                     })
@@ -8174,9 +8173,12 @@ async def admin_init(request: Request, body: InitRequest):
                         ticker_feed_count = 0
                         feed_ids_created = []
                         
-                        LOG.info(f"Starting feed creation for {current_ticker}, creating {len(feeds)} feeds")
+                        LOG.info(f"Starting feed creation for {ticker}, creating {len(feeds)} feeds")
                         
                         for feed_config in feeds:
+                            # BULLETPROOF: Log exactly what we're about to insert
+                            LOG.info(f"DEBUG FEED INSERT: ticker={ticker}, feed_name={feed_config['name']}, category={feed_config.get('category', 'company')}")
+                            
                             # Use parameterized query to prevent SQL injection and ensure proper binding
                             cur.execute("""
                                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
@@ -8189,7 +8191,7 @@ async def admin_init(request: Request, body: InitRequest):
                             """, (
                                 feed_config["url"], 
                                 feed_config["name"], 
-                                current_ticker,
+                                ticker,  # FIXED: Use ticker directly
                                 feed_config.get("category", "company"), 
                                 DEFAULT_RETAIN_DAYS,
                                 feed_config.get("search_keyword"), 
@@ -8205,14 +8207,14 @@ async def admin_init(request: Request, body: InitRequest):
                                 # CRITICAL: Validate inserted data matches intent
                                 cur.execute("SELECT ticker, name FROM source_feed WHERE id = %s", (feed_id,))
                                 validation_check = cur.fetchone()
-                                if validation_check['ticker'] != current_ticker:
-                                    LOG.error(f"DATA CORRUPTION DETECTED: Expected ticker={current_ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
-                                    raise Exception(f"Feed inserted with wrong ticker: expected {current_ticker}, got {validation_check['ticker']}")
+                                if validation_check['ticker'] != ticker:
+                                    LOG.error(f"DATA CORRUPTION DETECTED: Expected ticker={ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
+                                    raise Exception(f"Feed inserted with wrong ticker: expected {ticker}, got {validation_check['ticker']}")
                                 
                                 LOG.info(f"Created feed ID {feed_id}: {feed_config['name']} (category: {feed_config.get('category', 'company')})")
                                 
                                 results.append({
-                                    "ticker": current_ticker,
+                                    "ticker": ticker,
                                     "feed": feed_config["name"],
                                     "category": feed_config.get("category", "company"),
                                     "search_keyword": feed_config.get("search_keyword"),
@@ -8223,7 +8225,7 @@ async def admin_init(request: Request, body: InitRequest):
                                 LOG.error(f"Failed to create feed: {feed_config['name']}")
                         
                         # Final verification using the same connection/transaction
-                        LOG.info(f"Verifying feeds created for {current_ticker}")
+                        LOG.info(f"Verifying feeds created for {ticker}")
                         
                         # Verify the specific feed IDs we just created
                         if feed_ids_created:
@@ -8236,6 +8238,12 @@ async def admin_init(request: Request, body: InitRequest):
                             
                             direct_check = list(cur.fetchall())
                             LOG.info(f"Created {len(direct_check)} feeds with correct ticker assignments")
+                            
+                            # BULLETPROOF: Verify ALL feeds have correct ticker
+                            for feed_check in direct_check:
+                                if feed_check['ticker'] != ticker:
+                                    LOG.error(f"POST-INSERT CORRUPTION: Feed {feed_check['id']} has ticker {feed_check['ticker']}, expected {ticker}")
+                                    raise Exception(f"Post-insert validation failed: feed has wrong ticker")
                         
                         # Summary query
                         cur.execute("""
@@ -8245,38 +8253,38 @@ async def admin_init(request: Request, body: InitRequest):
                             WHERE ticker = %s AND active = TRUE 
                             GROUP BY category
                             ORDER BY category
-                        """, (current_ticker,))
+                        """, (ticker,))
                         
                         immediate_check = list(cur.fetchall())
-                        LOG.info(f"Final feed counts for {current_ticker}:")
+                        LOG.info(f"Final feed counts for {ticker}:")
                         for feed_row in immediate_check:
-                            LOG.info(f"  {current_ticker} | {feed_row['category']} | Count: {feed_row['count']}")
+                            LOG.info(f"  {ticker} | {feed_row['category']} | Count: {feed_row['count']}")
                         
                         # Check for company feeds
                         has_company_feeds = any(row['category'] == 'company' for row in immediate_check)
                         if not has_company_feeds and any(f.get('category') == 'company' for f in feeds):
-                            LOG.error(f"CRITICAL: {current_ticker} missing company feeds in same transaction!")
+                            LOG.error(f"CRITICAL: {ticker} missing company feeds in same transaction!")
                         else:
-                            LOG.info(f"SUCCESS: {current_ticker} has all expected feed categories")
+                            LOG.info(f"SUCCESS: {ticker} has all expected feed categories")
                             
                     # Connection closes here, committing the transaction
-                    LOG.info(f"=== COMPLETED {current_ticker}: {ticker_feed_count} new feeds created and committed ===")
+                    LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created and committed ===")
                     
                 except Exception as db_e:
-                    LOG.error(f"Database transaction failed for {current_ticker}: {db_e}")
+                    LOG.error(f"Database transaction failed for {ticker}: {db_e}")
                     results.append({
-                        "ticker": current_ticker,
+                        "ticker": ticker,
                         "error": str(db_e),
-                        "message": f"Failed to create feeds for {current_ticker}"
+                        "message": f"Failed to create feeds for {ticker}"
                     })
                     continue
                 
             except Exception as e:
-                LOG.error(f"Failed to initialize {current_ticker}: {e}")
+                LOG.error(f"Failed to initialize {ticker}: {e}")
                 results.append({
-                    "ticker": current_ticker,
+                    "ticker": ticker,
                     "error": str(e),
-                    "message": f"Failed to initialize {current_ticker}"
+                    "message": f"Failed to initialize {ticker}"
                 })
                 continue
         

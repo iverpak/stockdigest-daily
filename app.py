@@ -3186,11 +3186,14 @@ async def scrape_and_analyze_article_3tier(article: Dict, category: str, metadat
             LOG.info(f"REUSING ANALYSIS: Article {article_id} already analyzed from {analysis_ticker}'s perspective")
             return True
         
-        # Get keyword for limit tracking
+        # Get keyword for limit tracking - FIXED: Consistent competitor logic
         if category == "company":
             keyword = analysis_ticker
         elif category == "competitor":
-            keyword = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+             # FIXED: Consistent competitor keyword logic
+            keyword = article.get("competitor_ticker", "unknown")
+            if keyword == "unknown":
+                keyword = article.get("search_keyword", "unknown")
         else:
             keyword = article.get("search_keyword", "unknown")
         
@@ -3635,9 +3638,11 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
     
     category = feed.get("category", "company")
     
-    # Use competitor_ticker for competitor feeds, search_keyword for others
+    # Use competitor_ticker for competitor feeds, search_keyword for others - FIXED: Consistent logic
     if category == "competitor":
-        feed_keyword = feed.get("competitor_ticker", "unknown")
+        feed_keyword = feed.get("competitor_ticker")
+        if not feed_keyword:
+            feed_keyword = feed.get("search_keyword", "unknown")
     else:
         feed_keyword = feed.get("search_keyword", "unknown")
     

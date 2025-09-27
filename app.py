@@ -5734,7 +5734,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, secto
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
-                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0"}
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
                     },
                     "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
                     "additionalProperties": False
@@ -5922,7 +5922,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, pee
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
-                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0"}
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
                     },
                     "required": ["id", "scrape_priority", "likely_repeat", "repeat_key", "why", "confidence"],
                     "additionalProperties": False

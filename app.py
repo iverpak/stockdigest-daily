@@ -7995,6 +7995,29 @@ async def admin_init(request: Request, body: InitRequest):
                 
                 LOG.info(f"=== COMPLETED {ticker}: {ticker_feed_count} new feeds created ===")
                 
+                # DEBUG: Immediate feed verification after creation
+                try:
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT category, COUNT(*) as count, 
+                                   STRING_AGG(name, ' | ') as feed_names
+                            FROM source_feed 
+                            WHERE ticker = %s AND active = TRUE 
+                            GROUP BY category
+                            ORDER BY category
+                        """, (ticker,))
+                        
+                        immediate_check = list(cur.fetchall())
+                        LOG.info(f"IMMEDIATE FEED VERIFICATION for {ticker}:")
+                        for feed_row in immediate_check:
+                            LOG.info(f"  {ticker} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
+                        
+                        if not any(row['category'] == 'company' for row in immediate_check):
+                            LOG.error(f"CRITICAL: {ticker} missing company feeds immediately after creation!")
+                            
+                except Exception as debug_e:
+                    LOG.error(f"Feed verification failed for {ticker}: {debug_e}")
+                
             except Exception as e:
                 LOG.error(f"Failed to initialize {ticker}: {e}")
                 results.append({

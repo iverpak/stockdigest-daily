@@ -8037,17 +8037,15 @@ async def admin_init(request: Request, body: InitRequest):
                                     active = TRUE
                                 RETURNING id;
                             """, sql_params)
-
-                            # DEBUG: Check what PostgreSQL executed
-                            LOG.info(f"POSTGRES MOGRIFIED: {cur.mogrify('''
-                                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
-                                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-                                ON CONFLICT (url) DO UPDATE SET 
-                                    name = EXCLUDED.name, 
-                                    category = EXCLUDED.category,
-                                    active = TRUE
-                                RETURNING id;
-                            ''', sql_params).decode('utf-8')}")
+                            
+                            result = cur.fetchone()
+                            if result:
+                                feed_id = result['id']
+                                
+                                # DEBUG: Immediately check what was actually inserted
+                                cur.execute("SELECT id, ticker, name FROM source_feed WHERE id = %s", (feed_id,))
+                                check_result = cur.fetchone()
+                                LOG.info(f"IMMEDIATE CHECK - ID: {feed_id}, Expected ticker: {current_ticker}, Actual ticker: {check_result['ticker']}")
 
                             result = cur.fetchone()
                             if result:

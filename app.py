@@ -8005,56 +8005,47 @@ async def admin_init(request: Request, body: InitRequest):
                     })
                     continue
                 
-                # FIXED: Single transaction for all feed operations
+                # Single transaction for all feed operations
                 try:
                     with db() as conn, conn.cursor() as cur:
-                        # DEBUG: Check connection state
-                        cur.execute("SELECT current_setting('application_name'), pg_backend_pid()")
-                        conn_info = cur.fetchone()
-                        LOG.info(f"CONNECTION DEBUG: app={conn_info[0]}, pid={conn_info[1]}")
                         ticker_feed_count = 0
-                        feed_ids_created = []  # Collect IDs for verification
+                        feed_ids_created = []
                         
-                        # DEBUG: Check ticker values before starting SQL inserts
-                        LOG.info(f"DEBUG PRE-INSERT: ticker='{ticker}', current_ticker='{current_ticker}'")
+                        LOG.info(f"Starting feed creation for {current_ticker}, creating {len(feeds)} feeds")
                         
                         for feed_config in feeds:
-                            # Isolate ticker value to prevent corruption during loop
-                            isolated_ticker = str(current_ticker)  # Force a new string copy
-                            LOG.info(f"LOOP START: isolated_ticker='{isolated_ticker}', current_ticker='{current_ticker}'")
-                            
-                            # TEMPORARY TEST - Use direct string formatting with isolated ticker
-                            search_keyword = feed_config.get("search_keyword", "").replace("'", "''")  # Escape quotes
-                            feed_name = feed_config["name"].replace("'", "''")  # Escape quotes
-                            feed_url = feed_config["url"].replace("'", "''")  # Escape quotes
-                        
-                            sql_query = f"""
-                            INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
-                            VALUES ('{feed_url}', '{feed_name}', '{isolated_ticker}', '{feed_config.get("category", "company")}', {DEFAULT_RETAIN_DAYS}, TRUE, '{search_keyword}', NULL)
-                            ON CONFLICT (url) DO UPDATE SET 
-                                name = EXCLUDED.name, 
-                                category = EXCLUDED.category,
-                                active = TRUE
-                            RETURNING id;
-                            """
-                        
-                            LOG.info(f"DIRECT SQL TEST: Inserting isolated_ticker='{isolated_ticker}'")
-                            cur.execute(sql_query)
+                            # Use parameterized query to prevent SQL injection and ensure proper binding
+                            cur.execute("""
+                                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+                                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                                ON CONFLICT (url) DO UPDATE SET 
+                                    name = EXCLUDED.name, 
+                                    category = EXCLUDED.category,
+                                    active = TRUE
+                                RETURNING id;
+                            """, (
+                                feed_config["url"], 
+                                feed_config["name"], 
+                                current_ticker,
+                                feed_config.get("category", "company"), 
+                                DEFAULT_RETAIN_DAYS,
+                                feed_config.get("search_keyword"), 
+                                feed_config.get("competitor_ticker")
+                            ))
                             
                             result = cur.fetchone()
                             if result:
                                 feed_id = result['id']
-                                
-                                # DEBUG: Immediately check what was actually inserted
-                                cur.execute("SELECT id, ticker, name FROM source_feed WHERE id = %s", (feed_id,))
-                                check_result = cur.fetchone()
-                                LOG.info(f"IMMEDIATE CHECK - ID: {feed_id}, Expected ticker: {current_ticker}, Actual ticker: {check_result['ticker']}")
-
-                            result = cur.fetchone()
-                            if result:
-                                feed_id = result['id']
-                                feed_ids_created.append(feed_id)  # Track created feed IDs
+                                feed_ids_created.append(feed_id)
                                 ticker_feed_count += 1
+                                
+                                # CRITICAL: Validate inserted data matches intent
+                                cur.execute("SELECT ticker, name FROM source_feed WHERE id = %s", (feed_id,))
+                                validation_check = cur.fetchone()
+                                if validation_check['ticker'] != current_ticker:
+                                    LOG.error(f"DATA CORRUPTION DETECTED: Expected ticker={current_ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
+                                    raise Exception(f"Feed inserted with wrong ticker: expected {current_ticker}, got {validation_check['ticker']}")
+                                
                                 LOG.info(f"Created feed ID {feed_id}: {feed_config['name']} (category: {feed_config.get('category', 'company')})")
                                 
                                 results.append({
@@ -8068,10 +8059,10 @@ async def admin_init(request: Request, body: InitRequest):
                             else:
                                 LOG.error(f"Failed to create feed: {feed_config['name']}")
                         
-                        # Enhanced verification using the SAME connection/transaction
-                        LOG.info(f"DEBUG: Checking feeds immediately after creation for {current_ticker}")
+                        # Final verification using the same connection/transaction
+                        LOG.info(f"Verifying feeds created for {current_ticker}")
                         
-                        # First, verify the specific feed IDs we just created
+                        # Verify the specific feed IDs we just created
                         if feed_ids_created:
                             placeholders = ','.join(['%s'] * len(feed_ids_created))
                             cur.execute(f"""
@@ -8081,9 +8072,9 @@ async def admin_init(request: Request, body: InitRequest):
                             """, feed_ids_created)
                             
                             direct_check = list(cur.fetchall())
-                            LOG.info(f"DIRECT ID CHECK for {current_ticker}: {direct_check}")
+                            LOG.info(f"Created {len(direct_check)} feeds with correct ticker assignments")
                         
-                        # Then do the grouped query
+                        # Summary query
                         cur.execute("""
                             SELECT category, COUNT(*) as count, 
                                    STRING_AGG(name, ' | ') as feed_names
@@ -8094,9 +8085,9 @@ async def admin_init(request: Request, body: InitRequest):
                         """, (current_ticker,))
                         
                         immediate_check = list(cur.fetchall())
-                        LOG.info(f"GROUPED CHECK for {current_ticker}:")
+                        LOG.info(f"Final feed counts for {current_ticker}:")
                         for feed_row in immediate_check:
-                            LOG.info(f"  {current_ticker} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
+                            LOG.info(f"  {current_ticker} | {feed_row['category']} | Count: {feed_row['count']}")
                         
                         # Check for company feeds
                         has_company_feeds = any(row['category'] == 'company' for row in immediate_check)

@@ -6052,7 +6052,7 @@ async def perform_ai_triage_with_batching_async(
     triage_batch_size: int = 2
 ) -> Dict[str, List[Dict]]:
     """
-    Perform AI triage with configurable async batching across categories
+    Perform AI triage with true cross-category async batching
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - skipping triage")
@@ -6067,21 +6067,23 @@ async def perform_ai_triage_with_batching_async(
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
     
-    LOG.info(f"=== ASYNC TRIAGE BATCH PROCESSING: batch_size={triage_batch_size} ===")
+    LOG.info(f"=== TRUE CROSS-CATEGORY ASYNC TRIAGE: batch_size={triage_batch_size} ===")
     
-    # PHASE 1: Company articles - Single call (no batching needed for 1 call)
+    # Collect ALL triage operations into a single list
+    all_triage_operations = []
+    
+    # Add company operation
     company_articles = articles_by_category.get("company", [])
     if company_articles:
-        LOG.info(f"Starting async company triage: {len(company_articles)} articles")
-        try:
-            async with async_triage_sem:
-                selected = await triage_company_articles_full(company_articles, ticker, company_name, {}, {})
-                selected_results["company"] = selected
-                LOG.info(f"Company triage complete: selected {len(selected)} articles")
-        except Exception as e:
-            LOG.error(f"Company triage failed: {e}")
+        all_triage_operations.append({
+            "type": "company",
+            "key": "company",
+            "articles": company_articles,
+            "task_func": triage_company_articles_full,
+            "args": (company_articles, ticker, company_name, {}, {})
+        })
     
-    # PHASE 2: Industry articles - Batch by keyword
+    # Add industry operations (one per keyword)
     industry_articles = articles_by_category.get("industry", [])
     if industry_articles:
         # Group by search_keyword
@@ -6092,24 +6094,18 @@ async def perform_ai_triage_with_batching_async(
                 industry_by_keyword[keyword] = []
             industry_by_keyword[keyword].append({"article": article, "original_idx": idx})
         
-        LOG.info(f"Starting async industry triage: {len(industry_articles)} articles across {len(industry_by_keyword)} keywords")
-        
-        # Create batches of keyword groups
-        keyword_items = list(industry_by_keyword.items())
-        industry_tasks = []
-        
-        for i in range(0, len(keyword_items), triage_batch_size):
-            batch = keyword_items[i:i + triage_batch_size]
-            task = process_industry_batch_async(batch, ticker, selected_results)
-            industry_tasks.append(task)
-        
-        # Execute industry batches
-        if industry_tasks:
-            await asyncio.gather(*industry_tasks, return_exceptions=True)
-        
-        LOG.info(f"Industry triage complete: selected {len(selected_results['industry'])} articles total")
+        for keyword, keyword_articles in industry_by_keyword.items():
+            triage_articles = [item["article"] for item in keyword_articles]
+            all_triage_operations.append({
+                "type": "industry",
+                "key": keyword,
+                "articles": triage_articles,
+                "task_func": triage_industry_articles_full,
+                "args": (triage_articles, ticker, {}, []),
+                "index_mapping": keyword_articles  # For mapping back to original indices
+            })
     
-    # PHASE 3: Competitor articles - Batch by competitor
+    # Add competitor operations (one per competitor)
     competitor_articles = articles_by_category.get("competitor", [])
     if competitor_articles:
         # Group by competitor_ticker (primary) or search_keyword (fallback)
@@ -6120,64 +6116,84 @@ async def perform_ai_triage_with_batching_async(
                 competitor_by_entity[entity_key] = []
             competitor_by_entity[entity_key].append({"article": article, "original_idx": idx})
         
-        LOG.info(f"Starting async competitor triage: {len(competitor_articles)} articles across {len(competitor_by_entity)} competitors")
+        for entity_key, entity_articles in competitor_by_entity.items():
+            triage_articles = [item["article"] for item in entity_articles]
+            all_triage_operations.append({
+                "type": "competitor",
+                "key": entity_key,
+                "articles": triage_articles,
+                "task_func": triage_competitor_articles_full,
+                "args": (triage_articles, ticker, [], {}),
+                "index_mapping": entity_articles  # For mapping back to original indices
+            })
+    
+    total_operations = len(all_triage_operations)
+    LOG.info(f"Total triage operations to process: {total_operations}")
+    
+    if total_operations == 0:
+        return selected_results
+    
+    # Process operations in cross-category batches
+    for batch_start in range(0, total_operations, triage_batch_size):
+        batch_end = min(batch_start + triage_batch_size, total_operations)
+        batch = all_triage_operations[batch_start:batch_end]
+        batch_num = (batch_start // triage_batch_size) + 1
+        total_batches = (total_operations + triage_batch_size - 1) // triage_batch_size
         
-        # Create batches of competitor groups
-        competitor_items = list(competitor_by_entity.items())
-        competitor_tasks = []
+        LOG.info(f"BATCH {batch_num}/{total_batches}: Processing {len(batch)} operations concurrently:")
+        for op in batch:
+            LOG.info(f"  - {op['type']}: {op['key']} ({len(op['articles'])} articles)")
         
-        for i in range(0, len(competitor_items), triage_batch_size):
-            batch = competitor_items[i:i + triage_batch_size]
-            task = process_competitor_batch_async(batch, ticker, selected_results)
-            competitor_tasks.append(task)
+        # Create tasks for this batch with semaphore control
+        batch_tasks = []
+        for op in batch:
+            async def run_with_semaphore(operation):
+                async with async_triage_sem:
+                    return await operation["task_func"](*operation["args"])
+            
+            task = run_with_semaphore(op)
+            batch_tasks.append((op, task))
         
-        # Execute competitor batches
-        if competitor_tasks:
-            await asyncio.gather(*competitor_tasks, return_exceptions=True)
+        # Execute batch concurrently
+        batch_results = await asyncio.gather(*[task for _, task in batch_tasks], return_exceptions=True)
         
-        LOG.info(f"Competitor triage complete: selected {len(selected_results['competitor'])} articles total")
+        # Process results
+        for i, result in enumerate(batch_results):
+            op = batch_tasks[i][0]
+            
+            if isinstance(result, Exception):
+                LOG.error(f"Triage failed for {op['type']}/{op['key']}: {result}")
+                continue
+            
+            # Map results back to original indices and add to selected_results
+            if op["type"] == "company":
+                selected_results["company"].extend(result)
+                LOG.info(f"  ✓ Company: selected {len(result)} articles")
+            
+            elif op["type"] == "industry":
+                # Map back to original indices
+                for selected_item in result:
+                    original_idx = op["index_mapping"][selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx
+                selected_results["industry"].extend(result)
+                LOG.info(f"  ✓ Industry '{op['key']}': selected {len(result)} articles")
+            
+            elif op["type"] == "competitor":
+                # Map back to original indices
+                for selected_item in result:
+                    original_idx = op["index_mapping"][selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx
+                selected_results["competitor"].extend(result)
+                LOG.info(f"  ✓ Competitor '{op['key']}': selected {len(result)} articles")
+        
+        LOG.info(f"BATCH {batch_num} COMPLETE")
+    
+    LOG.info(f"CROSS-CATEGORY TRIAGE COMPLETE:")
+    LOG.info(f"  Company: {len(selected_results['company'])} selected")
+    LOG.info(f"  Industry: {len(selected_results['industry'])} selected") 
+    LOG.info(f"  Competitor: {len(selected_results['competitor'])} selected")
     
     return selected_results
-
-async def process_industry_batch_async(batch, ticker, selected_results):
-    """Process a batch of industry keyword groups"""
-    for keyword, keyword_articles in batch:
-        try:
-            LOG.info(f"Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
-            triage_articles = [item["article"] for item in keyword_articles]
-            
-            async with async_triage_sem:
-                selected = await triage_industry_articles_full(triage_articles, ticker, {}, [])
-            
-            # Map back to original indices
-            for selected_item in selected:
-                original_idx = keyword_articles[selected_item["id"]]["original_idx"]
-                selected_item["id"] = original_idx
-                selected_results["industry"].append(selected_item)
-            
-            LOG.info(f"Industry keyword '{keyword}': selected {len(selected)} articles")
-        except Exception as e:
-            LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
-
-async def process_competitor_batch_async(batch, ticker, selected_results):
-    """Process a batch of competitor groups"""
-    for entity_key, entity_articles in batch:
-        try:
-            LOG.info(f"Processing competitor '{entity_key}': {len(entity_articles)} articles")
-            triage_articles = [item["article"] for item in entity_articles]
-            
-            async with async_triage_sem:
-                selected = await triage_competitor_articles_full(triage_articles, ticker, [], {})
-            
-            # Map back to original indices
-            for selected_item in selected:
-                original_idx = entity_articles[selected_item["id"]]["original_idx"]
-                selected_item["id"] = original_idx
-                selected_results["competitor"].append(selected_item)
-            
-            LOG.info(f"Competitor '{entity_key}': selected {len(selected)} articles")
-        except Exception as e:
-            LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
 
 class TriageItem(BaseModel):
     id: int

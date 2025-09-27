@@ -2542,20 +2542,20 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
             enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
 
             host = _host(url)
-
-            # Build Scrapfly params (NO 'timeout' here; keep client timeout in aiohttp)
+            
+            # Build Scrapfly params - CONVERT BOOLEANS TO STRINGS
             params = {
                 "key": SCRAPFLY_API_KEY,
                 "url": url,
-                "render_js": False,
+                "render_js": "false",  # Convert boolean to string
                 "country": "us",
-                "cache": False,
+                "cache": "false",      # Convert boolean to string
             }
-
+            
             # Toggle anti-bot/JS only for local list
             if any(_matches(host, d) for d in LOCAL_SCRAPFLY_ANTIBOT):
-                params["asp"] = True
-                params["render_js"] = True
+                params["asp"] = "true"        # Convert boolean to string
+                params["render_js"] = "true"  # Convert boolean to string
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.get("https://api.scrapfly.io/scrape", params=params) as response:

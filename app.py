@@ -8585,12 +8585,90 @@ class CLIRequest(BaseModel):
 def root():
     return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
 
+@APP.post("/admin/migrate-feeds")
+async def admin_migrate_feeds(request: Request):
+    """Migrate from old source_feed architecture to new feeds + ticker_feeds architecture"""
+    if not verify_admin_token(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Import the new architecture functions
+    import sys
+    import os
+    sys.path.append(os.path.dirname(__file__))
+    from new_feed_architecture import ensure_new_feed_architecture, upsert_feed_new_architecture, associate_ticker_with_feed
+
+    try:
+        # Step 1: Create new tables
+        ensure_new_feed_architecture()
+
+        # Step 2: Migrate data from source_feed to new architecture
+        with db() as conn, conn.cursor() as cur:
+            # Get all existing feeds
+            cur.execute("""
+                SELECT url, name, ticker, category, search_keyword, competitor_ticker, retain_days
+                FROM source_feed
+                WHERE active = TRUE
+                ORDER BY category, ticker
+            """)
+
+            old_feeds = cur.fetchall()
+            migrated_count = 0
+
+            LOG.info(f"🔄 Starting migration of {len(old_feeds)} feeds to new architecture")
+
+            for old_feed in old_feeds:
+                try:
+                    # Create/get feed in new architecture
+                    feed_id = upsert_feed_new_architecture(
+                        url=old_feed['url'],
+                        name=old_feed['name'],
+                        category=old_feed['category'],
+                        search_keyword=old_feed['search_keyword'],
+                        competitor_ticker=old_feed['competitor_ticker'],
+                        retain_days=old_feed['retain_days']
+                    )
+
+                    # Associate ticker with feed
+                    if associate_ticker_with_feed(old_feed['ticker'], feed_id):
+                        migrated_count += 1
+
+                except Exception as e:
+                    LOG.error(f"❌ Migration failed for feed {old_feed['name']}: {e}")
+
+            LOG.info(f"✅ Migration completed: {migrated_count}/{len(old_feeds)} feeds migrated")
+
+            # Step 3: Verify migration
+            cur.execute("SELECT COUNT(*) as feed_count FROM feeds")
+            new_feed_count = cur.fetchone()['feed_count']
+
+            cur.execute("SELECT COUNT(*) as association_count FROM ticker_feeds")
+            association_count = cur.fetchone()['association_count']
+
+            return {
+                "status": "success",
+                "old_feeds": len(old_feeds),
+                "migrated": migrated_count,
+                "new_feeds": new_feed_count,
+                "associations": association_count,
+                "message": f"Successfully migrated to new feed architecture"
+            }
+
+    except Exception as e:
+        LOG.error(f"❌ Migration failed: {e}")
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/admin/init")
 async def admin_init(request: Request, body: InitRequest):
     async with TICKER_PROCESSING_LOCK:
-        """Initialize feeds for specified tickers with CSV preparation (no GitHub commit)"""
+        """Initialize feeds for specified tickers using NEW ARCHITECTURE"""
         require_admin(request)
         ensure_schema()
+
+        # Import the new architecture functions
+        import sys
+        import os
+        sys.path.append(os.path.dirname(__file__))
+        from new_feed_architecture import ensure_new_feed_architecture, create_feeds_for_ticker_new_architecture
         
         LOG.info("=== INITIALIZATION STARTING ===")
 
@@ -8599,53 +8677,84 @@ async def admin_init(request: Request, body: InitRequest):
         import gc
         gc.collect()  # Force garbage collection to clear any lingering objects
 
-        # STEP 1: Import CSV from GitHub
+        # STEP 1: Create new feed architecture
+        LOG.info("=== CREATING NEW FEED ARCHITECTURE ===")
+        ensure_new_feed_architecture()
+
+        # STEP 2: Import CSV from GitHub
         LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
         github_sync_result = sync_ticker_references_from_github()
-        
+
         if github_sync_result["status"] != "success":
             LOG.warning(f"GitHub sync failed: {github_sync_result.get('message', 'Unknown error')}")
         else:
             LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
-        
+
         results = []
-        
-        # CRITICAL: Process each ticker in complete isolation to prevent variable corruption
+
+        # CRITICAL: Process each ticker in complete isolation using NEW ARCHITECTURE
         for ticker in body.tickers:
             # STEP 1: Create isolated ticker variable to prevent corruption
             isolated_ticker = str(ticker).strip()  # Force new string object
 
             # CRITICAL: Clear any residual state between ticker processing
-            LOG.info(f"=== PROCESSING {isolated_ticker} - CLEARING STATE FROM PREVIOUS TICKERS ===")
+            LOG.info(f"=== PROCESSING {isolated_ticker} - NEW ARCHITECTURE ===")
             import gc
             gc.collect()  # Force garbage collection between each ticker
-            
+
             LOG.info(f"=== INITIALIZING TICKER: {isolated_ticker} ===")
-            
+
             try:
                 # STEP 2: Get or generate metadata with enhanced ticker reference integration
                 # CRITICAL: Force refresh to ensure no cached contamination from previous tickers
                 metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker, force_refresh=True)
 
                 # CRITICAL DEBUG: Log what metadata was actually returned
-                LOG.info(f"[CRITICAL_DEBUG] {isolated_ticker} metadata returned: {metadata}")
-                LOG.info(f"[CRITICAL_DEBUG] {isolated_ticker} company_name in metadata: '{metadata.get('company_name', 'MISSING')}'")
+                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} metadata returned: {metadata}")
+                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} company_name in metadata: '{metadata.get('company_name', 'MISSING')}'")
 
-                # STEP 3: Build feed URLs for all categories using enhanced feed creation
-                feeds = feed_manager.create_feeds_for_ticker_enhanced(isolated_ticker, metadata)
-                
-                if not feeds:
-                    LOG.info(f"=== {isolated_ticker}: No new feeds needed - already at limits ===")
+                # STEP 3: Create feeds using NEW MANY-TO-MANY ARCHITECTURE
+                feeds_created = create_feeds_for_ticker_new_architecture(isolated_ticker, metadata)
+
+                if not feeds_created:
+                    LOG.info(f"=== {isolated_ticker}: No new feeds created ===")
                     results.append({
                         "ticker": isolated_ticker,
-                        "message": "No new feeds created - already at limits",
+                        "message": "No new feeds created",
                         "feeds_created": 0
                     })
                     continue
-                
-                # STEP 4: CRITICAL SECTION - Single transaction for all feed operations with complete isolation
-                try:
-                    with db() as conn, conn.cursor() as cur:
+
+                # STEP 4: Process results from new architecture
+                LOG.info(f"✅ Successfully created {len(feeds_created)} feeds for {isolated_ticker} using NEW ARCHITECTURE")
+
+                results.append({
+                    "ticker": isolated_ticker,
+                    "message": f"Successfully created feeds using new architecture",
+                    "feeds_created": len(feeds_created),
+                    "details": [{"feed_id": f["feed_id"], "category": f["config"].get("category", "unknown")} for f in feeds_created]
+                })
+
+            except Exception as e:
+                LOG.error(f"❌ Failed to create feeds for {isolated_ticker}: {e}")
+                results.append({
+                    "ticker": isolated_ticker,
+                    "message": f"Failed to create feeds: {str(e)}",
+                    "feeds_created": 0
+                })
+
+        # Return results
+        LOG.info("=== INITIALIZATION COMPLETE ===")
+        return {
+            "status": "success",
+            "message": "Feed initialization completed using NEW ARCHITECTURE",
+            "results": results,
+            "total_tickers": len(body.tickers),
+            "successful": len([r for r in results if r["feeds_created"] > 0])
+        }
+
+# Clean up old initialization logic below this point
+def old_initialization_logic_placeholder():
                         ticker_feed_count = 0
                         feed_ids_created = []
                         

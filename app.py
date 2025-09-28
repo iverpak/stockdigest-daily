@@ -6687,6 +6687,10 @@ class FeedManager:
         feeds = []
         company_name = metadata.get("company_name", ticker)
         
+        # CRITICAL: Clear any global state that might affect this ticker's processing
+        import gc
+        gc.collect()
+
         # CRITICAL DEBUG: Log exactly what data this ticker is receiving
         LOG.info(f"FEED GENERATION DEBUG for {ticker}:")
         LOG.info(f"  Company name: {metadata.get('company_name', 'MISSING')}")
@@ -8556,7 +8560,12 @@ async def admin_init(request: Request, body: InitRequest):
         ensure_schema()
         
         LOG.info("=== INITIALIZATION STARTING ===")
-        
+
+        # CRITICAL: Clear any global state that might contaminate between tickers
+        LOG.info("=== CLEARING GLOBAL STATE FOR FRESH TICKER PROCESSING ===")
+        import gc
+        gc.collect()  # Force garbage collection to clear any lingering objects
+
         # STEP 1: Import CSV from GitHub
         LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
         github_sync_result = sync_ticker_references_from_github()
@@ -8572,12 +8581,18 @@ async def admin_init(request: Request, body: InitRequest):
         for ticker in body.tickers:
             # STEP 1: Create isolated ticker variable to prevent corruption
             isolated_ticker = str(ticker).strip()  # Force new string object
+
+            # CRITICAL: Clear any residual state between ticker processing
+            LOG.info(f"=== PROCESSING {isolated_ticker} - CLEARING STATE FROM PREVIOUS TICKERS ===")
+            import gc
+            gc.collect()  # Force garbage collection between each ticker
             
             LOG.info(f"=== INITIALIZING TICKER: {isolated_ticker} ===")
             
             try:
                 # STEP 2: Get or generate metadata with enhanced ticker reference integration
-                metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker)
+                # CRITICAL: Force refresh to ensure no cached contamination from previous tickers
+                metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker, force_refresh=True)
                 
                 # STEP 3: Build feed URLs for all categories using enhanced feed creation
                 feeds = feed_manager.create_feeds_for_ticker_enhanced(isolated_ticker, metadata)

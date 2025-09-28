@@ -4133,14 +4133,22 @@ def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
     try:
         with db() as conn, conn.cursor() as cur:
             # CRITICAL FIX: Prevent feed contamination between tickers
+            # Allow multiple tickers to track same competitor, but prevent company feed reassignment
             cur.execute("""
-                SELECT ticker FROM source_feed WHERE url = %s AND ticker != %s
+                SELECT ticker, category FROM source_feed WHERE url = %s AND ticker != %s
             """, (url, ticker))
             existing_different_ticker = cur.fetchone()
 
             if existing_different_ticker:
-                LOG.warning(f"FEED CONTAMINATION PREVENTED: URL {url} already assigned to {existing_different_ticker['ticker']}, skipping for {ticker}")
-                return -1  # Return invalid ID to indicate skipped
+                existing_ticker = existing_different_ticker['ticker']
+                existing_category = existing_different_ticker['category']
+
+                # Allow competitor/industry feeds to be shared, but prevent company feed contamination
+                if category == "company" or existing_category == "company":
+                    LOG.warning(f"FEED CONTAMINATION PREVENTED: Company feed URL {url} already assigned to {existing_ticker}, skipping for {ticker}")
+                    return -1  # Return invalid ID to indicate skipped
+                else:
+                    LOG.info(f"FEED SHARING ALLOWED: {category} feed {url} shared between {existing_ticker} and {ticker}")
 
             cur.execute("""
                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
@@ -6834,15 +6842,23 @@ class FeedManager:
         with db() as conn, conn.cursor() as cur:
             for feed in feeds:
                 # CRITICAL FIX: Prevent feed contamination between tickers
-                # Check if this URL already exists for a DIFFERENT ticker
+                # Allow multiple tickers to track same competitor, but prevent company feed reassignment
                 cur.execute("""
-                    SELECT ticker FROM source_feed WHERE url = %s AND ticker != %s
+                    SELECT ticker, category FROM source_feed WHERE url = %s AND ticker != %s
                 """, (feed["url"], ticker))
                 existing_different_ticker = cur.fetchone()
 
                 if existing_different_ticker:
-                    LOG.warning(f"FEED CONTAMINATION PREVENTED: URL {feed['url']} already assigned to {existing_different_ticker['ticker']}, skipping for {ticker}")
-                    continue
+                    existing_ticker = existing_different_ticker['ticker']
+                    existing_category = existing_different_ticker['category']
+                    feed_category = feed.get("category", "company")
+
+                    # Allow competitor/industry feeds to be shared, but prevent company feed contamination
+                    if feed_category == "company" or existing_category == "company":
+                        LOG.warning(f"FEED CONTAMINATION PREVENTED: Company feed URL {feed['url']} already assigned to {existing_ticker}, skipping for {ticker}")
+                        continue
+                    else:
+                        LOG.info(f"FEED SHARING ALLOWED: {feed_category} feed {feed['url']} shared between {existing_ticker} and {ticker}")
 
                 # Safe to insert/update for this ticker only
                 cur.execute("""
@@ -8577,14 +8593,22 @@ async def admin_init(request: Request, body: InitRequest):
                             LOG.info(f"DEBUG FEED INSERT: ticker={isolated_feed_ticker}, feed_name={isolated_feed_name}, category={isolated_feed_category}")
 
                             # CRITICAL FIX: Prevent feed contamination between tickers
+                            # Allow multiple tickers to track same competitor, but prevent company feed reassignment
                             cur.execute("""
-                                SELECT ticker FROM source_feed WHERE url = %s AND ticker != %s
+                                SELECT ticker, category FROM source_feed WHERE url = %s AND ticker != %s
                             """, (isolated_feed_url, isolated_feed_ticker))
                             existing_different_ticker = cur.fetchone()
 
                             if existing_different_ticker:
-                                LOG.warning(f"FEED CONTAMINATION PREVENTED: URL {isolated_feed_url} already assigned to {existing_different_ticker['ticker']}, skipping for {isolated_feed_ticker}")
-                                continue
+                                existing_ticker = existing_different_ticker['ticker']
+                                existing_category = existing_different_ticker['category']
+
+                                # Allow competitor/industry feeds to be shared, but prevent company feed contamination
+                                if isolated_feed_category == "company" or existing_category == "company":
+                                    LOG.warning(f"FEED CONTAMINATION PREVENTED: Company feed URL {isolated_feed_url} already assigned to {existing_ticker}, skipping for {isolated_feed_ticker}")
+                                    continue
+                                else:
+                                    LOG.info(f"FEED SHARING ALLOWED: {isolated_feed_category} feed {isolated_feed_url} shared between {existing_ticker} and {isolated_feed_ticker}")
 
                             # Use parameterized query with completely isolated variables
                             cur.execute("""

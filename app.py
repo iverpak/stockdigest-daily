@@ -8809,22 +8809,24 @@ async def cron_ingest(
             LOG.info("=== PHASE 1: PROCESSING FEEDS (NEW + EXISTING ARTICLES) ===")
             memory_monitor.take_snapshot("PHASE1_START")
             
-            # Get feeds
+            # Get feeds using NEW ARCHITECTURE (feeds + ticker_feeds)
             with resource_cleanup_context("database_connection"):
                 with db() as conn, conn.cursor() as cur:
                     if tickers:
                         cur.execute("""
-                            SELECT id, url, name, ticker, category, retain_days, search_keyword, competitor_ticker
-                            FROM source_feed
-                            WHERE active = TRUE AND ticker = ANY(%s)
-                            ORDER BY ticker, category, id
+                            SELECT f.id, f.url, f.name, tf.ticker, f.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
+                            ORDER BY tf.ticker, f.category, f.id
                         """, (tickers,))
                     else:
                         cur.execute("""
-                            SELECT id, url, name, ticker, category, retain_days, search_keyword, competitor_ticker
-                            FROM source_feed
-                            WHERE active = TRUE
-                            ORDER BY ticker, category, id
+                            SELECT f.id, f.url, f.name, tf.ticker, f.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE f.active = TRUE AND tf.active = TRUE
+                            ORDER BY tf.ticker, f.category, f.id
                         """)
                     feeds = list(cur.fetchall())
             
@@ -8834,26 +8836,28 @@ async def cron_ingest(
             
             memory_monitor.take_snapshot("FEEDS_LOADED")
             
-            # DEBUG: Check what feeds exist before processing
+            # DEBUG: Check what feeds exist before processing (NEW ARCHITECTURE)
             with resource_cleanup_context("debug_feed_check"):
                 with db() as conn, conn.cursor() as cur:
                     if tickers:
                         cur.execute("""
-                            SELECT ticker, category, COUNT(*) as count, 
-                                   STRING_AGG(name, ' | ') as feed_names
-                            FROM source_feed 
-                            WHERE ticker = ANY(%s) AND active = TRUE
-                            GROUP BY ticker, category
-                            ORDER BY ticker, category
+                            SELECT tf.ticker, f.category, COUNT(*) as count,
+                                   STRING_AGG(f.name, ' | ') as feed_names
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE tf.ticker = ANY(%s) AND f.active = TRUE AND tf.active = TRUE
+                            GROUP BY tf.ticker, f.category
+                            ORDER BY tf.ticker, f.category
                         """, (tickers,))
                     else:
                         cur.execute("""
-                            SELECT ticker, category, COUNT(*) as count,
-                                   STRING_AGG(name, ' | ') as feed_names
-                            FROM source_feed 
-                            WHERE active = TRUE
-                            GROUP BY ticker, category
-                            ORDER BY ticker, category
+                            SELECT tf.ticker, f.category, COUNT(*) as count,
+                                   STRING_AGG(f.name, ' | ') as feed_names
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE f.active = TRUE AND tf.active = TRUE
+                            GROUP BY tf.ticker, f.category
+                            ORDER BY tf.ticker, f.category
                         """)
                     
                     feed_debug = list(cur.fetchall())

@@ -1218,13 +1218,13 @@ def get_ticker_reference(ticker: str):
 # Backwards compatability ticker_reference to ticker_config
 def get_ticker_config(ticker: str) -> Optional[Dict]:
     """Get ticker configuration from ticker_reference table with proper field conversion"""
-    # LOG.info(f"DEBUG: get_ticker_config() called with ticker='{ticker}'")
-    
+    LOG.info(f"[DB_DEBUG] get_ticker_config() called with ticker='{ticker}'")
+
     with db() as conn, conn.cursor() as cur:
         # Add debug query first
         cur.execute("SELECT COUNT(*) as count FROM ticker_reference WHERE ticker = %s", (ticker,))
         count_result = cur.fetchone()
-        # LOG.info(f"DEBUG: Found {count_result['count'] if count_result else 0} records for ticker '{ticker}'")
+        LOG.info(f"[DB_DEBUG] Found {count_result['count'] if count_result else 0} records for ticker '{ticker}'")
         
         cur.execute("""
             SELECT ticker, company_name,
@@ -1238,8 +1238,9 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
         """, (ticker,))
         
         result = cur.fetchone()
-        # LOG.info(f"DEBUG: Raw database result: {result}")
+        LOG.info(f"[DB_DEBUG] Raw database result for '{ticker}': {result}")
         if not result:
+            LOG.info(f"[DB_DEBUG] No result found for ticker '{ticker}'")
             return None
         
         # Convert 3 separate keyword fields back to array format
@@ -4143,6 +4144,11 @@ def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
                 existing_ticker = existing_different_ticker['ticker']
                 existing_category = existing_different_ticker['category']
 
+                # CRITICAL DEBUG: Show exactly what conflict was detected
+                LOG.info(f"[{ticker}] FEED CONFLICT DETECTED: URL {url}")
+                LOG.info(f"[{ticker}]   Trying to assign to: {ticker} (category: {category})")
+                LOG.info(f"[{ticker}]   Already assigned to: {existing_ticker} (category: {existing_category})")
+
                 # Allow competitor/industry feeds to be shared, but prevent company feed contamination
                 if category == "company" or existing_category == "company":
                     LOG.warning(f"[{ticker}] FEED CONTAMINATION PREVENTED: Company feed URL {url} already assigned to {existing_ticker}, skipping for {ticker}")
@@ -6728,6 +6734,9 @@ class FeedManager:
         
         # Company feeds - always ensure we have the core 2
         if existing_company_count < 2:
+            # CRITICAL DEBUG: Log exactly what company data is being used
+            LOG.info(f"[{ticker}] CREATING COMPANY FEEDS: company_name='{company_name}', ticker='{ticker}'")
+
             company_feeds = [
                 {
                     "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
@@ -6874,6 +6883,11 @@ class FeedManager:
                     existing_ticker = existing_different_ticker['ticker']
                     existing_category = existing_different_ticker['category']
                     feed_category = feed.get("category", "company")
+
+                    # CRITICAL DEBUG: Show exactly what conflict was detected
+                    LOG.info(f"[{ticker}] FEED CONFLICT DETECTED: URL {feed['url']}")
+                    LOG.info(f"[{ticker}]   Trying to assign to: {ticker} (category: {feed_category})")
+                    LOG.info(f"[{ticker}]   Already assigned to: {existing_ticker} (category: {existing_category})")
 
                     # Allow competitor/industry feeds to be shared, but prevent company feed contamination
                     if feed_category == "company" or existing_category == "company":
@@ -7230,15 +7244,22 @@ Required JSON format:
 
 def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
     """Get ticker metadata with reference table lookup first, then AI enhancement"""
-    
+
+    # CRITICAL: Force complete isolation by creating new string objects
+    isolated_ticker = str(ticker).strip()
+    isolated_force_refresh = bool(force_refresh)
+
     # Normalize ticker format for consistent lookup
-    normalized_ticker = normalize_ticker_format(ticker)
-    
+    normalized_ticker = normalize_ticker_format(isolated_ticker)
+
+    # CRITICAL DEBUG: Log the exact ticker being looked up
+    LOG.info(f"[METADATA_DEBUG] Input ticker: '{isolated_ticker}' -> normalized: '{normalized_ticker}'")
+
     # Step 1: Use the new get_ticker_config wrapper for consistent data access
     config = get_ticker_config(normalized_ticker)
-    LOG.info(f"DEBUG: config returned: {config}")
+    LOG.info(f"[METADATA_DEBUG] config returned for '{normalized_ticker}': {config}")
     LOG.info(f"DEBUG: config bool check: {bool(config)}")
-    LOG.info(f"DEBUG: force_refresh: {force_refresh}")
+    LOG.info(f"DEBUG: force_refresh: {isolated_force_refresh}")
     
     # === MINIMAL CHANGE: handle both force_refresh and normal path inside the config branch ===
     if config:
@@ -7269,17 +7290,21 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
         )
         
         if needs_enhancement:
-            LOG.info(f"Enhancing {ticker} with AI - "
+            LOG.info(f"[AI_ENHANCEMENT_DEBUG] Enhancing {ticker} with AI - "
                      f"keywords: {len(metadata.get('industry_keywords', []))}, "
                      f"competitors: {len(metadata.get('competitors', []))}, "
                      f"force_refresh={force_refresh}")
-            
+            LOG.info(f"[AI_ENHANCEMENT_DEBUG] BEFORE AI: {ticker} company_name='{config['company_name']}'")
+
             ai_metadata = generate_enhanced_ticker_metadata_with_ai(
-                normalized_ticker, 
+                normalized_ticker,
                 config["company_name"],
                 config.get("sector", ""),
                 config.get("industry", "")
             )
+
+            LOG.info(f"[AI_ENHANCEMENT_DEBUG] AFTER AI: {ticker} ai_metadata company_name='{ai_metadata.get('company_name', 'MISSING') if ai_metadata else 'NO_AI_RESULT'}'")
+            LOG.info(f"[AI_ENHANCEMENT_DEBUG] AI result: {ai_metadata}")
             
             if ai_metadata:
                 # Only fill empty fields, don't overwrite existing data
@@ -8593,7 +8618,11 @@ async def admin_init(request: Request, body: InitRequest):
                 # STEP 2: Get or generate metadata with enhanced ticker reference integration
                 # CRITICAL: Force refresh to ensure no cached contamination from previous tickers
                 metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker, force_refresh=True)
-                
+
+                # CRITICAL DEBUG: Log what metadata was actually returned
+                LOG.info(f"[CRITICAL_DEBUG] {isolated_ticker} metadata returned: {metadata}")
+                LOG.info(f"[CRITICAL_DEBUG] {isolated_ticker} company_name in metadata: '{metadata.get('company_name', 'MISSING')}'")
+
                 # STEP 3: Build feed URLs for all categories using enhanced feed creation
                 feeds = feed_manager.create_feeds_for_ticker_enhanced(isolated_ticker, metadata)
                 

@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import logging
+import traceback
 import hashlib
 import re
 import pytz
@@ -41,6 +42,8 @@ from collections import defaultdict
 
 from playwright.async_api import async_playwright
 import asyncio
+import signal
+from contextlib import contextmanager
 
 import os
 import tracemalloc
@@ -167,6 +170,23 @@ def parse_json_with_fallback(text: str, ticker: str = "") -> dict:
             "aliases_brands_assets": {"aliases": [], "brands": [], "assets": []}
         }
 
+@contextmanager
+def timeout_handler(seconds: int):
+    """Context manager for timeout handling on Unix systems"""
+    def timeout_signal_handler(signum, frame):
+        raise TimeoutError(f"Operation timed out after {seconds} seconds")
+
+    # Set the signal handler and alarm
+    old_handler = signal.signal(signal.SIGALRM, timeout_signal_handler)
+    signal.alarm(seconds)
+
+    try:
+        yield
+    finally:
+        # Restore the old signal handler and cancel alarm
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
 def clean_null_bytes(text: str) -> str:
     """Remove NULL bytes and other problematic characters that cause PostgreSQL errors"""
     if not text:
@@ -278,7 +298,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
-SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 SCRAPFLY_API_KEY = os.getenv("SCRAPFLY_API_KEY")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Personal Access Token
@@ -463,14 +482,6 @@ scraping_stats = {
     }
 }
 
-# Global ScrapingBee statistics tracking
-scrapingbee_stats = {
-    "requests_made": 0,
-    "successful": 0,
-    "failed": 0,
-    "cost_estimate": 0.0,
-    "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
-}
 
 # Global Scrapfly statistics tracking  
 scrapfly_stats = {
@@ -481,9 +492,6 @@ scrapfly_stats = {
     "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
 }
 
-# Domains known to be problematic with ScrapingBee
-SCRAPINGBEE_PROBLEMATIC_DOMAINS = {
-}
 
 # Enhanced scraping statistics to track all methods
 enhanced_scraping_stats = {
@@ -491,13 +499,11 @@ enhanced_scraping_stats = {
     "requests_success": 0,
     "playwright_success": 0,
     "scrapfly_success": 0,  # ADD THIS
-    "scrapingbee_success": 0,
     "total_failures": 0,
     "by_method": {
         "requests": {"attempts": 0, "successes": 0},
         "playwright": {"attempts": 0, "successes": 0},
         "scrapfly": {"attempts": 0, "successes": 0},  # ADD THIS
-        "scrapingbee": {"attempts": 0, "successes": 0}
     }
 }
 
@@ -941,7 +947,25 @@ def normalize_ticker_format(ticker: str) -> str:
     
     # Convert to uppercase and strip whitespace
     normalized = ticker.upper().strip()
-    
+
+    # CRITICAL FIX: Convert colon format to dot format BEFORE character filtering
+    # Bloomberg/Reuters uses "ULVR:L", Yahoo Finance uses "ULVR.L"
+    colon_to_dot_mappings = {
+        ':L': '.L',      # London: ULVR:L → ULVR.L
+        ':TO': '.TO',    # Toronto: RY:TO → RY.TO
+        ':AX': '.AX',    # Australia: BHP:AX → BHP.AX
+        ':HK': '.HK',    # Hong Kong: 0005:HK → 0005.HK
+        ':DE': '.DE',    # Germany: SAP:DE → SAP.DE
+        ':PA': '.PA',    # Paris: MC:PA → MC.PA
+        ':AS': '.AS',    # Amsterdam: ASML:AS → ASML.AS
+    }
+
+    # Apply colon-to-dot conversions
+    for colon_suffix, dot_suffix in colon_to_dot_mappings.items():
+        if normalized.endswith(colon_suffix):
+            normalized = normalized[:-len(colon_suffix)] + dot_suffix
+            break
+
     # Remove quotes and invalid characters (keep only alphanumeric, dots, dashes)
     normalized = re.sub(r'[^A-Z0-9.-]', '', normalized)
     
@@ -1908,7 +1932,33 @@ def commit_csv_to_github(csv_content: str, commit_message: str = None):
         
         # Commit the file
         LOG.info(f"Committing CSV to GitHub: {len(csv_content)} characters")
-        commit_response = requests.put(api_url, headers=headers, json=commit_data, timeout=60)
+        # Add retry logic for network timeouts
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                LOG.info(f"GitHub commit attempt {attempt + 1}/{max_retries}")
+                commit_response = requests.put(api_url, headers=headers, json=commit_data, timeout=120)
+                break
+            except requests.Timeout as e:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 10  # 10s, 20s, 30s
+                    LOG.warning(f"GitHub commit timeout (attempt {attempt + 1}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    LOG.error(f"GitHub commit failed after {max_retries} timeout attempts")
+                    return {
+                        "status": "error",
+                        "message": f"GitHub commit timed out after {max_retries} attempts"
+                    }
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5  # 5s, 10s, 15s
+                    LOG.warning(f"GitHub commit network error (attempt {attempt + 1}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise
         
         if commit_response.status_code in [200, 201]:
             commit_result = commit_response.json()
@@ -2392,114 +2442,6 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
         import gc
         gc.collect()
 
-def scrape_with_scrapingbee(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Enhanced ScrapingBee with improved text extraction and content cleaning
-    """
-    global scrapingbee_stats, enhanced_scraping_stats
-    
-    for attempt in range(max_retries + 1):
-        try:
-            if not SCRAPINGBEE_API_KEY:
-                return None, "ScrapingBee API key not configured"
-            
-            if normalize_domain(domain) in PAYWALL_DOMAINS:
-                return None, f"Paywall domain: {domain}"
-            
-            if attempt > 0:
-                delay = 2 ** attempt
-                LOG.info(f"SCRAPINGBEE RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
-                time.sleep(delay)
-            
-            LOG.info(f"SCRAPINGBEE: Starting scrape for {domain} (attempt {attempt + 1})")
-            
-            # Update usage stats
-            scrapingbee_stats["requests_made"] += 1
-            scrapingbee_stats["cost_estimate"] += 0.001
-            scrapingbee_stats["by_domain"][domain]["attempts"] += 1
-            enhanced_scraping_stats["by_method"]["scrapingbee"]["attempts"] += 1
-            
-            # Improved parameters with better text extraction targeting
-            params = {
-                'api_key': SCRAPINGBEE_API_KEY,
-                'url': url,
-                'render_js': 'false',
-                'premium_proxy': 'true',
-                'country_code': 'us',
-                'timeout': 15000,
-                'extract_rules': '{"article_text": "article, main, .article-content, .story-content, .entry-content, .post-content, .content, [role=main], .post-body, .article-body"}',
-                'block_ads': 'true',
-                'block_resources': 'true'
-            }
-            
-            response = requests.get('https://app.scrapingbee.com/api/v1/', 
-                                   params=params, 
-                                   timeout=30)
-            
-            if response.status_code == 200:
-                try:
-                    # ScrapingBee returns JSON when using extract_rules
-                    result = response.json()
-                    raw_content = result.get('article_text', '') or response.text
-                except:
-                    # Fallback to raw text if JSON parsing fails
-                    raw_content = response.text
-                
-                if not raw_content or len(raw_content.strip()) < 100:
-                    LOG.warning(f"SCRAPINGBEE: Insufficient raw content for {domain} (attempt {attempt + 1})")
-                    continue
-                
-                # Apply content cleaning to the extracted text
-                cleaned_content = clean_scraped_content(raw_content, url, domain)
-                
-                if not cleaned_content or len(cleaned_content.strip()) < 100:
-                    LOG.warning(f"SCRAPINGBEE: Content too short after cleaning for {domain}")
-                    continue
-                
-                # Validate cleaned content quality
-                is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
-                if is_valid:
-                    scrapingbee_stats["successful"] += 1
-                    scrapingbee_stats["by_domain"][domain]["successes"] += 1
-                    enhanced_scraping_stats["by_method"]["scrapingbee"]["successes"] += 1
-                    
-                    # Enhanced logging to show cleaning effectiveness
-                    raw_len = len(str(raw_content))
-                    clean_len = len(cleaned_content)
-                    reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0
-                    
-                    LOG.info(f"SCRAPINGBEE SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
-                    return cleaned_content, None
-                else:
-                    LOG.warning(f"SCRAPINGBEE: Content validation failed for {domain}: {validation_msg}")
-                    break
-            
-            elif response.status_code == 500:
-                LOG.warning(f"SCRAPINGBEE: Server error 500 for {domain} (attempt {attempt + 1})")
-                if attempt < max_retries:
-                    continue
-                else:
-                    LOG.warning(f"SCRAPINGBEE: Max retries reached for {domain} after repeated 500 errors")
-            
-            elif response.status_code == 422:
-                LOG.warning(f"SCRAPINGBEE: Invalid parameters for {domain}")
-                break
-            
-            else:
-                LOG.warning(f"SCRAPINGBEE: HTTP {response.status_code} for {domain}")
-                if attempt < max_retries:
-                    continue
-                    
-        except requests.RequestException as e:
-            LOG.warning(f"SCRAPINGBEE: Request error for {domain} (attempt {attempt + 1}): {e}")
-            if attempt < max_retries:
-                continue
-        except Exception as e:
-            LOG.error(f"SCRAPINGBEE: Unexpected error for {domain}: {e}")
-            break
-    
-    scrapingbee_stats["failed"] += 1
-    return None, f"ScrapingBee failed after {max_retries + 1} attempts"
 
 async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -2895,9 +2837,9 @@ def log_scraping_success_rates():
         return
     
     # Calculate overall success rate
-    total_success = (enhanced_scraping_stats["requests_success"] + 
-                    enhanced_scraping_stats["playwright_success"] + 
-                    enhanced_scraping_stats["scrapingbee_success"])
+    total_success = (enhanced_scraping_stats["requests_success"] +
+                    enhanced_scraping_stats["playwright_success"] +
+                    enhanced_scraping_stats.get("scrapfly_success", 0))
     overall_rate = (total_success / total_attempts) * 100
     
     # Calculate individual success rates
@@ -2909,9 +2851,9 @@ def log_scraping_success_rates():
     playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
     playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
     
-    scrapingbee_attempts = enhanced_scraping_stats["by_method"]["scrapingbee"]["attempts"]
-    scrapingbee_success = enhanced_scraping_stats["by_method"]["scrapingbee"]["successes"]
-    scrapingbee_rate = (scrapingbee_success / scrapingbee_attempts * 100) if scrapingbee_attempts > 0 else 0
+    scrapfly_attempts = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("attempts", 0)
+    scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
+    scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
     
     # Log prominent success rate summary
     LOG.info("=" * 60)
@@ -2920,10 +2862,10 @@ def log_scraping_success_rates():
     LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
     LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
     LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
-    LOG.info(f"TIER 3 (ScrapingBee): {scrapingbee_rate:.1f}% ({scrapingbee_success}/{scrapingbee_attempts})")
-    
-    if scrapingbee_attempts > 0:
-        LOG.info(f"ScrapingBee Cost: ${scrapingbee_stats['cost_estimate']:.3f}")
+    LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
+
+    if scrapfly_attempts > 0:
+        LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
     
     LOG.info("=" * 60)
 
@@ -3140,9 +3082,8 @@ def log_enhanced_scraping_stats():
     
     requests_success = enhanced_scraping_stats["requests_success"]
     playwright_success = enhanced_scraping_stats["playwright_success"]
-    scrapfly_success = enhanced_scraping_stats["scrapfly_success"]  # ADD THIS
-    scrapingbee_success = enhanced_scraping_stats["scrapingbee_success"]
-    total_success = requests_success + playwright_success + scrapfly_success + scrapingbee_success
+    scrapfly_success = enhanced_scraping_stats["scrapfly_success"]
+    total_success = requests_success + playwright_success + scrapfly_success
     
     overall_rate = (total_success / total) * 100
     
@@ -3158,27 +3099,6 @@ def log_enhanced_scraping_stats():
             rate = (stats["successes"] / stats["attempts"]) * 100
             LOG.info(f"  {method.upper()} RATE: {rate:.1f}%")
 
-def log_scrapingbee_stats():
-    """Enhanced ScrapingBee statistics logging"""
-    if scrapingbee_stats["requests_made"] == 0:
-        LOG.info("SCRAPINGBEE: No requests made this run")
-        return
-    
-    success_rate = (scrapingbee_stats["successful"] / scrapingbee_stats["requests_made"]) * 100
-    LOG.info(f"SCRAPINGBEE FINAL: {success_rate:.1f}% success rate ({scrapingbee_stats['successful']}/{scrapingbee_stats['requests_made']})")
-    LOG.info(f"SCRAPINGBEE COST: ${scrapingbee_stats['cost_estimate']:.3f} estimated")
-    
-    if scrapingbee_stats["failed"] > 0:
-        LOG.warning(f"SCRAPINGBEE: {scrapingbee_stats['failed']} requests failed")
-    
-    # Log top performing and failing domains
-    successful_domains = [(domain, stats) for domain, stats in scrapingbee_stats["by_domain"].items() if stats["successes"] > 0]
-    failed_domains = [(domain, stats) for domain, stats in scrapingbee_stats["by_domain"].items() if stats["successes"] == 0 and stats["attempts"] > 0]
-    
-    if successful_domains:
-        LOG.info(f"SCRAPINGBEE SUCCESS DOMAINS: {len(successful_domains)} domains working")
-    if failed_domains:
-        LOG.info(f"SCRAPINGBEE FAILED DOMAINS: {len(failed_domains)} domains blocked/failed")
 
 def log_scrapfly_stats():
     """Scrapfly statistics logging"""
@@ -3204,31 +3124,21 @@ def log_scrapfly_stats():
 
 def reset_enhanced_scraping_stats():
     """Reset enhanced scraping stats for new run"""
-    global enhanced_scraping_stats, scrapfly_stats, scrapingbee_stats
+    global enhanced_scraping_stats, scrapfly_stats
     enhanced_scraping_stats = {
         "total_attempts": 0,
         "requests_success": 0,
         "playwright_success": 0,
-        "scrapfly_success": 0,  # ADD THIS
-        "scrapingbee_success": 0,
+        "scrapfly_success": 0,
         "total_failures": 0,
         "by_method": {
             "requests": {"attempts": 0, "successes": 0},
             "playwright": {"attempts": 0, "successes": 0},
-            "scrapfly": {"attempts": 0, "successes": 0},  # ADD THIS
-            "scrapingbee": {"attempts": 0, "successes": 0}
+            "scrapfly": {"attempts": 0, "successes": 0},
         }
     }
     # Reset Scrapfly stats
     scrapfly_stats = {
-        "requests_made": 0,
-        "successful": 0,
-        "failed": 0,
-        "cost_estimate": 0.0,
-        "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
-    }
-    # Keep ScrapingBee stats reset as well
-    scrapingbee_stats = {
         "requests_made": 0,
         "successful": 0,
         "failed": 0,
@@ -4222,11 +4132,21 @@ def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
     
     try:
         with db() as conn, conn.cursor() as cur:
+            # CRITICAL FIX: Prevent feed contamination between tickers
+            cur.execute("""
+                SELECT ticker FROM source_feed WHERE url = %s AND ticker != %s
+            """, (url, ticker))
+            existing_different_ticker = cur.fetchone()
+
+            if existing_different_ticker:
+                LOG.warning(f"FEED CONTAMINATION PREVENTED: URL {url} already assigned to {existing_different_ticker['ticker']}, skipping for {ticker}")
+                return -1  # Return invalid ID to indicate skipped
+
             cur.execute("""
                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
                 VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-                ON CONFLICT (url) DO UPDATE SET 
-                    name = EXCLUDED.name, 
+                ON CONFLICT (url) DO UPDATE SET
+                    name = EXCLUDED.name,
                     category = EXCLUDED.category,
                     active = TRUE
                 RETURNING id;
@@ -6216,8 +6136,8 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
     
     # Input validation
     if competitor_ticker:
-        competitor_ticker = competitor_ticker.strip().upper()
-        if not re.match(r'^[A-Z]{1,5}$', competitor_ticker):
+        competitor_ticker = normalize_ticker_format(competitor_ticker)
+        if not validate_ticker_format(competitor_ticker):
             LOG.warning(f"Invalid competitor ticker format: {competitor_ticker}")
             competitor_ticker = None
     
@@ -6842,7 +6762,7 @@ class FeedManager:
                     LOG.info(f"DEBUG: String competitor: {comp}")
                     # ENHANCED: Better parsing for international tickers
                     patterns = [
-                        r'^(.+?)\s*\(([A-Z]{1,5}(?:\.[A-Z]{1,3})?(?:-[A-Z])?)\)$',  # Standard with international
+                        r'^(.+?)\s*\(([A-Z]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?)\)$',  # Standard with international
                         r'^(.+?)\s*\(([A-Z-]{1,8})\)$',  # Broader pattern
                     ]
                     
@@ -6913,11 +6833,26 @@ class FeedManager:
         
         with db() as conn, conn.cursor() as cur:
             for feed in feeds:
+                # CRITICAL FIX: Prevent feed contamination between tickers
+                # Check if this URL already exists for a DIFFERENT ticker
+                cur.execute("""
+                    SELECT ticker FROM source_feed WHERE url = %s AND ticker != %s
+                """, (feed["url"], ticker))
+                existing_different_ticker = cur.fetchone()
+
+                if existing_different_ticker:
+                    LOG.warning(f"FEED CONTAMINATION PREVENTED: URL {feed['url']} already assigned to {existing_different_ticker['ticker']}, skipping for {ticker}")
+                    continue
+
+                # Safe to insert/update for this ticker only
                 cur.execute("""
                     INSERT INTO source_feed (url, name, ticker, retain_days, active, search_keyword, competitor_ticker)
                     VALUES (%s, %s, %s, %s, TRUE, %s, %s)
                     ON CONFLICT (url) DO UPDATE
-                    SET name = EXCLUDED.name, ticker = EXCLUDED.ticker, active = TRUE
+                    SET name = EXCLUDED.name,
+                        active = TRUE,
+                        search_keyword = EXCLUDED.search_keyword,
+                        competitor_ticker = EXCLUDED.competitor_ticker
                     RETURNING id;
                 """, (
                     feed["url"], feed["name"], ticker, retain_days,
@@ -6949,7 +6884,7 @@ class TickerManager:
                     # Process competitors back to structured format
                     competitors = []
                     for comp_str in config.get("competitors", []):
-                        match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp_str)
+                        match = re.search(r'^(.+?)\s*\(([A-Z]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?)\)$', comp_str)
                         if match:
                             competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
                         else:
@@ -7452,7 +7387,7 @@ def validate_metadata(metadata):
             warnings.append(f"Generic keyword detected: '{keyword}'")
     
     # Check competitor ticker format
-    ticker_pattern = r'^.+\([A-Z0-9]{1,6}(?:\.[A-Z]{1,3})?\)$'
+    ticker_pattern = r'^.+\([A-Z0-9]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?\)$'
     for competitor in metadata.get('competitors', []):
         if not re.match(ticker_pattern, competitor):
             warnings.append(f"Invalid competitor format: '{competitor}'")
@@ -7856,7 +7791,7 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
                         competitor_names.append(comp['name'])
                 else:
                     # Handle string format "Name (TICKER)"
-                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,5})\)$', comp)
+                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?)\)$', comp)
                     if match:
                         competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
                     else:
@@ -8231,17 +8166,30 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
         # HTML body
         msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        LOG.info(f"Connecting to SMTP server: {SMTP_HOST}:{SMTP_PORT}")
+
+        # Add timeout to SMTP operations
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=60) as server:
             if SMTP_STARTTLS:
+                LOG.info("Starting TLS...")
                 server.starttls()
+            LOG.info("Logging in to SMTP server...")
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            LOG.info("Sending email...")
             server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
 
-        LOG.info(f"Email sent to {recipient}")
+        LOG.info(f"Email sent successfully to {recipient}")
         return True
 
+    except smtplib.SMTPTimeout as e:
+        LOG.error(f"SMTP timeout sending email: {e}")
+        return False
+    except smtplib.SMTPException as e:
+        LOG.error(f"SMTP error sending email: {e}")
+        return False
     except Exception as e:
         LOG.error(f"Email send failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
         return False
 
 def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
@@ -8363,10 +8311,15 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
 
 def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
     """Fetch categorized articles for digest with ticker-specific AI analysis"""
+    start_time = time.time()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
+
     days = int(hours / 24) if hours >= 24 else 0
     period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
+
+    LOG.info(f"=== FETCHING DIGEST ARTICLES ===")
+    LOG.info(f"Time window: {period_label} (cutoff: {cutoff})")
+    LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
     with db() as conn, conn.cursor() as cur:
         # Enhanced query to get articles analyzed from each ticker's perspective - avoid duplicates
@@ -8622,13 +8575,23 @@ async def admin_init(request: Request, body: InitRequest):
                             
                             # BULLETPROOF: Log exactly what we're about to insert with isolated variables
                             LOG.info(f"DEBUG FEED INSERT: ticker={isolated_feed_ticker}, feed_name={isolated_feed_name}, category={isolated_feed_category}")
-                            
+
+                            # CRITICAL FIX: Prevent feed contamination between tickers
+                            cur.execute("""
+                                SELECT ticker FROM source_feed WHERE url = %s AND ticker != %s
+                            """, (isolated_feed_url, isolated_feed_ticker))
+                            existing_different_ticker = cur.fetchone()
+
+                            if existing_different_ticker:
+                                LOG.warning(f"FEED CONTAMINATION PREVENTED: URL {isolated_feed_url} already assigned to {existing_different_ticker['ticker']}, skipping for {isolated_feed_ticker}")
+                                continue
+
                             # Use parameterized query with completely isolated variables
                             cur.execute("""
                                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
                                 VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-                                ON CONFLICT (url) DO UPDATE SET 
-                                    name = EXCLUDED.name, 
+                                ON CONFLICT (url) DO UPDATE SET
+                                    name = EXCLUDED.name,
                                     category = EXCLUDED.category,
                                     active = TRUE
                                 RETURNING id;
@@ -9130,7 +9093,6 @@ async def cron_ingest(
             
             log_scraping_success_rates()
             log_enhanced_scraping_stats()
-            log_scrapingbee_stats()
             log_scrapfly_stats()
             
             # CRITICAL: Final cleanup before returning response
@@ -9150,10 +9112,9 @@ async def cron_ingest(
             
             # Calculate scraping stats
             total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
-            total_scraping_success = (enhanced_scraping_stats["requests_success"] + 
-                                     enhanced_scraping_stats["playwright_success"] + 
-                                     enhanced_scraping_stats.get("scrapfly_success", 0) +
-                                     enhanced_scraping_stats["scrapingbee_success"])
+            total_scraping_success = (enhanced_scraping_stats["requests_success"] +
+                                     enhanced_scraping_stats["playwright_success"] +
+                                     enhanced_scraping_stats.get("scrapfly_success", 0))
             overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
             
             # Stop memory monitoring and get summary
@@ -9189,10 +9150,8 @@ async def cron_ingest(
                         "requests_success": enhanced_scraping_stats["requests_success"],
                         "playwright_success": enhanced_scraping_stats["playwright_success"],
                         "scrapfly_success": enhanced_scraping_stats.get("scrapfly_success", 0),
-                        "scrapingbee_success": enhanced_scraping_stats["scrapingbee_success"],
                         "total_attempts": total_scraping_attempts
                     },
-                    "scrapingbee_cost": f"${scrapingbee_stats['cost_estimate']:.3f}",
                     "scrapfly_cost": f"${scrapfly_stats['cost_estimate']:.3f}",
                     "dynamic_limits": dynamic_limits,
                     "batch_processing": {
@@ -9282,9 +9241,39 @@ async def cron_digest(
         """Generate and send email digest with content scraping data and AI summaries"""
         require_admin(request)
         ensure_schema()
-        
-        result = fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
-        return result
+
+        try:
+            LOG.info(f"=== DIGEST GENERATION STARTING ===")
+            LOG.info(f"Time window: {minutes} minutes, Tickers: {tickers}")
+
+            # Use the existing enhanced digest function that sends emails
+            LOG.info("Calling enhanced digest function...")
+            result = fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
+
+            # The function returns a detailed result dict, let's pass it through with additional metadata
+            if isinstance(result, dict):
+                result["minutes"] = minutes
+                result["requested_tickers"] = tickers
+                LOG.info(f"Digest result: {result.get('status', 'unknown')} - {result.get('articles', 0)} articles")
+                return result
+            else:
+                LOG.error(f"Unexpected result type from digest function: {type(result)}")
+                return {
+                    "status": "error",
+                    "message": "Unexpected result from digest generation",
+                    "minutes": minutes,
+                    "tickers": tickers
+                }
+
+        except Exception as e:
+            LOG.error(f"Digest generation failed: {e}")
+            LOG.error(f"Error details: {traceback.format_exc()}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "tickers": tickers,
+                "minutes": minutes
+            }
         
 # FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/clean-feeds")
@@ -9336,33 +9325,34 @@ def get_ticker_metadata(request: Request, ticker: str):
     return {"ticker": ticker, "message": "No metadata found. Use /admin/init to generate."}
 
 @APP.post("/admin/regenerate-metadata")
-def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
+async def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
     """Force regeneration of AI metadata for a ticker"""
-    require_admin(request)
-    
-    if not OPENAI_API_KEY:
-        return {"status": "error", "message": "OpenAI API key not configured"}
-    
-    LOG.info(f"Regenerating metadata for {body.ticker}")
-    metadata = ticker_manager.get_or_create_metadata(body.ticker)
-    
-    # Rebuild feeds
-    feeds = feed_manager.create_feeds_for_ticker_enhanced(body.ticker, metadata)
-    for feed_config in feeds:
-        upsert_feed(
-            url=feed_config["url"],
-            name=feed_config["name"],
-            ticker=body.ticker,
-            category=feed_config.get("category", "company"),
-            retain_days=DEFAULT_RETAIN_DAYS
-        )
-    
-    return {
-        "status": "regenerated",
-        "ticker": body.ticker,
-        "metadata": metadata,
-        "feeds_created": len(feeds)
-    }
+    async with TICKER_PROCESSING_LOCK:
+        require_admin(request)
+
+        if not OPENAI_API_KEY:
+            return {"status": "error", "message": "OpenAI API key not configured"}
+
+        LOG.info(f"Regenerating metadata for {body.ticker}")
+        metadata = ticker_manager.get_or_create_metadata(body.ticker)
+
+        # Rebuild feeds
+        feeds = feed_manager.create_feeds_for_ticker_enhanced(body.ticker, metadata)
+        for feed_config in feeds:
+            upsert_feed(
+                url=feed_config["url"],
+                name=feed_config["name"],
+                ticker=body.ticker,
+                category=feed_config.get("category", "company"),
+                retain_days=DEFAULT_RETAIN_DAYS
+            )
+
+        return {
+            "status": "regenerated",
+            "ticker": body.ticker,
+            "metadata": metadata,
+            "feeds_created": len(feeds)
+        }
 
 
 @APP.post("/admin/force-digest")
@@ -10378,6 +10368,55 @@ async def get_memory_info():
     """Get current memory usage"""
     return memory_monitor.get_memory_info()
 
+@APP.get("/admin/debug/digest-check/{ticker}")
+async def debug_digest_check(request: Request, ticker: str):
+    """Debug endpoint to check digest data for a specific ticker"""
+    require_admin(request)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Check articles for this ticker in the last 24 hours
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
+            cur.execute("""
+                SELECT COUNT(*) as total_articles,
+                       COUNT(CASE WHEN ai_summary IS NOT NULL THEN 1 END) as with_ai_summary,
+                       COUNT(CASE WHEN scraped_content IS NOT NULL THEN 1 END) as with_content,
+                       COUNT(CASE WHEN sent_in_digest = TRUE THEN 1 END) as already_sent
+                FROM found_url
+                WHERE (ticker = %s OR ai_analysis_ticker = %s)
+                AND found_at >= %s
+            """, (ticker, ticker, cutoff))
+
+            stats = dict(cur.fetchone())
+
+            # Get sample articles
+            cur.execute("""
+                SELECT id, title, category, ai_summary IS NOT NULL as has_ai_summary,
+                       scraped_content IS NOT NULL as has_content, sent_in_digest
+                FROM found_url
+                WHERE (ticker = %s OR ai_analysis_ticker = %s)
+                AND found_at >= %s
+                ORDER BY found_at DESC
+                LIMIT 5
+            """, (ticker, ticker, cutoff))
+
+            sample_articles = [dict(row) for row in cur.fetchall()]
+
+            return {
+                "ticker": ticker,
+                "time_window": "24 hours",
+                "stats": stats,
+                "sample_articles": sample_articles,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "ticker": ticker
+        }
+
 @APP.get("/admin/memory-snapshots")
 async def get_memory_snapshots():
     """Get all memory snapshots"""
@@ -10419,6 +10458,102 @@ async def commit_csv_to_github_endpoint():
         
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@APP.post("/admin/safe-incremental-commit")
+async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
+    """Safely commit individual tickers as they complete processing"""
+    require_admin(request)
+
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+
+    LOG.info(f"=== SAFE INCREMENTAL COMMIT: {len(body.tickers)} TICKERS ===")
+
+    try:
+        # Step 1: Verify all tickers have AI-generated metadata
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, ai_generated, industry_keyword_1, competitor_1_name,
+                       ai_enhanced_at, updated_at
+                FROM ticker_reference
+                WHERE ticker = ANY(%s)
+                ORDER BY ticker
+            """, (body.tickers,))
+
+            ticker_status = {}
+            for row in cur.fetchall():
+                ticker = row["ticker"]
+                has_ai_data = (row["ai_generated"] and
+                             (row["industry_keyword_1"] or row["competitor_1_name"]))
+                ticker_status[ticker] = {
+                    "has_ai_metadata": has_ai_data,
+                    "ai_enhanced_at": row["ai_enhanced_at"],
+                    "updated_at": row["updated_at"]
+                }
+
+        # Step 2: Filter to only commit tickers with AI metadata
+        valid_tickers = [t for t, status in ticker_status.items() if status["has_ai_metadata"]]
+        invalid_tickers = [t for t, status in ticker_status.items() if not status["has_ai_metadata"]]
+
+        if not valid_tickers:
+            return {
+                "status": "no_changes",
+                "message": "No tickers have AI-generated metadata to commit",
+                "invalid_tickers": invalid_tickers,
+                "ticker_status": ticker_status
+            }
+
+        # Step 3: Create backup before commit
+        backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        commit_message = f"Incremental update: {', '.join(valid_tickers)} - {backup_timestamp}"
+
+        # Step 4: Export and commit with retry logic
+        LOG.info(f"Exporting {len(valid_tickers)} enhanced tickers: {valid_tickers}")
+        export_result = export_ticker_references_to_csv()
+
+        if export_result["status"] != "success":
+            return {
+                "status": "export_failed",
+                "message": export_result["message"],
+                "valid_tickers": valid_tickers,
+                "invalid_tickers": invalid_tickers
+            }
+
+        LOG.info(f"Committing to GitHub with message: {commit_message}")
+        commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
+
+        if commit_result["status"] == "success":
+            # Step 5: Update commit tracking in database
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE ticker_reference
+                    SET last_github_sync = %s
+                    WHERE ticker = ANY(%s)
+                """, (datetime.now(timezone.utc), valid_tickers))
+
+                LOG.info(f"Updated GitHub sync timestamp for {len(valid_tickers)} tickers")
+
+        return {
+            "status": commit_result["status"],
+            "message": f"Successfully committed {len(valid_tickers)} tickers",
+            "committed_tickers": valid_tickers,
+            "skipped_tickers": invalid_tickers,
+            "ticker_status": ticker_status,
+            "export_info": {
+                "total_tickers_in_csv": export_result["ticker_count"],
+                "csv_size": len(export_result["csv_content"])
+            },
+            "commit_info": commit_result
+        }
+
+    except Exception as e:
+        LOG.error(f"Safe incremental commit failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "message": f"Incremental commit failed: {str(e)}",
+            "requested_tickers": body.tickers
+        }
 
 # ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands

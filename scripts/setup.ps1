@@ -13,6 +13,7 @@ Write-Host "=== QUANTBRIEF FIXED: INITIALIZE ONCE, PROCESS SEQUENTIALLY ===" -Fo
 Write-Host "Window: $MINUTES min | Scraping Batch: $BATCH_SIZE | Triage Batch: $TRIAGE_BATCH_SIZE | Reset: $RESET_AI | Tickers: $($TICKERS -join ',')" -ForegroundColor Yellow
 
 $all_processed_tickers = @()
+$incremental_commits = @()
 
 # ===== CRITICAL FIX: INITIALIZE EACH TICKER SEPARATELY =====
 Write-Host "`n=== INDIVIDUAL TICKER INITIALIZATION (PREVENTS CORRUPTION) ===" -ForegroundColor Cyan
@@ -157,25 +158,61 @@ foreach ($ticker in $TICKERS) {
             }
         }
         
-        # DIGEST (for this ticker only)
+        # DIGEST (for this ticker only) with extended timeout
         Write-Host "  Starting digest for $ticker..." -ForegroundColor Gray
-        $digest = Invoke-RestMethod -Method Post "$APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -Headers $headers
-        
+        $digest = Invoke-RestMethod -Method Post "$APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -Headers $headers -TimeoutSec 900
+
         if ($digest.status -eq "sent") {
             Write-Host "  DIGEST SUCCESS: $($digest.articles) articles sent" -ForegroundColor Green
         } else {
             Write-Host "  DIGEST RESULT: $($digest.message)" -ForegroundColor Yellow
         }
-        
-        # Brief pause between tickers to prevent overlap
-        Write-Host "  $ticker completed. Pausing before next ticker..." -ForegroundColor Gray
-        Start-Sleep -Seconds 3
+
+        # *** NEW: INCREMENTAL COMMIT AFTER EACH SUCCESSFUL TICKER ***
+        if ($ingest.status -eq "completed" -or $ingested -gt 0) {
+            Write-Host "  Attempting incremental commit for $ticker..." -ForegroundColor Green
+
+            try {
+                $commitBody = @{ tickers = @($ticker) } | ConvertTo-Json
+                $commitResult = Invoke-RestMethod -Method Post "$APP/admin/safe-incremental-commit" -Headers $headers -Body $commitBody -TimeoutSec 180
+
+                if ($commitResult.status -eq "success") {
+                    Write-Host "  INCREMENTAL COMMIT SUCCESS: $ticker committed to GitHub" -ForegroundColor Green
+                    $incremental_commits += $ticker
+                } else {
+                    Write-Host "  INCREMENTAL COMMIT SKIPPED: $($commitResult.message)" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  INCREMENTAL COMMIT FAILED: $($_.Exception.Message)" -ForegroundColor Red
+                # Continue processing other tickers even if commit fails
+            }
+        }
+
+        # Brief pause between tickers to prevent overlap and ensure clean separation
+        Write-Host "  $ticker completed. Pausing 10 seconds for clean separation..." -ForegroundColor Gray
+        Start-Sleep -Seconds 10
       
     } catch {
         Write-Host "  ERROR: $($_.Exception.Message)" -ForegroundColor Red
-        
+
         if ($_.Exception.Response) {
             Write-Host "    HTTP Status: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
+        }
+
+        # *** NEW: EMERGENCY COMMIT FOR PARTIAL SUCCESS ***
+        if ($ingested -gt 0) {
+            Write-Host "  Attempting emergency commit due to partial success..." -ForegroundColor Yellow
+            try {
+                $commitBody = @{ tickers = @($ticker) } | ConvertTo-Json
+                $commitResult = Invoke-RestMethod -Method Post "$APP/admin/safe-incremental-commit" -Headers $headers -Body $commitBody -TimeoutSec 120
+
+                if ($commitResult.status -eq "success") {
+                    Write-Host "  EMERGENCY COMMIT SUCCESS: $ticker data saved!" -ForegroundColor Green
+                    $incremental_commits += $ticker
+                }
+            } catch {
+                Write-Host "  Emergency commit also failed: $($_.Exception.Message)" -ForegroundColor Red
+            }
         }
     }
 }
@@ -308,7 +345,21 @@ if ($all_processed_tickers.Count -gt 0) {
     Write-Host "  Reason: No successfully processed tickers found" -ForegroundColor Yellow
 }
 
+# ===== ENHANCED PROCESSING SUMMARY =====
+Write-Host "`n=== ENHANCED PROCESSING SUMMARY ===" -ForegroundColor Cyan
+Write-Host "  Successfully processed tickers: $($all_processed_tickers -join ',')" -ForegroundColor Green
+Write-Host "  Incrementally committed tickers: $($incremental_commits -join ',')" -ForegroundColor Green
+Write-Host "  Total incremental commits: $($incremental_commits.Count)" -ForegroundColor Green
+
+if ($incremental_commits.Count -gt 0) {
+    Write-Host "`n✅ METADATA PRESERVED: $($incremental_commits.Count) tickers committed individually" -ForegroundColor Green
+    Write-Host "   Your AI-generated metadata is safe in GitHub!" -ForegroundColor Green
+} else {
+    Write-Host "`n⚠️  NO METADATA COMMITTED: All tickers failed or had no AI enhancements" -ForegroundColor Yellow
+}
+
 Write-Host "`n=== ASYNC BATCH PROCESSING COMPLETED ===" -ForegroundColor Green
 Write-Host "Async Triage: $TRIAGE_BATCH_SIZE concurrent OpenAI calls" -ForegroundColor Magenta
 Write-Host "Async Scraping: $BATCH_SIZE concurrent article processing" -ForegroundColor Cyan
 Write-Host "Individual ticker initialization prevents data corruption!" -ForegroundColor Yellow
+Write-Host "✅ Incremental commits prevent metadata loss!" -ForegroundColor Green

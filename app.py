@@ -6794,11 +6794,14 @@ class FeedManager:
             for i, comp in enumerate(competitors):
                 comp_name = None
                 comp_ticker = None
-                
+
+                # CRITICAL DEBUG: Log what ticker we're processing for
+                LOG.info(f"[COMPETITOR_LOOP_DEBUG] Processing competitor {i} for ticker '{ticker}'")
+
                 if isinstance(comp, dict):
                     comp_name = comp.get('name', '')
                     comp_ticker = comp.get('ticker')
-                    LOG.info(f"DEBUG: Dict competitor - Name: '{comp_name}', Ticker: '{comp_ticker}'")
+                    LOG.info(f"[COMPETITOR_LOOP_DEBUG] Dict competitor - Name: '{comp_name}', Ticker: '{comp_ticker}' for main ticker '{ticker}'")
                 elif isinstance(comp, str):
                     LOG.info(f"DEBUG: String competitor: {comp}")
                     # ENHANCED: Better parsing for international tickers

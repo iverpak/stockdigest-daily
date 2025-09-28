@@ -6737,6 +6737,11 @@ class FeedManager:
             # CRITICAL DEBUG: Log exactly what company data is being used
             LOG.info(f"[{ticker}] CREATING COMPANY FEEDS: company_name='{company_name}', ticker='{ticker}'")
 
+            # CRITICAL DEBUG: Log exactly what variables are being used for company feeds
+            LOG.info(f"[COMPANY_FEED_DEBUG] {ticker} creating company feeds with:")
+            LOG.info(f"[COMPANY_FEED_DEBUG]   company_name='{company_name}'")
+            LOG.info(f"[COMPANY_FEED_DEBUG]   ticker='{ticker}'")
+
             company_feeds = [
                 {
                     "url": f"https://news.google.com/rss/search?q=\"{requests.utils.quote(company_name)}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",

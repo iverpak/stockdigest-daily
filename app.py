@@ -8729,12 +8729,16 @@ async def admin_init(request: Request, body: InitRequest):
                                 feed_ids_created.append(feed_id)
                                 ticker_feed_count += 1
                                 
-                                # CRITICAL: Immediate validation to catch corruption
-                                cur.execute("SELECT ticker, name FROM source_feed WHERE id = %s", (feed_id,))
+                                # CRITICAL: Validation with shared feed support
+                                cur.execute("SELECT ticker, name, category FROM source_feed WHERE id = %s", (feed_id,))
                                 validation_check = cur.fetchone()
                                 if validation_check['ticker'] != isolated_feed_ticker:
-                                    LOG.error(f"DATA CORRUPTION DETECTED: Expected ticker={isolated_feed_ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
-                                    raise Exception(f"Feed inserted with wrong ticker: expected {isolated_feed_ticker}, got {validation_check['ticker']}")
+                                    # Allow shared feeds for industry/competitor categories
+                                    if isolated_feed_category in ["industry", "competitor"]:
+                                        LOG.info(f"[{isolated_feed_ticker}] SHARED FEED DETECTED: Using existing {validation_check['category']} feed '{validation_check['name']}' owned by {validation_check['ticker']}")
+                                    else:
+                                        LOG.error(f"DATA CORRUPTION DETECTED: Expected ticker={isolated_feed_ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
+                                        raise Exception(f"Feed inserted with wrong ticker: expected {isolated_feed_ticker}, got {validation_check['ticker']}")
                                 
                                 LOG.info(f"Created feed ID {feed_id}: {isolated_feed_name} (category: {isolated_feed_category})")
                                 

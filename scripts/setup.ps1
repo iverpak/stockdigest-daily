@@ -9,7 +9,7 @@ $RESET_AI = $false  # Reset AI scores before running - DISABLED
 
 $headers = @{ "X-Admin-Token" = $TOKEN; "Content-Type" = "application/json" }
 
-Write-Host "=== QUANTBRIEF FIXED: INITIALIZE ONCE, PROCESS SEQUENTIALLY ===" -ForegroundColor Cyan
+Write-Host "=== QUANTBRIEF NEW ARCHITECTURE: INITIALIZE ONCE, PROCESS SEQUENTIALLY ===" -ForegroundColor Cyan
 Write-Host "Window: $MINUTES min | Scraping Batch: $BATCH_SIZE | Triage Batch: $TRIAGE_BATCH_SIZE | Reset: $RESET_AI | Tickers: $($TICKERS -join ',')" -ForegroundColor Yellow
 
 $all_processed_tickers = @()
@@ -37,10 +37,19 @@ try {
             $singleInitBody = @{ tickers = @($singleTicker); force_refresh = $false} | ConvertTo-Json
             $singleInitResult = Invoke-RestMethod -Method Post "$APP/admin/init" -Headers $headers -Body $singleInitBody
             
-            if ($singleInitResult.summary -and $singleInitResult.summary.total_feeds_created) {
-                $feedsForTicker = $singleInitResult.summary.total_feeds_created
-                $totalFeedsCreated += $feedsForTicker
-                Write-Host "    ${singleTicker}: SUCCESS - $feedsForTicker feeds created" -ForegroundColor Green
+            # NEW ARCHITECTURE: Check results array for feeds_created
+            if ($singleInitResult.results -and $singleInitResult.results.Count -gt 0) {
+                $feedsForTicker = ($singleInitResult.results | Measure-Object -Property feeds_created -Sum).Sum
+                if ($feedsForTicker -gt 0) {
+                    $totalFeedsCreated += $feedsForTicker
+                    Write-Host "    ${singleTicker}: SUCCESS - $feedsForTicker feeds created (NEW ARCHITECTURE)" -ForegroundColor Green
+                } else {
+                    Write-Host "    ${singleTicker}: No new feeds needed" -ForegroundColor Cyan
+                }
+            } elseif ($singleInitResult.successful -gt 0) {
+                # Fallback: Use successful count if results format changes
+                Write-Host "    ${singleTicker}: SUCCESS - New architecture working" -ForegroundColor Green
+                $totalFeedsCreated += 1  # Approximate count
             } else {
                 Write-Host "    ${singleTicker}: No new feeds needed" -ForegroundColor Cyan
             }

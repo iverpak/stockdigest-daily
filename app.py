@@ -8681,25 +8681,47 @@ async def admin_init(request: Request, body: InitRequest):
                                 else:
                                     LOG.info(f"[{isolated_feed_ticker}] FEED SHARING ALLOWED: {isolated_feed_category} feed {isolated_feed_url} shared between {existing_ticker} and {isolated_feed_ticker}")
 
-                            # Use parameterized query with completely isolated variables
-                            cur.execute("""
-                                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
-                                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-                                ON CONFLICT (url) DO UPDATE SET
-                                    name = EXCLUDED.name,
-                                    category = EXCLUDED.category,
-                                    active = TRUE
-                                WHERE source_feed.ticker = EXCLUDED.ticker
-                                RETURNING id;
-                            """, (
-                                isolated_feed_url,
-                                isolated_feed_name,
-                                isolated_feed_ticker,  # CRITICAL: Use isolated ticker variable
-                                isolated_feed_category,
-                                DEFAULT_RETAIN_DAYS,
-                                isolated_search_keyword,
-                                isolated_competitor_ticker
-                            ))
+                            # CRITICAL FIX: Handle industry/competitor feed sharing properly
+                            if isolated_feed_category in ["industry", "competitor"]:
+                                # Industry and competitor feeds can be shared between tickers
+                                # Just return the existing feed ID if URL already exists
+                                cur.execute("""
+                                    INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+                                    VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                                    ON CONFLICT (url) DO UPDATE SET
+                                        active = TRUE
+                                    RETURNING id;
+                                """, (
+                                    isolated_feed_url,
+                                    isolated_feed_name,
+                                    isolated_feed_ticker,
+                                    isolated_feed_category,
+                                    DEFAULT_RETAIN_DAYS,
+                                    isolated_search_keyword,
+                                    isolated_competitor_ticker
+                                ))
+                                LOG.info(f"[{isolated_feed_ticker}] SHARED FEED: {isolated_feed_category} feed '{isolated_feed_name}' - shared with other tickers")
+                            else:
+                                # Company feeds must be ticker-specific
+                                cur.execute("""
+                                    INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
+                                    VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                                    ON CONFLICT (url) DO UPDATE SET
+                                        name = EXCLUDED.name,
+                                        category = EXCLUDED.category,
+                                        active = TRUE
+                                    WHERE source_feed.ticker = EXCLUDED.ticker
+                                    RETURNING id;
+                                """, (
+                                    isolated_feed_url,
+                                    isolated_feed_name,
+                                    isolated_feed_ticker,
+                                    isolated_feed_category,
+                                    DEFAULT_RETAIN_DAYS,
+                                    isolated_search_keyword,
+                                    isolated_competitor_ticker
+                                ))
+                                LOG.info(f"[{isolated_feed_ticker}] TICKER-SPECIFIC FEED: {isolated_feed_category} feed '{isolated_feed_name}'")
                             
                             result = cur.fetchone()
                             if result:

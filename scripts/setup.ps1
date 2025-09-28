@@ -1,7 +1,7 @@
 # Configuration
 $APP = "https://quantbrief-daily.onrender.com"
 $TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
-$TICKERS = @("MO", "GM", "ODFL", "SO", "CVS")
+$TICKERS = @("RY.TO", "TD.TO", "VST", "CEG")  # Updated to test new architecture with problematic ticker combinations
 $MINUTES = 4320  # Time window in minutes
 $BATCH_SIZE = 3  # Scraping batch size
 $TRIAGE_BATCH_SIZE = 3  # NEW: Triage batch size for async processing

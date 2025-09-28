@@ -8752,6 +8752,8 @@ async def admin_init(request: Request, body: InitRequest):
             "total_tickers": len(body.tickers),
             "successful": len([r for r in results if r["feeds_created"] > 0])
         }
+
+@APP.post("/cron/ingest")
 async def cron_ingest(
     request: Request,
     minutes: int = Query(default=15, description="Time window in minutes"),

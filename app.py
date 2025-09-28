@@ -4145,10 +4145,10 @@ def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
 
                 # Allow competitor/industry feeds to be shared, but prevent company feed contamination
                 if category == "company" or existing_category == "company":
-                    LOG.warning(f"FEED CONTAMINATION PREVENTED: Company feed URL {url} already assigned to {existing_ticker}, skipping for {ticker}")
+                    LOG.warning(f"[{ticker}] FEED CONTAMINATION PREVENTED: Company feed URL {url} already assigned to {existing_ticker}, skipping for {ticker}")
                     return -1  # Return invalid ID to indicate skipped
                 else:
-                    LOG.info(f"FEED SHARING ALLOWED: {category} feed {url} shared between {existing_ticker} and {ticker}")
+                    LOG.info(f"[{ticker}] FEED SHARING ALLOWED: {category} feed {url} shared between {existing_ticker} and {ticker}")
 
             cur.execute("""
                 INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
@@ -6826,7 +6826,7 @@ class FeedManager:
                     continue
                 
                 # CRITICAL DEBUG: Log what feeds we're about to create
-                LOG.info(f"  CREATING COMPETITOR FEEDS for {ticker}: comp_name='{comp_name}', comp_ticker='{comp_ticker}'")
+                LOG.info(f"[{ticker}] CREATING COMPETITOR FEEDS: comp_name='{comp_name}', comp_ticker='{comp_ticker}'")
 
                 # Create feeds for this competitor
                 comp_feeds = [
@@ -6873,10 +6873,10 @@ class FeedManager:
 
                     # Allow competitor/industry feeds to be shared, but prevent company feed contamination
                     if feed_category == "company" or existing_category == "company":
-                        LOG.warning(f"FEED CONTAMINATION PREVENTED: Company feed URL {feed['url']} already assigned to {existing_ticker}, skipping for {ticker}")
+                        LOG.warning(f"[{ticker}] FEED CONTAMINATION PREVENTED: Company feed URL {feed['url']} already assigned to {existing_ticker}, skipping for {ticker}")
                         continue
                     else:
-                        LOG.info(f"FEED SHARING ALLOWED: {feed_category} feed {feed['url']} shared between {existing_ticker} and {ticker}")
+                        LOG.info(f"[{ticker}] FEED SHARING ALLOWED: {feed_category} feed {feed['url']} shared between {existing_ticker} and {ticker}")
 
                 # Safe to insert/update for this ticker only
                 cur.execute("""
@@ -8624,10 +8624,10 @@ async def admin_init(request: Request, body: InitRequest):
 
                                 # Allow competitor/industry feeds to be shared, but prevent company feed contamination
                                 if isolated_feed_category == "company" or existing_category == "company":
-                                    LOG.warning(f"FEED CONTAMINATION PREVENTED: Company feed URL {isolated_feed_url} already assigned to {existing_ticker}, skipping for {isolated_feed_ticker}")
+                                    LOG.warning(f"[{isolated_feed_ticker}] FEED CONTAMINATION PREVENTED: Company feed URL {isolated_feed_url} already assigned to {existing_ticker}, skipping for {isolated_feed_ticker}")
                                     continue
                                 else:
-                                    LOG.info(f"FEED SHARING ALLOWED: {isolated_feed_category} feed {isolated_feed_url} shared between {existing_ticker} and {isolated_feed_ticker}")
+                                    LOG.info(f"[{isolated_feed_ticker}] FEED SHARING ALLOWED: {isolated_feed_category} feed {isolated_feed_url} shared between {existing_ticker} and {isolated_feed_ticker}")
 
                             # Use parameterized query with completely isolated variables
                             cur.execute("""
@@ -8673,7 +8673,7 @@ async def admin_init(request: Request, body: InitRequest):
                                     "id": feed_id
                                 })
                             else:
-                                LOG.error(f"Failed to create feed: {isolated_feed_name}")
+                                LOG.error(f"[{isolated_feed_ticker}] Failed to create feed: {isolated_feed_name}")
                         
                         # Final verification using the same connection/transaction
                         LOG.info(f"Verifying feeds created for {isolated_ticker}")
@@ -8714,7 +8714,7 @@ async def admin_init(request: Request, body: InitRequest):
                         # Check for company feeds
                         has_company_feeds = any(row['category'] == 'company' for row in immediate_check)
                         if not has_company_feeds and any(f.get('category') == 'company' for f in feeds):
-                            LOG.error(f"CRITICAL: {isolated_ticker} missing company feeds in same transaction!")
+                            LOG.error(f"[{isolated_ticker}] CRITICAL: {isolated_ticker} missing company feeds in same transaction!")
                         else:
                             LOG.info(f"SUCCESS: {isolated_ticker} has all expected feed categories")
                             
@@ -8916,7 +8916,7 @@ async def cron_ingest(
                             memory_monitor.force_garbage_collection()
                             
                 except Exception as e:
-                    LOG.error(f"Feed ingest failed for {feed['name']}: {e}")
+                    LOG.error(f"[{feed.get('ticker', 'UNKNOWN')}] Feed ingest failed for {feed['name']}: {e}")
                     continue
             
             memory_monitor.take_snapshot("PHASE1_FEEDS_COMPLETE")

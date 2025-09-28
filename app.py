@@ -4157,13 +4157,19 @@ def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
                     name = EXCLUDED.name,
                     category = EXCLUDED.category,
                     active = TRUE
+                WHERE source_feed.ticker = EXCLUDED.ticker
                 RETURNING id;
             """, (url, name, ticker, category, retain_days, search_keyword, competitor_ticker))
-            
+
+            # CRITICAL: Validate the inserted/updated feed has correct ticker
             result = cur.fetchone()
-            
             if result:
                 feed_id = result["id"]
+                cur.execute("SELECT ticker, name FROM source_feed WHERE id = %s", (feed_id,))
+                validation_check = cur.fetchone()
+                if validation_check['ticker'] != ticker:
+                    LOG.error(f"FEED INSERTION CORRUPTION: Expected ticker={ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
+                    raise Exception(f"Feed inserted with wrong ticker: expected {ticker}, got {validation_check['ticker']}")
                 LOG.info(f"DEBUG: Feed upsert SUCCESS - ID: {feed_id}, category: {category}")
                 
                 # IMMEDIATE VERIFICATION
@@ -6869,6 +6875,7 @@ class FeedManager:
                         active = TRUE,
                         search_keyword = EXCLUDED.search_keyword,
                         competitor_ticker = EXCLUDED.competitor_ticker
+                    WHERE source_feed.ticker = EXCLUDED.ticker
                     RETURNING id;
                 """, (
                     feed["url"], feed["name"], ticker, retain_days,
@@ -8618,6 +8625,7 @@ async def admin_init(request: Request, body: InitRequest):
                                     name = EXCLUDED.name,
                                     category = EXCLUDED.category,
                                     active = TRUE
+                                WHERE source_feed.ticker = EXCLUDED.ticker
                                 RETURNING id;
                             """, (
                                 isolated_feed_url,

@@ -6687,6 +6687,12 @@ class FeedManager:
         feeds = []
         company_name = metadata.get("company_name", ticker)
         
+        # CRITICAL DEBUG: Log exactly what data this ticker is receiving
+        LOG.info(f"FEED GENERATION DEBUG for {ticker}:")
+        LOG.info(f"  Company name: {metadata.get('company_name', 'MISSING')}")
+        LOG.info(f"  Competitors: {metadata.get('competitors', [])}")
+        LOG.info(f"  Metadata keys: {list(metadata.keys())}")
+
         LOG.info(f"CREATING FEEDS for {ticker} ({company_name}):")
         
         # Check existing feed counts by unique competitor
@@ -6753,6 +6759,9 @@ class FeedManager:
         if existing_competitor_entities < 3:
             available_competitor_slots = 3 - existing_competitor_entities
             competitors = metadata.get("competitors", [])[:available_competitor_slots]
+
+            # CRITICAL DEBUG: Log competitor data for this specific ticker
+            LOG.info(f"  COMPETITOR DEBUG for {ticker}: Raw data: {competitors}")
             
             # Get existing competitor tickers to avoid duplicates
             with db() as conn, conn.cursor() as cur:
@@ -6816,6 +6825,9 @@ class FeedManager:
                     LOG.info(f"DEBUG: Skipping competitor - invalid ticker format: '{comp_ticker}'")
                     continue
                 
+                # CRITICAL DEBUG: Log what feeds we're about to create
+                LOG.info(f"  CREATING COMPETITOR FEEDS for {ticker}: comp_name='{comp_name}', comp_ticker='{comp_ticker}'")
+
                 # Create feeds for this competitor
                 comp_feeds = [
                     {

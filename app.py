@@ -4086,13 +4086,10 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                                 article_id, feed["ticker"], category,
                                 feed["id"], clean_search_keyword, clean_competitor_ticker
                             )
-                        
-                        result = cur.fetchone()
-                        if result:
                             stats["inserted"] += 1
                             LOG.info(f"INSERTED [{category}]: Total unique now: {projected_count}/{ingestion_stats['limits'][category if category == 'company' else f'{category}_per_keyword']} - {title[:50]}...")
                         else:
-                            LOG.warning(f"Insert returned no result for: {title[:30]}")
+                            LOG.info(f"DUPLICATE SKIPPED: {title[:30]}")
                             
                     except Exception as db_e:
                         import traceback

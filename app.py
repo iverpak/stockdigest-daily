@@ -800,9 +800,74 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
+
+                -- JOB QUEUE: Batch tracking table
+                CREATE TABLE IF NOT EXISTS ticker_processing_batches (
+                    batch_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    status VARCHAR(20) DEFAULT 'queued' CHECK (status IN
+                        ('queued', 'processing', 'completed', 'failed', 'cancelled')),
+                    total_jobs INT NOT NULL,
+                    completed_jobs INT DEFAULT 0,
+                    failed_jobs INT DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    created_by VARCHAR(100) DEFAULT 'api',
+                    config JSONB,
+                    error_summary TEXT
+                );
+
+                -- JOB QUEUE: Individual ticker job tracking
+                CREATE TABLE IF NOT EXISTS ticker_processing_jobs (
+                    job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    batch_id UUID NOT NULL REFERENCES ticker_processing_batches(batch_id) ON DELETE CASCADE,
+                    ticker VARCHAR(20) NOT NULL,
+
+                    -- Execution state
+                    status VARCHAR(20) DEFAULT 'queued' CHECK (status IN
+                        ('queued', 'processing', 'completed', 'failed', 'cancelled', 'timeout')),
+                    phase VARCHAR(50),
+                    progress INT DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
+
+                    -- Results
+                    result JSONB,
+                    error_message TEXT,
+                    error_stacktrace TEXT,
+
+                    -- Retry logic
+                    retry_count INT DEFAULT 0,
+                    max_retries INT DEFAULT 2,
+                    last_retry_at TIMESTAMP,
+
+                    -- Resource tracking
+                    worker_id VARCHAR(100),
+                    memory_mb FLOAT,
+                    duration_seconds FLOAT,
+
+                    -- Audit trail
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    last_updated TIMESTAMP DEFAULT NOW(),
+
+                    -- Configuration
+                    config JSONB,
+
+                    -- Timeout protection
+                    timeout_at TIMESTAMP
+                );
+
+                -- JOB QUEUE: Indexes for performance
+                CREATE INDEX IF NOT EXISTS idx_jobs_status_queued ON ticker_processing_jobs(status, created_at)
+                    WHERE status = 'queued';
+                CREATE INDEX IF NOT EXISTS idx_jobs_status_processing ON ticker_processing_jobs(status, timeout_at)
+                    WHERE status = 'processing';
+                CREATE INDEX IF NOT EXISTS idx_jobs_batch ON ticker_processing_jobs(batch_id);
+                CREATE INDEX IF NOT EXISTS idx_jobs_ticker ON ticker_processing_jobs(ticker);
+                CREATE INDEX IF NOT EXISTS idx_batches_status ON ticker_processing_batches(status, created_at);
             """)
 
-    LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE")
+    LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE")
 
 def update_schema_for_content():
     """Deprecated - schema already created in ensure_schema()"""
@@ -8742,6 +8807,459 @@ class CLIRequest(BaseModel):
     minutes: int = 1440
     triage_batch_size: int = 2
 
+class JobSubmitRequest(BaseModel):
+    tickers: List[str]
+    minutes: int = 1440
+    batch_size: int = 3
+    triage_batch_size: int = 3
+
+# ------------------------------------------------------------------------------
+# JOB QUEUE SYSTEM - PostgreSQL-Based Background Processing
+# ------------------------------------------------------------------------------
+
+# Circuit Breaker for System-Wide Failure Detection
+class CircuitBreaker:
+    """Detect and halt processing on systematic failures"""
+    def __init__(self, failure_threshold=3, reset_timeout=300):
+        self.failure_count = 0
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.last_failure_time = None
+        self.state = 'closed'  # closed = working, open = failing
+        self.lock = threading.Lock()
+
+    def record_failure(self, error_type: str, error_msg: str):
+        with self.lock:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+
+            if self.failure_count >= self.failure_threshold:
+                self.state = 'open'
+                LOG.critical(f"🚨 CIRCUIT BREAKER OPEN: {self.failure_count} consecutive failures")
+                LOG.critical(f"   Last error: {error_type}: {error_msg}")
+                # TODO: Send alert email in production
+
+    def record_success(self):
+        with self.lock:
+            # Reset if we've been in open state long enough
+            if self.state == 'open' and self.last_failure_time:
+                if time.time() - self.last_failure_time > self.reset_timeout:
+                    LOG.info("✅ Circuit breaker CLOSED: Resuming after timeout")
+                    self.state = 'closed'
+                    self.failure_count = 0
+            elif self.state == 'closed':
+                # Gradual recovery - reduce count on success
+                self.failure_count = max(0, self.failure_count - 1)
+
+    def is_open(self):
+        with self.lock:
+            return self.state == 'open'
+
+    def reset(self):
+        with self.lock:
+            self.state = 'closed'
+            self.failure_count = 0
+            self.last_failure_time = None
+            LOG.info("🔄 Circuit breaker manually reset")
+
+# Global circuit breaker instance
+job_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_timeout=300)
+
+# Job Queue Worker State
+_job_worker_running = False
+_job_worker_thread = None
+
+# Forward declarations - these reference functions defined later in the file
+# We use globals() to avoid circular imports
+
+async def process_ingest_phase(ticker: str, minutes: int, batch_size: int, triage_batch_size: int):
+    """Wrapper for ingest logic"""
+    # Call the actual cron_ingest function which is defined later
+    cron_ingest_func = globals().get('cron_ingest')
+    if not cron_ingest_func:
+        raise RuntimeError("cron_ingest function not yet defined")
+
+    # Create mock request
+    class MockRequest:
+        def __init__(self):
+            self.headers = {"x-admin-token": ADMIN_TOKEN}
+
+    return await cron_ingest_func(
+        MockRequest(),
+        minutes=minutes,
+        tickers=[ticker],
+        batch_size=batch_size,
+        triage_batch_size=triage_batch_size
+    )
+
+async def process_digest_phase(ticker: str, minutes: int):
+    """Wrapper for digest logic"""
+    # Call the actual digest function
+    fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')
+    if not fetch_digest_func:
+        raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
+
+    return fetch_digest_func(minutes / 60, [ticker])
+
+async def process_commit_phase(ticker: str):
+    """Wrapper for commit logic"""
+    # Call the actual GitHub commit function
+    commit_func = globals().get('admin_safe_incremental_commit')
+    if not commit_func:
+        raise RuntimeError("admin_safe_incremental_commit not yet defined")
+
+    class MockRequest:
+        def __init__(self):
+            self.headers = {"x-admin-token": ADMIN_TOKEN}
+
+    from pydantic import BaseModel
+    class CommitBody(BaseModel):
+        tickers: List[str]
+
+    return await commit_func(MockRequest(), CommitBody(tickers=[ticker]))
+
+def get_worker_id():
+    """Get unique worker ID (Render instance or hostname)"""
+    return os.getenv('RENDER_INSTANCE_ID') or os.getenv('HOSTNAME') or 'worker-local'
+
+def update_job_status(job_id: str, status: str = None, phase: str = None, progress: int = None,
+                     error_message: str = None, error_stacktrace: str = None, result: dict = None,
+                     memory_mb: float = None, duration_seconds: float = None):
+    """Update job status in database"""
+    updates = ["last_updated = NOW()"]
+    params = []
+
+    if status:
+        updates.append("status = %s")
+        params.append(status)
+
+        if status == 'processing':
+            updates.append("started_at = NOW()")
+        elif status in ('completed', 'failed', 'timeout', 'cancelled'):
+            updates.append("completed_at = NOW()")
+
+    if phase:
+        updates.append("phase = %s")
+        params.append(phase)
+
+    if progress is not None:
+        updates.append("progress = %s")
+        params.append(progress)
+
+    if error_message:
+        updates.append("error_message = %s")
+        params.append(error_message)
+
+    if error_stacktrace:
+        updates.append("error_stacktrace = %s")
+        params.append(error_stacktrace)
+
+    if result:
+        updates.append("result = %s")
+        params.append(json.dumps(result))
+
+    if memory_mb is not None:
+        updates.append("memory_mb = %s")
+        params.append(memory_mb)
+
+    if duration_seconds is not None:
+        updates.append("duration_seconds = %s")
+        params.append(duration_seconds)
+
+    params.append(job_id)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            UPDATE ticker_processing_jobs
+            SET {', '.join(updates)}
+            WHERE job_id = %s
+        """, params)
+
+def get_next_queued_job():
+    """Get next queued job with atomic claim (prevents race conditions)"""
+    with db() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("""
+                UPDATE ticker_processing_jobs
+                SET status = 'processing',
+                    started_at = NOW(),
+                    worker_id = %s,
+                    last_updated = NOW()
+                WHERE job_id = (
+                    SELECT job_id FROM ticker_processing_jobs
+                    WHERE status = 'queued'
+                    ORDER BY created_at
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING *
+            """, (get_worker_id(),))
+
+            job = cur.fetchone()
+            if job:
+                LOG.info(f"📋 Claimed job {job['job_id']} for ticker {job['ticker']}")
+            return dict(job) if job else None
+
+        except Exception as e:
+            LOG.error(f"Error claiming job: {e}")
+            return None
+
+async def process_ticker_job(job: dict):
+    """Process a single ticker job (ingest + digest + commit)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = json.loads(job['config']) if job['config'] else {}
+
+    minutes = config.get('minutes', 1440)
+    batch_size = config.get('batch_size', 3)
+    triage_batch_size = config.get('triage_batch_size', 3)
+
+    start_time = time.time()
+    memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
+
+    LOG.info(f"🚀 [JOB {job_id}] Starting processing for {ticker}")
+    LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
+
+    try:
+        # Use existing TICKER_PROCESSING_LOCK to ensure isolation
+        async with TICKER_PROCESSING_LOCK:
+            # PHASE 1: Ingest (already implemented in /cron/ingest)
+            update_job_status(job_id, phase='ingest_start', progress=10)
+            LOG.info(f"📥 [JOB {job_id}] Phase 1: Ingest starting...")
+
+            # Call ingest logic (will be defined later in file)
+            # We can't import it here due to circular dependency
+            # So we'll call it by name after it's defined
+            ingest_result = await process_ingest_phase(
+                ticker=ticker,
+                minutes=minutes,
+                batch_size=batch_size,
+                triage_batch_size=triage_batch_size
+            )
+
+            update_job_status(job_id, phase='ingest_complete', progress=60)
+            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete")
+
+            # PHASE 2: Digest (already implemented in /cron/digest)
+            update_job_status(job_id, phase='digest_start', progress=65)
+            LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
+
+            # Call digest function (defined later in file)
+            digest_result = await process_digest_phase(ticker=ticker, minutes=minutes)
+
+            update_job_status(job_id, phase='digest_complete', progress=95)
+            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete")
+
+            # PHASE 3: Commit to GitHub
+            update_job_status(job_id, phase='commit_start', progress=96)
+            LOG.info(f"💾 [JOB {job_id}] Phase 3: GitHub commit starting...")
+
+            # Call commit phase
+            commit_result = await process_commit_phase(ticker=ticker)
+
+            update_job_status(job_id, phase='commit_complete', progress=99)
+            LOG.info(f"✅ [JOB {job_id}] Phase 3: Commit complete")
+
+            # Calculate final metrics
+            duration = time.time() - start_time
+            memory_end = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
+            memory_used = max(0, memory_end - memory_start)
+
+            # Mark complete
+            result = {
+                "ticker": ticker,
+                "ingest": ingest_result,
+                "digest": digest_result,
+                "commit": commit_result,
+                "duration_seconds": duration,
+                "memory_mb": memory_used
+            }
+
+            update_job_status(
+                job_id,
+                status='completed',
+                phase='complete',
+                progress=100,
+                result=result,
+                duration_seconds=duration,
+                memory_mb=memory_used
+            )
+
+            LOG.info(f"✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
+
+            # Record success with circuit breaker
+            job_circuit_breaker.record_success()
+
+            # Update batch counters
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE ticker_processing_batches
+                    SET completed_jobs = completed_jobs + 1,
+                        last_updated = NOW()
+                    WHERE batch_id = %s
+                """, (job['batch_id'],))
+
+            return result
+
+    except Exception as e:
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        duration = time.time() - start_time
+
+        LOG.error(f"❌ [JOB {job_id}] FAILED after {duration:.1f}s: {error_msg}")
+        LOG.error(f"   Stacktrace: {error_trace}")
+
+        # Determine if this is a system-wide failure
+        is_system_failure = any(keyword in error_msg.lower() for keyword in [
+            'database', 'connection', 'psycopg', 'timeout', 'memory'
+        ])
+
+        if is_system_failure:
+            job_circuit_breaker.record_failure(type(e).__name__, error_msg)
+        else:
+            # Ticker-specific failure, not system-wide
+            job_circuit_breaker.record_success()
+
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=error_msg[:1000],  # Limit size
+            error_stacktrace=error_trace[:5000],
+            duration_seconds=duration
+        )
+
+        # Update batch counters
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET failed_jobs = failed_jobs + 1,
+                    last_updated = NOW()
+                WHERE batch_id = %s
+            """, (job['batch_id'],))
+
+        raise
+
+def job_worker_loop():
+    """Background worker that polls database for jobs"""
+    global _job_worker_running
+
+    LOG.info(f"🔧 Job worker started (worker_id: {get_worker_id()})")
+
+    while _job_worker_running:
+        try:
+            # Check circuit breaker
+            if job_circuit_breaker.is_open():
+                LOG.warning("⚠️ Circuit breaker is OPEN, skipping job polling")
+                time.sleep(30)
+                continue
+
+            # Get next job
+            job = get_next_queued_job()
+
+            if job:
+                # Process job (blocks until complete)
+                asyncio.run(process_ticker_job(job))
+            else:
+                # No jobs available, sleep and poll again
+                time.sleep(10)
+
+        except KeyboardInterrupt:
+            LOG.info("🛑 Job worker received interrupt signal")
+            break
+
+        except Exception as e:
+            LOG.error(f"💥 Job worker error: {e}")
+            LOG.error(traceback.format_exc())
+            time.sleep(30)  # Back off on errors
+
+    LOG.info("🔚 Job worker stopped")
+
+def start_job_worker():
+    """Start the background job worker thread"""
+    global _job_worker_running, _job_worker_thread
+
+    if _job_worker_running:
+        LOG.warning("Job worker already running")
+        return
+
+    _job_worker_running = True
+    _job_worker_thread = threading.Thread(target=job_worker_loop, daemon=True, name="JobWorker")
+    _job_worker_thread.start()
+
+    LOG.info("✅ Job worker thread started")
+
+def stop_job_worker():
+    """Stop the background job worker thread"""
+    global _job_worker_running
+
+    if not _job_worker_running:
+        return
+
+    _job_worker_running = False
+    LOG.info("⏸️ Job worker stopping...")
+
+    if _job_worker_thread:
+        _job_worker_thread.join(timeout=10)
+        LOG.info("✅ Job worker stopped")
+
+def timeout_watchdog_loop():
+    """Monitor for timed-out jobs"""
+    LOG.info("⏰ Timeout watchdog started")
+
+    while _job_worker_running:
+        try:
+            time.sleep(60)  # Check every minute
+
+            with db() as conn, conn.cursor() as cur:
+                # Find jobs that exceeded timeout
+                cur.execute("""
+                    UPDATE ticker_processing_jobs
+                    SET status = 'timeout',
+                        error_message = 'Job exceeded timeout limit',
+                        completed_at = NOW()
+                    WHERE status = 'processing'
+                    AND timeout_at < NOW()
+                    RETURNING job_id, ticker, worker_id
+                """)
+
+                timed_out = cur.fetchall()
+                for job in timed_out:
+                    LOG.error(f"⏰ JOB TIMEOUT: {job['job_id']} (ticker: {job['ticker']}, worker: {job['worker_id']})")
+
+                    # Update batch counters
+                    cur.execute("""
+                        UPDATE ticker_processing_batches
+                        SET failed_jobs = failed_jobs + 1
+                        WHERE batch_id = (
+                            SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
+                        )
+                    """, (job['job_id'],))
+
+        except Exception as e:
+            LOG.error(f"Timeout watchdog error: {e}")
+            time.sleep(30)
+
+    LOG.info("⏰ Timeout watchdog stopped")
+
+# Start workers on app startup
+@APP.on_event("startup")
+async def startup_event():
+    """Initialize job queue system on startup"""
+    LOG.info("🚀 FastAPI startup: Initializing job queue system...")
+    start_job_worker()
+
+    # Start timeout watchdog in separate thread
+    timeout_thread = threading.Thread(target=timeout_watchdog_loop, daemon=True, name="TimeoutWatchdog")
+    timeout_thread.start()
+
+    LOG.info("✅ Job queue system initialized")
+
+@APP.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    LOG.info("🛑 FastAPI shutdown: Stopping job queue system...")
+    stop_job_worker()
+
 # ------------------------------------------------------------------------------
 # API Routes
 # ------------------------------------------------------------------------------
@@ -8758,6 +9276,257 @@ def debug_auth(request: Request):
         "expected_token_prefix": ADMIN_TOKEN[:10] + "..." if ADMIN_TOKEN else "None",
         "token_length": len(ADMIN_TOKEN) if ADMIN_TOKEN else 0
     }
+
+# ------------------------------------------------------------------------------
+# JOB QUEUE API ENDPOINTS
+# ------------------------------------------------------------------------------
+
+@APP.post("/jobs/submit")
+async def submit_job_batch(request: Request, body: JobSubmitRequest):
+    """Submit a batch of tickers for server-side processing"""
+    require_admin(request)
+
+    if not body.tickers:
+        raise HTTPException(status_code=400, detail="No tickers specified")
+
+    # Check queue capacity
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT COUNT(*) as queued_count
+            FROM ticker_processing_jobs
+            WHERE status IN ('queued', 'processing')
+        """)
+
+        queued_count = cur.fetchone()['queued_count']
+
+        if queued_count > 100:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Job queue is full ({queued_count} jobs pending). Try again later."
+            )
+
+    # Create batch
+    batch_id = None
+    job_ids = []
+
+    with db() as conn, conn.cursor() as cur:
+        # Create batch record
+        cur.execute("""
+            INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+            VALUES (%s, %s, %s)
+            RETURNING batch_id
+        """, (len(body.tickers), 'powershell', json.dumps({
+            "minutes": body.minutes,
+            "batch_size": body.batch_size,
+            "triage_batch_size": body.triage_batch_size
+        })))
+
+        batch_id = cur.fetchone()['batch_id']
+
+        # Create individual jobs with timeout
+        timeout_minutes = 45  # 45 minutes per ticker
+        timeout_at = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
+
+        for ticker in body.tickers:
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, ticker, config, timeout_at
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING job_id
+            """, (batch_id, ticker, json.dumps({
+                "minutes": body.minutes,
+                "batch_size": body.batch_size,
+                "triage_batch_size": body.triage_batch_size
+            }), timeout_at))
+
+            job_ids.append(str(cur.fetchone()['job_id']))
+
+    LOG.info(f"📦 Batch {batch_id} created: {len(body.tickers)} tickers submitted")
+
+    return {
+        "status": "submitted",
+        "batch_id": str(batch_id),
+        "job_ids": job_ids,
+        "tickers": body.tickers,
+        "total_jobs": len(body.tickers),
+        "message": f"Processing started server-side for {len(body.tickers)} tickers"
+    }
+
+@APP.get("/jobs/batch/{batch_id}")
+async def get_batch_status(request: Request, batch_id: str):
+    """Get status of all jobs in a batch"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        # Get batch info
+        cur.execute("""
+            SELECT * FROM ticker_processing_batches WHERE batch_id = %s
+        """, (batch_id,))
+
+        batch = cur.fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        # Get all jobs in batch
+        cur.execute("""
+            SELECT job_id, ticker, status, phase, progress,
+                   error_message, started_at, completed_at,
+                   duration_seconds, memory_mb
+            FROM ticker_processing_jobs
+            WHERE batch_id = %s
+            ORDER BY created_at
+        """, (batch_id,))
+
+        jobs = [dict(row) for row in cur.fetchall()]
+
+    # Calculate overall progress
+    total_progress = sum(j['progress'] for j in jobs)
+    avg_progress = total_progress // len(jobs) if jobs else 0
+
+    completed = len([j for j in jobs if j['status'] == 'completed'])
+    failed = len([j for j in jobs if j['status'] in ('failed', 'timeout')])
+    processing = len([j for j in jobs if j['status'] == 'processing'])
+    queued = len([j for j in jobs if j['status'] == 'queued'])
+
+    # Determine batch status
+    batch_status = batch['status']
+    if completed + failed == len(jobs):
+        batch_status = 'completed'
+    elif processing > 0 or completed > 0:
+        batch_status = 'processing'
+    else:
+        batch_status = 'queued'
+
+    # Update batch status if changed
+    if batch_status != batch['status']:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET status = %s,
+                    completed_jobs = %s,
+                    failed_jobs = %s
+                WHERE batch_id = %s
+            """, (batch_status, completed, failed, batch_id))
+
+    return {
+        "batch_id": batch_id,
+        "status": batch_status,
+        "total_tickers": len(jobs),
+        "completed": completed,
+        "failed": failed,
+        "processing": processing,
+        "queued": queued,
+        "overall_progress": avg_progress,
+        "created_at": batch['created_at'].isoformat() if batch['created_at'] else None,
+        "jobs": [{
+            "job_id": str(j['job_id']),
+            "ticker": j['ticker'],
+            "status": j['status'],
+            "phase": j['phase'],
+            "progress": j['progress'],
+            "error_message": j['error_message'],
+            "duration_seconds": j['duration_seconds'],
+            "memory_mb": j['memory_mb']
+        } for j in jobs]
+    }
+
+@APP.get("/jobs/{job_id}")
+async def get_job_detail(request: Request, job_id: str):
+    """Get detailed status of a single job"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT j.*, b.batch_id
+            FROM ticker_processing_jobs j
+            JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
+            WHERE j.job_id = %s
+        """, (job_id,))
+
+        job = cur.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        return {
+            "job_id": str(job['job_id']),
+            "batch_id": str(job['batch_id']),
+            "ticker": job['ticker'],
+            "status": job['status'],
+            "phase": job['phase'],
+            "progress": job['progress'],
+            "result": job['result'],
+            "error_message": job['error_message'],
+            "error_stacktrace": job['error_stacktrace'],
+            "retry_count": job['retry_count'],
+            "worker_id": job['worker_id'],
+            "memory_mb": job['memory_mb'],
+            "duration_seconds": job['duration_seconds'],
+            "created_at": job['created_at'].isoformat() if job['created_at'] else None,
+            "started_at": job['started_at'].isoformat() if job['started_at'] else None,
+            "completed_at": job['completed_at'].isoformat() if job['completed_at'] else None,
+            "config": job['config']
+        }
+
+@APP.post("/jobs/circuit-breaker/reset")
+async def reset_circuit_breaker(request: Request):
+    """Manually reset the circuit breaker"""
+    require_admin(request)
+
+    job_circuit_breaker.reset()
+
+    return {
+        "status": "reset",
+        "message": "Circuit breaker has been manually reset"
+    }
+
+@APP.get("/jobs/stats")
+async def get_job_stats(request: Request):
+    """Get overall job queue statistics"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        # Job counts by status
+        cur.execute("""
+            SELECT status, COUNT(*) as count
+            FROM ticker_processing_jobs
+            GROUP BY status
+        """)
+        status_counts = {row['status']: row['count'] for row in cur.fetchall()}
+
+        # Recent completions (last hour)
+        cur.execute("""
+            SELECT COUNT(*) as count,
+                   AVG(duration_seconds) as avg_duration,
+                   AVG(memory_mb) as avg_memory
+            FROM ticker_processing_jobs
+            WHERE status = 'completed'
+            AND completed_at > NOW() - INTERVAL '1 hour'
+        """)
+        recent = cur.fetchone()
+
+        # Active batches
+        cur.execute("""
+            SELECT COUNT(*) as count
+            FROM ticker_processing_batches
+            WHERE status IN ('queued', 'processing')
+        """)
+        active_batches = cur.fetchone()['count']
+
+    return {
+        "status_counts": status_counts,
+        "recent_completions_1h": recent['count'] or 0,
+        "avg_duration_seconds": float(recent['avg_duration']) if recent['avg_duration'] else None,
+        "avg_memory_mb": float(recent['avg_memory']) if recent['avg_memory'] else None,
+        "active_batches": active_batches,
+        "circuit_breaker_state": job_circuit_breaker.state,
+        "circuit_breaker_failures": job_circuit_breaker.failure_count,
+        "worker_id": get_worker_id()
+    }
+
+# ------------------------------------------------------------------------------
+# ADMIN ENDPOINTS (Existing)
+# ------------------------------------------------------------------------------
 
 @APP.post("/admin/migrate-feeds")
 async def admin_migrate_feeds(request: Request):

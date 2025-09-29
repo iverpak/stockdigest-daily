@@ -8806,9 +8806,9 @@ async def admin_init(request: Request, body: InitRequest):
         import gc
         gc.collect()  # Force garbage collection to clear any lingering objects
 
-        # STEP 1: Create new feed architecture
-        LOG.info("=== CREATING NEW FEED ARCHITECTURE ===")
-        ensure_new_feed_architecture()
+        # STEP 1: Ensure database schema is up to date (includes new feed architecture)
+        LOG.info("=== ENSURING DATABASE SCHEMA (NEW FEED ARCHITECTURE) ===")
+        ensure_schema()
 
         # STEP 2: Import CSV from GitHub
         LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")

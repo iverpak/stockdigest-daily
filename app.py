@@ -6262,16 +6262,77 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
     # Final fallback - use ticker if that's all we have
     return competitor_ticker or search_keyword or "Unknown Competitor"
 
+def determine_article_category_for_ticker(article_row: dict, viewing_ticker: str) -> str:
+    """
+    Determine the correct article category based on the viewing ticker.
+    Same article can be 'company' for one ticker and 'competitor' for another.
+    """
+    try:
+        # Get ticker metadata to determine relationships
+        ticker_config = get_ticker_reference(viewing_ticker)
+        if not ticker_config:
+            # Fallback to stored category if no metadata
+            return article_row.get("category", "company")
+
+        # Get company name for the viewing ticker
+        viewing_company_name = ticker_config.get("company_name", viewing_ticker)
+
+        # Get article's search keyword and competitor ticker
+        search_keyword = article_row.get("search_keyword", "")
+        competitor_ticker = article_row.get("competitor_ticker", "")
+        original_category = article_row.get("category", "company")
+
+        # If this article mentions the viewing ticker's company, it's company news
+        if search_keyword and viewing_company_name:
+            # Check if search keyword matches company name (case insensitive)
+            if viewing_company_name.lower() in search_keyword.lower() or \
+               search_keyword.lower() in viewing_company_name.lower():
+                return "company"
+
+        # If the competitor_ticker matches viewing ticker, this is company news
+        if competitor_ticker == viewing_ticker:
+            return "company"
+
+        # If this is from a competitor feed but about viewing ticker's company, it's company news
+        if original_category == "competitor":
+            # Check if this competitor article is actually about the viewing ticker's company
+            competitors_list = ticker_config.get("competitors", [])
+            article_company_mentioned = False
+
+            for comp in competitors_list:
+                if isinstance(comp, dict):
+                    comp_name = comp.get("name", "")
+                    comp_ticker = comp.get("ticker", "")
+                    # If article mentions a known competitor, keep it as competitor
+                    if comp_name and (comp_name.lower() in search_keyword.lower()):
+                        article_company_mentioned = True
+                        break
+                    if comp_ticker and comp_ticker == competitor_ticker:
+                        article_company_mentioned = True
+                        break
+
+            # If competitor article doesn't mention known competitors, might be about viewing company
+            if not article_company_mentioned and search_keyword:
+                if viewing_company_name.lower() in search_keyword.lower():
+                    return "company"
+
+        # Default: use original category from database
+        return original_category
+
+    except Exception as e:
+        LOG.warning(f"Error determining category for {viewing_ticker}: {e}")
+        return article_row.get("category", "company")
+
 def get_url_hash(url: str, resolved_url: str = None) -> str:
     """Generate hash for URL deduplication, using resolved URL if available"""
     # Use resolved URL if available (this is the key part)
     primary_url = resolved_url or url
     url_lower = primary_url.lower()
-    
+
     # Remove common parameters
     url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url_lower)
     url_clean = url_clean.rstrip('/')
-    
+
     return hashlib.md5(url_clean.encode()).hexdigest()
 
 def normalize_domain(domain: str) -> str:
@@ -8442,7 +8503,9 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         for row in cur.fetchall():
             # Use ai_analysis_ticker if available, otherwise use ticker
             target_ticker = row["ai_analysis_ticker"] or row["ticker"] or "UNKNOWN"
-            category = row["category"] or "company"
+
+            # CRITICAL FIX: Determine correct category based on viewing ticker
+            category = determine_article_category_for_ticker(row, target_ticker)
             
             if target_ticker not in articles_by_ticker:
                 articles_by_ticker[target_ticker] = {}

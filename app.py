@@ -708,9 +708,11 @@ def ensure_schema():
                     LOG.error(f"❌ Category column check failed: {e}")
                     raise e
 
-                # SCHEMA FIX: Add missing category column to ticker_feeds if needed
+                # SCHEMA FIX: Add missing columns to ticker_feeds if needed
                 try:
-                    LOG.info("🔧 Checking if ticker_feeds.category column exists...")
+                    LOG.info("🔧 Checking ticker_feeds table schema...")
+
+                    # Check for category column
                     cur.execute("""
                         SELECT column_name
                         FROM information_schema.columns
@@ -731,6 +733,24 @@ def ensure_schema():
                         LOG.info("✅ Added index for ticker_feeds.category")
                     else:
                         LOG.info("✅ ticker_feeds.category column already exists")
+
+                    # Check for updated_at column
+                    cur.execute("""
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_name = 'ticker_feeds' AND column_name = 'updated_at'
+                    """)
+                    updated_at_exists = cur.fetchone()
+
+                    if not updated_at_exists:
+                        LOG.info("➕ Adding missing updated_at column to ticker_feeds table...")
+                        cur.execute("""
+                            ALTER TABLE ticker_feeds
+                            ADD COLUMN updated_at TIMESTAMP DEFAULT NOW()
+                        """)
+                        LOG.info("✅ Added updated_at column to ticker_feeds")
+                    else:
+                        LOG.info("✅ ticker_feeds.updated_at column already exists")
 
                 except Exception as e:
                     LOG.error(f"❌ Schema fix failed: {e}")

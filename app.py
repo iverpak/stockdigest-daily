@@ -11,7 +11,7 @@ import openai
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set
 from contextlib import contextmanager
-from urllib.parse imp2ort urlparse, parse_qs, unquote, quote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 import csv
 import io
 import newspaper

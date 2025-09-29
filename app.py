@@ -729,12 +729,11 @@ def ensure_schema():
                     UNIQUE(ticker, article_id)
                 );
 
-                -- Single ticker reference table
+                -- ticker_reference table - EXACT match to CSV structure
                 CREATE TABLE IF NOT EXISTS ticker_reference (
-                    id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(20) UNIQUE NOT NULL,
-                    country VARCHAR(5) NOT NULL,
-                    company_name VARCHAR(255) NOT NULL,
+                    ticker VARCHAR(20) PRIMARY KEY,
+                    country VARCHAR(5),
+                    company_name VARCHAR(255),
                     industry VARCHAR(255),
                     sector VARCHAR(255),
                     sub_industry VARCHAR(255),
@@ -744,25 +743,20 @@ def ensure_schema():
                     active BOOLEAN DEFAULT TRUE,
                     is_etf BOOLEAN DEFAULT FALSE,
                     yahoo_ticker VARCHAR(20),
-                    -- Individual keyword columns (legacy compatibility)
                     industry_keyword_1 VARCHAR(255),
                     industry_keyword_2 VARCHAR(255),
                     industry_keyword_3 VARCHAR(255),
-                    -- Individual competitor columns (legacy compatibility)
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    ai_enhanced_at TIMESTAMP,
                     competitor_1_name VARCHAR(255),
                     competitor_1_ticker VARCHAR(20),
                     competitor_2_name VARCHAR(255),
                     competitor_2_ticker VARCHAR(20),
                     competitor_3_name VARCHAR(255),
                     competitor_3_ticker VARCHAR(20),
-                    -- Array columns (new architecture)
-                    industry_keywords TEXT[],
-                    competitors TEXT[],
-                    ai_generated BOOLEAN DEFAULT FALSE,
-                    ai_enhanced_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW(),
-                    data_source VARCHAR(50) DEFAULT 'manual'
+                    data_source VARCHAR(50) DEFAULT 'csv_import'
                 );
 
                 CREATE TABLE IF NOT EXISTS domain_names (

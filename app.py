@@ -456,7 +456,25 @@ DOMAIN_STRATEGIES = {
     }
 }
 
-# Ingestion limits (50/25/25) - for URL collection phase
+# FIXED: Ticker-specific ingestion stats to prevent race conditions
+ticker_ingestion_stats = {}
+
+def get_ticker_ingestion_stats(ticker: str) -> dict:
+    """Get or create ticker-specific ingestion stats"""
+    if ticker not in ticker_ingestion_stats:
+        ticker_ingestion_stats[ticker] = {
+            "company_ingested": 0,
+            "industry_ingested_by_keyword": {},
+            "competitor_ingested_by_keyword": {},
+            "limits": {
+                "company": 50,
+                "industry_per_keyword": 25,
+                "competitor_per_keyword": 25
+            }
+        }
+    return ticker_ingestion_stats[ticker]
+
+# Legacy global stats for backward compatibility (deprecated)
 ingestion_stats = {
     "company_ingested": 0,
     "industry_ingested_by_keyword": {},
@@ -468,7 +486,27 @@ ingestion_stats = {
     }
 }
 
-# Scraping limits (20 + 5×keywords + 5×competitors) - for content extraction phase
+# FIXED: Ticker-specific scraping stats to prevent race conditions
+ticker_scraping_stats = {}
+
+def get_ticker_scraping_stats(ticker: str) -> dict:
+    """Get or create ticker-specific scraping stats"""
+    if ticker not in ticker_scraping_stats:
+        ticker_scraping_stats[ticker] = {
+            "company_scraped": 0,
+            "industry_scraped_by_keyword": {},
+            "competitor_scraped_by_keyword": {},
+            "successful_scrapes": 0,
+            "failed_scrapes": 0,
+            "limits": {
+                "company": 20,
+                "industry_per_keyword": 5,
+                "competitor_per_keyword": 5
+            }
+        }
+    return ticker_scraping_stats[ticker]
+
+# Legacy global stats for backward compatibility (deprecated)
 scraping_stats = {
     "company_scraped": 0,
     "industry_scraped_by_keyword": {},

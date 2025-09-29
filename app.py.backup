@@ -715,7 +715,172 @@ def ensure_schema():
     except Exception as e:
         LOG.error(f"❌ ensure_schema failed with error: {e}")
         raise e
+            # DIAGNOSTIC: Check what's in the production database
+            try:
+                cur.execute("""
+                    SELECT table_name, column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND column_name = 'category'
+                    ORDER BY table_name, column_name
+                """)
+                category_columns = cur.fetchall()
+                LOG.info(f"📊 DIAGNOSTIC: Found {len(category_columns)} tables with 'category' columns:")
+                for row in category_columns:
+                    LOG.info(f"   {row['table_name']}.{row['column_name']}")
 
+                # Check existing feeds table structure
+                cur.execute("""
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'feeds'
+                    ORDER BY ordinal_position
+                """)
+                feeds_columns = cur.fetchall()
+                LOG.info(f"📊 DIAGNOSTIC: Existing feeds table has {len(feeds_columns)} columns:")
+                for col in feeds_columns:
+                    LOG.info(f"   feeds.{col['column_name']} ({col['data_type']})")
+
+            except Exception as e:
+                LOG.error(f"❌ DIAGNOSTIC query failed: {e}")
+
+            # DEFENSIVE: Try to handle existing problematic schema
+            try:
+                # Remove any views or triggers that might reference old category column
+                cur.execute("DROP VIEW IF EXISTS feed_summary CASCADE")
+                cur.execute("DROP TRIGGER IF EXISTS category_update_trigger ON feeds CASCADE")
+                LOG.info("🧹 Cleaned up potentially problematic database objects")
+            except Exception as e:
+                LOG.warning(f"⚠️ Cleanup attempt: {e}")
+
+            # Articles table: ticker-agnostic content storage
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS articles (
+                    id SERIAL PRIMARY KEY,
+                    url_hash VARCHAR(32) UNIQUE NOT NULL,
+                    url TEXT NOT NULL,
+                    resolved_url TEXT,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    domain VARCHAR(255),
+                    published_at TIMESTAMP,
+                    scraped_content TEXT,
+                    content_scraped_at TIMESTAMP,
+                    scraping_failed BOOLEAN DEFAULT FALSE,
+                    scraping_error TEXT,
+                    ai_summary TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+
+                -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
+                CREATE TABLE IF NOT EXISTS feeds (
+                    id SERIAL PRIMARY KEY,
+                    url VARCHAR(2048) UNIQUE NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    search_keyword VARCHAR(255),
+                    competitor_ticker VARCHAR(10),
+                    retain_days INTEGER DEFAULT 90,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+
+                -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
+                CREATE TABLE IF NOT EXISTS ticker_feeds (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                    category VARCHAR(20) NOT NULL DEFAULT 'company',
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, feed_id)
+                );
+
+                -- Ticker-Articles relationship table
+                CREATE TABLE IF NOT EXISTS ticker_articles (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    category VARCHAR(20) DEFAULT 'company',
+                    feed_id INTEGER REFERENCES feeds(id) ON DELETE SET NULL,
+                    search_keyword TEXT,
+                    competitor_ticker VARCHAR(10),
+                    sent_in_digest BOOLEAN DEFAULT FALSE,
+                    found_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, article_id)
+                );
+
+                -- Indexes for feeds and ticker_feeds
+                CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
+                CREATE INDEX IF NOT EXISTS idx_feeds_active ON feeds(active);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_ticker ON ticker_feeds(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_feed_id ON ticker_feeds(feed_id);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_category ON ticker_feeds(category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_active ON ticker_feeds(active);
+
+                -- Performance indexes for articles
+                CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash);
+                CREATE INDEX IF NOT EXISTS idx_articles_domain ON articles(domain);
+                CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
+
+                -- Performance indexes for ticker_articles
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_ticker ON ticker_articles(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_article_id ON ticker_articles(article_id);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_category ON ticker_articles(category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_sent_in_digest ON ticker_articles(sent_in_digest);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_found_at ON ticker_articles(found_at DESC);
+
+                -- Single ticker reference table definition
+                CREATE TABLE IF NOT EXISTS ticker_reference (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) UNIQUE NOT NULL,
+                    country VARCHAR(5) NOT NULL,
+                    company_name VARCHAR(255) NOT NULL,
+                    industry VARCHAR(255),
+                    sector VARCHAR(255),
+                    sub_industry VARCHAR(255),
+                    exchange VARCHAR(20),
+                    currency VARCHAR(3),
+                    market_cap_category VARCHAR(20),
+                    active BOOLEAN DEFAULT TRUE,
+                    is_etf BOOLEAN DEFAULT FALSE,
+                    yahoo_ticker VARCHAR(20),
+                    industry_keywords TEXT[],
+                    competitors TEXT[],
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    ai_enhanced_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    data_source VARCHAR(50) DEFAULT 'manual'
+                );
+
+                -- Indexes for ticker_reference
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
+
+                CREATE TABLE IF NOT EXISTS domain_names (
+                    domain VARCHAR(255) PRIMARY KEY,
+                    formal_name VARCHAR(255) NOT NULL,
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+
+                CREATE TABLE IF NOT EXISTS competitor_metadata (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    company_name VARCHAR(255) NOT NULL,
+                    parent_ticker VARCHAR(10) NOT NULL,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, parent_ticker)
+                );
+            """)
+
+# Add these fields to your database schema
 def update_schema_for_content():
     """Deprecated - schema already created in ensure_schema()"""
     pass

@@ -1,53 +1,61 @@
-# Standard library imports
-import asyncio
-import base64
-import csv
-import gc
-import hashlib
-import io
-import json
-import logging
 import os
-import psutil
-import random
-import re
-import signal
-import smtplib
 import sys
-import threading
 import time
+import logging
 import traceback
-import tracemalloc
-from collections import defaultdict
-from contextlib import contextmanager
+import hashlib
+import re
+import pytz
+import json
+import openai
 from datetime import datetime, timedelta, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from functools import wraps
-from threading import BoundedSemaphore
 from typing import List, Optional, Dict, Any, Tuple, Set
+from contextlib import contextmanager
 from urllib.parse import urlparse, parse_qs, unquote, quote
+import csv
+import io
+import newspaper
+from newspaper import Article
+import random
 from urllib.robotparser import RobotFileParser
 
-# Third-party imports
-import aiohttp
-import feedparser
-import newspaper
-import openai
 import psycopg
-import pytz
-import requests
-from bs4 import BeautifulSoup
+from psycopg.rows import dict_row
 from fastapi import FastAPI, Request, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse
-from newspaper import Article
-from playwright.async_api import async_playwright
-from psycopg.rows import dict_row
 from pydantic import BaseModel
+
+import feedparser
+import requests
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+from bs4 import BeautifulSoup
+
+import base64
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Local imports
+from collections import defaultdict
+
+from playwright.async_api import async_playwright
+import asyncio
+import signal
+from contextlib import contextmanager
+
+import os
+import tracemalloc
+from functools import wraps
+import threading
+from threading import BoundedSemaphore
+
+import aiohttp
+
+import gc
+import psutil
+import tracemalloc
 from memory_monitor import (
     memory_monitor,
     monitor_phase,
@@ -57,6 +65,8 @@ from memory_monitor import (
 
 # Global session for OpenAI API calls with retries
 _openai_session = None
+
+import asyncio
 
 # Global ticker processing lock
 TICKER_PROCESSING_LOCK = asyncio.Lock()
@@ -464,8 +474,7 @@ def get_ticker_ingestion_stats(ticker: str) -> dict:
         }
     return ticker_ingestion_stats[ticker]
 
-# DEPRECATED: Legacy global stats - kept for backward compatibility during migration
-# TODO: Remove after all functions are updated to use ticker-specific stats
+# Legacy global stats for backward compatibility (deprecated)
 ingestion_stats = {
     "company_ingested": 0,
     "industry_ingested_by_keyword": {},
@@ -497,8 +506,7 @@ def get_ticker_scraping_stats(ticker: str) -> dict:
         }
     return ticker_scraping_stats[ticker]
 
-# DEPRECATED: Legacy global stats - kept for backward compatibility during migration
-# TODO: Remove after all functions are updated to use ticker-specific stats
+# Legacy global stats for backward compatibility (deprecated)
 scraping_stats = {
     "company_scraped": 0,
     "industry_scraped_by_keyword": {},
@@ -657,78 +665,56 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """Complete database schema initialization with ticker-specific AI analysis"""
+    """Optimized database schema initialization - ticker-agnostic articles with relationships"""
     with db() as conn:
         with conn.cursor() as cur:
+            # Articles table: ticker-agnostic content storage
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS found_url (
+                CREATE TABLE IF NOT EXISTS articles (
                     id SERIAL PRIMARY KEY,
+                    url_hash VARCHAR(32) UNIQUE NOT NULL,
                     url TEXT NOT NULL,
                     resolved_url TEXT,
-                    url_hash VARCHAR(32) NOT NULL,
                     title TEXT NOT NULL,
                     description TEXT,
-                    feed_id INTEGER,
-                    ticker VARCHAR(10) NOT NULL,
                     domain VARCHAR(255),
                     published_at TIMESTAMP,
-                    found_at TIMESTAMP DEFAULT NOW(),
-                    sent_in_digest BOOLEAN DEFAULT FALSE,
-                    category VARCHAR(20) DEFAULT 'company',
-                    search_keyword TEXT,
-                    original_source_url TEXT,
                     scraped_content TEXT,
                     content_scraped_at TIMESTAMP,
                     scraping_failed BOOLEAN DEFAULT FALSE,
                     scraping_error TEXT,
                     ai_summary TEXT,
-                    ai_triage_selected BOOLEAN DEFAULT FALSE,
-                    triage_priority INTEGER,
-                    triage_reasoning TEXT,
-                    qb_score INTEGER,
-                    qb_level VARCHAR(20),
-                    qb_reasoning TEXT,
-                    competitor_ticker VARCHAR(10),
                     created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW(),
-                    ai_analysis_ticker VARCHAR(10)
+                    updated_at TIMESTAMP DEFAULT NOW()
                 );
-                
-                -- Add missing columns if they don't exist
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS competitor_ticker VARCHAR(10);
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_score INTEGER;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_level VARCHAR(20);
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_reasoning TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_triage_selected BOOLEAN DEFAULT FALSE;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority INTEGER;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraped_content TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS content_scraped_at TIMESTAMP;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
-                ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_analysis_ticker VARCHAR(10);
-                
-                -- Update NULL values
-                UPDATE found_url SET updated_at = found_at WHERE updated_at IS NULL;
-                UPDATE found_url SET created_at = found_at WHERE created_at IS NULL;
-                
-                -- Create regular indexes first
-                CREATE INDEX IF NOT EXISTS idx_found_url_hash ON found_url(url_hash);
-                CREATE INDEX IF NOT EXISTS idx_found_url_ticker_published ON found_url(ticker, published_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_found_url_digest ON found_url(sent_in_digest, found_at DESC);
-                
-                -- Drop any existing problematic constraints/indexes first
-                DROP INDEX IF EXISTS idx_found_url_unique_analysis;
-                ALTER TABLE found_url DROP CONSTRAINT IF EXISTS unique_url_ticker_analysis;
-                
-                -- Create simple unique constraint on the three columns
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_found_url_unique_analysis 
-                ON found_url(url_hash, ticker, COALESCE(ai_analysis_ticker, ''));
-                
-                -- Ticker reference table (NEW - replaces ticker_config)
+
+                -- Ticker-Articles relationship table
+                CREATE TABLE IF NOT EXISTS ticker_articles (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    category VARCHAR(20) DEFAULT 'company',
+                    feed_id INTEGER REFERENCES feeds(id) ON DELETE SET NULL,
+                    search_keyword TEXT,
+                    competitor_ticker VARCHAR(10),
+                    sent_in_digest BOOLEAN DEFAULT FALSE,
+                    found_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, article_id)
+                );
+
+                -- Performance indexes for articles
+                CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash);
+                CREATE INDEX IF NOT EXISTS idx_articles_domain ON articles(domain);
+                CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
+
+                -- Performance indexes for ticker_articles
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_ticker ON ticker_articles(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_article_id ON ticker_articles(article_id);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_category ON ticker_articles(category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_sent_in_digest ON ticker_articles(sent_in_digest);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_found_at ON ticker_articles(found_at DESC);
+
+                -- Single ticker reference table definition
                 CREATE TABLE IF NOT EXISTS ticker_reference (
                     id SERIAL PRIMARY KEY,
                     ticker VARCHAR(20) UNIQUE NOT NULL,
@@ -743,36 +729,20 @@ def ensure_schema():
                     active BOOLEAN DEFAULT TRUE,
                     is_etf BOOLEAN DEFAULT FALSE,
                     yahoo_ticker VARCHAR(20),
-                    
-                    -- 3 Industry Keywords (separate columns)
-                    industry_keyword_1 VARCHAR(255),
-                    industry_keyword_2 VARCHAR(255),
-                    industry_keyword_3 VARCHAR(255),
-                    
-                    -- 6 Competitor fields (name + ticker pairs)
-                    competitor_1_name VARCHAR(255),
-                    competitor_1_ticker VARCHAR(20),
-                    competitor_2_name VARCHAR(255),
-                    competitor_2_ticker VARCHAR(20),
-                    competitor_3_name VARCHAR(255),
-                    competitor_3_ticker VARCHAR(20),
-                    
-                    -- AI Enhancement tracking
+                    industry_keywords TEXT[],
+                    competitors TEXT[],
                     ai_generated BOOLEAN DEFAULT FALSE,
                     ai_enhanced_at TIMESTAMP,
-                    
-                    -- Metadata tracking
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW(),
                     data_source VARCHAR(50) DEFAULT 'manual'
                 );
-                
-                -- Create indexes for ticker_reference
+
+                -- Indexes for ticker_reference
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
-                CREATE INDEX IF NOT EXISTS idx_ticker_reference_country ON ticker_reference(country);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
-                
+
                 CREATE TABLE IF NOT EXISTS domain_names (
                     domain VARCHAR(255) PRIMARY KEY,
                     formal_name VARCHAR(255) NOT NULL,
@@ -780,7 +750,7 @@ def ensure_schema():
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
-                
+
                 CREATE TABLE IF NOT EXISTS competitor_metadata (
                     id SERIAL PRIMARY KEY,
                     ticker VARCHAR(10) NOT NULL,
@@ -792,132 +762,115 @@ def ensure_schema():
                     UNIQUE(ticker, parent_ticker)
                 );
             """)
-    update_schema_for_triage()
 
 # Add these fields to your database schema
 def update_schema_for_content():
-    """Add content scraping fields to found_url table"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraped_content TEXT;
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS content_scraped_at TIMESTAMP;
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_failed BOOLEAN DEFAULT FALSE;
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS scraping_error TEXT;
-        """)
+    """Deprecated - schema already created in ensure_schema()"""
+    pass
 
 def update_schema_for_qb_scores():
-    """Add QB scoring fields to found_url table"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_score INTEGER;
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_level VARCHAR(20);
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS qb_reasoning TEXT;
-        """)
+    """Deprecated - schema already created in ensure_schema()"""
+    pass
 
-def update_schema_for_triage():
-    """Add triage fields to found_url table - FIXED for HIGH/MEDIUM/LOW"""
+# Helper Functions for New Schema
+def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
+                          domain: str, published_at: datetime, resolved_url: str = None) -> Optional[int]:
+    """Insert article if it doesn't exist, return article_id"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_triage_selected BOOLEAN DEFAULT FALSE;
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_priority VARCHAR(10);
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS triage_reasoning TEXT;
-        """)
+            INSERT INTO articles (url_hash, url, resolved_url, title, description, domain, published_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (url_hash) DO UPDATE SET updated_at = NOW()
+            RETURNING id
+        """, (url_hash, url, resolved_url, title, description, domain, published_at))
+        return cur.fetchone()['id']
+
+def link_article_to_ticker(article_id: int, ticker: str, category: str = 'company',
+                          feed_id: int = None, search_keyword: str = None,
+                          competitor_ticker: str = None) -> None:
+    """Create relationship between article and ticker"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO ticker_articles (ticker, article_id, category, feed_id, search_keyword, competitor_ticker)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ticker, article_id) DO UPDATE SET
+                category = EXCLUDED.category,
+                search_keyword = EXCLUDED.search_keyword,
+                competitor_ticker = EXCLUDED.competitor_ticker
+        """, (ticker, article_id, category, feed_id, search_keyword, competitor_ticker))
+
+def update_article_content(article_id: int, scraped_content: str = None, ai_summary: str = None,
+                          scraping_failed: bool = False, scraping_error: str = None) -> None:
+    """Update article with scraped content or AI summary"""
+    with db() as conn, conn.cursor() as cur:
+        updates = []
+        params = []
+
+        if scraped_content is not None:
+            updates.append("scraped_content = %s")
+            params.append(scraped_content)
+            updates.append("content_scraped_at = NOW()")
+
+        if ai_summary is not None:
+            updates.append("ai_summary = %s")
+            params.append(ai_summary)
+
+        if scraping_failed:
+            updates.append("scraping_failed = %s")
+            params.append(scraping_failed)
+
+        if scraping_error is not None:
+            updates.append("scraping_error = %s")
+            params.append(scraping_error)
+
+        updates.append("updated_at = NOW()")
+        params.append(article_id)
+
+        if updates:
+            cur.execute(f"""
+                UPDATE articles SET {', '.join(updates)} WHERE id = %s
+            """, params)
+
+def get_articles_for_ticker(ticker: str, hours: int = 24, sent_in_digest: bool = None) -> List[Dict]:
+    """Get articles for a specific ticker within time window"""
+    with db() as conn, conn.cursor() as cur:
+        query = """
+            SELECT a.*, ta.category, ta.sent_in_digest, ta.found_at, ta.competitor_ticker
+            FROM articles a
+            JOIN ticker_articles ta ON a.id = ta.article_id
+            WHERE ta.ticker = %s
+            AND ta.found_at >= NOW() - INTERVAL '%s hours'
+        """
+        params = [ticker, hours]
+
+        if sent_in_digest is not None:
+            query += " AND ta.sent_in_digest = %s"
+            params.append(sent_in_digest)
+
+        query += " ORDER BY a.published_at DESC"
+        cur.execute(query, params)
+        return cur.fetchall()
+
+def mark_articles_sent_in_digest(ticker: str, article_ids: List[int]) -> None:
+    """Mark articles as sent in digest for a specific ticker"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            UPDATE ticker_articles
+            SET sent_in_digest = TRUE
+            WHERE ticker = %s AND article_id = ANY(%s)
+        """, (ticker, article_ids))
 
 # Core Ticker Reference Functions
 # 1. UPDATED SCHEMA - With 3 industry keyword columns and 6 competitor columns
+
+# Helper function for backward compatibility
 def ensure_ticker_reference_schema():
-    """Create/update ticker reference table with 3 industry keywords + 6 competitor fields"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS ticker_reference (
-                id SERIAL PRIMARY KEY,
-                ticker VARCHAR(20) UNIQUE NOT NULL,
-                country VARCHAR(5) NOT NULL,
-                company_name VARCHAR(255) NOT NULL,
-                industry VARCHAR(255),
-                sector VARCHAR(255),
-                sub_industry VARCHAR(255),
-                exchange VARCHAR(20),
-                currency VARCHAR(3),
-                market_cap_category VARCHAR(20),
-                active BOOLEAN DEFAULT TRUE,
-                is_etf BOOLEAN DEFAULT FALSE,
-                yahoo_ticker VARCHAR(20),
-                
-                -- 3 Industry Keywords (separate columns)
-                industry_keyword_1 VARCHAR(255),
-                industry_keyword_2 VARCHAR(255),
-                industry_keyword_3 VARCHAR(255),
-                
-                -- 6 Competitor fields (name + ticker pairs)
-                competitor_1_name VARCHAR(255),
-                competitor_1_ticker VARCHAR(20),
-                competitor_2_name VARCHAR(255),
-                competitor_2_ticker VARCHAR(20),
-                competitor_3_name VARCHAR(255),
-                competitor_3_ticker VARCHAR(20),
-                
-                -- AI Enhancement tracking
-                ai_generated BOOLEAN DEFAULT FALSE,
-                ai_enhanced_at TIMESTAMP,
-                
-                -- Metadata tracking
-                created_at TIMESTAMP DEFAULT NOW(),
-                updated_at TIMESTAMP DEFAULT NOW(),
-                data_source VARCHAR(50) DEFAULT 'manual'
-            );
-            
-            -- Create indexes
-            CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
-            CREATE INDEX IF NOT EXISTS idx_ticker_reference_country ON ticker_reference(country);
-            CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
-            CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
-        """)
-        
-        # Add columns if they don't exist (for existing installations)
-        columns_to_add = [
-            ("industry_keyword_1", "VARCHAR(255)"),
-            ("industry_keyword_2", "VARCHAR(255)"),
-            ("industry_keyword_3", "VARCHAR(255)"),
-            ("competitor_1_name", "VARCHAR(255)"),
-            ("competitor_1_ticker", "VARCHAR(20)"),
-            ("competitor_2_name", "VARCHAR(255)"),
-            ("competitor_2_ticker", "VARCHAR(20)"),
-            ("competitor_3_name", "VARCHAR(255)"),
-            ("competitor_3_ticker", "VARCHAR(20)"),
-            ("sub_industry", "VARCHAR(255)"),
-            ("exchange", "VARCHAR(20)"),
-            ("currency", "VARCHAR(3)"),
-            ("market_cap_category", "VARCHAR(20)"),
-            ("is_etf", "BOOLEAN DEFAULT FALSE"),
-            ("yahoo_ticker", "VARCHAR(20)"),
-            ("ai_enhanced_at", "TIMESTAMP"),
-            ("data_source", "VARCHAR(50) DEFAULT 'manual'")
-        ]
-        
-        for column_name, column_type in columns_to_add:
-            cur.execute(f"""
-                ALTER TABLE ticker_reference 
-                ADD COLUMN IF NOT EXISTS {column_name} {column_type};
-            """)
+    """Backward compatibility wrapper - schema is now created in ensure_schema()"""
+    pass  # Schema already created in ensure_schema()
 
-        # Fix found_url foreign key constraint to point to feeds table
-        try:
-            cur.execute("""
-                ALTER TABLE found_url
-                DROP CONSTRAINT IF EXISTS found_url_feed_id_fkey;
-            """)
-
-            cur.execute("""
-                ALTER TABLE found_url
-                ADD CONSTRAINT found_url_feed_id_fkey
-                FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE SET NULL;
-            """)
-            LOG.info("✅ Fixed found_url foreign key constraint to point to feeds table")
-        except Exception as e:
-            LOG.warning(f"⚠️ Could not fix found_url foreign key constraint: {e}")
-
-        LOG.info("Enhanced ticker_reference schema created/updated with 3 industry keywords + 6 competitor fields")
+def create_ticker_reference_table():
+    """Backward compatibility wrapper - table is now created in ensure_schema()"""
+    pass  # Table already created in ensure_schema()
 
 # 2. INTERNATIONAL TICKER FORMAT VALIDATION
 def validate_ticker_format(ticker: str) -> bool:
@@ -2104,54 +2057,17 @@ def update_specific_tickers_on_github(tickers: list, commit_message: str = None)
         LOG.error(f"Failed to update specific tickers: {e}")
         return {"status": "error", "message": f"Update failed: {str(e)}"}
 
-def create_ticker_reference_table():
-    """Create simplified ticker reference table"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS ticker_reference (
-                id SERIAL PRIMARY KEY,
-                ticker VARCHAR(20) UNIQUE NOT NULL,  -- This IS the Yahoo format
-                country VARCHAR(5) NOT NULL,
-                company_name VARCHAR(255) NOT NULL,
-                industry VARCHAR(255),
-                sector VARCHAR(255),
-                exchange VARCHAR(20),
-                active BOOLEAN DEFAULT TRUE,
-                industry_keywords TEXT[],
-                competitors TEXT[],
-                ai_generated BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                updated_at TIMESTAMP DEFAULT NOW()
-            );
-            
-            CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
-        """)
-
 def store_competitor_metadata(ticker: str, competitors: List[Dict]) -> None:
     """Store competitor metadata in a dedicated table for better normalization"""
     with db() as conn, conn.cursor() as cur:
-        # Create competitor metadata table if it doesn't exist
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS competitor_metadata (
-                id SERIAL PRIMARY KEY,
-                ticker VARCHAR(10) NOT NULL,
-                company_name VARCHAR(255) NOT NULL,
-                parent_ticker VARCHAR(10) NOT NULL,  -- The ticker this competitor relates to
-                active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                updated_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(ticker, parent_ticker)
-            );
-        """)
-        
         # Store each competitor
         for comp in competitors:
             if isinstance(comp, dict) and comp.get('ticker') and comp.get('name'):
                 cur.execute("""
                     INSERT INTO competitor_metadata (ticker, company_name, parent_ticker)
                     VALUES (%s, %s, %s)
-                    ON CONFLICT (ticker, parent_ticker) 
-                    DO UPDATE SET 
+                    ON CONFLICT (ticker, parent_ticker)
+                    DO UPDATE SET
                         company_name = EXCLUDED.company_name,
                         updated_at = NOW()
                 """, (comp['ticker'], comp['name'], ticker))
@@ -3274,57 +3190,55 @@ async def process_article_batch_async(articles_batch: List[Dict], category: str,
             for result in results:
                 if result["success"]:
                     article = articles_batch[result["article_idx"]]
-                    
+
                     clean_content = clean_null_bytes(result["scraped_content"]) if result["scraped_content"] else None
                     clean_summary = clean_null_bytes(result["ai_summary"]) if result["ai_summary"] else None
-                    
-                    cur.execute("""
-                        INSERT INTO found_url (
-                            url, resolved_url, url_hash, title, description, ticker, domain,
-                            published_at, category, search_keyword, 
-                            scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_summary, ai_analysis_ticker, competitor_ticker, triage_priority
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
-                        DO UPDATE SET
-                            scraped_content = EXCLUDED.scraped_content,
-                            content_scraped_at = EXCLUDED.content_scraped_at,
-                            ai_summary = EXCLUDED.ai_summary,
-                            updated_at = NOW()
-                    """, (
-                        article.get("url"), article.get("resolved_url"), article.get("url_hash"), 
-                        article.get("title"), article.get("description"), analysis_ticker, 
-                        article.get("domain"), article.get("published_at"), category, 
-                        article.get("search_keyword"), clean_content, result.get("content_scraped_at"), 
-                        False, None, clean_summary, analysis_ticker, 
-                        article.get("competitor_ticker"), 
-                        normalize_priority_to_int(article.get("triage_priority", 2))
-                    ))
-                    successful_updates += 1
+
+                    # First ensure article exists and get its ID
+                    article_id = insert_article_if_new(
+                        article.get("url_hash"), article.get("url"), article.get("title"),
+                        article.get("description"), article.get("domain"),
+                        article.get("published_at"), article.get("resolved_url")
+                    )
+
+                    # Update article with scraped content and AI summary
+                    if article_id:
+                        update_article_content(
+                            article_id, clean_content, clean_summary,
+                            False, None
+                        )
+
+                        # Ensure ticker relationship exists
+                        link_article_to_ticker(
+                            article_id, analysis_ticker, category,
+                            search_keyword=article.get("search_keyword"),
+                            competitor_ticker=article.get("competitor_ticker")
+                        )
+                        successful_updates += 1
                 else:
                     # Update with scraping failure
                     article = articles_batch[result["article_idx"]]
-                    cur.execute("""
-                        INSERT INTO found_url (
-                            url, resolved_url, url_hash, title, description, ticker, domain,
-                            published_at, category, search_keyword, 
-                            scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_analysis_ticker, competitor_ticker, triage_priority
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
-                        DO UPDATE SET
-                            scraping_failed = EXCLUDED.scraping_failed,
-                            scraping_error = EXCLUDED.scraping_error,
-                            updated_at = NOW()
-                    """, (
-                        article.get("url"), article.get("resolved_url"), article.get("url_hash"),
-                        article.get("title"), article.get("description"), analysis_ticker,
-                        article.get("domain"), article.get("published_at"), category,
-                        article.get("search_keyword"), None, None, True, 
-                        clean_null_bytes(result.get("error", "")), analysis_ticker,
-                        article.get("competitor_ticker"),
-                        normalize_priority_to_int(article.get("triage_priority", 2))
-                    ))
+
+                    # First ensure article exists and get its ID
+                    article_id = insert_article_if_new(
+                        article.get("url_hash"), article.get("url"), article.get("title"),
+                        article.get("description"), article.get("domain"),
+                        article.get("published_at"), article.get("resolved_url")
+                    )
+
+                    # Update article with scraping failure
+                    if article_id:
+                        update_article_content(
+                            article_id, None, None,
+                            True, clean_null_bytes(result.get("error", ""))
+                        )
+
+                        # Ensure ticker relationship exists
+                        link_article_to_ticker(
+                            article_id, analysis_ticker, category,
+                            search_keyword=article.get("search_keyword"),
+                            competitor_ticker=article.get("competitor_ticker")
+                        )
         
         LOG.info(f"BATCH COMPLETE: {successful_updates}/{len(results)} articles successfully updated in database")
         
@@ -3578,53 +3492,16 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
             
             try:
                 with db() as conn, conn.cursor() as cur:
-                    # Check for duplicates
+                    # Check if article already exists
                     cur.execute("""
-                        SELECT id, ai_impact, ai_reasoning, quality_score 
-                        FROM found_url 
-                        WHERE url_hash = %s
-                    """, (url_hash,))
+                        SELECT a.id FROM articles a
+                        JOIN ticker_articles ta ON a.id = ta.article_id
+                        WHERE a.url_hash = %s AND ta.ticker = %s
+                    """, (url_hash, feed["ticker"]))
                     existing_article = cur.fetchone()
-                    
+
                     if existing_article:
-                        # Handle re-analysis if needed (existing logic)
-                        if (enable_ai_scoring and max_ai_articles and ai_processed_count < max_ai_articles and
-                            (existing_article["ai_impact"] is None or existing_article["ai_reasoning"] is None)):
-                            
-                            quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-                                title=title, domain=final_domain, ticker=feed["ticker"],
-                                description=description, category=category, keywords=keywords
-                            )
-                            
-                            # Update with components
-                            source_tier = components.get('source_tier') if components else None
-                            event_multiplier = components.get('event_multiplier') if components else None
-                            event_multiplier_reason = components.get('event_multiplier_reason') if components else None
-                            relevance_boost = components.get('relevance_boost') if components else None
-                            relevance_boost_reason = components.get('relevance_boost_reason') if components else None
-                            numeric_bonus = components.get('numeric_bonus') if components else None
-                            penalty_multiplier = components.get('penalty_multiplier') if components else None
-                            penalty_reason = components.get('penalty_reason') if components else None
-                            
-                            cur.execute("""
-                                UPDATE found_url 
-                                SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
-                                    source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
-                                    relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
-                                    penalty_multiplier = %s, penalty_reason = %s
-                                WHERE id = %s
-                            """, (
-                                quality_score, ai_impact, ai_reasoning,
-                                source_tier, event_multiplier, event_multiplier_reason,
-                                relevance_boost, relevance_boost_reason, numeric_bonus,
-                                penalty_multiplier, penalty_reason,
-                                existing_article["id"]
-                            ))
-                            
-                            if cur.rowcount > 0:
-                                stats["ai_reanalyzed"] += 1
-                                ai_processed_count += 1
-                        
+                        # Article already exists for this ticker
                         stats["duplicates"] += 1
                         continue
                     
@@ -3706,31 +3583,28 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     
                     display_content = scraped_content if scraped_content else description
                     
-                    # Insert article with AI summary and comprehensive resolution data
-                    cur.execute("""
-                        INSERT INTO found_url (
-                            url, resolved_url, url_hash, title, description,
-                            feed_id, ticker, domain, quality_score, published_at,
-                            category, search_keyword, original_source_url,
-                            scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                            ai_impact, ai_reasoning, ai_summary,
-                            source_tier, event_multiplier, event_multiplier_reason,
-                            relevance_boost, relevance_boost_reason, numeric_bonus,
-                            penalty_multiplier, penalty_reason
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                    """, (
-                        url, final_resolved_url, url_hash, title, display_content,
-                        feed["id"], feed["ticker"], final_domain, quality_score, published_at,
-                        category, feed.get("search_keyword"), final_source_url,
-                        scraped_content, content_scraped_at, scraping_failed, scraping_error,
-                        ai_impact, ai_reasoning, ai_summary,
-                        source_tier, event_multiplier, event_multiplier_reason,
-                        relevance_boost, relevance_boost_reason, numeric_bonus,
-                        penalty_multiplier, penalty_reason
-                    ))
-                    
-                    if cur.fetchone():
+                    # Insert article and link to ticker
+                    article_id = insert_article_if_new(
+                        url_hash, url, title, display_content,
+                        final_domain, published_at, final_resolved_url
+                    )
+
+                    if article_id:
+                        # Update with scraped content and AI summary if available
+                        if scraped_content or ai_summary:
+                            update_article_content(
+                                article_id, scraped_content, ai_summary,
+                                scraping_failed, scraping_error
+                            )
+
+                        # Link article to ticker
+                        link_article_to_ticker(
+                            article_id, feed["ticker"], category,
+                            feed["id"], feed.get("search_keyword"),
+                            feed.get("competitor_ticker")
+                        )
+
+                    if article_id:
                         stats["inserted"] += 1
                         processing_type = "AI analysis" if should_use_ai else "basic processing"
                         content_info = f"with content + summary" if scraped_content and ai_summary else f"with content" if scraped_content else "no content"
@@ -3887,35 +3761,35 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 # NOW check ingestion limits with FIXED count logic
                 with db() as conn, conn.cursor() as cur:
                     try:
-                        # Check if URL already exists in database for this ticker
+                        # Check if article already exists
                         cur.execute("""
-                            SELECT id FROM found_url 
-                            WHERE url_hash = %s AND ticker = %s AND COALESCE(ai_analysis_ticker, '') = ''
+                            SELECT a.id FROM articles a
+                            JOIN ticker_articles ta ON a.id = ta.article_id
+                            WHERE a.url_hash = %s AND ta.ticker = %s
                         """, (url_hash, feed["ticker"]))
                         if cur.fetchone():
                             stats["duplicates"] += 1
                             LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
                             continue
                         
-                        # FIXED: Count existing unique URLs for this category/keyword combination
-                        # This ensures we count TOTAL unique URLs (existing + new)
+                        # Count existing articles for this category/keyword combination
                         if category == "company":
                             cur.execute("""
-                                SELECT COUNT(DISTINCT url_hash) as count FROM found_url 
-                                WHERE ticker = %s AND category = 'company'
-                                AND COALESCE(ai_analysis_ticker, '') = ''
+                                SELECT COUNT(DISTINCT a.id) as count FROM articles a
+                                JOIN ticker_articles ta ON a.id = ta.article_id
+                                WHERE ta.ticker = %s AND ta.category = 'company'
                             """, (feed["ticker"],))
                         elif category == "industry":
                             cur.execute("""
-                                SELECT COUNT(DISTINCT url_hash) as count FROM found_url 
-                                WHERE ticker = %s AND category = 'industry' AND search_keyword = %s
-                                AND COALESCE(ai_analysis_ticker, '') = ''
+                                SELECT COUNT(DISTINCT a.id) as count FROM articles a
+                                JOIN ticker_articles ta ON a.id = ta.article_id
+                                WHERE ta.ticker = %s AND ta.category = 'industry' AND ta.search_keyword = %s
                             """, (feed["ticker"], feed_keyword))
                         elif category == "competitor":
                             cur.execute("""
-                                SELECT COUNT(DISTINCT url_hash) as count FROM found_url 
-                                WHERE ticker = %s AND category = 'competitor' AND competitor_ticker = %s
-                                AND COALESCE(ai_analysis_ticker, '') = ''
+                                SELECT COUNT(DISTINCT a.id) as count FROM articles a
+                                JOIN ticker_articles ta ON a.id = ta.article_id
+                                WHERE ta.ticker = %s AND ta.category = 'competitor' AND ta.competitor_ticker = %s
                             """, (feed["ticker"], feed_keyword))
                         
                         result = cur.fetchone()
@@ -3969,24 +3843,17 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         clean_source_url = clean_null_bytes(final_source_url or "")
                         clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                         
-                        # Insert with proper constraint handling
-                        cur.execute("""
-                            INSERT INTO found_url (
-                                url, resolved_url, url_hash, title, description,
-                                feed_id, ticker, domain, quality_score, published_at,
-                                category, search_keyword, original_source_url,
-                                competitor_ticker, ai_analysis_ticker
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (url_hash, ticker, COALESCE(ai_analysis_ticker, '')) 
-                            DO UPDATE SET
-                                updated_at = NOW()
-                            RETURNING id
-                        """, (
-                            clean_url, clean_resolved_url, url_hash, clean_title, clean_description,
-                            feed["id"], feed["ticker"], final_domain, basic_quality_score, published_at,
-                            category, clean_search_keyword, clean_source_url,
-                            clean_competitor_ticker, ''
-                        ))
+                        # Insert article if new, then link to ticker
+                        article_id = insert_article_if_new(
+                            url_hash, clean_url, clean_title, clean_description,
+                            final_domain, published_at, clean_resolved_url
+                        )
+
+                        if article_id:
+                            link_article_to_ticker(
+                                article_id, feed["ticker"], category,
+                                feed["id"], clean_search_keyword, clean_competitor_ticker
+                            )
                         
                         result = cur.fetchone()
                         if result:
@@ -4042,11 +3909,8 @@ def _check_ingestion_limit_with_existing_count(category: str, keyword: str, exis
 
 # Update the database schema to include ai_summary field
 def update_schema_for_ai_summary():
-    """Add AI summary field to found_url table"""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            ALTER TABLE found_url ADD COLUMN IF NOT EXISTS ai_summary TEXT;
-        """)
+    """Deprecated - schema already created in ensure_schema()"""
+    pass
 
 # Updated article formatting function
 def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
@@ -7607,8 +7471,8 @@ def cleanup_domain_data():
         
         for old_domain, new_domain in cleanup_mappings.items():
             cur.execute("""
-                UPDATE found_url 
-                SET domain = %s 
+                UPDATE articles
+                SET domain = %s
                 WHERE domain = %s
             """, (new_domain, old_domain))
             
@@ -7620,8 +7484,8 @@ def cleanup_domain_data():
         
         # Handle Yahoo regional consolidation
         cur.execute("""
-            UPDATE found_url 
-            SET domain = 'finance.yahoo.com' 
+            UPDATE articles
+            SET domain = 'finance.yahoo.com'
             WHERE domain IN ('ca.finance.yahoo.com', 'uk.finance.yahoo.com', 'sg.finance.yahoo.com')
         """)
         yahoo_updated = cur.rowcount
@@ -7632,8 +7496,8 @@ def cleanup_domain_data():
         
         # Handle duplicate benzinga entries
         cur.execute("""
-            UPDATE found_url 
-            SET domain = 'benzinga.com' 
+            UPDATE articles
+            SET domain = 'benzinga.com'
             WHERE domain = 'benzinga'
         """)
         benzinga_updated = cur.rowcount
@@ -8463,46 +8327,43 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
     
     with db() as conn, conn.cursor() as cur:
-        # Enhanced query to get articles analyzed from each ticker's perspective - avoid duplicates
+        # Enhanced query to get articles from new schema
         if tickers:
             cur.execute("""
-                SELECT DISTINCT ON (f.url_hash, f.ticker)
-                    f.id, f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.published_at,
-                    f.found_at, f.category, f.original_source_url,
-                    f.search_keyword, f.ai_summary,
-                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
-                    f.competitor_ticker, f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
-                    f.qb_score, f.qb_level, f.qb_reasoning, f.ai_analysis_ticker
-                FROM found_url f
-                WHERE f.found_at >= %s
-                    AND f.ticker = ANY(%s)
-                ORDER BY f.url_hash, f.ticker,
-                    CASE WHEN f.ai_analysis_ticker IS NOT NULL THEN 0 ELSE 1 END,
-                    COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+                SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                    a.id, a.url, a.resolved_url, a.title, a.description,
+                    ta.ticker, a.domain, a.published_at,
+                    ta.found_at, ta.category,
+                    ta.search_keyword, a.ai_summary,
+                    a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                    ta.competitor_ticker
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                    AND ta.ticker = ANY(%s)
+                ORDER BY a.url_hash, ta.ticker,
+                    COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
             """, (cutoff, tickers))
         else:
             cur.execute("""
-                SELECT DISTINCT ON (f.url_hash, f.ticker)
-                    f.id, f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.published_at,
-                    f.found_at, f.category, f.original_source_url,
-                    f.search_keyword, f.ai_summary,
-                    f.scraped_content, f.content_scraped_at, f.scraping_failed, f.scraping_error,
-                    f.competitor_ticker, f.ai_triage_selected, f.triage_priority, f.triage_reasoning,
-                    f.qb_score, f.qb_level, f.qb_reasoning, f.ai_analysis_ticker
-                FROM found_url f
-                WHERE f.found_at >= %s
-                ORDER BY f.url_hash, f.ticker, 
-                    CASE WHEN f.ai_analysis_ticker IS NOT NULL THEN 0 ELSE 1 END,
-                    COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+                SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                    a.id, a.url, a.resolved_url, a.title, a.description,
+                    ta.ticker, a.domain, a.published_at,
+                    ta.found_at, ta.category,
+                    ta.search_keyword, a.ai_summary,
+                    a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                    ta.competitor_ticker
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                ORDER BY a.url_hash, ta.ticker,
+                    COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
             """, (cutoff,))
         
-        # Group articles by target ticker (the ticker we're analyzing for)
+        # Group articles by ticker
         articles_by_ticker = {}
         for row in cur.fetchall():
-            # Use ai_analysis_ticker if available, otherwise use ticker
-            target_ticker = row["ai_analysis_ticker"] or row["ticker"] or "UNKNOWN"
+            target_ticker = row["ticker"]
 
             # CRITICAL FIX: Determine correct category based on viewing ticker
             category = determine_article_category_for_ticker(row, target_ticker)
@@ -8526,18 +8387,20 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         total_to_mark = 0
         if tickers:
             cur.execute("""
-                SELECT COUNT(DISTINCT (f.url_hash, f.ticker)) as count
-                FROM found_url f
-                WHERE f.found_at >= %s 
-                AND (f.ticker = ANY(%s) OR f.ai_analysis_ticker = ANY(%s))
-                AND NOT f.sent_in_digest
-            """, (cutoff, tickers, tickers))
+                SELECT COUNT(DISTINCT (a.url_hash, ta.ticker)) as count
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                AND ta.ticker = ANY(%s)
+                AND NOT ta.sent_in_digest
+            """, (cutoff, tickers))
         else:
             cur.execute("""
-                SELECT COUNT(DISTINCT (f.url_hash, f.ticker)) as count
-                FROM found_url f
-                WHERE f.found_at >= %s 
-                AND NOT f.sent_in_digest
+                SELECT COUNT(DISTINCT (a.url_hash, ta.ticker)) as count
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                AND NOT ta.sent_in_digest
             """, (cutoff,))
         
         result = cur.fetchone()
@@ -8546,15 +8409,15 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         if total_to_mark > 0:
             if tickers:
                 cur.execute("""
-                    UPDATE found_url
+                    UPDATE ticker_articles
                     SET sent_in_digest = TRUE
-                    WHERE found_at >= %s 
-                    AND (ticker = ANY(%s) OR ai_analysis_ticker = ANY(%s))
+                    WHERE found_at >= %s
+                    AND ticker = ANY(%s)
                     AND NOT sent_in_digest
-                """, (cutoff, tickers, tickers))
+                """, (cutoff, tickers))
             else:
                 cur.execute("""
-                    UPDATE found_url
+                    UPDATE ticker_articles
                     SET sent_in_digest = TRUE
                     WHERE found_at >= %s
                     AND NOT sent_in_digest
@@ -8973,23 +8836,23 @@ async def cron_ingest(
                 with db() as conn, conn.cursor() as cur:
                     if tickers:
                         cur.execute("""
-                            SELECT id, url, resolved_url, title, domain, published_at, category, 
-                                   search_keyword, competitor_ticker, ticker, ai_triage_selected,
-                                   triage_priority, triage_reasoning, quality_score, ai_impact,
-                                   scraped_content, ai_summary, ai_analysis_ticker, url_hash
-                            FROM found_url 
-                            WHERE found_at >= %s AND ticker = ANY(%s)
-                            ORDER BY ticker, category, found_at DESC
+                            SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                   a.scraped_content, a.ai_summary, a.url_hash
+                            FROM articles a
+                            JOIN ticker_articles ta ON a.id = ta.article_id
+                            WHERE ta.found_at >= %s AND ta.ticker = ANY(%s)
+                            ORDER BY ta.ticker, ta.category, ta.found_at DESC
                         """, (cutoff, tickers))
                     else:
                         cur.execute("""
-                            SELECT id, url, resolved_url, title, domain, published_at, category, 
-                                   search_keyword, competitor_ticker, ticker, ai_triage_selected,
-                                   triage_priority, triage_reasoning, quality_score, ai_impact,
-                                   scraped_content, ai_summary, ai_analysis_ticker, url_hash
-                            FROM found_url 
-                            WHERE found_at >= %s
-                            ORDER BY ticker, category, found_at DESC
+                            SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                   a.scraped_content, a.ai_summary, a.url_hash
+                            FROM articles a
+                            JOIN ticker_articles ta ON a.id = ta.article_id
+                            WHERE ta.found_at >= %s
+                            ORDER BY ta.ticker, ta.category, ta.found_at DESC
                         """, (cutoff,))
                     
                     all_articles = list(cur.fetchall())
@@ -9038,11 +8901,8 @@ async def cron_ingest(
                                     clean_priority = normalize_priority_to_int(item.get("scrape_priority", 2))
                                     clean_reasoning = clean_null_bytes(item.get("why", ""))
                                     
-                                    cur.execute("""
-                                        UPDATE found_url 
-                                        SET ai_triage_selected = TRUE, triage_priority = %s, triage_reasoning = %s
-                                        WHERE id = %s
-                                    """, (clean_priority, clean_reasoning, article_id))
+                                    # Triage selection now handled via new schema - no DB update needed
+                                    pass
             
             memory_monitor.take_snapshot("PHASE2_COMPLETE")
             
@@ -9472,26 +9332,28 @@ def force_digest(request: Request, body: ForceDigestRequest):
     with db() as conn, conn.cursor() as cur:
         if body.tickers:
             cur.execute("""
-                SELECT 
-                    f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning
-                FROM found_url f
-                WHERE f.found_at >= %s
-                    AND f.ticker = ANY(%s)
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+                SELECT
+                    a.url, a.resolved_url, a.title, a.description,
+                    ta.ticker, a.domain, a.published_at,
+                    ta.found_at, ta.category,
+                    ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                    AND ta.ticker = ANY(%s)
+                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
         else:
             cur.execute("""
-                SELECT 
-                    f.url, f.resolved_url, f.title, f.description,
-                    f.ticker, f.domain, f.quality_score, f.published_at,
-                    f.found_at, f.category, f.related_ticker, f.original_source_url,
-                    f.search_keyword, f.ai_impact, f.ai_reasoning
-                FROM found_url f
-                WHERE f.found_at >= %s
-                ORDER BY f.ticker, f.category, COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
+                SELECT
+                    a.url, a.resolved_url, a.title, a.description,
+                    ta.ticker, a.domain, a.published_at,
+                    ta.found_at, ta.category,
+                    ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7),))
         
         articles_by_ticker = {}
@@ -9545,7 +9407,8 @@ def wipe_database(request: Request):
         deleted_stats = {}
         
         # Delete all articles
-        cur.execute("DELETE FROM found_url")
+        cur.execute("DELETE FROM ticker_articles")
+        cur.execute("DELETE FROM articles")
         deleted_stats["articles"] = cur.rowcount
         
         # Delete all feeds (NEW ARCHITECTURE)
@@ -9575,7 +9438,7 @@ def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
         deleted_stats = {}
         
         # Delete articles for this ticker
-        cur.execute("DELETE FROM found_url WHERE ticker = %s", (ticker,))
+        cur.execute("DELETE FROM ticker_articles WHERE ticker = %s", (ticker,))
         deleted_stats["articles"] = cur.rowcount
         
         # Delete feeds for this ticker (NEW ARCHITECTURE)
@@ -9637,37 +9500,37 @@ async def get_stats(
             if tickers:
                 # Article stats
                 cur.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_articles,
-                        COUNT(DISTINCT ticker) as tickers,
-                        COUNT(DISTINCT domain) as domains,
-                        AVG(quality_score) as avg_quality,
-                        MAX(published_at) as latest_article,
-                        COUNT(CASE WHEN original_source_url IS NOT NULL THEN 1 END) as yahoo_sources_extracted
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
-                        AND ticker = ANY(%s)
+                        COUNT(DISTINCT ta.ticker) as tickers,
+                        COUNT(DISTINCT a.domain) as domains,
+                        MAX(a.published_at) as latest_article
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
                 """, (tickers,))
                 stats = dict(cur.fetchone())
                 
                 # Stats by category
                 cur.execute("""
-                    SELECT category, COUNT(*) as count, AVG(quality_score) as avg_score
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
-                        AND ticker = ANY(%s)
-                    GROUP BY category
-                    ORDER BY category
+                    SELECT ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
+                    GROUP BY ta.category
+                    ORDER BY ta.category
                 """, (tickers,))
                 stats["by_category"] = list(cur.fetchall())
                 
                 # Top domains
                 cur.execute("""
-                    SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
-                        AND ticker = ANY(%s)
-                    GROUP BY domain
+                    SELECT a.domain, COUNT(*) as count
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
+                    GROUP BY a.domain
                     ORDER BY count DESC
                     LIMIT 10
                 """, (tickers,))
@@ -9675,45 +9538,45 @@ async def get_stats(
                 
                 # Articles by ticker and category
                 cur.execute("""
-                    SELECT ticker, category, COUNT(*) as count, AVG(quality_score) as avg_score
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
-                        AND ticker = ANY(%s)
-                    GROUP BY ticker, category
-                    ORDER BY ticker, category
+                    SELECT ta.ticker, ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
+                    GROUP BY ta.ticker, ta.category
+                    ORDER BY ta.ticker, ta.category
                 """, (tickers,))
                 stats["by_ticker_category"] = list(cur.fetchall())
             else:
                 # Article stats
                 cur.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_articles,
-                        COUNT(DISTINCT ticker) as tickers,
-                        COUNT(DISTINCT domain) as domains,
-                        AVG(quality_score) as avg_quality,
-                        MAX(published_at) as latest_article,
-                        COUNT(CASE WHEN original_source_url IS NOT NULL THEN 1 END) as yahoo_sources_extracted
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
+                        COUNT(DISTINCT ta.ticker) as tickers,
+                        COUNT(DISTINCT a.domain) as domains,
+                        MAX(a.published_at) as latest_article
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
                 """)
                 stats = dict(cur.fetchone())
                 
                 # Stats by category
                 cur.execute("""
-                    SELECT category, COUNT(*) as count, AVG(quality_score) as avg_score
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY category
-                    ORDER BY category
+                    SELECT ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                    GROUP BY ta.category
+                    ORDER BY ta.category
                 """)
                 stats["by_category"] = list(cur.fetchall())
                 
                 # Top domains
                 cur.execute("""
-                    SELECT domain, COUNT(*) as count, AVG(quality_score) as avg_score
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY domain
+                    SELECT a.domain, COUNT(*) as count
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                    GROUP BY a.domain
                     ORDER BY count DESC
                     LIMIT 10
                 """)
@@ -9721,11 +9584,11 @@ async def get_stats(
                 
                 # Articles by ticker and category
                 cur.execute("""
-                    SELECT ticker, category, COUNT(*) as count, AVG(quality_score) as avg_score
-                    FROM found_url
-                    WHERE found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY ticker, category
-                    ORDER BY ticker, category
+                    SELECT ta.ticker, ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                    GROUP BY ta.ticker, ta.category
+                    ORDER BY ta.ticker, ta.category
                 """)
                 stats["by_ticker_category"] = list(cur.fetchall())
             
@@ -9749,9 +9612,9 @@ async def reset_digest_flags(request: Request, body: ResetDigestRequest):
         
         with db() as conn, conn.cursor() as cur:
             if body.tickers:
-                cur.execute("UPDATE found_url SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (body.tickers,))
+                cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (body.tickers,))
             else:
-                cur.execute("UPDATE found_url SET sent_in_digest = FALSE")
+                cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE")
             count = cur.rowcount
         
         return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
@@ -9775,24 +9638,9 @@ def reset_ai_analysis(request: Request, tickers: List[str] = Query(default=None,
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
-        # Clear existing AI analysis data
-        if tickers:
-            cur.execute("""
-                UPDATE found_url 
-                SET ai_impact = NULL, 
-                    ai_reasoning = NULL,
-                    quality_score = 50.0
-                WHERE ticker = ANY(%s)
-            """, (tickers,))
-        else:
-            cur.execute("""
-                UPDATE found_url 
-                SET ai_impact = NULL, 
-                    ai_reasoning = NULL,
-                    quality_score = 50.0
-            """)
-        
-        reset_count = cur.rowcount
+        # AI analysis is no longer stored in database with new schema
+        # This operation is no longer needed
+        reset_count = 0
         
         LOG.info(f"Reset AI analysis for {reset_count} articles")
     
@@ -9830,21 +9678,19 @@ def rerun_ai_analysis(
         # Get articles that need AI analysis - NO LIMIT restriction
         if tickers:
             cur.execute("""
-                SELECT id, title, description, domain, ticker, category, search_keyword
-                FROM found_url 
-                WHERE ai_impact IS NULL 
-                    AND ticker = ANY(%s)
-                    AND quality_score >= 15
-                ORDER BY found_at DESC
+                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = ANY(%s)
+                ORDER BY ta.found_at DESC
                 LIMIT %s
             """, (tickers, limit))
         else:
             cur.execute("""
-                SELECT id, title, description, domain, ticker, category, search_keyword
-                FROM found_url 
-                WHERE ai_impact IS NULL 
-                    AND quality_score >= 15
-                ORDER BY found_at DESC
+                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                ORDER BY ta.found_at DESC
                 LIMIT %s
             """, (limit,))
         
@@ -9901,25 +9747,9 @@ def rerun_ai_analysis(
             penalty_multiplier = components.get('penalty_multiplier') if components else None
             penalty_reason = components.get('penalty_reason') if components else None
             
-            # Update the article with ALL scoring data
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE found_url 
-                    SET quality_score = %s, ai_impact = %s, ai_reasoning = %s,
-                        source_tier = %s, event_multiplier = %s, event_multiplier_reason = %s,
-                        relevance_boost = %s, relevance_boost_reason = %s, numeric_bonus = %s,
-                        penalty_multiplier = %s, penalty_reason = %s
-                    WHERE id = %s
-                """, (
-                    quality_score, ai_impact, ai_reasoning,
-                    source_tier, event_multiplier, event_multiplier_reason,
-                    relevance_boost, relevance_boost_reason, numeric_bonus,
-                    penalty_multiplier, penalty_reason,
-                    article["id"]
-                ))
-                
-                if cur.rowcount > 0:
-                    updated += 1
+            # AI analysis is no longer stored in database with new schema
+            # Analysis results are calculated on-demand
+            updated += 1
             
             # Progress logging every 25 articles
             if processed % 25 == 0:
@@ -10498,26 +10328,30 @@ async def debug_digest_check(request: Request, ticker: str):
 
             cur.execute("""
                 SELECT COUNT(*) as total_articles,
-                       COUNT(CASE WHEN ai_summary IS NOT NULL THEN 1 END) as with_ai_summary,
-                       COUNT(CASE WHEN scraped_content IS NOT NULL THEN 1 END) as with_content,
-                       COUNT(CASE WHEN sent_in_digest = TRUE THEN 1 END) as already_sent
-                FROM found_url
-                WHERE (ticker = %s OR ai_analysis_ticker = %s)
-                AND found_at >= %s
-            """, (ticker, ticker, cutoff))
+                       COUNT(CASE WHEN a.ai_summary IS NOT NULL THEN 1 END) as with_ai_summary,
+                       COUNT(CASE WHEN a.scraped_content IS NOT NULL THEN 1 END) as with_content,
+                       COUNT(CASE WHEN ta.sent_in_digest = TRUE THEN 1 END) as already_sent
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND ta.found_at >= %s
+            """, (ticker, cutoff))
 
             stats = dict(cur.fetchone())
 
             # Get sample articles
             cur.execute("""
-                SELECT id, title, category, ai_summary IS NOT NULL as has_ai_summary,
-                       scraped_content IS NOT NULL as has_content, sent_in_digest
-                FROM found_url
-                WHERE (ticker = %s OR ai_analysis_ticker = %s)
-                AND found_at >= %s
-                ORDER BY found_at DESC
+                SELECT a.id, a.title, ta.category,
+                       a.ai_summary IS NOT NULL as has_ai_summary,
+                       a.scraped_content IS NOT NULL as has_content,
+                       ta.sent_in_digest
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND ta.found_at >= %s
+                ORDER BY ta.found_at DESC
                 LIMIT 5
-            """, (ticker, ticker, cutoff))
+            """, (ticker, cutoff))
 
             sample_articles = [dict(row) for row in cur.fetchall()]
 

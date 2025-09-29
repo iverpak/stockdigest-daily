@@ -8806,10 +8806,16 @@ async def admin_init(request: Request, body: InitRequest):
     async with TICKER_PROCESSING_LOCK:
         """Initialize feeds for specified tickers using NEW ARCHITECTURE"""
         require_admin(request)
-        ensure_schema()
+
+        # Global state to track if initialization already happened in this session
+        global _schema_initialized, _github_synced
+        if '_schema_initialized' not in globals():
+            _schema_initialized = False
+        if '_github_synced' not in globals():
+            _github_synced = False
 
         # NEW ARCHITECTURE V2: Use functions directly from app.py (no import needed)
-        
+
         LOG.info("=== INITIALIZATION STARTING ===")
 
         # CRITICAL: Clear any global state that might contaminate between tickers
@@ -8817,13 +8823,22 @@ async def admin_init(request: Request, body: InitRequest):
         import gc
         gc.collect()  # Force garbage collection to clear any lingering objects
 
-        # STEP 1: Ensure database schema is up to date (includes new feed architecture)
-        LOG.info("=== ENSURING DATABASE SCHEMA (NEW FEED ARCHITECTURE) ===")
-        ensure_schema()
+        # STEP 1: Ensure database schema is up to date (ONCE per session)
+        if not _schema_initialized:
+            LOG.info("=== ENSURING DATABASE SCHEMA (NEW FEED ARCHITECTURE) ===")
+            ensure_schema()
+            _schema_initialized = True
+        else:
+            LOG.info("=== SCHEMA ALREADY INITIALIZED - SKIPPING ===")
 
-        # STEP 2: Import CSV from GitHub
-        LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
-        github_sync_result = sync_ticker_references_from_github()
+        # STEP 2: Import CSV from GitHub (ONCE per session)
+        if not _github_synced:
+            LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
+            github_sync_result = sync_ticker_references_from_github()
+            _github_synced = True
+        else:
+            LOG.info("=== GITHUB SYNC ALREADY COMPLETED - SKIPPING ===")
+            github_sync_result = {"status": "skipped", "message": "Already synced in this session"}
 
         if github_sync_result["status"] != "success":
             LOG.warning(f"GitHub sync failed: {github_sync_result.get('message', 'Unknown error')}")

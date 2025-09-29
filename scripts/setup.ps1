@@ -167,14 +167,36 @@ foreach ($ticker in $TICKERS) {
             }
         }
         
-        # DIGEST (for this ticker only) with extended timeout
+        # DIGEST (for this ticker only) with extended timeout and comprehensive debugging
         Write-Host "  Starting digest for $ticker..." -ForegroundColor Gray
-        $digest = Invoke-RestMethod -Method Post "$APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -Headers $headers -TimeoutSec 900
+        Write-Host "  DEBUG: About to call digest endpoint at $(Get-Date)" -ForegroundColor Cyan
+        Write-Host "  DEBUG: URL = $APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -ForegroundColor Cyan
+        Write-Host "  DEBUG: Timeout = 900 seconds (15 minutes)" -ForegroundColor Cyan
 
-        if ($digest.status -eq "sent") {
-            Write-Host "  DIGEST SUCCESS: $($digest.articles) articles sent" -ForegroundColor Green
-        } else {
-            Write-Host "  DIGEST RESULT: $($digest.message)" -ForegroundColor Yellow
+        try {
+            $digestStartTime = Get-Date
+            Write-Host "  DEBUG: Making digest request at $digestStartTime..." -ForegroundColor Cyan
+
+            $digest = Invoke-RestMethod -Method Post "$APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -Headers $headers -TimeoutSec 900
+
+            $digestEndTime = Get-Date
+            $digestDuration = ($digestEndTime - $digestStartTime).TotalSeconds
+            Write-Host "  DEBUG: Digest request completed in $digestDuration seconds" -ForegroundColor Cyan
+
+            if ($digest.status -eq "sent") {
+                Write-Host "  DIGEST SUCCESS: $($digest.articles) articles sent" -ForegroundColor Green
+            } else {
+                Write-Host "  DIGEST RESULT: $($digest.message)" -ForegroundColor Yellow
+                Write-Host "  DEBUG: Full digest response: $($digest | ConvertTo-Json -Depth 3)" -ForegroundColor Gray
+            }
+        } catch {
+            $digestEndTime = Get-Date
+            $digestDuration = ($digestEndTime - $digestStartTime).TotalSeconds
+            Write-Host "  DIGEST FAILED after $digestDuration seconds: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "  DEBUG: Full error: $($_.Exception | Format-List * | Out-String)" -ForegroundColor Red
+
+            # Continue processing even if digest fails
+            Write-Host "  Continuing to next ticker despite digest failure..." -ForegroundColor Yellow
         }
 
         # *** NEW: INCREMENTAL COMMIT AFTER EACH SUCCESSFUL TICKER ***

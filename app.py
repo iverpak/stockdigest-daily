@@ -9267,6 +9267,73 @@ async def shutdown_event():
 def root():
     return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
 
+@APP.get("/health")
+def health_check():
+    """
+    Health check endpoint for Render and monitoring services.
+
+    Returns worker status and last activity to prevent idle timeout.
+    Render pings this endpoint to verify the service is alive.
+    """
+    global _job_worker_running
+
+    # Check worker thread is alive
+    worker_alive = _job_worker_running and (_job_worker_thread is not None and _job_worker_thread.is_alive())
+
+    # Check database connectivity
+    db_healthy = False
+    db_error = None
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            db_healthy = True
+    except Exception as e:
+        db_error = str(e)
+
+    # Check for active jobs
+    active_jobs = 0
+    recent_completions = 0
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as count FROM ticker_processing_jobs WHERE status = 'processing'")
+            active_jobs = cur.fetchone()['count']
+
+            cur.execute("""
+                SELECT COUNT(*) as count FROM ticker_processing_jobs
+                WHERE status = 'completed' AND completed_at > NOW() - INTERVAL '10 minutes'
+            """)
+            recent_completions = cur.fetchone()['count']
+    except:
+        pass
+
+    # Overall health status
+    is_healthy = worker_alive and db_healthy
+    status_code = 200 if is_healthy else 503
+
+    response = {
+        "status": "healthy" if is_healthy else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "worker": {
+            "running": _job_worker_running,
+            "thread_alive": worker_alive,
+            "worker_id": get_worker_id()
+        },
+        "database": {
+            "connected": db_healthy,
+            "error": db_error
+        },
+        "jobs": {
+            "active": active_jobs,
+            "recent_completions_10min": recent_completions
+        },
+        "circuit_breaker": {
+            "state": job_circuit_breaker.state,
+            "failure_count": job_circuit_breaker.failure_count
+        }
+    }
+
+    return JSONResponse(content=response, status_code=status_code)
+
 @APP.get("/debug/auth")
 def debug_auth(request: Request):
     """Debug endpoint to check authentication headers"""

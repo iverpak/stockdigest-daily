@@ -8872,51 +8872,84 @@ _job_worker_thread = None
 # Forward declarations - these reference functions defined later in the file
 # We use globals() to avoid circular imports
 
-async def process_ingest_phase(ticker: str, minutes: int, batch_size: int, triage_batch_size: int):
-    """Wrapper for ingest logic"""
-    # Call the actual cron_ingest function which is defined later
-    cron_ingest_func = globals().get('cron_ingest')
-    if not cron_ingest_func:
-        raise RuntimeError("cron_ingest function not yet defined")
+async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_size: int, triage_batch_size: int):
+    """Wrapper for ingest logic with error handling and progress tracking"""
+    try:
+        # Call the actual cron_ingest function which is defined later
+        cron_ingest_func = globals().get('cron_ingest')
+        if not cron_ingest_func:
+            raise RuntimeError("cron_ingest function not yet defined")
 
-    # Create mock request
-    class MockRequest:
-        def __init__(self):
-            self.headers = {"x-admin-token": ADMIN_TOKEN}
+        # Create mock request
+        class MockRequest:
+            def __init__(self):
+                self.headers = {"x-admin-token": ADMIN_TOKEN}
 
-    return await cron_ingest_func(
-        MockRequest(),
-        minutes=minutes,
-        tickers=[ticker],
-        batch_size=batch_size,
-        triage_batch_size=triage_batch_size
-    )
+        LOG.info(f"[JOB {job_id}] Calling cron_ingest for {ticker}...")
 
-async def process_digest_phase(ticker: str, minutes: int):
-    """Wrapper for digest logic"""
-    # Call the actual digest function
-    fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')
-    if not fetch_digest_func:
-        raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
+        result = await cron_ingest_func(
+            MockRequest(),
+            minutes=minutes,
+            tickers=[ticker],
+            batch_size=batch_size,
+            triage_batch_size=triage_batch_size
+        )
 
-    return fetch_digest_func(minutes / 60, [ticker])
+        LOG.info(f"[JOB {job_id}] cron_ingest completed for {ticker}")
+        return result
 
-async def process_commit_phase(ticker: str):
-    """Wrapper for commit logic"""
-    # Call the actual GitHub commit function
-    commit_func = globals().get('admin_safe_incremental_commit')
-    if not commit_func:
-        raise RuntimeError("admin_safe_incremental_commit not yet defined")
+    except Exception as e:
+        LOG.error(f"[JOB {job_id}] INGEST FAILED for {ticker}: {e}")
+        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
+        raise
 
-    class MockRequest:
-        def __init__(self):
-            self.headers = {"x-admin-token": ADMIN_TOKEN}
+async def process_digest_phase(job_id: str, ticker: str, minutes: int):
+    """Wrapper for digest logic with error handling"""
+    try:
+        # Call the actual digest function
+        fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')
+        if not fetch_digest_func:
+            raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
 
-    from pydantic import BaseModel
-    class CommitBody(BaseModel):
-        tickers: List[str]
+        LOG.info(f"[JOB {job_id}] Calling fetch_digest for {ticker}...")
 
-    return await commit_func(MockRequest(), CommitBody(tickers=[ticker]))
+        result = fetch_digest_func(minutes / 60, [ticker])
+
+        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker}")
+        return result
+
+    except Exception as e:
+        LOG.error(f"[JOB {job_id}] DIGEST FAILED for {ticker}: {e}")
+        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
+        raise
+
+async def process_commit_phase(job_id: str, ticker: str):
+    """Wrapper for commit logic with error handling"""
+    try:
+        # Call the actual GitHub commit function
+        commit_func = globals().get('admin_safe_incremental_commit')
+        if not commit_func:
+            raise RuntimeError("admin_safe_incremental_commit not yet defined")
+
+        class MockRequest:
+            def __init__(self):
+                self.headers = {"x-admin-token": ADMIN_TOKEN}
+
+        from pydantic import BaseModel
+        class CommitBody(BaseModel):
+            tickers: List[str]
+
+        LOG.info(f"[JOB {job_id}] Calling GitHub commit for {ticker}...")
+
+        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker]))
+
+        LOG.info(f"[JOB {job_id}] GitHub commit completed for {ticker}")
+        return result
+
+    except Exception as e:
+        LOG.error(f"[JOB {job_id}] COMMIT FAILED for {ticker}: {e}")
+        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
+        raise
 
 def get_worker_id():
     """Get unique worker ID (Render instance or hostname)"""
@@ -9023,85 +9056,114 @@ async def process_ticker_job(job: dict):
     LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
 
     try:
-        # Use existing TICKER_PROCESSING_LOCK to ensure isolation
-        async with TICKER_PROCESSING_LOCK:
-            # PHASE 1: Ingest (already implemented in /cron/ingest)
-            update_job_status(job_id, phase='ingest_start', progress=10)
-            LOG.info(f"📥 [JOB {job_id}] Phase 1: Ingest starting...")
+        # NOTE: TICKER_PROCESSING_LOCK is acquired inside cron_ingest/cron_digest
+        # We don't acquire it here to avoid deadlock (lock is not reentrant)
 
-            # Call ingest logic (will be defined later in file)
-            # We can't import it here due to circular dependency
-            # So we'll call it by name after it's defined
-            ingest_result = await process_ingest_phase(
-                ticker=ticker,
-                minutes=minutes,
-                batch_size=batch_size,
-                triage_batch_size=triage_batch_size
-            )
+        # PHASE 1: Ingest (already implemented in /cron/ingest)
+        update_job_status(job_id, phase='ingest_start', progress=10)
+        LOG.info(f"📥 [JOB {job_id}] Phase 1: Ingest starting...")
 
-            update_job_status(job_id, phase='ingest_complete', progress=60)
+        # Call ingest logic (will be defined later in file)
+        # We can't import it here due to circular dependency
+        # So we'll call it by name after it's defined
+        ingest_result = await process_ingest_phase(
+            job_id=job_id,
+            ticker=ticker,
+            minutes=minutes,
+            batch_size=batch_size,
+            triage_batch_size=triage_batch_size
+        )
+
+        update_job_status(job_id, phase='ingest_complete', progress=60)
+
+        # Log detailed ingest stats
+        if ingest_result:
             LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete")
+            if isinstance(ingest_result, dict):
+                phase1 = ingest_result.get('phase_1_ingest', {})
+                phase2 = ingest_result.get('phase_2_triage', {})
+                phase4 = ingest_result.get('phase_4_async_batch_scraping', {})
 
-            # PHASE 2: Digest (already implemented in /cron/digest)
-            update_job_status(job_id, phase='digest_start', progress=65)
-            LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
+                if phase1:
+                    LOG.info(f"   Articles: New({phase1.get('total_inserted', 0)}) Total({phase1.get('total_articles_in_timeframe', 0)})")
 
-            # Call digest function (defined later in file)
-            digest_result = await process_digest_phase(ticker=ticker, minutes=minutes)
+                if phase2 and phase2.get('selections_by_ticker'):
+                    sel = phase2['selections_by_ticker'].get(ticker, {})
+                    LOG.info(f"   Triage: Company({sel.get('company', 0)}) Industry({sel.get('industry', 0)}) Competitor({sel.get('competitor', 0)})")
 
-            update_job_status(job_id, phase='digest_complete', progress=95)
+                if phase4:
+                    LOG.info(f"   Scraping: New({phase4.get('scraped', 0)}) Reused({phase4.get('reused_existing', 0)}) Success({phase4.get('overall_success_rate', 'N/A')})")
+        else:
+            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
+
+        # PHASE 2: Digest (already implemented in /cron/digest)
+        update_job_status(job_id, phase='digest_start', progress=65)
+        LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
+
+        # Call digest function (defined later in file)
+        digest_result = await process_digest_phase(job_id=job_id, ticker=ticker, minutes=minutes)
+
+        update_job_status(job_id, phase='digest_complete', progress=95)
+
+        # Log detailed digest stats
+        if digest_result:
             LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete")
+            if isinstance(digest_result, dict):
+                LOG.info(f"   Status: {digest_result.get('status', 'unknown')}")
+                LOG.info(f"   Articles: {digest_result.get('articles', 0)}")
+        else:
+            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete (no detailed stats)")
 
-            # PHASE 3: Commit to GitHub
-            update_job_status(job_id, phase='commit_start', progress=96)
-            LOG.info(f"💾 [JOB {job_id}] Phase 3: GitHub commit starting...")
+        # PHASE 3: Commit to GitHub
+        update_job_status(job_id, phase='commit_start', progress=96)
+        LOG.info(f"💾 [JOB {job_id}] Phase 3: GitHub commit starting...")
 
-            # Call commit phase
-            commit_result = await process_commit_phase(ticker=ticker)
+        # Call commit phase
+        commit_result = await process_commit_phase(job_id=job_id, ticker=ticker)
 
-            update_job_status(job_id, phase='commit_complete', progress=99)
-            LOG.info(f"✅ [JOB {job_id}] Phase 3: Commit complete")
+        update_job_status(job_id, phase='commit_complete', progress=99)
+        LOG.info(f"✅ [JOB {job_id}] Phase 3: Commit complete")
 
-            # Calculate final metrics
-            duration = time.time() - start_time
-            memory_end = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
-            memory_used = max(0, memory_end - memory_start)
+        # Calculate final metrics
+        duration = time.time() - start_time
+        memory_end = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
+        memory_used = max(0, memory_end - memory_start)
 
-            # Mark complete
-            result = {
-                "ticker": ticker,
-                "ingest": ingest_result,
-                "digest": digest_result,
-                "commit": commit_result,
-                "duration_seconds": duration,
-                "memory_mb": memory_used
-            }
+        # Mark complete
+        result = {
+            "ticker": ticker,
+            "ingest": ingest_result,
+            "digest": digest_result,
+            "commit": commit_result,
+            "duration_seconds": duration,
+            "memory_mb": memory_used
+        }
 
-            update_job_status(
-                job_id,
-                status='completed',
-                phase='complete',
-                progress=100,
-                result=result,
-                duration_seconds=duration,
-                memory_mb=memory_used
-            )
+        update_job_status(
+            job_id,
+            status='completed',
+            phase='complete',
+            progress=100,
+            result=result,
+            duration_seconds=duration,
+            memory_mb=memory_used
+        )
 
-            LOG.info(f"✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
+        LOG.info(f"✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
 
-            # Record success with circuit breaker
-            job_circuit_breaker.record_success()
+        # Record success with circuit breaker
+        job_circuit_breaker.record_success()
 
-            # Update batch counters
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE ticker_processing_batches
-                    SET completed_jobs = completed_jobs + 1,
-                        last_updated = NOW()
-                    WHERE batch_id = %s
-                """, (job['batch_id'],))
+        # Update batch counters
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET completed_jobs = completed_jobs + 1,
+                    last_updated = NOW()
+                WHERE batch_id = %s
+            """, (job['batch_id'],))
 
-            return result
+        return result
 
     except Exception as e:
         error_msg = str(e)
@@ -9248,6 +9310,34 @@ def timeout_watchdog_loop():
 async def startup_event():
     """Initialize job queue system on startup"""
     LOG.info("🚀 FastAPI startup: Initializing job queue system...")
+
+    # Reclaim orphaned jobs from previous worker instance (handles Render restarts)
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Find jobs that were "processing" but the worker died (older than 5 minutes)
+            cur.execute("""
+                UPDATE ticker_processing_jobs
+                SET status = 'queued',
+                    started_at = NULL,
+                    worker_id = NULL,
+                    phase = 'restart_recovery',
+                    progress = 0,
+                    last_updated = NOW()
+                WHERE status = 'processing'
+                AND started_at < NOW() - INTERVAL '5 minutes'
+                RETURNING job_id, ticker
+            """)
+
+            orphaned = cur.fetchall()
+            if orphaned:
+                LOG.warning(f"🔄 Reclaimed {len(orphaned)} orphaned jobs from previous worker:")
+                for job in orphaned:
+                    LOG.info(f"   → {job['ticker']} (job_id: {job['job_id']})")
+            else:
+                LOG.info("✓ No orphaned jobs found")
+    except Exception as e:
+        LOG.error(f"Failed to reclaim orphaned jobs: {e}")
+
     start_job_worker()
 
     # Start timeout watchdog in separate thread

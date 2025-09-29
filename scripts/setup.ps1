@@ -171,13 +171,13 @@ foreach ($ticker in $TICKERS) {
         Write-Host "  Starting digest for $ticker..." -ForegroundColor Gray
         Write-Host "  DEBUG: About to call digest endpoint at $(Get-Date)" -ForegroundColor Cyan
         Write-Host "  DEBUG: URL = $APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -ForegroundColor Cyan
-        Write-Host "  DEBUG: Timeout = 900 seconds (15 minutes)" -ForegroundColor Cyan
+        Write-Host "  DEBUG: Timeout = 1800 seconds (30 minutes)" -ForegroundColor Cyan
 
         try {
             $digestStartTime = Get-Date
             Write-Host "  DEBUG: Making digest request at $digestStartTime..." -ForegroundColor Cyan
 
-            $digest = Invoke-RestMethod -Method Post "$APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -Headers $headers -TimeoutSec 900
+            $digest = Invoke-RestMethod -Method Post "$APP/cron/digest?minutes=$MINUTES&tickers=$ticker" -Headers $headers -TimeoutSec 1800
 
             $digestEndTime = Get-Date
             $digestDuration = ($digestEndTime - $digestStartTime).TotalSeconds

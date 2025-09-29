@@ -9804,7 +9804,7 @@ async def reset_digest_flags(request: Request, body: ResetDigestRequest):
     async with TICKER_PROCESSING_LOCK:
         """Reset sent_in_digest flags for testing"""
         require_admin(request)
-        ensure_schema()
+        # Note: ensure_schema() not needed for simple UPDATE operation
 
         with db() as conn, conn.cursor() as cur:
             if body.tickers:

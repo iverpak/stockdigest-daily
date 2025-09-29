@@ -8377,11 +8377,11 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                     f.qb_score, f.qb_level, f.qb_reasoning, f.ai_analysis_ticker
                 FROM found_url f
                 WHERE f.found_at >= %s
-                    AND (f.ticker = ANY(%s) OR f.ai_analysis_ticker = ANY(%s))
-                ORDER BY f.url_hash, f.ticker, 
+                    AND f.ticker = ANY(%s)
+                ORDER BY f.url_hash, f.ticker,
                     CASE WHEN f.ai_analysis_ticker IS NOT NULL THEN 0 ELSE 1 END,
                     COALESCE(f.published_at, f.found_at) DESC, f.found_at DESC
-            """, (cutoff, tickers, tickers))
+            """, (cutoff, tickers))
         else:
             cur.execute("""
                 SELECT DISTINCT ON (f.url_hash, f.ticker)

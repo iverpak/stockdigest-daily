@@ -8660,6 +8660,30 @@ async def admin_migrate_feeds(request: Request):
         LOG.error(f"❌ Migration failed: {e}")
         return {"status": "error", "message": str(e)}
 
+@APP.post("/admin/fix-foreign-key")
+async def admin_fix_foreign_key(request: Request):
+    """Fix the found_url foreign key constraint to point to feeds table"""
+    require_admin(request)
+
+    try:
+        # Import the fix function
+        import sys
+        import os
+        sys.path.append(os.path.dirname(__file__))
+        from new_feed_architecture import fix_found_url_foreign_key
+
+        # Fix the foreign key constraint
+        fix_found_url_foreign_key()
+
+        return {
+            "status": "success",
+            "message": "Foreign key constraint fixed successfully"
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Foreign key fix failed: {e}")
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/admin/init")
 async def admin_init(request: Request, body: InitRequest):
     async with TICKER_PROCESSING_LOCK:

@@ -1425,6 +1425,13 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
     LOG.info(f"[DB_DEBUG] get_ticker_config() called with ticker='{ticker}'")
 
     with db() as conn, conn.cursor() as cur:
+        # Check if ticker_reference table exists first (safe for fresh database)
+        try:
+            cur.execute("SELECT 1 FROM ticker_reference LIMIT 1")
+        except Exception as e:
+            LOG.info(f"[DB_DEBUG] ticker_reference table doesn't exist yet (fresh database): {e}")
+            return None
+
         # Add debug query first
         cur.execute("SELECT COUNT(*) as count FROM ticker_reference WHERE ticker = %s", (ticker,))
         count_result = cur.fetchone()
@@ -9639,8 +9646,18 @@ def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
     require_admin(request)
     
     with db() as conn, conn.cursor() as cur:
+        # Check if tables exist first (safe for fresh database)
+        try:
+            cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
+            cur.execute("SELECT 1 FROM ticker_feeds LIMIT 1")
+            cur.execute("SELECT 1 FROM feeds LIMIT 1")
+            cur.execute("SELECT 1 FROM ticker_reference LIMIT 1")
+        except Exception as e:
+            LOG.info(f"📋 Tables don't exist yet (fresh database) - wipe-ticker skipped: {e}")
+            return {"status": "skipped", "message": "Tables don't exist yet - nothing to wipe", "ticker": ticker, "deleted": {}}
+
         deleted_stats = {}
-        
+
         # Delete articles for this ticker
         cur.execute("DELETE FROM ticker_articles WHERE ticker = %s", (ticker,))
         deleted_stats["articles"] = cur.rowcount
@@ -10535,6 +10552,14 @@ async def debug_digest_check(request: Request, ticker: str):
 
     try:
         with db() as conn, conn.cursor() as cur:
+            # Check if tables exist first (safe for fresh database)
+            try:
+                cur.execute("SELECT 1 FROM articles LIMIT 1")
+                cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
+            except Exception as e:
+                LOG.info(f"📋 Tables don't exist yet (fresh database) - digest-check skipped: {e}")
+                return {"status": "skipped", "message": "Tables don't exist yet - cannot check digest", "ticker": ticker}
+
             # Check articles for this ticker in the last 24 hours
             cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 

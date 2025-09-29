@@ -8519,6 +8519,16 @@ class CLIRequest(BaseModel):
 def root():
     return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
 
+@APP.get("/debug/auth")
+def debug_auth(request: Request):
+    """Debug endpoint to check authentication headers"""
+    return {
+        "x-admin-token": request.headers.get("x-admin-token"),
+        "authorization": request.headers.get("authorization"),
+        "expected_token_prefix": ADMIN_TOKEN[:10] + "..." if ADMIN_TOKEN else "None",
+        "token_length": len(ADMIN_TOKEN) if ADMIN_TOKEN else 0
+    }
+
 @APP.post("/admin/migrate-feeds")
 async def admin_migrate_feeds(request: Request):
     """Migrate from old source_feed architecture to new feeds + ticker_feeds architecture"""

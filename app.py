@@ -11,7 +11,7 @@ import openai
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set
 from contextlib import contextmanager
-from urllib.parse import urlparse, parse_qs, unquote, quote
+from urllib.parse imp2ort urlparse, parse_qs, unquote, quote
 import csv
 import io
 import newspaper
@@ -884,7 +884,23 @@ def ensure_ticker_reference_schema():
                 ALTER TABLE ticker_reference 
                 ADD COLUMN IF NOT EXISTS {column_name} {column_type};
             """)
-        
+
+        # Fix found_url foreign key constraint to point to feeds table
+        try:
+            cur.execute("""
+                ALTER TABLE found_url
+                DROP CONSTRAINT IF EXISTS found_url_feed_id_fkey;
+            """)
+
+            cur.execute("""
+                ALTER TABLE found_url
+                ADD CONSTRAINT found_url_feed_id_fkey
+                FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE SET NULL;
+            """)
+            LOG.info("✅ Fixed found_url foreign key constraint to point to feeds table")
+        except Exception as e:
+            LOG.warning(f"⚠️ Could not fix found_url foreign key constraint: {e}")
+
         LOG.info("Enhanced ticker_reference schema created/updated with 3 industry keywords + 6 competitor fields")
 
 # 2. INTERNATIONAL TICKER FORMAT VALIDATION

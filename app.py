@@ -744,6 +744,18 @@ def ensure_schema():
                     active BOOLEAN DEFAULT TRUE,
                     is_etf BOOLEAN DEFAULT FALSE,
                     yahoo_ticker VARCHAR(20),
+                    -- Individual keyword columns (legacy compatibility)
+                    industry_keyword_1 VARCHAR(255),
+                    industry_keyword_2 VARCHAR(255),
+                    industry_keyword_3 VARCHAR(255),
+                    -- Individual competitor columns (legacy compatibility)
+                    competitor_1_name VARCHAR(255),
+                    competitor_1_ticker VARCHAR(20),
+                    competitor_2_name VARCHAR(255),
+                    competitor_2_ticker VARCHAR(20),
+                    competitor_3_name VARCHAR(255),
+                    competitor_3_ticker VARCHAR(20),
+                    -- Array columns (new architecture)
                     industry_keywords TEXT[],
                     competitors TEXT[],
                     ai_generated BOOLEAN DEFAULT FALSE,

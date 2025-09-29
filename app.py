@@ -6272,6 +6272,7 @@ def determine_article_category_for_ticker(article_row: dict, viewing_ticker: str
         ticker_config = get_ticker_reference(viewing_ticker)
         if not ticker_config:
             # Fallback to stored category if no metadata
+            LOG.debug(f"CATEGORIZATION: No metadata for {viewing_ticker}, using original category")
             return article_row.get("category", "company")
 
         # Get company name for the viewing ticker
@@ -6281,16 +6282,21 @@ def determine_article_category_for_ticker(article_row: dict, viewing_ticker: str
         search_keyword = article_row.get("search_keyword", "")
         competitor_ticker = article_row.get("competitor_ticker", "")
         original_category = article_row.get("category", "company")
+        article_title = article_row.get("title", "")[:50]
+
+        LOG.debug(f"CATEGORIZATION: {viewing_ticker} | Company: '{viewing_company_name}' | Article: '{article_title}' | Search: '{search_keyword}' | Original: '{original_category}'")
 
         # If this article mentions the viewing ticker's company, it's company news
         if search_keyword and viewing_company_name:
             # Check if search keyword matches company name (case insensitive)
             if viewing_company_name.lower() in search_keyword.lower() or \
                search_keyword.lower() in viewing_company_name.lower():
+                LOG.debug(f"CATEGORIZATION: {viewing_ticker} | MATCH FOUND - Converting '{original_category}' → 'company' for '{search_keyword}'")
                 return "company"
 
         # If the competitor_ticker matches viewing ticker, this is company news
         if competitor_ticker == viewing_ticker:
+            LOG.debug(f"CATEGORIZATION: {viewing_ticker} | COMPETITOR TICKER MATCH - Converting '{original_category}' → 'company'")
             return "company"
 
         # If this is from a competitor feed but about viewing ticker's company, it's company news
@@ -6314,9 +6320,11 @@ def determine_article_category_for_ticker(article_row: dict, viewing_ticker: str
             # If competitor article doesn't mention known competitors, might be about viewing company
             if not article_company_mentioned and search_keyword:
                 if viewing_company_name.lower() in search_keyword.lower():
+                    LOG.debug(f"CATEGORIZATION: {viewing_ticker} | COMPETITOR ARTICLE ABOUT COMPANY - Converting 'competitor' → 'company'")
                     return "company"
 
         # Default: use original category from database
+        LOG.debug(f"CATEGORIZATION: {viewing_ticker} | NO MATCH - Keeping original category '{original_category}'")
         return original_category
 
     except Exception as e:

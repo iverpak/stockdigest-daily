@@ -665,103 +665,138 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """MINIMAL TEST VERSION - Optimized database schema initialization"""
-    LOG.info("🔄 Starting ensure_schema() function")
+    """FRESH DATABASE - Complete schema creation for new architecture"""
+    LOG.info("🔄 Creating complete database schema for NEW ARCHITECTURE")
 
-    try:
-        with db() as conn:
-            LOG.info("✅ Database connection established")
-            with conn.cursor() as cur:
-                LOG.info("✅ Database cursor created")
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                -- Articles table: ticker-agnostic content storage
+                CREATE TABLE IF NOT EXISTS articles (
+                    id SERIAL PRIMARY KEY,
+                    url_hash VARCHAR(32) UNIQUE NOT NULL,
+                    url TEXT NOT NULL,
+                    resolved_url TEXT,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    domain VARCHAR(255),
+                    published_at TIMESTAMP,
+                    scraped_content TEXT,
+                    content_scraped_at TIMESTAMP,
+                    scraping_failed BOOLEAN DEFAULT FALSE,
+                    scraping_error TEXT,
+                    ai_summary TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
 
-                # MINIMAL TEST: Just try a simple query first
-                try:
-                    cur.execute("SELECT 1 as test")
-                    result = cur.fetchone()
-                    LOG.info(f"✅ Basic query works: {result}")
-                except Exception as e:
-                    LOG.error(f"❌ Basic query failed: {e}")
-                    raise e
+                -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
+                CREATE TABLE IF NOT EXISTS feeds (
+                    id SERIAL PRIMARY KEY,
+                    url VARCHAR(2048) UNIQUE NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    search_keyword VARCHAR(255),
+                    competitor_ticker VARCHAR(10),
+                    retain_days INTEGER DEFAULT 90,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
 
-                # TEST: Try to list existing tables
-                try:
-                    cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-                    tables = [row['tablename'] for row in cur.fetchall()]
-                    LOG.info(f"✅ Found {len(tables)} existing tables: {tables}")
-                except Exception as e:
-                    LOG.error(f"❌ Table listing failed: {e}")
-                    raise e
+                -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
+                CREATE TABLE IF NOT EXISTS ticker_feeds (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                    category VARCHAR(20) NOT NULL DEFAULT 'company',
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, feed_id)
+                );
 
-                # TEST: Check for category columns
-                try:
-                    cur.execute("""
-                        SELECT table_name, column_name
-                        FROM information_schema.columns
-                        WHERE table_schema = 'public' AND column_name = 'category'
-                        ORDER BY table_name, column_name
-                    """)
-                    category_columns = cur.fetchall()
-                    LOG.info(f"📊 Found {len(category_columns)} tables with 'category' columns:")
-                    for row in category_columns:
-                        LOG.info(f"   {row['table_name']}.{row['column_name']}")
-                except Exception as e:
-                    LOG.error(f"❌ Category column check failed: {e}")
-                    raise e
+                -- Ticker-Articles relationship table
+                CREATE TABLE IF NOT EXISTS ticker_articles (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    category VARCHAR(20) DEFAULT 'company',
+                    feed_id INTEGER REFERENCES feeds(id) ON DELETE SET NULL,
+                    search_keyword TEXT,
+                    competitor_ticker VARCHAR(10),
+                    sent_in_digest BOOLEAN DEFAULT FALSE,
+                    found_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, article_id)
+                );
 
-                # SCHEMA FIX: Add missing columns to ticker_feeds if needed
-                try:
-                    LOG.info("🔧 Checking ticker_feeds table schema...")
+                -- Single ticker reference table
+                CREATE TABLE IF NOT EXISTS ticker_reference (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) UNIQUE NOT NULL,
+                    country VARCHAR(5) NOT NULL,
+                    company_name VARCHAR(255) NOT NULL,
+                    industry VARCHAR(255),
+                    sector VARCHAR(255),
+                    sub_industry VARCHAR(255),
+                    exchange VARCHAR(20),
+                    currency VARCHAR(3),
+                    market_cap_category VARCHAR(20),
+                    active BOOLEAN DEFAULT TRUE,
+                    is_etf BOOLEAN DEFAULT FALSE,
+                    yahoo_ticker VARCHAR(20),
+                    industry_keywords TEXT[],
+                    competitors TEXT[],
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    ai_enhanced_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    data_source VARCHAR(50) DEFAULT 'manual'
+                );
 
-                    # Check for category column
-                    cur.execute("""
-                        SELECT column_name
-                        FROM information_schema.columns
-                        WHERE table_name = 'ticker_feeds' AND column_name = 'category'
-                    """)
-                    category_exists = cur.fetchone()
+                CREATE TABLE IF NOT EXISTS domain_names (
+                    domain VARCHAR(255) PRIMARY KEY,
+                    formal_name VARCHAR(255) NOT NULL,
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
 
-                    if not category_exists:
-                        LOG.info("➕ Adding missing category column to ticker_feeds table...")
-                        cur.execute("""
-                            ALTER TABLE ticker_feeds
-                            ADD COLUMN category VARCHAR(20) NOT NULL DEFAULT 'company'
-                        """)
-                        LOG.info("✅ Added category column to ticker_feeds")
+                CREATE TABLE IF NOT EXISTS competitor_metadata (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) NOT NULL,
+                    competitor_name VARCHAR(255) NOT NULL,
+                    competitor_ticker VARCHAR(20),
+                    relationship_type VARCHAR(50) DEFAULT 'competitor',
+                    ai_generated BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, competitor_name)
+                );
 
-                        # Add index for the new column
-                        cur.execute("CREATE INDEX IF NOT EXISTS idx_ticker_feeds_category ON ticker_feeds(category)")
-                        LOG.info("✅ Added index for ticker_feeds.category")
-                    else:
-                        LOG.info("✅ ticker_feeds.category column already exists")
+                -- All indexes for performance
+                CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash);
+                CREATE INDEX IF NOT EXISTS idx_articles_domain ON articles(domain);
+                CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
 
-                    # Check for updated_at column
-                    cur.execute("""
-                        SELECT column_name
-                        FROM information_schema.columns
-                        WHERE table_name = 'ticker_feeds' AND column_name = 'updated_at'
-                    """)
-                    updated_at_exists = cur.fetchone()
+                CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
+                CREATE INDEX IF NOT EXISTS idx_feeds_active ON feeds(active);
 
-                    if not updated_at_exists:
-                        LOG.info("➕ Adding missing updated_at column to ticker_feeds table...")
-                        cur.execute("""
-                            ALTER TABLE ticker_feeds
-                            ADD COLUMN updated_at TIMESTAMP DEFAULT NOW()
-                        """)
-                        LOG.info("✅ Added updated_at column to ticker_feeds")
-                    else:
-                        LOG.info("✅ ticker_feeds.updated_at column already exists")
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_ticker ON ticker_feeds(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_feed_id ON ticker_feeds(feed_id);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_category ON ticker_feeds(category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_active ON ticker_feeds(active);
 
-                except Exception as e:
-                    LOG.error(f"❌ Schema fix failed: {e}")
-                    raise e
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_ticker ON ticker_articles(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_article_id ON ticker_articles(article_id);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_category ON ticker_articles(category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_sent_in_digest ON ticker_articles(sent_in_digest);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_found_at ON ticker_articles(found_at DESC);
 
-                LOG.info("🔚 Schema checks and fixes complete - exiting early")
-                return
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
+            """)
 
-    except Exception as e:
-        LOG.error(f"❌ ensure_schema failed with error: {e}")
-        raise e
+    LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE")
 
 def update_schema_for_content():
     """Deprecated - schema already created in ensure_schema()"""

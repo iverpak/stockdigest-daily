@@ -6901,11 +6901,11 @@ class FeedManager:
         # Check existing feed counts by unique competitor
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT f.category, COUNT(*) as count
+                SELECT tf.category, COUNT(*) as count
                 FROM feeds f
                 JOIN ticker_feeds tf ON f.id = tf.feed_id
                 WHERE tf.ticker = %s AND f.active = TRUE AND tf.active = TRUE
-                GROUP BY f.category
+                GROUP BY tf.category
             """, (ticker,))
             
             existing_data = {row["category"]: row for row in cur.fetchall()}
@@ -6919,7 +6919,7 @@ class FeedManager:
                 SELECT COUNT(DISTINCT f.competitor_ticker) as unique_competitors
                 FROM feeds f
                 JOIN ticker_feeds tf ON f.id = tf.feed_id
-                WHERE tf.ticker = %s AND f.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
+                WHERE tf.ticker = %s AND tf.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
                 AND f.competitor_ticker IS NOT NULL
             """, (ticker,))
             result = cur.fetchone()
@@ -6982,7 +6982,7 @@ class FeedManager:
                     SELECT DISTINCT f.competitor_ticker
                     FROM feeds f
                     JOIN ticker_feeds tf ON f.id = tf.feed_id
-                    WHERE tf.ticker = %s AND f.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
+                    WHERE tf.ticker = %s AND tf.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
                     AND f.competitor_ticker IS NOT NULL
                 """, (ticker,))
                 existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
@@ -8943,19 +8943,19 @@ async def cron_ingest(
                 with db() as conn, conn.cursor() as cur:
                     if tickers:
                         cur.execute("""
-                            SELECT f.id, f.url, f.name, tf.ticker, f.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
                             FROM feeds f
                             JOIN ticker_feeds tf ON f.id = tf.feed_id
                             WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
-                            ORDER BY tf.ticker, f.category, f.id
+                            ORDER BY tf.ticker, tf.category, f.id
                         """, (tickers,))
                     else:
                         cur.execute("""
-                            SELECT f.id, f.url, f.name, tf.ticker, f.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
                             FROM feeds f
                             JOIN ticker_feeds tf ON f.id = tf.feed_id
                             WHERE f.active = TRUE AND tf.active = TRUE
-                            ORDER BY tf.ticker, f.category, f.id
+                            ORDER BY tf.ticker, tf.category, f.id
                         """)
                     feeds = list(cur.fetchall())
             
@@ -8970,23 +8970,23 @@ async def cron_ingest(
                 with db() as conn, conn.cursor() as cur:
                     if tickers:
                         cur.execute("""
-                            SELECT tf.ticker, f.category, COUNT(*) as count,
+                            SELECT tf.ticker, tf.category, COUNT(*) as count,
                                    STRING_AGG(f.name, ' | ') as feed_names
                             FROM feeds f
                             JOIN ticker_feeds tf ON f.id = tf.feed_id
                             WHERE tf.ticker = ANY(%s) AND f.active = TRUE AND tf.active = TRUE
-                            GROUP BY tf.ticker, f.category
-                            ORDER BY tf.ticker, f.category
+                            GROUP BY tf.ticker, tf.category
+                            ORDER BY tf.ticker, tf.category
                         """, (tickers,))
                     else:
                         cur.execute("""
-                            SELECT tf.ticker, f.category, COUNT(*) as count,
+                            SELECT tf.ticker, tf.category, COUNT(*) as count,
                                    STRING_AGG(f.name, ' | ') as feed_names
                             FROM feeds f
                             JOIN ticker_feeds tf ON f.id = tf.feed_id
                             WHERE f.active = TRUE AND tf.active = TRUE
-                            GROUP BY tf.ticker, f.category
-                            ORDER BY tf.ticker, f.category
+                            GROUP BY tf.ticker, tf.category
+                            ORDER BY tf.ticker, tf.category
                         """)
                     
                     feed_debug = list(cur.fetchall())

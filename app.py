@@ -9619,7 +9619,8 @@ async def reset_digest_flags(request: Request, body: ResetDigestRequest):
     async with TICKER_PROCESSING_LOCK:
         """Reset sent_in_digest flags for testing"""
         require_admin(request)
-        
+        ensure_schema()
+
         with db() as conn, conn.cursor() as cur:
             if body.tickers:
                 cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (body.tickers,))

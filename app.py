@@ -688,6 +688,31 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
 
+                -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
+                CREATE TABLE IF NOT EXISTS feeds (
+                    id SERIAL PRIMARY KEY,
+                    url VARCHAR(2048) UNIQUE NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    search_keyword VARCHAR(255),
+                    competitor_ticker VARCHAR(10),
+                    retain_days INTEGER DEFAULT 90,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+
+                -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
+                CREATE TABLE IF NOT EXISTS ticker_feeds (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                    category VARCHAR(20) NOT NULL DEFAULT 'company',
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, feed_id)
+                );
+
                 -- Ticker-Articles relationship table
                 CREATE TABLE IF NOT EXISTS ticker_articles (
                     id SERIAL PRIMARY KEY,
@@ -701,6 +726,14 @@ def ensure_schema():
                     found_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(ticker, article_id)
                 );
+
+                -- Indexes for feeds and ticker_feeds
+                CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
+                CREATE INDEX IF NOT EXISTS idx_feeds_active ON feeds(active);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_ticker ON ticker_feeds(ticker);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_feed_id ON ticker_feeds(feed_id);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_category ON ticker_feeds(category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_active ON ticker_feeds(active);
 
                 -- Performance indexes for articles
                 CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash);
@@ -742,39 +775,6 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
-
-                -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
-                CREATE TABLE IF NOT EXISTS feeds (
-                    id SERIAL PRIMARY KEY,
-                    url VARCHAR(2048) UNIQUE NOT NULL,
-                    name VARCHAR(255) NOT NULL,
-                    search_keyword VARCHAR(255),
-                    competitor_ticker VARCHAR(10),
-                    retain_days INTEGER DEFAULT 90,
-                    active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW()
-                );
-
-                -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
-                CREATE TABLE IF NOT EXISTS ticker_feeds (
-                    id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(10) NOT NULL,
-                    feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
-                    category VARCHAR(20) NOT NULL DEFAULT 'company',
-                    active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(ticker, feed_id)
-                );
-
-                -- Indexes for feeds and ticker_feeds
-                CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
-                CREATE INDEX IF NOT EXISTS idx_feeds_active ON feeds(active);
-                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_ticker ON ticker_feeds(ticker);
-                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_feed_id ON ticker_feeds(feed_id);
-                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_category ON ticker_feeds(category);
-                CREATE INDEX IF NOT EXISTS idx_ticker_feeds_active ON ticker_feeds(active);
 
                 CREATE TABLE IF NOT EXISTS domain_names (
                     domain VARCHAR(255) PRIMARY KEY,

@@ -9008,7 +9008,9 @@ async def process_ticker_job(job: dict):
     """Process a single ticker job (ingest + digest + commit)"""
     job_id = job['job_id']
     ticker = job['ticker']
-    config = json.loads(job['config']) if job['config'] else {}
+
+    # psycopg returns JSONB as dict, not string
+    config = job['config'] if isinstance(job['config'], dict) else {}
 
     minutes = config.get('minutes', 1440)
     batch_size = config.get('batch_size', 3)

@@ -98,12 +98,18 @@ def upsert_feed_new_architecture(url: str, name: str, category: str = "company",
             # Handle race condition: if feed was created by another process, try to get it
             if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
                 LOG.warning(f"⚠️ Concurrent feed creation detected for {url}, attempting to retrieve existing feed")
-                cur.execute("SELECT id FROM feeds WHERE url = %s", (url,))
-                result = cur.fetchone()
-                if result:
-                    feed_id = result['id']
-                    LOG.info(f"✅ Retrieved existing feed: {name} (ID: {feed_id})")
-                    return feed_id
+
+                # CRITICAL FIX: Use separate transaction for recovery since current one is aborted
+                try:
+                    conn.rollback()  # End the aborted transaction
+                    cur.execute("SELECT id FROM feeds WHERE url = %s", (url,))
+                    result = cur.fetchone()
+                    if result:
+                        feed_id = result['id']
+                        LOG.info(f"✅ Retrieved existing feed: {name} (ID: {feed_id})")
+                        return feed_id
+                except Exception as recovery_error:
+                    LOG.error(f"❌ Recovery attempt failed: {recovery_error}")
 
             # Re-raise if not a concurrency issue or if we couldn't recover
             raise e

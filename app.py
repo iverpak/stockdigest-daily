@@ -8588,8 +8588,7 @@ def root():
 @APP.post("/admin/migrate-feeds")
 async def admin_migrate_feeds(request: Request):
     """Migrate from old source_feed architecture to new feeds + ticker_feeds architecture"""
-    if not verify_admin_token(request):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(request)
 
     # Import the new architecture functions
     import sys

@@ -3594,16 +3594,23 @@ def calculate_dynamic_scraping_limits(ticker: str) -> Dict[str, int]:
     """Calculate dynamic scraping limits based on actual keywords/competitors"""
     config = get_ticker_config(ticker)
     if not config:
+        LOG.warning(f"⚠️ No config found for {ticker} - using minimal limits")
         return {"company": 20, "industry_total": 0, "competitor_total": 0}
-    
+
     # Get actual counts
     industry_keywords = config.get("industry_keywords", [])
     competitors = config.get("competitors", [])
-    
+
+    # DIAGNOSTIC: Log what we actually found
+    LOG.info(f"📊 METADATA READ for {ticker}:")
+    LOG.info(f"   AI Generated: {config.get('ai_generated', False)}")
+    LOG.info(f"   Industry Keywords: {industry_keywords}")
+    LOG.info(f"   Competitors: {competitors}")
+
     # Calculate totals: 5 articles per keyword/competitor
     industry_total = len(industry_keywords) * 5
     competitor_total = len(competitors) * 5
-    
+
     LOG.info(f"DYNAMIC SCRAPING LIMITS for {ticker}:")
     LOG.info(f"  Company: 20")
     LOG.info(f"  Industry: {len(industry_keywords)} keywords × 5 = {industry_total}")

@@ -783,7 +783,15 @@ def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
             ON CONFLICT (url_hash) DO UPDATE SET updated_at = NOW()
             RETURNING id
         """, (url_hash, url, resolved_url, title, description, domain, published_at))
-        return cur.fetchone()['id']
+        result = cur.fetchone()
+
+        if result:
+            return result['id']
+        else:
+            # Handle UPDATE case - RETURNING id is NULL for ON CONFLICT DO UPDATE
+            cur.execute("SELECT id FROM articles WHERE url_hash = %s", (url_hash,))
+            result = cur.fetchone()
+            return result['id'] if result else None
 
 def link_article_to_ticker(article_id: int, ticker: str, category: str = 'company',
                           feed_id: int = None, search_keyword: str = None,

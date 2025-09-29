@@ -9816,6 +9816,13 @@ async def reset_digest_flags(request: Request, body: ResetDigestRequest):
         # Note: ensure_schema() not needed for simple UPDATE operation
 
         with db() as conn, conn.cursor() as cur:
+            # Check if ticker_articles table exists first (safe for fresh database)
+            try:
+                cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
+            except Exception as e:
+                LOG.info(f"📋 ticker_articles table doesn't exist yet (fresh database) - reset-digest-flags skipped: {e}")
+                return {"status": "skipped", "message": "ticker_articles table doesn't exist yet - nothing to reset", "articles_reset": 0, "tickers": body.tickers or "all"}
+
             if body.tickers:
                 cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (body.tickers,))
             else:

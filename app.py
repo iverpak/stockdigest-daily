@@ -668,6 +668,43 @@ def ensure_schema():
     """Optimized database schema initialization - ticker-agnostic articles with relationships"""
     with db() as conn:
         with conn.cursor() as cur:
+            # DIAGNOSTIC: Check what's in the production database
+            try:
+                cur.execute("""
+                    SELECT table_name, column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND column_name = 'category'
+                    ORDER BY table_name, column_name
+                """)
+                category_columns = cur.fetchall()
+                LOG.info(f"📊 DIAGNOSTIC: Found {len(category_columns)} tables with 'category' columns:")
+                for row in category_columns:
+                    LOG.info(f"   {row['table_name']}.{row['column_name']}")
+
+                # Check existing feeds table structure
+                cur.execute("""
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'feeds'
+                    ORDER BY ordinal_position
+                """)
+                feeds_columns = cur.fetchall()
+                LOG.info(f"📊 DIAGNOSTIC: Existing feeds table has {len(feeds_columns)} columns:")
+                for col in feeds_columns:
+                    LOG.info(f"   feeds.{col['column_name']} ({col['data_type']})")
+
+            except Exception as e:
+                LOG.error(f"❌ DIAGNOSTIC query failed: {e}")
+
+            # DEFENSIVE: Try to handle existing problematic schema
+            try:
+                # Remove any views or triggers that might reference old category column
+                cur.execute("DROP VIEW IF EXISTS feed_summary CASCADE")
+                cur.execute("DROP TRIGGER IF EXISTS category_update_trigger ON feeds CASCADE")
+                LOG.info("🧹 Cleaned up potentially problematic database objects")
+            except Exception as e:
+                LOG.warning(f"⚠️ Cleanup attempt: {e}")
+
             # Articles table: ticker-agnostic content storage
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS articles (

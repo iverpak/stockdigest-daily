@@ -76,8 +76,15 @@ try {
     }
     
 } catch {
-    Write-Host "  INDIVIDUAL INITIALIZATION FAILED: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "  Cannot continue without proper initialization" -ForegroundColor Red
+    Write-Host "  🚨 INDIVIDUAL INITIALIZATION FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  🔍 FULL ERROR DETAILS:" -ForegroundColor Yellow
+    Write-Host "     Status Code: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
+    Write-Host "     Response: $($_.Exception.Response)" -ForegroundColor Red
+    Write-Host "     Inner Exception: $($_.Exception.InnerException)" -ForegroundColor Red
+    Write-Host "  ❌ Cannot continue without proper initialization" -ForegroundColor Red
+    Write-Host "  ⏸️  Script will pause so you can read this error..." -ForegroundColor Yellow
+    Write-Host "     Press any key to exit..." -ForegroundColor White
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
@@ -394,3 +401,9 @@ Write-Host "Async Triage: $TRIAGE_BATCH_SIZE concurrent OpenAI calls" -Foregroun
 Write-Host "Async Scraping: $BATCH_SIZE concurrent article processing" -ForegroundColor Cyan
 Write-Host "Individual ticker initialization prevents data corruption!" -ForegroundColor Yellow
 Write-Host "✅ Incremental commits prevent metadata loss!" -ForegroundColor Green
+
+# PAUSE SCRIPT TO READ ANY ERRORS
+Write-Host "`n" -NoNewline
+Write-Host "🔍 DEBUGGING MODE: " -ForegroundColor Yellow -NoNewline
+Write-Host "Press any key to close PowerShell..." -ForegroundColor White
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

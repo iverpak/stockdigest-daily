@@ -9059,6 +9059,14 @@ async def process_ticker_job(job: dict):
         # NOTE: TICKER_PROCESSING_LOCK is acquired inside cron_ingest/cron_digest
         # We don't acquire it here to avoid deadlock (lock is not reentrant)
 
+        # Check if job was cancelled before starting
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            current_status = cur.fetchone()
+            if current_status and current_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled before starting, exiting")
+                return
+
         # PHASE 1: Ingest (already implemented in /cron/ingest)
         update_job_status(job_id, phase='ingest_start', progress=10)
         LOG.info(f"📥 [JOB {job_id}] Phase 1: Ingest starting...")
@@ -9096,6 +9104,14 @@ async def process_ticker_job(job: dict):
         else:
             LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
 
+        # Check if cancelled after Phase 1
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            current_status = cur.fetchone()
+            if current_status and current_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 1, exiting")
+                return
+
         # PHASE 2: Digest (already implemented in /cron/digest)
         update_job_status(job_id, phase='digest_start', progress=65)
         LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
@@ -9113,6 +9129,14 @@ async def process_ticker_job(job: dict):
                 LOG.info(f"   Articles: {digest_result.get('articles', 0)}")
         else:
             LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete (no detailed stats)")
+
+        # Check if cancelled after Phase 2
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            current_status = cur.fetchone()
+            if current_status and current_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
+                return
 
         # PHASE 3: Commit to GitHub
         update_job_status(job_id, phase='commit_start', progress=96)
@@ -9626,6 +9650,114 @@ async def get_job_detail(request: Request, job_id: str):
             "completed_at": job['completed_at'].isoformat() if job['completed_at'] else None,
             "config": job['config']
         }
+
+@APP.post("/jobs/{job_id}/cancel")
+async def cancel_job(request: Request, job_id: str):
+    """Cancel a specific job"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            UPDATE ticker_processing_jobs
+            SET status = 'cancelled',
+                error_message = 'Cancelled by user',
+                completed_at = NOW(),
+                last_updated = NOW()
+            WHERE job_id = %s
+            AND status IN ('queued', 'processing')
+            RETURNING ticker, status, phase
+        """, (job_id,))
+
+        result = cur.fetchone()
+        if result:
+            LOG.warning(f"🚫 Job {job_id} cancelled by user (ticker: {result['ticker']}, was in: {result['phase']})")
+
+            # Update batch counters
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET failed_jobs = failed_jobs + 1,
+                    last_updated = NOW()
+                WHERE batch_id = (
+                    SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
+                )
+            """, (job_id,))
+
+            return {
+                "status": "cancelled",
+                "job_id": job_id,
+                "ticker": result['ticker'],
+                "was_in_phase": result['phase']
+            }
+        else:
+            # Check if job exists but already completed/failed
+            cur.execute("""
+                SELECT ticker, status FROM ticker_processing_jobs WHERE job_id = %s
+            """, (job_id,))
+
+            existing = cur.fetchone()
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Job already {existing['status']}, cannot cancel"
+                )
+            else:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+@APP.post("/jobs/batch/{batch_id}/cancel")
+async def cancel_batch(request: Request, batch_id: str):
+    """Cancel all jobs in a batch"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        # Cancel all queued/processing jobs in the batch
+        cur.execute("""
+            UPDATE ticker_processing_jobs
+            SET status = 'cancelled',
+                error_message = 'Batch cancelled by user',
+                completed_at = NOW(),
+                last_updated = NOW()
+            WHERE batch_id = %s
+            AND status IN ('queued', 'processing')
+            RETURNING job_id, ticker
+        """, (batch_id,))
+
+        cancelled_jobs = cur.fetchall()
+
+        if cancelled_jobs:
+            LOG.warning(f"🚫 Batch {batch_id} cancelled by user ({len(cancelled_jobs)} jobs)")
+            for job in cancelled_jobs:
+                LOG.info(f"   Cancelled: {job['ticker']} (job_id: {job['job_id']})")
+
+            # Update batch status
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET status = 'cancelled',
+                    failed_jobs = failed_jobs + %s,
+                    last_updated = NOW()
+                WHERE batch_id = %s
+            """, (len(cancelled_jobs), batch_id))
+
+            return {
+                "status": "cancelled",
+                "batch_id": batch_id,
+                "jobs_cancelled": len(cancelled_jobs),
+                "tickers": [j['ticker'] for j in cancelled_jobs]
+            }
+        else:
+            # Check if batch exists
+            cur.execute("""
+                SELECT status, total_jobs FROM ticker_processing_batches WHERE batch_id = %s
+            """, (batch_id,))
+
+            batch = cur.fetchone()
+            if batch:
+                return {
+                    "status": "no_jobs_to_cancel",
+                    "message": f"Batch is already {batch['status']}, no jobs to cancel",
+                    "batch_id": batch_id
+                }
+            else:
+                raise HTTPException(status_code=404, detail="Batch not found")
 
 @APP.post("/jobs/circuit-breaker/reset")
 async def reset_circuit_breaker(request: Request):

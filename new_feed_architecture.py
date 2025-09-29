@@ -71,27 +71,42 @@ def upsert_feed_new_architecture(url: str, name: str, category: str = "company",
     from app import db, LOG
 
     with db() as conn, conn.cursor() as cur:
-        # Insert or get existing feed
-        cur.execute("""
-            INSERT INTO feeds (url, name, category, search_keyword, competitor_ticker, retain_days)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (url) DO UPDATE SET
-                name = EXCLUDED.name,
-                category = EXCLUDED.category,
-                search_keyword = EXCLUDED.search_keyword,
-                competitor_ticker = EXCLUDED.competitor_ticker,
-                active = TRUE,
-                updated_at = NOW()
-            RETURNING id;
-        """, (url, name, category, search_keyword, competitor_ticker, retain_days))
+        try:
+            # Insert or get existing feed
+            cur.execute("""
+                INSERT INTO feeds (url, name, category, search_keyword, competitor_ticker, retain_days)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    category = EXCLUDED.category,
+                    search_keyword = EXCLUDED.search_keyword,
+                    competitor_ticker = EXCLUDED.competitor_ticker,
+                    active = TRUE,
+                    updated_at = NOW()
+                RETURNING id;
+            """, (url, name, category, search_keyword, competitor_ticker, retain_days))
 
-        result = cur.fetchone()
-        if result:
-            feed_id = result['id']
-            LOG.info(f"✅ Feed upserted: {name} (ID: {feed_id})")
-            return feed_id
-        else:
-            raise Exception(f"Failed to upsert feed: {name}")
+            result = cur.fetchone()
+            if result:
+                feed_id = result['id']
+                LOG.info(f"✅ Feed upserted: {name} (ID: {feed_id})")
+                return feed_id
+            else:
+                raise Exception(f"Failed to upsert feed: {name}")
+
+        except Exception as e:
+            # Handle race condition: if feed was created by another process, try to get it
+            if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+                LOG.warning(f"⚠️ Concurrent feed creation detected for {url}, attempting to retrieve existing feed")
+                cur.execute("SELECT id FROM feeds WHERE url = %s", (url,))
+                result = cur.fetchone()
+                if result:
+                    feed_id = result['id']
+                    LOG.info(f"✅ Retrieved existing feed: {name} (ID: {feed_id})")
+                    return feed_id
+
+            # Re-raise if not a concurrency issue or if we couldn't recover
+            raise e
 
 def associate_ticker_with_feed(ticker: str, feed_id: int) -> bool:
     """Associate a ticker with a feed (many-to-many relationship)"""

@@ -9508,22 +9508,14 @@ async def regenerate_metadata(request: Request, body: RegenerateMetadataRequest)
         LOG.info(f"Regenerating metadata for {body.ticker}")
         metadata = ticker_manager.get_or_create_metadata(body.ticker)
 
-        # Rebuild feeds using new architecture
-        feeds = build_feed_urls(body.ticker, metadata)
-        for feed_config in feeds:
-            upsert_feed(
-                url=feed_config["url"],
-                name=feed_config["name"],
-                ticker=body.ticker,
-                category=feed_config.get("category", "company"),
-                retain_days=DEFAULT_RETAIN_DAYS
-            )
+        # Rebuild feeds using NEW ARCHITECTURE V2
+        feeds_created = create_feeds_for_ticker_new_architecture(body.ticker, metadata)
 
         return {
             "status": "regenerated",
             "ticker": body.ticker,
             "metadata": metadata,
-            "feeds_created": len(feeds)
+            "feeds_created": len(feeds_created)
         }
 
 
@@ -10722,19 +10714,11 @@ def cli_run(request: Request, body: CLIRequest):
     results = {}
     
     if body.action in ["ingest", "both"]:
-        # Initialize feeds if needed
+        # Initialize feeds using NEW ARCHITECTURE V2
         ensure_schema()
         for ticker in body.tickers:
             metadata = ticker_manager.get_or_create_metadata(ticker)
-            feeds = build_feed_urls(ticker, metadata)
-            for feed_config in feeds:
-                upsert_feed(
-                    url=feed_config["url"],
-                    name=feed_config["name"],
-                    ticker=ticker,
-                    category=feed_config.get("category", "company"),
-                    retain_days=DEFAULT_RETAIN_DAYS
-                )
+            create_feeds_for_ticker_new_architecture(ticker, metadata)
         
         # Run ingestion
         ingest_result = cron_ingest(request, body.minutes, body.tickers)

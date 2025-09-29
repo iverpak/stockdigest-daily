@@ -1,61 +1,53 @@
-import os
-import sys
-import time
-import logging
-import traceback
-import hashlib
-import re
-import pytz
-import json
-import openai
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Dict, Any, Tuple, Set
-from contextlib import contextmanager
-from urllib.parse import urlparse, parse_qs, unquote, quote
+# Standard library imports
+import asyncio
+import base64
 import csv
+import gc
+import hashlib
 import io
-import newspaper
-from newspaper import Article
+import json
+import logging
+import os
+import psutil
 import random
-from urllib.robotparser import RobotFileParser
-
-import psycopg
-from psycopg.rows import dict_row
-from fastapi import FastAPI, Request, HTTPException, Query, Body, UploadFile, File
-from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
-
-import feedparser
-import requests
+import re
+import signal
 import smtplib
+import sys
+import threading
+import time
+import traceback
+import tracemalloc
+from collections import defaultdict
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from functools import wraps
+from threading import BoundedSemaphore
+from typing import List, Optional, Dict, Any, Tuple, Set
+from urllib.parse import urlparse, parse_qs, unquote, quote
+from urllib.robotparser import RobotFileParser
 
-from bs4 import BeautifulSoup
-
-import base64
+# Third-party imports
+import aiohttp
+import feedparser
+import newspaper
+import openai
+import psycopg
+import pytz
 import requests
+from bs4 import BeautifulSoup
+from fastapi import FastAPI, Request, HTTPException, Query, Body, UploadFile, File
+from fastapi.responses import JSONResponse, PlainTextResponse
+from newspaper import Article
+from playwright.async_api import async_playwright
+from psycopg.rows import dict_row
+from pydantic import BaseModel
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from collections import defaultdict
-
-from playwright.async_api import async_playwright
-import asyncio
-import signal
-from contextlib import contextmanager
-
-import os
-import tracemalloc
-from functools import wraps
-import threading
-from threading import BoundedSemaphore
-
-import aiohttp
-
-import gc
-import psutil
-import tracemalloc
+# Local imports
 from memory_monitor import (
     memory_monitor,
     monitor_phase,
@@ -65,8 +57,6 @@ from memory_monitor import (
 
 # Global session for OpenAI API calls with retries
 _openai_session = None
-
-import asyncio
 
 # Global ticker processing lock
 TICKER_PROCESSING_LOCK = asyncio.Lock()
@@ -474,7 +464,8 @@ def get_ticker_ingestion_stats(ticker: str) -> dict:
         }
     return ticker_ingestion_stats[ticker]
 
-# Legacy global stats for backward compatibility (deprecated)
+# DEPRECATED: Legacy global stats - kept for backward compatibility during migration
+# TODO: Remove after all functions are updated to use ticker-specific stats
 ingestion_stats = {
     "company_ingested": 0,
     "industry_ingested_by_keyword": {},
@@ -506,7 +497,8 @@ def get_ticker_scraping_stats(ticker: str) -> dict:
         }
     return ticker_scraping_stats[ticker]
 
-# Legacy global stats for backward compatibility (deprecated)
+# DEPRECATED: Legacy global stats - kept for backward compatibility during migration
+# TODO: Remove after all functions are updated to use ticker-specific stats
 scraping_stats = {
     "company_scraped": 0,
     "industry_scraped_by_keyword": {},

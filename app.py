@@ -708,8 +708,35 @@ def ensure_schema():
                     LOG.error(f"❌ Category column check failed: {e}")
                     raise e
 
-                # If we get here, basic DB operations work - exit for now
-                LOG.info("🔚 Database tests passed - exiting early for debugging")
+                # SCHEMA FIX: Add missing category column to ticker_feeds if needed
+                try:
+                    LOG.info("🔧 Checking if ticker_feeds.category column exists...")
+                    cur.execute("""
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_name = 'ticker_feeds' AND column_name = 'category'
+                    """)
+                    category_exists = cur.fetchone()
+
+                    if not category_exists:
+                        LOG.info("➕ Adding missing category column to ticker_feeds table...")
+                        cur.execute("""
+                            ALTER TABLE ticker_feeds
+                            ADD COLUMN category VARCHAR(20) NOT NULL DEFAULT 'company'
+                        """)
+                        LOG.info("✅ Added category column to ticker_feeds")
+
+                        # Add index for the new column
+                        cur.execute("CREATE INDEX IF NOT EXISTS idx_ticker_feeds_category ON ticker_feeds(category)")
+                        LOG.info("✅ Added index for ticker_feeds.category")
+                    else:
+                        LOG.info("✅ ticker_feeds.category column already exists")
+
+                except Exception as e:
+                    LOG.error(f"❌ Schema fix failed: {e}")
+                    raise e
+
+                LOG.info("🔚 Schema checks and fixes complete - exiting early")
                 return
 
     except Exception as e:

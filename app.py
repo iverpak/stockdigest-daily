@@ -665,9 +665,56 @@ def db():
         conn.close()
 
 def ensure_schema():
-    """Optimized database schema initialization - ticker-agnostic articles with relationships"""
-    with db() as conn:
-        with conn.cursor() as cur:
+    """MINIMAL TEST VERSION - Optimized database schema initialization"""
+    LOG.info("🔄 Starting ensure_schema() function")
+
+    try:
+        with db() as conn:
+            LOG.info("✅ Database connection established")
+            with conn.cursor() as cur:
+                LOG.info("✅ Database cursor created")
+
+                # MINIMAL TEST: Just try a simple query first
+                try:
+                    cur.execute("SELECT 1 as test")
+                    result = cur.fetchone()
+                    LOG.info(f"✅ Basic query works: {result}")
+                except Exception as e:
+                    LOG.error(f"❌ Basic query failed: {e}")
+                    raise e
+
+                # TEST: Try to list existing tables
+                try:
+                    cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+                    tables = [row[0] for row in cur.fetchall()]
+                    LOG.info(f"✅ Found {len(tables)} existing tables: {tables}")
+                except Exception as e:
+                    LOG.error(f"❌ Table listing failed: {e}")
+                    raise e
+
+                # TEST: Check for category columns
+                try:
+                    cur.execute("""
+                        SELECT table_name, column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public' AND column_name = 'category'
+                        ORDER BY table_name, column_name
+                    """)
+                    category_columns = cur.fetchall()
+                    LOG.info(f"📊 Found {len(category_columns)} tables with 'category' columns:")
+                    for row in category_columns:
+                        LOG.info(f"   {row[0]}.{row[1]}")
+                except Exception as e:
+                    LOG.error(f"❌ Category column check failed: {e}")
+                    raise e
+
+                # If we get here, basic DB operations work - exit for now
+                LOG.info("🔚 Database tests passed - exiting early for debugging")
+                return
+
+    except Exception as e:
+        LOG.error(f"❌ ensure_schema failed with error: {e}")
+        raise e
             # DIAGNOSTIC: Check what's in the production database
             try:
                 cur.execute("""

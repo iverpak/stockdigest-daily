@@ -751,20 +751,6 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
                 
-                CREATE TABLE IF NOT EXISTS source_feed (
-                    id SERIAL PRIMARY KEY,
-                    url TEXT UNIQUE NOT NULL,
-                    name TEXT NOT NULL,
-                    ticker VARCHAR(10) NOT NULL,
-                    category VARCHAR(20) DEFAULT 'company',
-                    retain_days INTEGER DEFAULT 90,
-                    active BOOLEAN DEFAULT TRUE,
-                    search_keyword TEXT,
-                    competitor_ticker VARCHAR(10),
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW()
-                );
-                
                 CREATE TABLE IF NOT EXISTS competitor_metadata (
                     id SERIAL PRIMARY KEY,
                     ticker VARCHAR(10) NOT NULL,
@@ -4138,99 +4124,115 @@ def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> D
     return ticker_manager.get_or_create_metadata(ticker, force_refresh)
 
 def build_feed_urls(ticker: str, keywords: Dict) -> List[Dict]:
-    """Wrapper for backward compatibility"""
-    return feed_manager.create_feeds_for_ticker_enhanced(ticker, keywords)
+    """NEW ARCHITECTURE: Build feed URLs based on ticker metadata (without creating feeds)"""
+    feeds = []
+    company_name = keywords.get("company_name", ticker)
+
+    # 1. Company feeds (2 feeds)
+    feeds.extend([
+        {
+            "url": f"https://news.google.com/rss/search?q=\"{company_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Google News: {company_name}",
+            "category": "company",
+            "search_keyword": company_name
+        },
+        {
+            "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+            "name": f"Yahoo Finance: {ticker}",
+            "category": "company",
+            "search_keyword": ticker
+        }
+    ])
+
+    # 2. Industry feeds (up to 3)
+    industry_keywords = keywords.get("industry_keywords", [])[:3]
+    for keyword in industry_keywords:
+        feeds.append({
+            "url": f"https://news.google.com/rss/search?q=\"{keyword.replace(' ', '%20')}\"+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Industry: {keyword}",
+            "category": "industry",
+            "search_keyword": keyword
+        })
+
+    # 3. Competitor feeds (up to 3)
+    competitors = keywords.get("competitors", [])[:3]
+    for comp in competitors:
+        if isinstance(comp, dict) and comp.get('name') and comp.get('ticker'):
+            comp_name = comp['name']
+            comp_ticker = comp['ticker']
+
+            feeds.extend([
+                {
+                    "url": f"https://news.google.com/rss/search?q=\"{comp_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    "name": f"Competitor: {comp_name}",
+                    "category": "competitor",
+                    "search_keyword": comp_name,
+                    "competitor_ticker": comp_ticker
+                },
+                {
+                    "url": f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                    "name": f"Yahoo Competitor: {comp_name} ({comp_ticker})",
+                    "category": "competitor",
+                    "search_keyword": comp_name,
+                    "competitor_ticker": comp_ticker
+                }
+            ])
+
+    return feeds
     
-def upsert_feed(url: str, name: str, ticker: str, category: str = "company", 
-                retain_days: int = 90, search_keyword: str = None, 
+def upsert_feed(url: str, name: str, ticker: str, category: str = "company",
+                retain_days: int = 90, search_keyword: str = None,
                 competitor_ticker: str = None) -> int:
-    """Simplified feed upsert with category storage"""
-    LOG.info(f"DEBUG: Upserting feed - ticker: {ticker}, name: {name}, category: {category}, search_keyword: {search_keyword}")
-    
+    """NEW ARCHITECTURE: Feed upsert using feeds + ticker_feeds tables"""
+    LOG.info(f"DEBUG: Upserting feed (NEW ARCHITECTURE) - ticker: {ticker}, name: {name}, category: {category}, search_keyword: {search_keyword}")
+
     try:
-        with db() as conn, conn.cursor() as cur:
-            # CRITICAL FIX: Prevent feed contamination between tickers
-            # Allow multiple tickers to track same competitor, but prevent company feed reassignment
-            cur.execute("""
-                SELECT ticker, category FROM source_feed WHERE url = %s AND ticker != %s
-            """, (url, ticker))
-            existing_different_ticker = cur.fetchone()
+        # Import new architecture functions
+        import sys
+        import os
+        sys.path.append(os.path.dirname(__file__))
+        from new_feed_architecture import upsert_feed_new_architecture, associate_ticker_with_feed
 
-            if existing_different_ticker:
-                existing_ticker = existing_different_ticker['ticker']
-                existing_category = existing_different_ticker['category']
+        # Create/get feed in new architecture
+        feed_id = upsert_feed_new_architecture(
+            url=url,
+            name=name,
+            category=category,
+            search_keyword=search_keyword,
+            competitor_ticker=competitor_ticker,
+            retain_days=retain_days
+        )
 
-                # CRITICAL DEBUG: Show exactly what conflict was detected
-                LOG.info(f"[{ticker}] FEED CONFLICT DETECTED: URL {url}")
-                LOG.info(f"[{ticker}]   Trying to assign to: {ticker} (category: {category})")
-                LOG.info(f"[{ticker}]   Already assigned to: {existing_ticker} (category: {existing_category})")
+        # Associate ticker with feed
+        if associate_ticker_with_feed(ticker, feed_id):
+            LOG.info(f"DEBUG: Feed upsert SUCCESS (NEW ARCHITECTURE) - ID: {feed_id}, category: {category}")
+            return feed_id
+        else:
+            LOG.error(f"Failed to associate ticker {ticker} with feed {feed_id}")
+            return -1
 
-                # Allow competitor/industry feeds to be shared, but prevent company feed contamination
-                if category == "company" or existing_category == "company":
-                    LOG.warning(f"[{ticker}] FEED CONTAMINATION PREVENTED: Company feed URL {url} already assigned to {existing_ticker}, skipping for {ticker}")
-                    return -1  # Return invalid ID to indicate skipped
-                else:
-                    LOG.info(f"[{ticker}] FEED SHARING ALLOWED: {category} feed {url} shared between {existing_ticker} and {ticker}")
-
-            cur.execute("""
-                INSERT INTO source_feed (url, name, ticker, category, retain_days, active, search_keyword, competitor_ticker)
-                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-                ON CONFLICT (url) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    category = EXCLUDED.category,
-                    active = TRUE
-                WHERE source_feed.ticker = EXCLUDED.ticker
-                RETURNING id;
-            """, (url, name, ticker, category, retain_days, search_keyword, competitor_ticker))
-
-            # CRITICAL: Validate the inserted/updated feed has correct ticker
-            result = cur.fetchone()
-            if result:
-                feed_id = result["id"]
-                cur.execute("SELECT ticker, name FROM source_feed WHERE id = %s", (feed_id,))
-                validation_check = cur.fetchone()
-                if validation_check['ticker'] != ticker:
-                    LOG.error(f"FEED INSERTION CORRUPTION: Expected ticker={ticker}, Got ticker={validation_check['ticker']}, Feed={validation_check['name']}")
-                    raise Exception(f"Feed inserted with wrong ticker: expected {ticker}, got {validation_check['ticker']}")
-                LOG.info(f"DEBUG: Feed upsert SUCCESS - ID: {feed_id}, category: {category}")
-                
-                # IMMEDIATE VERIFICATION
-                cur.execute("""
-                    SELECT id, category, name FROM source_feed 
-                    WHERE id = %s AND active = TRUE
-                """, (feed_id,))
-                verification = cur.fetchone()
-                
-                if verification:
-                    LOG.info(f"DEBUG: Feed verification SUCCESS - {verification}")
-                else:
-                    LOG.error(f"DEBUG: Feed verification FAILED - feed {feed_id} not found after insert")
-                
-                return feed_id
-            else:
-                LOG.error(f"DEBUG: Feed upsert returned no result for {ticker} {category}")
-                return None
-                
     except Exception as e:
-        LOG.error(f"DEBUG: Feed upsert EXCEPTION for {ticker} {category}: {e}")
-        return None
+        LOG.error(f"Error upserting feed for {ticker} (NEW ARCHITECTURE): {e}")
+        return -1
 
 def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
-    """Get all active feeds, optionally filtered by tickers"""
+    """NEW ARCHITECTURE: Get all active feeds using feeds + ticker_feeds tables"""
     with db() as conn, conn.cursor() as cur:
         if tickers:
             cur.execute("""
-                SELECT id, url, name, ticker, retain_days
-                FROM source_feed
-                WHERE active = TRUE AND ticker = ANY(%s)
-                ORDER BY ticker, id
+                SELECT f.id, f.url, f.name, tf.ticker, f.retain_days, f.category, f.search_keyword, f.competitor_ticker
+                FROM feeds f
+                JOIN ticker_feeds tf ON f.id = tf.feed_id
+                WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
+                ORDER BY tf.ticker, f.id
             """, (tickers,))
         else:
             cur.execute("""
-                SELECT id, url, name, ticker, retain_days
-                FROM source_feed
-                WHERE active = TRUE
-                ORDER BY ticker, id
+                SELECT f.id, f.url, f.name, tf.ticker, f.retain_days, f.category, f.search_keyword, f.competitor_ticker
+                FROM feeds f
+                JOIN ticker_feeds tf ON f.id = tf.feed_id
+                WHERE f.active = TRUE AND tf.active = TRUE
+                ORDER BY tf.ticker, f.id
             """)
         return list(cur.fetchall())
 
@@ -6199,21 +6201,21 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
         except Exception as e:
             LOG.debug(f"Database lookup failed for competitor {competitor_ticker}: {e}")
     
-    # Try to get competitor name from source_feed table using competitor_ticker
+    # Try to get competitor name from feeds table using competitor_ticker (NEW ARCHITECTURE)
     if competitor_ticker:
         try:
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT search_keyword FROM source_feed 
+                    SELECT search_keyword FROM feeds
                     WHERE competitor_ticker = %s AND category = 'competitor' AND active = TRUE
                     LIMIT 1
                 """, (competitor_ticker,))
                 result = cur.fetchone()
-                
+
                 if result and result["search_keyword"]:
                     return result["search_keyword"]
         except Exception as e:
-            LOG.debug(f"Source feed lookup failed for competitor {competitor_ticker}: {e}")
+            LOG.debug(f"Feeds table lookup failed for competitor {competitor_ticker}: {e}")
     
     # Fallback to search_keyword (should be company name for Google feeds)
     if search_keyword and not search_keyword.isupper():  # Likely a company name, not ticker
@@ -6724,10 +6726,11 @@ class FeedManager:
         # Check existing feed counts by unique competitor
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT category, COUNT(*) as count
-                FROM source_feed 
-                WHERE ticker = %s AND active = TRUE
-                GROUP BY category
+                SELECT f.category, COUNT(*) as count
+                FROM feeds f
+                JOIN ticker_feeds tf ON f.id = tf.feed_id
+                WHERE tf.ticker = %s AND f.active = TRUE AND tf.active = TRUE
+                GROUP BY f.category
             """, (ticker,))
             
             existing_data = {row["category"]: row for row in cur.fetchall()}
@@ -6738,10 +6741,11 @@ class FeedManager:
             
             # Count unique competitors separately
             cur.execute("""
-                SELECT COUNT(DISTINCT competitor_ticker) as unique_competitors
-                FROM source_feed 
-                WHERE ticker = %s AND category = 'competitor' AND active = TRUE
-                AND competitor_ticker IS NOT NULL
+                SELECT COUNT(DISTINCT f.competitor_ticker) as unique_competitors
+                FROM feeds f
+                JOIN ticker_feeds tf ON f.id = tf.feed_id
+                WHERE tf.ticker = %s AND f.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
+                AND f.competitor_ticker IS NOT NULL
             """, (ticker,))
             result = cur.fetchone()
             existing_competitor_entities = result["unique_competitors"] if result else 0
@@ -6800,10 +6804,11 @@ class FeedManager:
             # Get existing competitor tickers to avoid duplicates
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT DISTINCT competitor_ticker 
-                    FROM source_feed 
-                    WHERE ticker = %s AND category = 'competitor' AND active = TRUE
-                    AND competitor_ticker IS NOT NULL
+                    SELECT DISTINCT f.competitor_ticker
+                    FROM feeds f
+                    JOIN ticker_feeds tf ON f.id = tf.feed_id
+                    WHERE tf.ticker = %s AND f.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
+                    AND f.competitor_ticker IS NOT NULL
                 """, (ticker,))
                 existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
             
@@ -6889,57 +6894,6 @@ class FeedManager:
         LOG.info(f"TOTAL FEEDS TO CREATE: {len(feeds)}")
         return feeds
     
-    @staticmethod
-    def store_feeds(ticker: str, feeds: List[Dict], retain_days: int = 90) -> List[int]:
-        """Store feeds in database"""
-        feed_ids = []
-        
-        with db() as conn, conn.cursor() as cur:
-            for feed in feeds:
-                # CRITICAL FIX: Prevent feed contamination between tickers
-                # Allow multiple tickers to track same competitor, but prevent company feed reassignment
-                cur.execute("""
-                    SELECT ticker, category FROM source_feed WHERE url = %s AND ticker != %s
-                """, (feed["url"], ticker))
-                existing_different_ticker = cur.fetchone()
-
-                if existing_different_ticker:
-                    existing_ticker = existing_different_ticker['ticker']
-                    existing_category = existing_different_ticker['category']
-                    feed_category = feed.get("category", "company")
-
-                    # CRITICAL DEBUG: Show exactly what conflict was detected
-                    LOG.info(f"[{ticker}] FEED CONFLICT DETECTED: URL {feed['url']}")
-                    LOG.info(f"[{ticker}]   Trying to assign to: {ticker} (category: {feed_category})")
-                    LOG.info(f"[{ticker}]   Already assigned to: {existing_ticker} (category: {existing_category})")
-
-                    # Allow competitor/industry feeds to be shared, but prevent company feed contamination
-                    if feed_category == "company" or existing_category == "company":
-                        LOG.warning(f"[{ticker}] FEED CONTAMINATION PREVENTED: Company feed URL {feed['url']} already assigned to {existing_ticker}, skipping for {ticker}")
-                        continue
-                    else:
-                        LOG.info(f"[{ticker}] FEED SHARING ALLOWED: {feed_category} feed {feed['url']} shared between {existing_ticker} and {ticker}")
-
-                # Safe to insert/update for this ticker only
-                cur.execute("""
-                    INSERT INTO source_feed (url, name, ticker, retain_days, active, search_keyword, competitor_ticker)
-                    VALUES (%s, %s, %s, %s, TRUE, %s, %s)
-                    ON CONFLICT (url) DO UPDATE
-                    SET name = EXCLUDED.name,
-                        active = TRUE,
-                        search_keyword = EXCLUDED.search_keyword,
-                        competitor_ticker = EXCLUDED.competitor_ticker
-                    WHERE source_feed.ticker = EXCLUDED.ticker
-                    RETURNING id;
-                """, (
-                    feed["url"], feed["name"], ticker, retain_days,
-                    feed.get("search_keyword"), feed.get("competitor_ticker")
-                ))
-                result = cur.fetchone()
-                if result:
-                    feed_ids.append(result["id"])
-        
-        return feed_ids
 
 # Global instance
 feed_manager = FeedManager()
@@ -8619,56 +8573,22 @@ async def admin_migrate_feeds(request: Request):
         # Step 1.5: Fix foreign key constraint for found_url table
         fix_found_url_foreign_key()
 
-        # Step 2: Migrate data from source_feed to new architecture
+        # Step 2: New architecture is now the default - no migration needed
         with db() as conn, conn.cursor() as cur:
-            # Get all existing feeds
-            cur.execute("""
-                SELECT url, name, ticker, category, search_keyword, competitor_ticker, retain_days
-                FROM source_feed
-                WHERE active = TRUE
-                ORDER BY category, ticker
-            """)
-
-            old_feeds = cur.fetchall()
-            migrated_count = 0
-
-            LOG.info(f"🔄 Starting migration of {len(old_feeds)} feeds to new architecture")
-
-            for old_feed in old_feeds:
-                try:
-                    # Create/get feed in new architecture
-                    feed_id = upsert_feed_new_architecture(
-                        url=old_feed['url'],
-                        name=old_feed['name'],
-                        category=old_feed['category'],
-                        search_keyword=old_feed['search_keyword'],
-                        competitor_ticker=old_feed['competitor_ticker'],
-                        retain_days=old_feed['retain_days']
-                    )
-
-                    # Associate ticker with feed
-                    if associate_ticker_with_feed(old_feed['ticker'], feed_id):
-                        migrated_count += 1
-
-                except Exception as e:
-                    LOG.error(f"❌ Migration failed for feed {old_feed['name']}: {e}")
-
-            LOG.info(f"✅ Migration completed: {migrated_count}/{len(old_feeds)} feeds migrated")
-
-            # Step 3: Verify migration
+            # Verify new architecture exists
             cur.execute("SELECT COUNT(*) as feed_count FROM feeds")
             new_feed_count = cur.fetchone()['feed_count']
 
             cur.execute("SELECT COUNT(*) as association_count FROM ticker_feeds")
             association_count = cur.fetchone()['association_count']
 
+            LOG.info(f"✅ New architecture verified: {new_feed_count} feeds, {association_count} associations")
+
             return {
                 "status": "success",
-                "old_feeds": len(old_feeds),
-                "migrated": migrated_count,
-                "new_feeds": new_feed_count,
-                "associations": association_count,
-                "message": f"Successfully migrated to new feed architecture"
+                "message": "New feed architecture is active",
+                "feeds": new_feed_count,
+                "associations": association_count
             }
 
     except Exception as e:
@@ -9359,16 +9279,37 @@ async def clean_old_feeds(request: Request, body: CleanFeedsRequest):
             
             total_deleted = 0
             if body.tickers:
+                # NEW ARCHITECTURE: Remove ticker-feed associations for specific tickers
                 for pattern in cleanup_patterns:
+                    # First, remove ticker-feed associations for feeds matching the pattern
                     cur.execute("""
-                        DELETE FROM source_feed 
-                        WHERE name LIKE %s AND ticker = ANY(%s)
-                    """, (f"%{pattern}%", body.tickers))
+                        DELETE FROM ticker_feeds
+                        WHERE ticker = ANY(%s) AND feed_id IN (
+                            SELECT id FROM feeds WHERE name LIKE %s
+                        )
+                    """, (body.tickers, f"%{pattern}%"))
+                    total_deleted += cur.rowcount
+
+                    # Then, delete feeds that have no more associations
+                    cur.execute("""
+                        DELETE FROM feeds
+                        WHERE name LIKE %s AND id NOT IN (
+                            SELECT DISTINCT feed_id FROM ticker_feeds WHERE active = TRUE
+                        )
+                    """, (f"%{pattern}%",))
                     total_deleted += cur.rowcount
             else:
+                # NEW ARCHITECTURE: Delete all feeds matching patterns (and their associations)
                 for pattern in cleanup_patterns:
+                    # First remove all ticker-feed associations for these feeds
                     cur.execute("""
-                        DELETE FROM source_feed 
+                        DELETE FROM ticker_feeds
+                        WHERE feed_id IN (SELECT id FROM feeds WHERE name LIKE %s)
+                    """, (f"%{pattern}%",))
+
+                    # Then delete the feeds themselves
+                    cur.execute("""
+                        DELETE FROM feeds
                         WHERE name LIKE %s
                     """, (f"%{pattern}%",))
                     total_deleted += cur.rowcount
@@ -9403,8 +9344,8 @@ async def regenerate_metadata(request: Request, body: RegenerateMetadataRequest)
         LOG.info(f"Regenerating metadata for {body.ticker}")
         metadata = ticker_manager.get_or_create_metadata(body.ticker)
 
-        # Rebuild feeds
-        feeds = feed_manager.create_feeds_for_ticker_enhanced(body.ticker, metadata)
+        # Rebuild feeds using new architecture
+        feeds = build_feed_urls(body.ticker, metadata)
         for feed_config in feeds:
             upsert_feed(
                 url=feed_config["url"],
@@ -9506,8 +9447,10 @@ def wipe_database(request: Request):
         cur.execute("DELETE FROM found_url")
         deleted_stats["articles"] = cur.rowcount
         
-        # Delete all feeds
-        cur.execute("DELETE FROM source_feed")
+        # Delete all feeds (NEW ARCHITECTURE)
+        cur.execute("DELETE FROM ticker_feeds")
+        deleted_stats["ticker_feeds"] = cur.rowcount
+        cur.execute("DELETE FROM feeds")
         deleted_stats["feeds"] = cur.rowcount
         
         # Delete all ticker configurations (keywords, competitors, etc.)
@@ -9534,9 +9477,16 @@ def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
         cur.execute("DELETE FROM found_url WHERE ticker = %s", (ticker,))
         deleted_stats["articles"] = cur.rowcount
         
-        # Delete feeds for this ticker
-        cur.execute("DELETE FROM source_feed WHERE ticker = %s", (ticker,))
-        deleted_stats["feeds"] = cur.rowcount
+        # Delete feeds for this ticker (NEW ARCHITECTURE)
+        cur.execute("DELETE FROM ticker_feeds WHERE ticker = %s", (ticker,))
+        deleted_stats["ticker_feeds"] = cur.rowcount
+
+        # Delete orphaned feeds (feeds with no ticker associations)
+        cur.execute("""
+            DELETE FROM feeds
+            WHERE id NOT IN (SELECT DISTINCT feed_id FROM ticker_feeds WHERE active = TRUE)
+        """)
+        deleted_stats["orphaned_feeds"] = cur.rowcount
         
         # Delete ticker configuration
         cur.execute("DELETE FROM ticker_reference WHERE ticker = %s", (ticker,))
@@ -10637,7 +10587,7 @@ def cli_run(request: Request, body: CLIRequest):
         ensure_schema()
         for ticker in body.tickers:
             metadata = ticker_manager.get_or_create_metadata(ticker)
-            feeds = feed_manager.create_feeds_for_ticker_enhanced(ticker, metadata)
+            feeds = build_feed_urls(ticker, metadata)
             for feed_config in feeds:
                 upsert_feed(
                     url=feed_config["url"],

@@ -9435,13 +9435,21 @@ async def clean_old_feeds(request: Request, body: CleanFeedsRequest):
         require_admin(request)
         
         with db() as conn, conn.cursor() as cur:
+            # Check if tables exist first (safe for fresh database)
+            try:
+                cur.execute("SELECT 1 FROM ticker_feeds LIMIT 1")
+                cur.execute("SELECT 1 FROM feeds LIMIT 1")
+            except Exception as e:
+                LOG.info(f"📋 Tables don't exist yet (fresh database) - clean-feeds skipped: {e}")
+                return {"status": "skipped", "message": "Tables don't exist yet - nothing to clean", "deleted": 0}
+
             # Delete feeds that contain Reddit, Twitter, SEC, StockTwits
             cleanup_patterns = [
-                "Reddit", "Twitter", "SEC EDGAR", "StockTwits", 
-                "r/investing", "r/stocks", "r/SecurityAnalysis", 
+                "Reddit", "Twitter", "SEC EDGAR", "StockTwits",
+                "r/investing", "r/stocks", "r/SecurityAnalysis",
                 "r/ValueInvesting", "r/energy", "@TalenEnergy"
             ]
-            
+
             total_deleted = 0
             if body.tickers:
                 # NEW ARCHITECTURE: Remove ticker-feed associations for specific tickers

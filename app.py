@@ -8595,11 +8595,14 @@ async def admin_migrate_feeds(request: Request):
     import sys
     import os
     sys.path.append(os.path.dirname(__file__))
-    from new_feed_architecture import ensure_new_feed_architecture, upsert_feed_new_architecture, associate_ticker_with_feed
+    from new_feed_architecture import ensure_new_feed_architecture, upsert_feed_new_architecture, associate_ticker_with_feed, fix_found_url_foreign_key
 
     try:
         # Step 1: Create new tables
         ensure_new_feed_architecture()
+
+        # Step 1.5: Fix foreign key constraint for found_url table
+        fix_found_url_foreign_key()
 
         # Step 2: Migrate data from source_feed to new architecture
         with db() as conn, conn.cursor() as cur:

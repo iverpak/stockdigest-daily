@@ -44,6 +44,26 @@ def ensure_new_feed_architecture():
 
         LOG.info("✅ New feed architecture (feeds + ticker_feeds) created successfully")
 
+def fix_found_url_foreign_key():
+    """Fix the found_url table foreign key to point to feeds instead of source_feed"""
+    from app import db, LOG
+
+    with db() as conn, conn.cursor() as cur:
+        # Drop the old foreign key constraint if it exists
+        cur.execute("""
+            ALTER TABLE found_url
+            DROP CONSTRAINT IF EXISTS found_url_feed_id_fkey;
+        """)
+
+        # Add new foreign key constraint pointing to feeds table
+        cur.execute("""
+            ALTER TABLE found_url
+            ADD CONSTRAINT found_url_feed_id_fkey
+            FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE SET NULL;
+        """)
+
+        LOG.info("✅ Fixed found_url foreign key constraint to point to feeds table")
+
 def upsert_feed_new_architecture(url: str, name: str, category: str = "company",
                                 search_keyword: str = None, competitor_ticker: str = None,
                                 retain_days: int = 90) -> int:

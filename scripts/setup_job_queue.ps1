@@ -79,8 +79,13 @@ try {
     $batch = Invoke-RestMethod -Method Post "$APP/jobs/submit" -Headers $headers -Body $submitBody
 
     $batch_id = $batch.batch_id
+
+    # Save batch_id for easy cancellation
+    $batch_id | Out-File "$PSScriptRoot\..\last_batch_id.txt" -Encoding UTF8
+
     Write-Host "  ✅ Batch submitted: $batch_id" -ForegroundColor Green
     Write-Host "  Processing $($batch.total_jobs) tickers server-side..." -ForegroundColor Yellow
+    Write-Host "  💡 To cancel: .\scripts\cancel_all_jobs.ps1" -ForegroundColor Gray
 
 } catch {
     Write-Host "  🚨 JOB SUBMISSION FAILED: $($_.Exception.Message)" -ForegroundColor Red

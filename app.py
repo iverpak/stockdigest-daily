@@ -686,7 +686,7 @@ def ensure_schema():
                 # TEST: Try to list existing tables
                 try:
                     cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-                    tables = [row[0] for row in cur.fetchall()]
+                    tables = [row['tablename'] for row in cur.fetchall()]
                     LOG.info(f"✅ Found {len(tables)} existing tables: {tables}")
                 except Exception as e:
                     LOG.error(f"❌ Table listing failed: {e}")
@@ -703,7 +703,7 @@ def ensure_schema():
                     category_columns = cur.fetchall()
                     LOG.info(f"📊 Found {len(category_columns)} tables with 'category' columns:")
                     for row in category_columns:
-                        LOG.info(f"   {row[0]}.{row[1]}")
+                        LOG.info(f"   {row['table_name']}.{row['column_name']}")
                 except Exception as e:
                     LOG.error(f"❌ Category column check failed: {e}")
                     raise e

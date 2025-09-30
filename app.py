@@ -10823,6 +10823,41 @@ def get_ticker_metadata(request: Request, ticker: str):
     
     return {"ticker": ticker, "message": "No metadata found. Use /admin/init to generate."}
 
+@APP.get("/admin/domain-names")
+def get_domain_names(request: Request, limit: int = 1000, offset: int = 0):
+    """Export domain names database (domain → formal name mappings)"""
+    require_admin(request)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT domain, formal_name, ai_generated, created_at, updated_at
+                FROM domain_names
+                ORDER BY domain
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
+
+            domains = cur.fetchall()
+
+            # Get total count
+            cur.execute("SELECT COUNT(*) as total FROM domain_names")
+            total = cur.fetchone()['total']
+
+            return {
+                "status": "success",
+                "total": total,
+                "returned": len(domains),
+                "limit": limit,
+                "offset": offset,
+                "domains": [dict(d) for d in domains]
+            }
+    except Exception as e:
+        LOG.error(f"Failed to fetch domain names: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 @APP.post("/admin/regenerate-metadata")
 async def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
     """Force regeneration of AI metadata for a ticker"""

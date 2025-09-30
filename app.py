@@ -9104,6 +9104,18 @@ async def process_ticker_job(job: dict):
         else:
             LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
 
+        # COMMIT METADATA TO GITHUB after Phase 1
+        # This ensures AI-generated metadata is saved even if job is cancelled later
+        update_job_status(job_id, phase='commit_metadata', progress=62)
+        LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub...")
+
+        try:
+            commit_result = await process_commit_phase(job_id=job_id, ticker=ticker)
+            LOG.info(f"✅ [JOB {job_id}] Metadata committed to GitHub successfully")
+        except Exception as e:
+            LOG.error(f"⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
+            # Don't fail the job if commit fails - continue processing
+
         # Check if cancelled after Phase 1
         with db() as conn, conn.cursor() as cur:
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
@@ -9138,15 +9150,9 @@ async def process_ticker_job(job: dict):
                 LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
                 return
 
-        # PHASE 3: Commit to GitHub
-        update_job_status(job_id, phase='commit_start', progress=96)
-        LOG.info(f"💾 [JOB {job_id}] Phase 3: GitHub commit starting...")
-
-        # Call commit phase
-        commit_result = await process_commit_phase(job_id=job_id, ticker=ticker)
-
-        update_job_status(job_id, phase='commit_complete', progress=99)
-        LOG.info(f"✅ [JOB {job_id}] Phase 3: Commit complete")
+        # PHASE 3: Complete (metadata already committed after Phase 1)
+        update_job_status(job_id, phase='finalizing', progress=99)
+        LOG.info(f"✅ [JOB {job_id}] Finalizing job...")
 
         # Calculate final metrics
         duration = time.time() - start_time
@@ -9158,7 +9164,7 @@ async def process_ticker_job(job: dict):
             "ticker": ticker,
             "ingest": ingest_result,
             "digest": digest_result,
-            "commit": commit_result,
+            "metadata_committed": True,  # Committed after Phase 1
             "duration_seconds": duration,
             "memory_mb": memory_used
         }

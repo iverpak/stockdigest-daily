@@ -8904,18 +8904,19 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
         raise
 
 async def process_digest_phase(job_id: str, ticker: str, minutes: int):
-    """Wrapper for digest logic with error handling"""
+    """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary"""
     try:
-        # Call the actual digest function
+        # CRITICAL: fetch_digest_articles_with_enhanced_content sends the Stock Intelligence Email
+        # which includes the executive summary via generate_ai_final_summaries()
         fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')
         if not fetch_digest_func:
             raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
 
-        LOG.info(f"[JOB {job_id}] Calling fetch_digest for {ticker}...")
+        LOG.info(f"[JOB {job_id}] Calling fetch_digest (will send Stock Intelligence Email) for {ticker}...")
 
         result = fetch_digest_func(minutes / 60, [ticker])
 
-        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker}")
+        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Email sent: {result.get('status') == 'sent'}")
         return result
 
     except Exception as e:
@@ -8926,16 +8927,15 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int):
 async def process_commit_phase(job_id: str, ticker: str):
     """Wrapper for commit logic with error handling"""
     try:
-        # Call the actual GitHub commit function
-        commit_func = globals().get('admin_safe_incremental_commit')
+        # Call the actual GitHub commit function (it's named safe_incremental_commit, not admin_safe_incremental_commit)
+        commit_func = globals().get('safe_incremental_commit')
         if not commit_func:
-            raise RuntimeError("admin_safe_incremental_commit not yet defined")
+            raise RuntimeError("safe_incremental_commit not yet defined")
 
         class MockRequest:
             def __init__(self):
                 self.headers = {"x-admin-token": ADMIN_TOKEN}
 
-        from pydantic import BaseModel
         class CommitBody(BaseModel):
             tickers: List[str]
 

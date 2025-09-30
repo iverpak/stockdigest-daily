@@ -80,8 +80,13 @@ try {
 
     $batch_id = $batch.batch_id
 
-    # Save batch_id for easy cancellation
-    $batch_id | Out-File "$PSScriptRoot\..\last_batch_id.txt" -Encoding UTF8
+    # Save batch_id for easy cancellation (try to write, but don't fail if permission denied)
+    try {
+        $batch_id | Out-File "$PSScriptRoot\..\last_batch_id.txt" -Encoding UTF8 -ErrorAction Stop
+        Write-Host "  💾 Batch ID saved to last_batch_id.txt" -ForegroundColor Gray
+    } catch {
+        Write-Host "  ⚠️ Could not save batch_id.txt (permission issue)" -ForegroundColor Yellow
+    }
 
     Write-Host "  ✅ Batch submitted: $batch_id" -ForegroundColor Green
     Write-Host "  Processing $($batch.total_jobs) tickers server-side..." -ForegroundColor Yellow

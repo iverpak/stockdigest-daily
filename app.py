@@ -8681,7 +8681,7 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
                 try:
                     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                     
-                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
+                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
 
 ANALYSIS FRAMEWORK:
 1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
@@ -8863,7 +8863,7 @@ def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List
                         "content-type": "application/json"
                     }
 
-                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
+                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
 
 ANALYSIS FRAMEWORK:
 1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
@@ -9018,7 +9018,7 @@ def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict
             try:
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
                 
-                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact.
+                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
 
 ANALYSIS FRAMEWORK:
 1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
@@ -9174,7 +9174,7 @@ def generate_claude_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[
                     "content-type": "application/json"
                 }
 
-                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact.
+                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
 
 ANALYSIS FRAMEWORK:
 1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.

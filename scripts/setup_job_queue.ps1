@@ -183,10 +183,17 @@ try {
     Write-Host "  Total: $($finalStatus.total_tickers) tickers" -ForegroundColor White
     Write-Host "  Completed: $($finalStatus.completed)" -ForegroundColor Green
     Write-Host "  Failed: $($finalStatus.failed)" -ForegroundColor $(if ($finalStatus.failed -gt 0) { "Red" } else { "Gray" })
+    Write-Host "  Processing: $($finalStatus.processing)" -ForegroundColor Yellow
+    Write-Host "  Queued: $($finalStatus.queued)" -ForegroundColor Gray
     Write-Host "  Success Rate: $([math]::Round($finalStatus.completed / $finalStatus.total_tickers * 100, 1))%" -ForegroundColor Cyan
+
+    # Check if batch is actually complete
+    $stillRunning = $finalStatus.processing + $finalStatus.queued
+    $allComplete = ($stillRunning -eq 0)
 
 } catch {
     Write-Host "  ⚠️ Could not fetch final results: $($_.Exception.Message)" -ForegroundColor Yellow
+    $allComplete = $false
 }
 
 # ===== STEP 5: JOB QUEUE STATS =====
@@ -210,9 +217,17 @@ try {
     Write-Host "  ⚠️ Could not fetch stats" -ForegroundColor Yellow
 }
 
-Write-Host "`n=== PROCESSING COMPLETE ===" -ForegroundColor Green
-Write-Host "✅ All operations complete using server-side job queue!" -ForegroundColor Green
-Write-Host "   No more 520 errors - processing is fully decoupled from HTTP!" -ForegroundColor Cyan
+# Display accurate completion status
+if ($allComplete) {
+    Write-Host "`n=== PROCESSING COMPLETE ===" -ForegroundColor Green
+    Write-Host "✅ All operations complete using server-side job queue!" -ForegroundColor Green
+    Write-Host "   No more 520 errors - processing is fully decoupled from HTTP!" -ForegroundColor Cyan
+} else {
+    Write-Host "`n=== MONITORING STOPPED (JOBS STILL RUNNING) ===" -ForegroundColor Yellow
+    Write-Host "⚠️ Some jobs are still processing server-side" -ForegroundColor Yellow
+    Write-Host "   Check status at: $APP/jobs/batch/$batch_id" -ForegroundColor Cyan
+    Write-Host "   Processing continues in background - no action needed!" -ForegroundColor Gray
+}
 
 # Pause to read results
 Write-Host "`n🔍 Press any key to close..." -ForegroundColor White

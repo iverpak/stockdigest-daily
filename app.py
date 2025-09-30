@@ -356,7 +356,7 @@ PROBLEMATIC_SCRAPE_DOMAINS = {
     # finance & article sites w/ bot protection or heavy JS
     "defenseworld.net", "defense-world.net", "defensenews.com",
     # Sites to avoid scraping (not spam, just problematic)
-    "zacks.com", "insidermonkey.com", "fool.com",
+    "zacks.com", "insidermonkey.com", "fool.com", "fool.ca",
     # Never flag for scraping (low-quality/problematic content)
     "gurufocus.com", "stocktitan.net",
 }
@@ -6614,13 +6614,18 @@ async def merge_triage_scores(
                 url_scores[url]["claude"] = 4 - priority
                 url_scores[url]["why_claude"] = result.get("why", "")
 
+    # Track stats for logging
+    total_unique_before_filter = len(url_scores)
+
     # Filter out problematic domains BEFORE ranking
     filtered_scores = {}
+    blocked_count = 0
     for url, data in url_scores.items():
         article = data["article"]
         domain = article.get("domain", "")
         if domain in PROBLEMATIC_SCRAPE_DOMAINS:
-            LOG.info(f"Blocked {domain} from triage selection (problematic domain)")
+            blocked_count += 1
+            LOG.debug(f"Blocked {domain} from triage selection (problematic domain)")
             continue
         filtered_scores[url] = data
 
@@ -6649,7 +6654,11 @@ async def merge_triage_scores(
     # Take top N
     top_articles = scored_articles[:target_cap]
 
-    LOG.info(f"  Dual scoring {category_type}/{category_key}: {len(openai_results)} OpenAI + {len(claude_results)} Claude = {len(scored_articles)} unique → top {len(top_articles)}")
+    # Enhanced logging with domain filter transparency
+    if blocked_count > 0:
+        LOG.info(f"  Dual scoring {category_type}/{category_key}: {len(openai_results)} OpenAI + {len(claude_results)} Claude = {total_unique_before_filter} unique ({blocked_count} blocked by domain filter) → {len(scored_articles)} remaining → top {len(top_articles)}")
+    else:
+        LOG.info(f"  Dual scoring {category_type}/{category_key}: {len(openai_results)} OpenAI + {len(claude_results)} Claude = {len(scored_articles)} unique → top {len(top_articles)}")
 
     # Return in format expected by downstream code
     result = []
@@ -9279,10 +9288,9 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             "</style></head><body>",
             f"<h1>🚀 Quick Intelligence Report: {ticker_list} - Triage Complete</h1>",
             f"<div class='summary'>",
-            f"<strong>Generated:</strong> {current_time_est}<br>",
-            f"<strong>🎯 Status:</strong> Articles ingested and triaged, AI analysis and scraping in progress...<br>",
-            f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>",
-            f"<strong>🤖 Selection Process:</strong> AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill",
+            f"<strong>📅 Report Period:</strong> Last 24 hours<br>",
+            f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
+            f"<strong>📊 Tickers Covered:</strong> {ticker_list}",
             "</div>"
         ]
         
@@ -9305,7 +9313,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             total_selected += ticker_selected
             
             html.append(f"<div class='ticker-section'>")
-            html.append(f"<h2>📈 {ticker} ({full_company_name}) - {ticker_count} Total Articles</h2>")
+            html.append(f"<h2>🎯 Target Company: {full_company_name} ({ticker})</h2>")
 
             # Display industry keywords and competitors
             industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
@@ -9314,12 +9322,12 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             if industry_keywords or competitors:
                 html.append("<p style='margin: 10px 0; color: #555;'>")
                 if industry_keywords:
-                    html.append(f"<strong>🔍 Industry Keywords:</strong> {', '.join(industry_keywords)}")
+                    html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(industry_keywords)}")
                 if competitors:
                     if industry_keywords:
-                        html.append(" | ")
+                        html.append("<br>")
                     competitor_display = [f"{name} ({ticker})" if ticker else name for name, ticker in competitors]
-                    html.append(f"<strong>🏢 Competitors:</strong> {', '.join(competitor_display)}")
+                    html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(competitor_display)}")
                 html.append("</p>")
 
             # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
@@ -9425,8 +9433,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if enhanced_article["is_quality_domain"]:
                         header_badges.append('<span class="quality-badge">⭐ Quality</span>')
                     
-                    # 4. Flagged badge if selected
-                    if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
+                    # 4. Flagged badge ONLY if dual AI selected it
+                    if enhanced_article["is_ai_selected"]:
                         header_badges.append('<span class="flagged-badge">🚩 Flagged</span>')
                     
                     # 5. OpenAI Score - 0-3 scoring
@@ -9601,9 +9609,8 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         f"<h1>📊 Stock Intelligence Report: {ticker_list}</h1>",
         f"<div class='summary'>",
         f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
-        f"<strong>Generated:</strong> {current_time_est}<br>",
-        f"<strong>🎯 Tickers Covered:</strong> {ticker_list}<br>",
-        f"<strong>🤖 AI Features:</strong> Enhanced Content Analysis + Hedge Fund Summaries + Company Intelligence Synthesis",
+        f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
+        f"<strong>📊 Tickers Covered:</strong> {ticker_list}",
         "</div>"
     ]
         
@@ -9615,7 +9622,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         company_name = config.get("name", ticker) if config else ticker
         
         html.append(f"<div class='ticker-section'>")
-        html.append(f"<h2>📈 {ticker} ({company_name}) - {total_articles} Total Articles</h2>")
+        html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
         # Display industry keywords and competitors
         industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
@@ -9624,12 +9631,12 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         if industry_keywords or competitors:
             html.append("<p style='margin: 10px 0; color: #555;'>")
             if industry_keywords:
-                html.append(f"<strong>🔍 Industry Keywords:</strong> {', '.join(industry_keywords)}")
+                html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(industry_keywords)}")
             if competitors:
                 if industry_keywords:
-                    html.append(" | ")
+                    html.append("<br>")
                 competitor_display = [f"{name} ({ticker})" if ticker else name for name, ticker in competitors]
-                html.append(f"<strong>🏢 Competitors:</strong> {', '.join(competitor_display)}")
+                html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(competitor_display)}")
             html.append("</p>")
 
         # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
@@ -11397,7 +11404,7 @@ async def cron_ingest(
             # Now get ALL articles from the timeframe for ticker-specific analysis
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
             articles_by_ticker = {}
-            
+
             with resource_cleanup_context("database_connection"):
                 with db() as conn, conn.cursor() as cur:
                     if tickers:
@@ -11407,9 +11414,11 @@ async def cron_ingest(
                                    a.scraped_content, a.ai_summary, a.url_hash
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
-                            WHERE ta.found_at >= %s AND ta.ticker = ANY(%s)
+                            WHERE ta.found_at >= %s
+                            AND ta.ticker = ANY(%s)
+                            AND (a.published_at >= %s OR a.published_at IS NULL)
                             ORDER BY ta.ticker, ta.category, ta.found_at DESC
-                        """, (cutoff, tickers))
+                        """, (cutoff, tickers, cutoff))
                     else:
                         cur.execute("""
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
@@ -11418,8 +11427,9 @@ async def cron_ingest(
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
                             WHERE ta.found_at >= %s
+                            AND (a.published_at >= %s OR a.published_at IS NULL)
                             ORDER BY ta.ticker, ta.category, ta.found_at DESC
-                        """, (cutoff,))
+                        """, (cutoff, cutoff))
                     
                     all_articles = list(cur.fetchall())
             

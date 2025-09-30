@@ -8756,6 +8756,180 @@ Provide a strategic investment thesis integrating company developments, industry
     LOG.info(f"🎯 EXECUTIVE SUMMARY: Completed - generated summaries for {len(summaries)} tickers")
     return summaries
 
+def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
+    """Generate Claude final summaries from AI-analyzed content (parallel to OpenAI final summaries)"""
+    if not ANTHROPIC_API_KEY:
+        LOG.warning("⚠️ EXECUTIVE SUMMARY (Claude): Anthropic API key not configured - skipping")
+        return {}
+
+    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude): Starting generation for {len(articles_by_ticker)} tickers")
+    summaries = {}
+
+    for ticker, categories in articles_by_ticker.items():
+        company_articles = categories.get("company", [])
+        competitor_articles = categories.get("competitor", [])
+        industry_articles = categories.get("industry", [])
+
+        LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(company_articles)} company, {len(industry_articles)} industry, {len(competitor_articles)} competitor articles")
+
+        if not company_articles and not industry_articles:
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (Claude) [{ticker}]: Skipping - no company or industry articles")
+            continue
+
+        config = get_ticker_config(ticker)
+        company_name = config.get("name", ticker) if config else ticker
+
+        # Get sector information
+        sector = config.get("sector", "") if config else ""
+        industry = config.get("industry", "") if config else ""
+        financial_context = f"{company_name} operates in {sector}" if sector else f"{company_name}"
+        if industry:
+            financial_context += f" within the {industry} industry"
+
+        # Get industry keywords
+        industry_keywords = config.get("industry_keywords", []) if config else []
+
+        # Company articles with AI summaries
+        articles_with_ai_summary = [
+            article for article in company_articles
+            if article.get("ai_summary")
+        ]
+
+        # Industry articles with AI summaries
+        industry_articles_with_ai_summary = [
+            article for article in industry_articles
+            if article.get("ai_summary")
+        ]
+
+        # Competitor articles with AI summaries
+        competitor_articles_with_ai_summary = [
+            article for article in competitor_articles
+            if article.get("ai_summary")
+        ]
+
+        LOG.info(f"📊 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(articles_with_ai_summary)} company articles with AI summaries")
+        LOG.info(f"📊 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(industry_articles_with_ai_summary)} industry articles with AI summaries")
+        LOG.info(f"📊 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(competitor_articles_with_ai_summary)} competitor articles with AI summaries")
+
+        ai_analysis_summary = ""
+
+        if articles_with_ai_summary or industry_articles_with_ai_summary:
+            LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Proceeding with summary generation")
+
+            # Company AI summaries with sources
+            content_summaries = []
+            for article in articles_with_ai_summary[:20]:
+                title = article.get("title", "")
+                ai_summary = article.get("ai_summary", "")
+                domain = article.get("domain", "")
+
+                if ai_summary:
+                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+
+            # Industry AI summaries with keyword context
+            industry_content_summaries = []
+            for article in industry_articles_with_ai_summary[:15]:
+                title = article.get("title", "")
+                ai_summary = article.get("ai_summary", "")
+                domain = article.get("domain", "")
+                keyword = article.get("search_keyword", "Industry")
+
+                if ai_summary:
+                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}]: {ai_summary}")
+
+            # Competitor AI summaries
+            competitor_content_summaries = []
+            for article in competitor_articles_with_ai_summary[:15]:
+                title = article.get("title", "")
+                ai_summary = article.get("ai_summary", "")
+                domain = article.get("domain", "")
+
+                if ai_summary:
+                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    competitor_content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+
+            if content_summaries or industry_content_summaries:
+                LOG.info(f"📝 EXECUTIVE SUMMARY (Claude) [{ticker}]: Generating from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
+                ai_text = "\n".join(content_summaries)
+                industry_analysis = ""
+                if industry_content_summaries:
+                    industry_analysis = "\n\nINDUSTRY & SECTOR ANALYSIS:\n" + "\n".join(industry_content_summaries)
+                competitor_analysis = ""
+                if competitor_content_summaries:
+                    competitor_analysis = "\n\nCOMPETITOR ANALYSIS:\n" + "\n".join(competitor_content_summaries)
+
+                try:
+                    headers = {
+                        "x-api-key": ANTHROPIC_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json"
+                    }
+
+                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment.
+
+ANALYSIS FRAMEWORK:
+1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
+2. INDUSTRY/SECTOR DYNAMICS: Policy, regulatory, supply chain, or market developments affecting the sector and {company_name}'s position, if present.
+3. COMPETITIVE DYNAMICS: Competitor actions impacting {company_name}'s market position, if present.
+4. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts, if present.
+5. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships, if present.
+
+CRITICAL REQUIREMENTS:
+- Include SPECIFIC DATES: earnings dates, regulatory deadlines, investor days, conference dates, completion timelines, if present
+- Report figures (%/$/units) exactly if present; no estimates/price math unless both numbers are in-text
+- Synthesize quantitative metrics when available
+- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
+- ANALYST ACTIONS: Include firm names and price targets as mentioned in content
+- INDUSTRY IMPACT: Assess how sector developments affect {company_name}'s business model and profitability
+- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
+- Include specific numbers when available and cite sources using formal domain names in parentheses, e.g., (Business Wire).
+- Assess competitor moves that could affect {company_name}'s performance
+- Keep to 7-8 sentences maximum
+
+FINANCIAL CONTEXT: {financial_context}
+INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'N/A'}
+
+TARGET: {company_name} ({ticker})
+
+COMPANY ARTICLE CONTENT ANALYSIS (sources in brackets):
+{ai_text}{industry_analysis}{competitor_analysis}
+
+Provide a strategic investment thesis integrating company developments, industry dynamics, and competitive positioning with specific dates, materiality context, and analyst price targets."""
+
+                    data = {
+                        "model": ANTHROPIC_MODEL,
+                        "max_tokens": 2048,
+                        "messages": [{"role": "user", "content": prompt}]
+                    }
+
+                    response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        ai_analysis_summary = result.get("content", [{}])[0].get("text", "")
+                        LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
+                    else:
+                        LOG.warning(f"Claude final summary failed: {response.status_code}")
+
+                except Exception as e:
+                    LOG.warning(f"Failed to generate Claude final summary for {ticker}: {e}")
+
+        if ai_analysis_summary:
+            LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
+        else:
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (Claude) [{ticker}]: No summary generated (no AI summaries or all articles skipped)")
+
+        summaries[ticker] = {
+            "ai_analysis_summary": ai_analysis_summary,
+            "company_name": company_name,
+            "industry_articles_analyzed": len(industry_articles_with_ai_summary)
+        }
+
+    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude): Completed - generated summaries for {len(summaries)} tickers")
+    return summaries
+
 def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
     """Generate AI summaries from company + industry article titles with enhanced financial focus"""
     if not OPENAI_API_KEY:
@@ -9364,9 +9538,9 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
 def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
     """Enhanced digest with metadata display removed but keeping all badges/emojis"""
 
-    # Generate summaries from both OpenAI and Claude
+    # Generate summaries from both OpenAI and Claude (both use AI-analyzed content)
     openai_summaries = generate_ai_final_summaries(articles_by_ticker)
-    claude_summaries = generate_claude_titles_summary(articles_by_ticker)
+    claude_summaries = generate_claude_final_summaries(articles_by_ticker)
     
     ticker_list = ', '.join(articles_by_ticker.keys())
     current_time_est = format_timestamp_est(datetime.now(timezone.utc))
@@ -9437,7 +9611,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
 
         # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
         openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
-        claude_summary = claude_summaries.get(ticker, {}).get("titles_summary", "")
+        claude_summary = claude_summaries.get(ticker, {}).get("ai_analysis_summary", "")
 
         if openai_summary and claude_summary:
             html.append("<div class='company-summary'>")

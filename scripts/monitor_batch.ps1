@@ -204,7 +204,8 @@ try {
 
             foreach ($batch in $activeBatches.batches) {
                 $batchIdShort = $batch.batch_id.Substring(0, 8)
-                Write-Host "`nBatch $batchIdShort:" -ForegroundColor Cyan
+                Write-Host ""
+                Write-Host "Batch ${batchIdShort}:" -ForegroundColor Cyan
 
                 foreach ($job in $batch.jobs) {
                     $statusSymbol = switch ($job.status) {

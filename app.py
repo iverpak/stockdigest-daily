@@ -9656,35 +9656,57 @@ async def get_active_batches(request: Request):
     """Get all active batches with their job details"""
     require_admin(request)
 
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT
-                b.batch_id,
-                b.status as batch_status,
-                b.created_at,
-                COUNT(j.job_id) as total_jobs,
-                COUNT(CASE WHEN j.status IN ('queued', 'processing') THEN 1 END) as active_jobs,
-                json_agg(
-                    json_build_object(
-                        'job_id', j.job_id,
-                        'ticker', j.ticker,
-                        'status', j.status,
-                        'phase', j.phase
-                    ) ORDER BY j.created_at
-                ) as jobs
-            FROM ticker_processing_batches b
-            JOIN ticker_processing_jobs j ON b.batch_id = j.batch_id
-            WHERE b.created_at > NOW() - INTERVAL '24 hours'
-            GROUP BY b.batch_id, b.status, b.created_at
-            HAVING COUNT(CASE WHEN j.status IN ('queued', 'processing') THEN 1 END) > 0
-            ORDER BY b.created_at DESC
-        """)
-        batches = cur.fetchall()
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # First get batches with active jobs
+            cur.execute("""
+                SELECT
+                    b.batch_id,
+                    b.status as batch_status,
+                    b.created_at,
+                    b.total_jobs,
+                    b.completed_jobs,
+                    b.failed_jobs
+                FROM ticker_processing_batches b
+                WHERE b.created_at > NOW() - INTERVAL '24 hours'
+                  AND EXISTS (
+                      SELECT 1 FROM ticker_processing_jobs j
+                      WHERE j.batch_id = b.batch_id
+                        AND j.status IN ('queued', 'processing')
+                  )
+                ORDER BY b.created_at DESC
+            """)
+            batches = cur.fetchall()
 
-        return {
-            "active_batches": len(batches),
-            "batches": [dict(batch) for batch in batches]
-        }
+            result = []
+            for batch in batches:
+                # Get jobs for this batch
+                cur.execute("""
+                    SELECT job_id, ticker, status, phase, progress
+                    FROM ticker_processing_jobs
+                    WHERE batch_id = %s
+                    ORDER BY created_at
+                """, (batch['batch_id'],))
+                jobs = cur.fetchall()
+
+                result.append({
+                    "batch_id": batch['batch_id'],
+                    "batch_status": batch['batch_status'],
+                    "created_at": batch['created_at'].isoformat() if batch['created_at'] else None,
+                    "total_jobs": batch['total_jobs'],
+                    "completed_jobs": batch['completed_jobs'],
+                    "failed_jobs": batch['failed_jobs'],
+                    "jobs": [dict(job) for job in jobs]
+                })
+
+            return {
+                "active_batches": len(result),
+                "batches": result
+            }
+    except Exception as e:
+        LOG.error(f"Error in /jobs/active-batches: {e}")
+        LOG.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 @APP.post("/jobs/{job_id}/cancel")
 async def cancel_job(request: Request, job_id: str):

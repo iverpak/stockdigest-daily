@@ -9620,43 +9620,6 @@ async def get_batch_status(request: Request, batch_id: str):
         } for j in jobs]
     }
 
-@APP.get("/jobs/{job_id}")
-async def get_job_detail(request: Request, job_id: str):
-    """Get detailed status of a single job"""
-    require_admin(request)
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT j.*, b.batch_id
-            FROM ticker_processing_jobs j
-            JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
-            WHERE j.job_id = %s
-        """, (job_id,))
-
-        job = cur.fetchone()
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        return {
-            "job_id": str(job['job_id']),
-            "batch_id": str(job['batch_id']),
-            "ticker": job['ticker'],
-            "status": job['status'],
-            "phase": job['phase'],
-            "progress": job['progress'],
-            "result": job['result'],
-            "error_message": job['error_message'],
-            "error_stacktrace": job['error_stacktrace'],
-            "retry_count": job['retry_count'],
-            "worker_id": job['worker_id'],
-            "memory_mb": job['memory_mb'],
-            "duration_seconds": job['duration_seconds'],
-            "created_at": job['created_at'].isoformat() if job['created_at'] else None,
-            "started_at": job['started_at'].isoformat() if job['started_at'] else None,
-            "completed_at": job['completed_at'].isoformat() if job['completed_at'] else None,
-            "config": job['config']
-        }
-
 @APP.get("/jobs/active-batches")
 async def get_active_batches(request: Request):
     """Get all active batches with their job details"""
@@ -9696,13 +9659,13 @@ async def get_active_batches(request: Request):
                 jobs = cur.fetchall()
 
                 result.append({
-                    "batch_id": batch['batch_id'],
+                    "batch_id": str(batch['batch_id']),
                     "batch_status": batch['batch_status'],
                     "created_at": batch['created_at'].isoformat() if batch['created_at'] else None,
                     "total_jobs": batch['total_jobs'],
                     "completed_jobs": batch['completed_jobs'],
                     "failed_jobs": batch['failed_jobs'],
-                    "jobs": [dict(job) for job in jobs]
+                    "jobs": [{"job_id": str(j['job_id']), "ticker": j['ticker'], "status": j['status'], "phase": j['phase'], "progress": j['progress']} for j in jobs]
                 })
 
             return {
@@ -9713,6 +9676,43 @@ async def get_active_batches(request: Request):
         LOG.error(f"Error in /jobs/active-batches: {e}")
         LOG.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+@APP.get("/jobs/{job_id}")
+async def get_job_detail(request: Request, job_id: str):
+    """Get detailed status of a single job"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT j.*, b.batch_id
+            FROM ticker_processing_jobs j
+            JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
+            WHERE j.job_id = %s
+        """, (job_id,))
+
+        job = cur.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        return {
+            "job_id": str(job['job_id']),
+            "batch_id": str(job['batch_id']),
+            "ticker": job['ticker'],
+            "status": job['status'],
+            "phase": job['phase'],
+            "progress": job['progress'],
+            "result": job['result'],
+            "error_message": job['error_message'],
+            "error_stacktrace": job['error_stacktrace'],
+            "retry_count": job['retry_count'],
+            "worker_id": job['worker_id'],
+            "memory_mb": job['memory_mb'],
+            "duration_seconds": job['duration_seconds'],
+            "created_at": job['created_at'].isoformat() if job['created_at'] else None,
+            "started_at": job['started_at'].isoformat() if job['started_at'] else None,
+            "completed_at": job['completed_at'].isoformat() if job['completed_at'] else None,
+            "config": job['config']
+        }
 
 @APP.post("/jobs/{job_id}/cancel")
 async def cancel_job(request: Request, job_id: str):

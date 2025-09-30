@@ -9651,6 +9651,41 @@ async def get_job_detail(request: Request, job_id: str):
             "config": job['config']
         }
 
+@APP.get("/jobs/active-batches")
+async def get_active_batches(request: Request):
+    """Get all active batches with their job details"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                b.batch_id,
+                b.status as batch_status,
+                b.created_at,
+                COUNT(j.job_id) as total_jobs,
+                COUNT(CASE WHEN j.status IN ('queued', 'processing') THEN 1 END) as active_jobs,
+                json_agg(
+                    json_build_object(
+                        'job_id', j.job_id,
+                        'ticker', j.ticker,
+                        'status', j.status,
+                        'phase', j.phase
+                    ) ORDER BY j.created_at
+                ) as jobs
+            FROM ticker_processing_batches b
+            JOIN ticker_processing_jobs j ON b.batch_id = j.batch_id
+            WHERE b.created_at > NOW() - INTERVAL '24 hours'
+            GROUP BY b.batch_id, b.status, b.created_at
+            HAVING COUNT(CASE WHEN j.status IN ('queued', 'processing') THEN 1 END) > 0
+            ORDER BY b.created_at DESC
+        """)
+        batches = cur.fetchall()
+
+        return {
+            "active_batches": len(batches),
+            "batches": [dict(batch) for batch in batches]
+        }
+
 @APP.post("/jobs/{job_id}/cancel")
 async def cancel_job(request: Request, job_id: str):
     """Cancel a specific job"""

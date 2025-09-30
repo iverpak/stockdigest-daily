@@ -2216,13 +2216,48 @@ def commit_csv_to_github(csv_content: str, commit_message: str = None):
         
         # Commit the file
         LOG.info(f"Committing CSV to GitHub: {len(csv_content)} characters")
-        # Add retry logic for network timeouts
+        # Add retry logic for network timeouts AND SHA conflicts
         max_retries = 3
+        sha_retry_count = 0
+        max_sha_retries = 2  # Allow 2 SHA conflict retries
+
         for attempt in range(max_retries):
             try:
                 LOG.info(f"GitHub commit attempt {attempt + 1}/{max_retries}")
                 commit_response = requests.put(api_url, headers=headers, json=commit_data, timeout=120)
+
+                # Handle 409 Conflict (SHA mismatch) - someone else committed
+                if commit_response.status_code == 409 and sha_retry_count < max_sha_retries:
+                    sha_retry_count += 1
+                    LOG.warning(f"⚠️ GitHub SHA conflict detected (attempt {sha_retry_count}/{max_sha_retries})")
+                    LOG.warning("   Another commit was made between GET and PUT. Re-fetching current SHA...")
+
+                    # Re-fetch current file SHA
+                    time.sleep(2)  # Brief pause before retry
+                    refetch_response = requests.get(api_url, headers=headers, timeout=30)
+
+                    if refetch_response.status_code == 200:
+                        current_file = refetch_response.json()
+                        new_sha = current_file["sha"]
+                        LOG.info(f"   Refetched SHA: {new_sha[:8]} (was: {file_sha[:8] if file_sha else 'None'})")
+
+                        # Update commit_data with new SHA
+                        commit_data["sha"] = new_sha
+                        file_sha = new_sha
+
+                        # Retry the commit with new SHA
+                        LOG.info(f"   Retrying commit with updated SHA...")
+                        continue
+                    else:
+                        LOG.error(f"   Failed to refetch SHA: {refetch_response.status_code}")
+                        return {
+                            "status": "error",
+                            "message": f"SHA conflict: failed to refetch file ({refetch_response.status_code})"
+                        }
+
+                # If not a retryable 409, break out of loop
                 break
+
             except requests.Timeout as e:
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 10  # 10s, 20s, 30s
@@ -2243,27 +2278,29 @@ def commit_csv_to_github(csv_content: str, commit_message: str = None):
                     continue
                 else:
                     raise
-        
+
         if commit_response.status_code in [200, 201]:
             commit_result = commit_response.json()
-            
-            LOG.info(f"Successfully committed CSV to GitHub: {commit_result['commit']['sha'][:8]}")
-            
+
+            LOG.info(f"✅ Successfully committed CSV to GitHub: {commit_result['commit']['sha'][:8]}")
+
             return {
                 "status": "success",
                 "commit_sha": commit_result['commit']['sha'],
                 "file_sha": commit_result['content']['sha'],
                 "commit_url": commit_result['commit']['html_url'],
                 "message": f"Successfully updated {GITHUB_CSV_PATH} in {GITHUB_REPO}",
-                "csv_size": len(csv_content)
+                "csv_size": len(csv_content),
+                "sha_retries": sha_retry_count
             }
         else:
             error_msg = commit_response.text
-            LOG.error(f"Failed to commit CSV to GitHub: {commit_response.status_code} - {error_msg}")
-            
+            LOG.error(f"❌ Failed to commit CSV to GitHub: {commit_response.status_code} - {error_msg}")
+
             return {
                 "status": "error",
-                "message": f"GitHub commit failed ({commit_response.status_code}): {error_msg}"
+                "message": f"GitHub commit failed ({commit_response.status_code}): {error_msg}",
+                "response_body": error_msg[:500]  # Include partial response for debugging
             }
             
     except requests.RequestException as e:
@@ -8936,8 +8973,8 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int):
         LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
         raise
 
-async def process_commit_phase(job_id: str, ticker: str):
-    """Wrapper for commit logic with error handling"""
+async def process_commit_phase(job_id: str, ticker: str, batch_id: str = None, is_last_job: bool = False):
+    """Wrapper for commit logic with error handling - includes job_id for idempotency"""
     try:
         # Call the actual GitHub commit function (it's named safe_incremental_commit, not admin_safe_incremental_commit)
         commit_func = globals().get('safe_incremental_commit')
@@ -8950,10 +8987,19 @@ async def process_commit_phase(job_id: str, ticker: str):
 
         class CommitBody(BaseModel):
             tickers: List[str]
+            job_id: Optional[str] = None  # Pass job_id for idempotency tracking
+            skip_render: Optional[bool] = True  # Control [skip render] flag
 
         LOG.info(f"[JOB {job_id}] Calling GitHub commit for {ticker}...")
 
-        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker]))
+        # Skip render for all jobs EXCEPT the last one in batch
+        skip_render = not is_last_job
+        if is_last_job:
+            LOG.info(f"[JOB {job_id}] ⚠️ LAST JOB IN BATCH - Render will deploy after this commit")
+        else:
+            LOG.info(f"[JOB {job_id}] [skip render] flag enabled - no deployment")
+
+        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker], job_id=job_id, skip_render=skip_render))
 
         LOG.info(f"[JOB {job_id}] GitHub commit completed for {ticker}")
         return result
@@ -9122,7 +9168,33 @@ async def process_ticker_job(job: dict):
         LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub...")
 
         try:
-            commit_result = await process_commit_phase(job_id=job_id, ticker=ticker)
+            # Check if this is the last job in the batch (to control [skip render] flag)
+            batch_id = job.get('batch_id')
+            is_last_job = False
+
+            if batch_id:
+                with db() as conn, conn.cursor() as cur:
+                    # Count remaining jobs in batch (queued + processing, excluding this one)
+                    cur.execute("""
+                        SELECT COUNT(*) as remaining
+                        FROM ticker_processing_jobs
+                        WHERE batch_id = %s
+                        AND status IN ('queued', 'processing')
+                        AND job_id != %s
+                    """, (batch_id, job_id))
+                    result = cur.fetchone()
+                    remaining_jobs = result['remaining'] if result else 0
+
+                    if remaining_jobs == 0:
+                        is_last_job = True
+                        LOG.info(f"[JOB {job_id}] 🎯 This is the LAST job in batch {batch_id}")
+
+            commit_result = await process_commit_phase(
+                job_id=job_id,
+                ticker=ticker,
+                batch_id=batch_id,
+                is_last_job=is_last_job
+            )
             LOG.info(f"✅ [JOB {job_id}] Metadata committed to GitHub successfully")
         except Exception as e:
             LOG.error(f"⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
@@ -9349,12 +9421,36 @@ def timeout_watchdog_loop():
 @APP.on_event("startup")
 async def startup_event():
     """Initialize job queue system on startup"""
-    LOG.info("🚀 FastAPI startup: Initializing job queue system...")
+    worker_id = get_worker_id()
+    LOG.info("=" * 80)
+    LOG.info(f"🚀 FastAPI STARTUP EVENT - Worker: {worker_id}")
+    LOG.info(f"   Python: {sys.version}")
+    LOG.info(f"   Platform: {sys.platform}")
+    LOG.info(f"   Environment: Render.com" if os.getenv('RENDER') else "   Environment: Local")
+    LOG.info(f"   Port: {os.getenv('PORT', '10000')}")
+    LOG.info(f"   Memory: {memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 'N/A'} MB")
+    LOG.info("=" * 80)
+    LOG.info("🔧 Initializing job queue system...")
 
     # Reclaim orphaned jobs from previous worker instance (handles Render restarts)
     try:
         with db() as conn, conn.cursor() as cur:
-            # Find jobs that were "processing" but the worker died (older than 5 minutes)
+            # First, log ALL processing jobs to understand restart impact
+            cur.execute("""
+                SELECT job_id, ticker, phase, progress, worker_id,
+                       EXTRACT(EPOCH FROM (NOW() - started_at)) / 60 AS minutes_running
+                FROM ticker_processing_jobs
+                WHERE status = 'processing'
+                ORDER BY started_at
+            """)
+            all_processing = cur.fetchall()
+
+            if all_processing:
+                LOG.warning(f"⚠️ STARTUP: Found {len(all_processing)} jobs in 'processing' state:")
+                for job in all_processing:
+                    LOG.info(f"   → {job['ticker']} ({job['phase']}, {job['progress']}%, {job['minutes_running']:.1f}min, worker: {job['worker_id']})")
+
+            # Reclaim jobs that were processing but worker died (older than 5 minutes = definitely orphaned)
             cur.execute("""
                 UPDATE ticker_processing_jobs
                 SET status = 'queued',
@@ -9362,21 +9458,38 @@ async def startup_event():
                     worker_id = NULL,
                     phase = 'restart_recovery',
                     progress = 0,
-                    last_updated = NOW()
+                    last_updated = NOW(),
+                    error_message = COALESCE(error_message, '') || ' | Server restart detected, job reclaimed'
                 WHERE status = 'processing'
                 AND started_at < NOW() - INTERVAL '5 minutes'
-                RETURNING job_id, ticker
+                RETURNING job_id, ticker, phase AS old_phase, progress AS old_progress
             """)
 
             orphaned = cur.fetchall()
             if orphaned:
-                LOG.warning(f"🔄 Reclaimed {len(orphaned)} orphaned jobs from previous worker:")
+                LOG.warning(f"🔄 RECLAIMED {len(orphaned)} orphaned jobs (>5min old, server likely restarted):")
                 for job in orphaned:
-                    LOG.info(f"   → {job['ticker']} (job_id: {job['job_id']})")
-            else:
-                LOG.info("✓ No orphaned jobs found")
+                    LOG.info(f"   → {job['ticker']} was at {job['old_phase']} ({job['old_progress']}%), now queued for retry")
+
+            # Also check for jobs processing <5 minutes (possible crash mid-job)
+            cur.execute("""
+                SELECT COUNT(*) as recent_count
+                FROM ticker_processing_jobs
+                WHERE status = 'processing'
+                AND started_at >= NOW() - INTERVAL '5 minutes'
+            """)
+            recent_result = cur.fetchone()
+            if recent_result and recent_result['recent_count'] > 0:
+                LOG.warning(f"⚠️ {recent_result['recent_count']} jobs started <5min ago still marked 'processing'")
+                LOG.warning("   These will NOT be reclaimed yet (might still be running on old worker)")
+                LOG.warning("   Timeout watchdog will mark them as 'timeout' if they exceed 45 minutes")
+
+            if not orphaned and not all_processing:
+                LOG.info("✅ No orphaned jobs found - clean startup")
+
     except Exception as e:
-        LOG.error(f"Failed to reclaim orphaned jobs: {e}")
+        LOG.error(f"❌ Failed to reclaim orphaned jobs: {e}")
+        LOG.error(f"   Stacktrace: {traceback.format_exc()}")
 
     start_job_worker()
 
@@ -9389,7 +9502,35 @@ async def startup_event():
 @APP.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    LOG.info("🛑 FastAPI shutdown: Stopping job queue system...")
+    worker_id = get_worker_id()
+    LOG.info("=" * 80)
+    LOG.info(f"🛑 FastAPI SHUTDOWN EVENT - Worker: {worker_id}")
+    LOG.info(f"   Reason: Unknown (check Render logs)")
+    LOG.info(f"   Memory: {memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 'N/A'} MB")
+
+    # Log any jobs currently processing (will be orphaned after shutdown)
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT job_id, ticker, phase, progress,
+                       EXTRACT(EPOCH FROM (NOW() - started_at)) / 60 AS minutes_running
+                FROM ticker_processing_jobs
+                WHERE status = 'processing'
+                AND worker_id = %s
+            """, (worker_id,))
+            active_jobs = cur.fetchall()
+
+            if active_jobs:
+                LOG.warning(f"⚠️ SHUTDOWN: {len(active_jobs)} jobs were still processing:")
+                for job in active_jobs:
+                    LOG.warning(f"   → {job['ticker']} ({job['phase']}, {job['progress']}%, {job['minutes_running']:.1f}min)")
+                LOG.warning("   These jobs will be reclaimed on next startup (>5min threshold)")
+            else:
+                LOG.info("✅ No active jobs at shutdown")
+    except Exception as e:
+        LOG.error(f"Failed to check active jobs during shutdown: {e}")
+
+    LOG.info("=" * 80)
     stop_job_worker()
 
 # ------------------------------------------------------------------------------
@@ -9442,6 +9583,9 @@ def health_check():
     is_healthy = worker_alive and db_healthy
     status_code = 200 if is_healthy else 503
 
+    # Get memory usage
+    memory_mb = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else None
+
     response = {
         "status": "healthy" if is_healthy else "degraded",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -9461,6 +9605,12 @@ def health_check():
         "circuit_breaker": {
             "state": job_circuit_breaker.state,
             "failure_count": job_circuit_breaker.failure_count
+        },
+        "system": {
+            "memory_mb": memory_mb,
+            "platform": sys.platform,
+            "python_version": sys.version.split()[0],
+            "render_instance": os.getenv('RENDER_INSTANCE_ID', 'not_render')
         }
     }
 
@@ -11290,6 +11440,8 @@ class GitHubSyncRequest(BaseModel):
 class UpdateTickersRequest(BaseModel):
     tickers: List[str]
     commit_message: Optional[str] = None
+    job_id: Optional[str] = None  # For idempotency tracking
+    skip_render: Optional[bool] = True  # Default: skip render to prevent auto-deployment
 
 # 1. GITHUB SYNC ENDPOINTS
 @APP.post("/admin/sync-ticker-reference-from-github")
@@ -11853,9 +12005,20 @@ async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
                 "ticker_status": ticker_status
             }
 
-        # Step 3: Create backup before commit
+        # Step 3: Create backup before commit (include job_id for idempotency)
+        # [skip render] controlled by skip_render flag (default: True)
         backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        commit_message = f"Incremental update: {', '.join(valid_tickers)} - {backup_timestamp}"
+        job_id_suffix = f" [job:{body.job_id[:8]}]" if body.job_id else ""
+
+        # Add [skip render] prefix only if skip_render=True
+        skip_prefix = "[skip render] " if body.skip_render else ""
+        commit_message = f"{skip_prefix}Incremental update: {', '.join(valid_tickers)} - {backup_timestamp}{job_id_suffix}"
+
+        if not body.skip_render:
+            LOG.warning(f"⚠️ RENDER DEPLOYMENT WILL BE TRIGGERED by this commit")
+            LOG.warning(f"   Commit message: {commit_message}")
+        else:
+            LOG.info(f"✅ [skip render] enabled - no deployment will be triggered")
 
         # Step 4: Export and commit with retry logic
         LOG.info(f"Exporting {len(valid_tickers)} enhanced tickers: {valid_tickers}")
@@ -11870,18 +12033,48 @@ async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
             }
 
         LOG.info(f"Committing to GitHub with message: {commit_message}")
-        commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
 
-        if commit_result["status"] == "success":
-            # Step 5: Update commit tracking in database
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE ticker_reference
-                    SET last_github_sync = %s
-                    WHERE ticker = ANY(%s)
-                """, (datetime.now(timezone.utc), valid_tickers))
+        # Wrap GitHub commit in try/except to make it non-fatal
+        try:
+            commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
 
-                LOG.info(f"Updated GitHub sync timestamp for {len(valid_tickers)} tickers")
+            if commit_result["status"] == "success":
+                # Step 5: Update commit tracking in database (with column existence check)
+                try:
+                    with db() as conn, conn.cursor() as cur:
+                        # Verify column exists before attempting update (bulletproofing for schema mismatches)
+                        cur.execute("""
+                            SELECT column_name
+                            FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                            AND table_name = 'ticker_reference'
+                            AND column_name = 'last_github_sync'
+                        """)
+
+                        if cur.fetchone():
+                            cur.execute("""
+                                UPDATE ticker_reference
+                                SET last_github_sync = %s
+                                WHERE ticker = ANY(%s)
+                            """, (datetime.now(timezone.utc), valid_tickers))
+
+                            LOG.info(f"✅ Updated GitHub sync timestamp for {len(valid_tickers)} tickers")
+                        else:
+                            LOG.warning("⚠️ Column 'last_github_sync' does not exist in ticker_reference table")
+                            LOG.warning("   CSV committed successfully, but sync timestamp not recorded")
+                            LOG.warning("   Run: ALTER TABLE ticker_reference ADD COLUMN last_github_sync TIMESTAMP;")
+
+                except Exception as db_error:
+                    LOG.error(f"⚠️ Failed to update last_github_sync timestamp: {db_error}")
+                    LOG.warning("   CSV was committed to GitHub successfully, but DB timestamp update failed")
+                    # Don't fail the entire operation - GitHub commit succeeded
+
+        except Exception as commit_error:
+            LOG.error(f"⚠️ GitHub commit failed (non-fatal): {commit_error}")
+            commit_result = {
+                "status": "error",
+                "message": f"GitHub commit failed: {str(commit_error)}"
+            }
 
         return {
             "status": commit_result["status"],

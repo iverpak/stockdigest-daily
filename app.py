@@ -8907,6 +8907,154 @@ Provide a comprehensive executive summary integrating company-specific news with
     
     return summaries
 
+def generate_claude_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
+    """Generate Claude summaries from company + industry article titles (parallel to OpenAI)"""
+    if not ANTHROPIC_API_KEY:
+        return {}
+
+    summaries = {}
+
+    for ticker, categories in articles_by_ticker.items():
+        company_articles = categories.get("company", [])
+        competitor_articles = categories.get("competitor", [])
+        industry_articles = categories.get("industry", [])
+
+        if not company_articles and not industry_articles:
+            continue
+
+        config = get_ticker_config(ticker)
+        company_name = config.get("name", ticker) if config else ticker
+
+        # Get competitor information
+        competitor_names = []
+        if config and config.get("competitors"):
+            for comp in config["competitors"]:
+                if isinstance(comp, dict):
+                    if comp.get('ticker'):
+                        competitor_names.append(f"{comp['name']} ({comp['ticker']})")
+                    else:
+                        competitor_names.append(comp['name'])
+                else:
+                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?)\)$', comp)
+                    if match:
+                        competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
+                    else:
+                        competitor_names.append(comp)
+
+        # Get industry keywords
+        industry_keywords = config.get("industry_keywords", []) if config else []
+
+        # Collect titles + descriptions
+        titles_with_sources = []
+        for article in company_articles[:20]:
+            title = article.get("title", "")
+            description = article.get("description", "")
+            if title:
+                domain = article.get("domain", "")
+                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                if description:
+                    titles_with_sources.append(f"• {title} | {description[:100]}... [{source_name}]")
+                else:
+                    titles_with_sources.append(f"• {title} [{source_name}]")
+
+        industry_titles_with_sources = []
+        for article in industry_articles[:10]:
+            title = article.get("title", "")
+            description = article.get("description", "")
+            if title:
+                domain = article.get("domain", "")
+                keyword = article.get("search_keyword", "Industry")
+                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                if description:
+                    industry_titles_with_sources.append(f"• {title} | {description[:100]}... [Industry: {keyword}] [{source_name}]")
+                else:
+                    industry_titles_with_sources.append(f"• {title} [Industry: {keyword}] [{source_name}]")
+
+        competitor_titles_with_sources = []
+        for article in competitor_articles[:10]:
+            title = article.get("title", "")
+            description = article.get("description", "")
+            if title:
+                domain = article.get("domain", "")
+                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                if description:
+                    competitor_titles_with_sources.append(f"• {title} | {description[:100]}... [{source_name}]")
+                else:
+                    competitor_titles_with_sources.append(f"• {title} [{source_name}]")
+
+        titles_summary = ""
+
+        if titles_with_sources or industry_titles_with_sources:
+            titles_text = "\n".join(titles_with_sources)
+            industry_text = ""
+            if industry_titles_with_sources:
+                industry_text = "\n\nINDUSTRY DEVELOPMENTS:\n" + "\n".join(industry_titles_with_sources)
+            competitor_text = ""
+            if competitor_titles_with_sources:
+                competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(competitor_titles_with_sources)
+
+            try:
+                headers = {
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                }
+
+                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact.
+
+ANALYSIS FRAMEWORK:
+1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
+2. INDUSTRY/SECTOR DYNAMICS: Policy, regulatory, supply chain, or market developments affecting the sector and {company_name}'s position, if present.
+3. COMPETITIVE DYNAMICS: Competitor actions impacting {company_name}'s market position, if present.
+4. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts, if present.
+5. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships, if present.
+
+CRITICAL REQUIREMENTS:
+- Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines, if present
+- Report figures (%/$/units) exactly if present; no estimates/price math unless both numbers are in-text
+- Synthesize quantitative metrics when available
+- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
+- ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
+- INDUSTRY IMPACT: Assess how sector developments affect {company_name}'s business model and profitability
+- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
+- Include specific numbers when available and cite sources using formal domain names in parentheses, e.g., (Business Wire).
+- Keep to 5-6 sentences maximum
+
+TARGET COMPANY: {company_name} ({ticker})
+INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'None specified'}
+KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
+
+COMPANY HEADLINES (sources provided in brackets):
+{titles_text}{industry_text}{competitor_text}
+
+Provide a comprehensive executive summary integrating company-specific news with relevant industry and competitive developments."""
+
+                data = {
+                    "model": ANTHROPIC_MODEL,
+                    "max_tokens": 2048,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
+
+                response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
+
+                if response.status_code == 200:
+                    result = response.json()
+                    titles_summary = result.get("content", [{}])[0].get("text", "")
+                    LOG.info(f"Claude titles summary generated for {ticker}")
+                else:
+                    LOG.warning(f"Claude titles summary failed: {response.status_code}")
+
+            except Exception as e:
+                LOG.warning(f"Failed to generate Claude titles summary for {ticker}: {e}")
+
+        summaries[ticker] = {
+            "titles_summary": titles_summary,
+            "company_name": company_name,
+            "industry_coverage": len(industry_titles_with_sources)
+        }
+
+    return summaries
+
 def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
     """Quick email with metadata display removed"""
     try:
@@ -11050,23 +11198,41 @@ async def cron_ingest(
                     # Use dual scoring triage (OpenAI + Claude)
                     selected_results = await perform_ai_triage_with_dual_scoring_async(articles_by_ticker[ticker], ticker, triage_batch_size)
                     triage_results[ticker] = selected_results
-                
+
                 memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")
-                
-                # Update database with triage results
+
+                # Store flagged articles in job config for later use in final email
                 with resource_cleanup_context("database_connection"):
+                    flagged_articles = []
                     for category, selected_items in selected_results.items():
                         articles = articles_by_ticker[ticker][category]
                         for item in selected_items:
                             article_idx = item["id"]
                             if article_idx < len(articles):
-                                article_id = articles[article_idx]["id"]
-                                with db() as conn, conn.cursor() as cur:
-                                    clean_priority = normalize_priority_to_int(item.get("scrape_priority", 2))
-                                    clean_reasoning = clean_null_bytes(item.get("why", ""))
-                                    
-                                    # Triage selection now handled via new schema - no DB update needed
-                                    pass
+                                article = articles[article_idx]
+                                flagged_articles.append({
+                                    "article_id": article.get("id"),
+                                    "url": article.get("url"),
+                                    "title": article.get("title"),
+                                    "description": article.get("description", ""),
+                                    "domain": article.get("domain", ""),
+                                    "published": article.get("published", ""),
+                                    "category": category,
+                                    "openai_score": item.get("openai_score", 0),
+                                    "claude_score": item.get("claude_score", 0),
+                                    "combined_score": item.get("combined_score", 0),
+                                    "scrape_priority": item.get("scrape_priority", 2)
+                                })
+
+                    # Store in job config JSONB
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE ticker_processing_jobs
+                            SET config = jsonb_set(COALESCE(config, '{}'), '{flagged_articles}', %s::jsonb)
+                            WHERE job_id = %s
+                        """, (json.dumps(flagged_articles), job_id))
+
+                    LOG.info(f"Stored {len(flagged_articles)} flagged articles in job config for {ticker}")
             
             memory_monitor.take_snapshot("PHASE2_COMPLETE")
             

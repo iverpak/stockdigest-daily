@@ -74,27 +74,31 @@ TICKER_PROCESSING_LOCK = asyncio.Lock()
 # Concurrency Configuration and Semaphores
 SCRAPE_BATCH_SIZE = int(os.getenv("SCRAPE_BATCH_SIZE", "5"))
 OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "5"))
+CLAUDE_MAX_CONCURRENCY = int(os.getenv("CLAUDE_MAX_CONCURRENCY", "5"))  # Claude concurrency
 PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "3"))
 SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "4"))
 TRIAGE_MAX_CONCURRENCY = int(os.getenv("TRIAGE_MAX_CONCURRENCY", "5"))
 
 # Global semaphores for concurrent processing
 OPENAI_SEM = BoundedSemaphore(OPENAI_MAX_CONCURRENCY)
-PLAYWRIGHT_SEM = BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENCY)  
+CLAUDE_SEM = BoundedSemaphore(CLAUDE_MAX_CONCURRENCY)  # Claude semaphore
+PLAYWRIGHT_SEM = BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENCY)
 SCRAPFLY_SEM = BoundedSemaphore(SCRAPFLY_MAX_CONCURRENCY)
 
 # Async semaphores for async operations
 _async_semaphores_initialized = False
 async_openai_sem = None
+async_claude_sem = None  # Claude async semaphore
 async_playwright_sem = None
 async_scrapfly_sem = None
 async_triage_sem = None
 
 def init_async_semaphores():
     """Initialize async semaphores - called once per event loop"""
-    global _async_semaphores_initialized, async_openai_sem, async_playwright_sem, async_scrapfly_sem, async_triage_sem
+    global _async_semaphores_initialized, async_openai_sem, async_claude_sem, async_playwright_sem, async_scrapfly_sem, async_triage_sem
     if not _async_semaphores_initialized:
         async_openai_sem = asyncio.Semaphore(OPENAI_MAX_CONCURRENCY)
+        async_claude_sem = asyncio.Semaphore(CLAUDE_MAX_CONCURRENCY)  # Initialize Claude semaphore
         async_playwright_sem = asyncio.Semaphore(PLAYWRIGHT_MAX_CONCURRENCY)
         async_scrapfly_sem = asyncio.Semaphore(SCRAPFLY_MAX_CONCURRENCY)
         async_triage_sem = asyncio.Semaphore(TRIAGE_MAX_CONCURRENCY)
@@ -293,10 +297,15 @@ if not DATABASE_URL:
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
-# OpenAI Configuration -
+# OpenAI Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+
+# Anthropic Claude Configuration
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_API_URL = os.getenv("ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
 SCRAPFLY_API_KEY = os.getenv("SCRAPFLY_API_KEY")
 
@@ -348,6 +357,8 @@ PROBLEMATIC_SCRAPE_DOMAINS = {
     "defenseworld.net", "defense-world.net", "defensenews.com",
     # Sites to avoid scraping (not spam, just problematic)
     "zacks.com", "insidermonkey.com", "fool.com",
+    # Never flag for scraping (low-quality/problematic content)
+    "gurufocus.com", "stocktitan.net",
 }
 
 # Known paywall domains to skip during content scraping
@@ -6230,6 +6241,338 @@ Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
     except Exception as e:
         LOG.error(f"Async triage request failed: {str(e)}")
         return []
+
+# ===== CLAUDE TRIAGE FUNCTIONS =====
+
+async def triage_company_articles_claude(articles: List[Dict], ticker: str, company_name: str) -> List[Dict]:
+    """Claude-based company triage - parallel to OpenAI triage"""
+    if not ANTHROPIC_API_KEY or not articles:
+        LOG.warning("No Anthropic API key or no articles to triage")
+        return []
+
+    # Prepare items for triage (title + description)
+    items = []
+    for i, article in enumerate(articles):
+        item = {
+            "id": i,
+            "title": article.get('title', ''),
+            "published": article.get('published', '')
+        }
+        # Add description if available
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
+
+    target_cap = min(20, len(articles))
+
+    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPANY articles about {company_name} ({ticker}).
+
+Review all articles and select UP TO {target_cap} articles that are highest quality based on the criteria below. You may select FEWER than {target_cap} if you don't find enough quality articles.
+
+For each article you select, you MUST assign a score of 1-3:
+- 1 = High priority (most important articles requiring immediate scraping)
+- 2 = Medium priority (moderate importance)
+- 3 = Low priority (lower importance, backup selections)
+
+Articles you don't select receive a score of 0 (not flagged).
+
+SELECTION PRIORITY:
+
+HIGH PRIORITY - Hard business events with company as primary subject:
+Event verbs: acquires, merger, divests, spin-off, bankruptcy, Chapter 11, delist, recall, halt, guidance, preannounce, beats, misses, earnings, margin, backlog, contract, long-term agreement, supply deal, price increase, price cut, capacity add, closure, curtailment, buyback, tender, equity offering, convertible, refinance, rating change, approval, license, tariff, quota, sanction, fine, settlement, DOJ, FTC, SEC, FDA, USDA, EPA, OSHA, NHTSA, FAA, FCC
+
+MEDIUM PRIORITY - Strategic developments with specificity:
+* Investment/expansion announcements with specific amounts or timelines
+* Technology developments with ship dates or deployment specifics
+* Leadership changes (CEO, CFO, division heads) with effective dates
+* Partnership announcements with scope/duration details
+* Product launches with market entry dates and revenue targets
+* Facility openings/closings with employment or capacity numbers
+
+LOW PRIORITY - Routine coverage requiring backfill:
+* Analyst coverage with material rating changes and revised targets
+* Routine corporate announcements with minor operational impact
+* Market commentary where company is mentioned with business context
+
+EXCLUDE COMPLETELY:
+* Listicles/opinion titles: "Top", "Best", "Should you", "Right now", "Reasons", "Prediction", "If you'd invested", "What to know", "How to", "Why", "Analysis", "Outlook"
+* PR/TAM phrasing: "Announces" (without hard event verb), "Reports Market Size", "CAGR", "Forecast 20XX-20YY", "to reach $X by 2030", "Market Report", "Press Release" (unless paired with hard event verb AND concrete numbers)
+
+Return a JSON array of selected articles. Each selected article must have:
+{
+  "id": <article_id>,
+  "scrape_priority": <1, 2, or 3>,
+  "why": "<brief reason>"
+}
+
+Articles: {json.dumps(items, separators=(',', ':'))}"""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 4096,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": system_prompt
+                }
+            ]
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"Claude triage API error {response.status}: {error_text}")
+                    return []
+
+                result = await response.json()
+                content = result.get("content", [{}])[0].get("text", "")
+
+                if not content:
+                    LOG.error("Claude returned no text content for triage")
+                    return []
+
+                # Extract JSON from response
+                try:
+                    # Try direct parse first
+                    triage_result = json.loads(content)
+                except json.JSONDecodeError:
+                    # Try extracting JSON array from text
+                    import re
+                    match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if match:
+                        try:
+                            triage_result = json.loads(match.group(0))
+                        except:
+                            LOG.error(f"Claude JSON extraction failed")
+                            return []
+                    else:
+                        LOG.error(f"Claude returned non-JSON content")
+                        return []
+
+                # Validate and return selected articles
+                selected_articles = []
+                for item in triage_result:
+                    if isinstance(item, dict) and "id" in item and "scrape_priority" in item:
+                        article_id = item["id"]
+                        if 0 <= article_id < len(articles):
+                            selected_articles.append({
+                                "id": article_id,
+                                "scrape_priority": item["scrape_priority"],
+                                "why": item.get("why", ""),
+                                "confidence": 0.8,  # Default confidence for Claude
+                                "likely_repeat": False,
+                                "repeat_key": ""
+                            })
+
+                # Cap at target
+                if len(selected_articles) > target_cap:
+                    LOG.warning(f"Claude selected {len(selected_articles)}, capping to {target_cap}")
+                    selected_articles = selected_articles[:target_cap]
+
+                LOG.info(f"Claude triage company: selected {len(selected_articles)}/{len(articles)} articles")
+                return selected_articles
+
+    except Exception as e:
+        LOG.error(f"Claude triage request failed: {str(e)}")
+        return []
+
+async def triage_industry_articles_claude(articles: List[Dict], ticker: str, keyword: str) -> List[Dict]:
+    """Claude-based industry keyword triage"""
+    if not ANTHROPIC_API_KEY or not articles:
+        return []
+
+    # Prepare items
+    items = []
+    for i, article in enumerate(articles):
+        item = {
+            "id": i,
+            "title": article.get('title', ''),
+            "published": article.get('published', '')
+        }
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
+
+    target_cap = min(5, len(articles))
+
+    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for INDUSTRY articles related to ticker {ticker} and keyword "{keyword}".
+
+Review all articles and select UP TO {target_cap} articles that are highest quality. You may select FEWER if insufficient quality.
+
+For each selected article, assign score 1-3 (1=high, 2=medium, 3=low). Non-selected = 0.
+
+SELECTION CRITERIA:
+- Industry trends affecting {ticker}'s business
+- Regulatory/policy changes impacting the sector
+- Supply chain or market developments
+- Technology shifts in the industry
+
+EXCLUDE:
+- Generic market commentary
+- Listicles and opinion pieces
+- Company-specific news (unless sector-wide impact)
+
+Return JSON array: [{{"id": <int>, "scrape_priority": <1-3>, "why": "<reason>"}}]
+
+Articles: {json.dumps(items, separators=(',', ':'))}"""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": system_prompt}]
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    LOG.error(f"Claude industry triage error {response.status}")
+                    return []
+
+                result = await response.json()
+                content = result.get("content", [{}])[0].get("text", "")
+
+                try:
+                    triage_result = json.loads(content)
+                except:
+                    import re
+                    match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if match:
+                        triage_result = json.loads(match.group(0))
+                    else:
+                        return []
+
+                selected_articles = []
+                for item in triage_result:
+                    if isinstance(item, dict) and "id" in item:
+                        if 0 <= item["id"] < len(articles):
+                            selected_articles.append({
+                                "id": item["id"],
+                                "scrape_priority": item.get("scrape_priority", 2),
+                                "why": item.get("why", ""),
+                                "confidence": 0.8,
+                                "likely_repeat": False,
+                                "repeat_key": ""
+                            })
+
+                if len(selected_articles) > target_cap:
+                    selected_articles = selected_articles[:target_cap]
+
+                return selected_articles
+
+    except Exception as e:
+        LOG.error(f"Claude industry triage failed: {str(e)}")
+        return []
+
+async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, competitor_name: str) -> List[Dict]:
+    """Claude-based competitor triage"""
+    if not ANTHROPIC_API_KEY or not articles:
+        return []
+
+    # Prepare items
+    items = []
+    for i, article in enumerate(articles):
+        item = {
+            "id": i,
+            "title": article.get('title', ''),
+            "published": article.get('published', '')
+        }
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
+
+    target_cap = min(5, len(articles))
+
+    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPETITOR articles about {competitor_name} from {ticker}'s perspective.
+
+Review all articles and select UP TO {target_cap} articles that are highest quality. You may select FEWER if insufficient quality.
+
+For each selected article, assign score 1-3 (1=high, 2=medium, 3=low). Non-selected = 0.
+
+SELECTION CRITERIA:
+- Major strategic moves by {competitor_name} (M&A, partnerships, launches)
+- Financial results that affect competitive positioning
+- Market share shifts or pricing actions
+- Regulatory actions affecting {competitor_name}
+
+EXCLUDE:
+- Routine announcements
+- Listicles and opinion pieces
+- Generic market commentary
+
+Return JSON array: [{{"id": <int>, "scrape_priority": <1-3>, "why": "<reason>"}}]
+
+Articles: {json.dumps(items, separators=(',', ':'))}"""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": system_prompt}]
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    LOG.error(f"Claude competitor triage error {response.status}")
+                    return []
+
+                result = await response.json()
+                content = result.get("content", [{}])[0].get("text", "")
+
+                try:
+                    triage_result = json.loads(content)
+                except:
+                    import re
+                    match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if match:
+                        triage_result = json.loads(match.group(0))
+                    else:
+                        return []
+
+                selected_articles = []
+                for item in triage_result:
+                    if isinstance(item, dict) and "id" in item:
+                        if 0 <= item["id"] < len(articles):
+                            selected_articles.append({
+                                "id": item["id"],
+                                "scrape_priority": item.get("scrape_priority", 2),
+                                "why": item.get("why", ""),
+                                "confidence": 0.8,
+                                "likely_repeat": False,
+                                "repeat_key": ""
+                            })
+
+                if len(selected_articles) > target_cap:
+                    selected_articles = selected_articles[:target_cap]
+
+                return selected_articles
+
+    except Exception as e:
+        LOG.error(f"Claude competitor triage failed: {str(e)}")
+        return []
+
+# ===== END CLAUDE TRIAGE FUNCTIONS =====
 
 async def perform_ai_triage_with_batching_async(
     articles_by_category: Dict[str, List[Dict]], 

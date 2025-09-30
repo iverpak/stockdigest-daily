@@ -9771,56 +9771,61 @@ async def cancel_batch(request: Request, batch_id: str):
     """Cancel all jobs in a batch"""
     require_admin(request)
 
-    with db() as conn, conn.cursor() as cur:
-        # Cancel all queued/processing jobs in the batch
-        cur.execute("""
-            UPDATE ticker_processing_jobs
-            SET status = 'cancelled',
-                error_message = 'Batch cancelled by user',
-                completed_at = NOW(),
-                last_updated = NOW()
-            WHERE batch_id = %s
-            AND status IN ('queued', 'processing')
-            RETURNING job_id, ticker
-        """, (batch_id,))
-
-        cancelled_jobs = cur.fetchall()
-
-        if cancelled_jobs:
-            LOG.warning(f"🚫 Batch {batch_id} cancelled by user ({len(cancelled_jobs)} jobs)")
-            for job in cancelled_jobs:
-                LOG.info(f"   Cancelled: {job['ticker']} (job_id: {job['job_id']})")
-
-            # Update batch status
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Cancel all queued/processing jobs in the batch
             cur.execute("""
-                UPDATE ticker_processing_batches
+                UPDATE ticker_processing_jobs
                 SET status = 'cancelled',
-                    failed_jobs = failed_jobs + %s,
+                    error_message = 'Batch cancelled by user',
+                    completed_at = NOW(),
                     last_updated = NOW()
                 WHERE batch_id = %s
-            """, (len(cancelled_jobs), batch_id))
-
-            return {
-                "status": "cancelled",
-                "batch_id": batch_id,
-                "jobs_cancelled": len(cancelled_jobs),
-                "tickers": [j['ticker'] for j in cancelled_jobs]
-            }
-        else:
-            # Check if batch exists
-            cur.execute("""
-                SELECT status, total_jobs FROM ticker_processing_batches WHERE batch_id = %s
+                AND status IN ('queued', 'processing')
+                RETURNING job_id, ticker
             """, (batch_id,))
 
-            batch = cur.fetchone()
-            if batch:
+            cancelled_jobs = cur.fetchall()
+
+            if cancelled_jobs:
+                LOG.warning(f"🚫 Batch {batch_id} cancelled by user ({len(cancelled_jobs)} jobs)")
+                for job in cancelled_jobs:
+                    LOG.info(f"   Cancelled: {job['ticker']} (job_id: {job['job_id']})")
+
+                # Update batch status
+                cur.execute("""
+                    UPDATE ticker_processing_batches
+                    SET status = 'cancelled',
+                        failed_jobs = failed_jobs + %s,
+                        last_updated = NOW()
+                    WHERE batch_id = %s
+                """, (len(cancelled_jobs), batch_id))
+
                 return {
-                    "status": "no_jobs_to_cancel",
-                    "message": f"Batch is already {batch['status']}, no jobs to cancel",
-                    "batch_id": batch_id
+                    "status": "cancelled",
+                    "batch_id": batch_id,
+                    "jobs_cancelled": len(cancelled_jobs),
+                    "tickers": [j['ticker'] for j in cancelled_jobs]
                 }
             else:
-                raise HTTPException(status_code=404, detail="Batch not found")
+                # Check if batch exists
+                cur.execute("""
+                    SELECT status, total_jobs FROM ticker_processing_batches WHERE batch_id = %s
+                """, (batch_id,))
+
+                batch = cur.fetchone()
+                if batch:
+                    return {
+                        "status": "no_jobs_to_cancel",
+                        "message": f"Batch is already {batch['status']}, no jobs to cancel",
+                        "batch_id": batch_id
+                    }
+                else:
+                    raise HTTPException(status_code=404, detail="Batch not found")
+    except Exception as e:
+        LOG.error(f"Error cancelling batch {batch_id}: {e}")
+        LOG.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 @APP.post("/jobs/circuit-breaker/reset")
 async def reset_circuit_breaker(request: Request):

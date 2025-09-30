@@ -4323,8 +4323,12 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     
     # 2. SECOND BADGE: Source name
     header_badges.append(f'<span class="source-badge">{display_source}</span>')
-    
-    # 3. Analysis badge if both content and summary exist
+
+    # 3. Quality badge for quality domains
+    if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
+        header_badges.append('<span class="quality-badge">⭐ Quality</span>')
+
+    # 4. Analysis badge if both content and summary exist
     analyzed_html = ""
     if article.get('scraped_content') and article.get('ai_summary'):
         analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
@@ -9359,8 +9363,10 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
 
 def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
     """Enhanced digest with metadata display removed but keeping all badges/emojis"""
-    
-    company_summaries = generate_ai_final_summaries(articles_by_ticker)
+
+    # Generate summaries from both OpenAI and Claude
+    openai_summaries = generate_ai_final_summaries(articles_by_ticker)
+    claude_summaries = generate_claude_titles_summary(articles_by_ticker)
     
     ticker_list = ', '.join(articles_by_ticker.keys())
     current_time_est = format_timestamp_est(datetime.now(timezone.utc))
@@ -9413,12 +9419,36 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>📈 {ticker} ({company_name}) - {total_articles} Total Articles</h2>")
-        
-        # Add AI-generated executive summary (same format as Quick Intelligence email)
-        if ticker in company_summaries and company_summaries[ticker].get("ai_analysis_summary"):
+
+        # Display industry keywords and competitors
+        industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
+        competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")]
+
+        if industry_keywords or competitors:
+            html.append("<p style='margin: 10px 0; color: #555;'>")
+            if industry_keywords:
+                html.append(f"<strong>🔍 Industry Keywords:</strong> {', '.join(industry_keywords)}")
+            if competitors:
+                if industry_keywords:
+                    html.append(" | ")
+                competitor_display = [f"{name} ({ticker})" if ticker else name for name, ticker in competitors]
+                html.append(f"<strong>🏢 Competitors:</strong> {', '.join(competitor_display)}")
+            html.append("</p>")
+
+        # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
+        openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
+        claude_summary = claude_summaries.get(ticker, {}).get("titles_summary", "")
+
+        if openai_summary and claude_summary:
             html.append("<div class='company-summary'>")
             html.append("<div class='summary-title'>📰 Executive Summary (Deep Analysis)</div>")
-            html.append(f"<div class='summary-content'>{company_summaries[ticker]['ai_analysis_summary']}</div>")
+            html.append("<div class='summary-content'>")
+            html.append("<strong>OpenAI Analysis:</strong><br>")
+            html.append(f"{openai_summary}")
+            html.append("<br><br>")
+            html.append("<strong>Claude Analysis:</strong><br>")
+            html.append(f"{claude_summary}")
+            html.append("</div>")
             html.append("</div>")
         
         # Sort articles within each category - Quality domains first, then AI analyzed, then by time

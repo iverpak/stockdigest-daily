@@ -7924,68 +7924,67 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
         # Get industry keywords for enhanced context
         industry_keywords = config.get("industry_keywords", []) if config else []
         
-        # Company articles with content and ticker-specific analysis
-        articles_with_content = [
-            article for article in company_articles 
-            if (article.get("scraped_content") and 
-                article.get("ai_analysis_ticker") == ticker)
+        # Company articles with AI summaries (no complex filtering - use ALL articles with ai_summary)
+        articles_with_ai_summary = [
+            article for article in company_articles
+            if article.get("ai_summary")
         ]
-        
-        # Industry articles with content and ticker-specific analysis
-        industry_articles_with_content = [
-            article for article in industry_articles 
-            if (article.get("scraped_content") and 
-                article.get("ai_analysis_ticker") == ticker)
+
+        # Industry articles with AI summaries
+        industry_articles_with_ai_summary = [
+            article for article in industry_articles
+            if article.get("ai_summary")
         ]
-        
-        competitor_articles_with_content = [
-            article for article in competitor_articles 
-            if (article.get("scraped_content") and 
-                article.get("ai_analysis_ticker") == ticker)
+
+        # Competitor articles with AI summaries
+        competitor_articles_with_ai_summary = [
+            article for article in competitor_articles
+            if article.get("ai_summary")
         ]
-        
-        LOG.info(f"Found {len(articles_with_content)} company articles with {ticker}-perspective analysis")
-        LOG.info(f"Found {len(industry_articles_with_content)} industry articles with {ticker}-perspective analysis")
-        LOG.info(f"Found {len(competitor_articles_with_content)} competitor articles with {ticker}-perspective analysis")
-        
+
+        LOG.info(f"📊 EXECUTIVE SUMMARY: Found {len(articles_with_ai_summary)} company articles with AI summaries")
+        LOG.info(f"📊 EXECUTIVE SUMMARY: Found {len(industry_articles_with_ai_summary)} industry articles with AI summaries")
+        LOG.info(f"📊 EXECUTIVE SUMMARY: Found {len(competitor_articles_with_ai_summary)} competitor articles with AI summaries")
+
         ai_analysis_summary = ""
-        
-        if articles_with_content or industry_articles_with_content:
-            # Company content summaries - USE AI SUMMARIES
+
+        if articles_with_ai_summary or industry_articles_with_ai_summary:
+            # Company AI summaries with sources
             content_summaries = []
-            for article in articles_with_content[:20]:
+            for article in articles_with_ai_summary[:20]:
                 title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")  # CHANGED: Use AI summary instead of scraped content
+                ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
-                
-                if ai_summary and len(ai_summary) > 50:  # CHANGED: Lower threshold for AI summaries
+
+                if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")  # CHANGED: Use full AI summary
-            
-            # Industry content summaries with keyword context - USE AI SUMMARIES
+                    content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+
+            # Industry AI summaries with keyword context
             industry_content_summaries = []
-            for article in industry_articles_with_content[:15]:
+            for article in industry_articles_with_ai_summary[:15]:
                 title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")  # CHANGED: Use AI summary
+                ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
                 keyword = article.get("search_keyword", "Industry")
-                
-                if ai_summary and len(ai_summary) > 50:  # CHANGED: Lower threshold
+
+                if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}]: {ai_summary}")  # CHANGED: Use full AI summary
-            
-            # Competitor content summaries - USE AI SUMMARIES
+                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}]: {ai_summary}")
+
+            # Competitor AI summaries
             competitor_content_summaries = []
-            for article in competitor_articles_with_content[:15]:
+            for article in competitor_articles_with_ai_summary[:15]:
                 title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")  # CHANGED: Use AI summary
+                ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
-                
-                if ai_summary and len(ai_summary) > 50:  # CHANGED: Lower threshold
+
+                if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    competitor_content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")  # CHANGED: Use full AI summary
-            
+                    competitor_content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+
             if content_summaries or industry_content_summaries:
+                LOG.info(f"📝 Generating executive summary from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
                 ai_text = "\n".join(content_summaries)
                 industry_analysis = ""
                 if industry_content_summaries:
@@ -8057,7 +8056,7 @@ Provide a strategic investment thesis integrating company developments, industry
         summaries[ticker] = {
             "ai_analysis_summary": ai_analysis_summary,
             "company_name": company_name,
-            "industry_articles_analyzed": len(industry_articles_with_content)
+            "industry_articles_analyzed": len(industry_articles_with_ai_summary)
         }
     
     return summaries
@@ -8549,10 +8548,10 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>📈 {ticker} ({company_name}) - {total_articles} Total Articles</h2>")
         
-        # Add AI-generated summaries from scraped content
+        # Add AI-generated executive summary (same format as Quick Intelligence email)
         if ticker in company_summaries and company_summaries[ticker].get("ai_analysis_summary"):
             html.append("<div class='company-summary'>")
-            html.append("<div class='summary-title'>🎯 Investment Thesis (Deep Analysis Synthesis)</div>")
+            html.append("<div class='summary-title'>📰 Executive Summary (Deep Analysis)</div>")
             html.append(f"<div class='summary-content'>{company_summaries[ticker]['ai_analysis_summary']}</div>")
             html.append("</div>")
         

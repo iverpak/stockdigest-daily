@@ -9061,8 +9061,10 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
         
         ticker_list = ', '.join(articles_by_ticker.keys())
-        
-        company_summaries = generate_ai_titles_summary(articles_by_ticker)
+
+        # Generate summaries from both OpenAI and Claude
+        openai_summaries = generate_ai_titles_summary(articles_by_ticker)
+        claude_summaries = generate_claude_titles_summary(articles_by_ticker)
         
         html = [
             "<html><head><style>",
@@ -9126,11 +9128,36 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             
             html.append(f"<div class='ticker-section'>")
             html.append(f"<h2>📈 {ticker} ({full_company_name}) - {ticker_count} Total Articles</h2>")
-            
-            if ticker in company_summaries and company_summaries[ticker].get("titles_summary"):
+
+            # Display industry keywords and competitors
+            industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
+            competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")]
+
+            if industry_keywords or competitors:
+                html.append("<p style='margin: 10px 0; color: #555;'>")
+                if industry_keywords:
+                    html.append(f"<strong>🔍 Industry Keywords:</strong> {', '.join(industry_keywords)}")
+                if competitors:
+                    if industry_keywords:
+                        html.append(" | ")
+                    competitor_display = [f"{name} ({ticker})" if ticker else name for name, ticker in competitors]
+                    html.append(f"<strong>🏢 Competitors:</strong> {', '.join(competitor_display)}")
+                html.append("</p>")
+
+            # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
+            openai_summary = openai_summaries.get(ticker, {}).get("titles_summary", "")
+            claude_summary = claude_summaries.get(ticker, {}).get("titles_summary", "")
+
+            if openai_summary and claude_summary:
                 html.append("<div class='company-summary'>")
                 html.append("<div class='summary-title'>📰 Executive Summary (Headlines Analysis)</div>")
-                html.append(f"<div class='summary-content'>{company_summaries[ticker]['titles_summary']}</div>")
+                html.append("<div class='summary-content'>")
+                html.append("<strong>OpenAI Analysis:</strong><br>")
+                html.append(f"{openai_summary}")
+                html.append("<br><br>")
+                html.append("<strong>Claude Analysis:</strong><br>")
+                html.append(f"{claude_summary}")
+                html.append("</div>")
                 html.append("</div>")
                 html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
             

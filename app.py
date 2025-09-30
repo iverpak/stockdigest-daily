@@ -6298,11 +6298,7 @@ EXCLUDE COMPLETELY:
 * PR/TAM phrasing: "Announces" (without hard event verb), "Reports Market Size", "CAGR", "Forecast 20XX-20YY", "to reach $X by 2030", "Market Report", "Press Release" (unless paired with hard event verb AND concrete numbers)
 
 Return a JSON array of selected articles. Each selected article must have:
-{
-  "id": <article_id>,
-  "scrape_priority": <1, 2, or 3>,
-  "why": "<brief reason>"
-}
+[{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -6419,7 +6415,7 @@ EXCLUDE:
 - Listicles and opinion pieces
 - Company-specific news (unless sector-wide impact)
 
-Return JSON array: [{{"id": <int>, "scrape_priority": <1-3>, "why": "<reason>"}}]
+Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -6513,7 +6509,7 @@ EXCLUDE:
 - Listicles and opinion pieces
 - Generic market commentary
 
-Return JSON array: [{{"id": <int>, "scrape_priority": <1-3>, "why": "<reason>"}}]
+Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -11432,38 +11428,37 @@ async def cron_ingest(
 
                 memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")
 
-                # Store flagged articles in job config for later use in final email
-                with resource_cleanup_context("database_connection"):
-                    flagged_articles = []
-                    for category, selected_items in selected_results.items():
-                        articles = articles_by_ticker[ticker][category]
-                        for item in selected_items:
-                            article_idx = item["id"]
-                            if article_idx < len(articles):
-                                article = articles[article_idx]
-                                flagged_articles.append({
-                                    "article_id": article.get("id"),
-                                    "url": article.get("url"),
-                                    "title": article.get("title"),
-                                    "description": article.get("description", ""),
-                                    "domain": article.get("domain", ""),
-                                    "published": article.get("published", ""),
-                                    "category": category,
-                                    "openai_score": item.get("openai_score", 0),
-                                    "claude_score": item.get("claude_score", 0),
-                                    "combined_score": item.get("combined_score", 0),
-                                    "scrape_priority": item.get("scrape_priority", 2)
-                                })
-
-                    # Store in job config JSONB
-                    with db() as conn, conn.cursor() as cur:
-                        cur.execute("""
-                            UPDATE ticker_processing_jobs
-                            SET config = jsonb_set(COALESCE(config, '{}'), '{flagged_articles}', %s::jsonb)
-                            WHERE job_id = %s
-                        """, (json.dumps(flagged_articles), job_id))
-
-                    LOG.info(f"Stored {len(flagged_articles)} flagged articles in job config for {ticker}")
+                # Store flagged articles in job config - DISABLED (job_id not accessible in this scope)
+                # TODO: Pass job_id through cron_ingest call chain to enable this feature
+                # with resource_cleanup_context("database_connection"):
+                #     flagged_articles = []
+                #     for category, selected_items in selected_results.items():
+                #         articles = articles_by_ticker[ticker][category]
+                #         for item in selected_items:
+                #             article_idx = item["id"]
+                #             if article_idx < len(articles):
+                #                 article = articles[article_idx]
+                #                 flagged_articles.append({
+                #                     "article_id": article.get("id"),
+                #                     "url": article.get("url"),
+                #                     "title": article.get("title"),
+                #                     "description": article.get("description", ""),
+                #                     "domain": article.get("domain", ""),
+                #                     "published": article.get("published", ""),
+                #                     "category": category,
+                #                     "openai_score": item.get("openai_score", 0),
+                #                     "claude_score": item.get("claude_score", 0),
+                #                     "combined_score": item.get("combined_score", 0),
+                #                     "scrape_priority": item.get("scrape_priority", 2)
+                #                 })
+                #     # Store in job config JSONB
+                #     with db() as conn, conn.cursor() as cur:
+                #         cur.execute("""
+                #             UPDATE ticker_processing_jobs
+                #             SET config = jsonb_set(COALESCE(config, '{}'), '{flagged_articles}', %s::jsonb)
+                #             WHERE job_id = %s
+                #         """, (json.dumps(flagged_articles), job_id))
+                #     LOG.info(f"Stored {len(flagged_articles)} flagged articles in job config for {ticker}")
             
             memory_monitor.take_snapshot("PHASE2_COMPLETE")
             

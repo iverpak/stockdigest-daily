@@ -75,8 +75,8 @@ TICKER_PROCESSING_LOCK = asyncio.Lock()
 SCRAPE_BATCH_SIZE = int(os.getenv("SCRAPE_BATCH_SIZE", "5"))
 OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "5"))
 CLAUDE_MAX_CONCURRENCY = int(os.getenv("CLAUDE_MAX_CONCURRENCY", "5"))  # Claude concurrency
-PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "3"))
-SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "4"))
+PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "5"))
+SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "5"))
 TRIAGE_MAX_CONCURRENCY = int(os.getenv("TRIAGE_MAX_CONCURRENCY", "5"))
 
 # Global semaphores for concurrent processing
@@ -9258,13 +9258,17 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".quality-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
             ".flagged-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
             ".ai-triage { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            ".ai-high { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }",
-            ".ai-medium { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
-            ".ai-low { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }",
+            "/* OpenAI Scoring - Blue theme */",
+            ".openai-high { background-color: #d4edff; color: #0d47a1; border: 1px solid #90caf9; }",
+            ".openai-medium { background-color: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }",
+            ".openai-low { background-color: #f1f8ff; color: #1976d2; border: 1px solid #dce9f7; }",
+            ".openai-none { background-color: #f5f5f5; color: #9e9e9e; border: 1px solid #e0e0e0; }",
             ".qb-score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            ".qb-high { background-color: #c8e6c9; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".qb-medium { background-color: #fff3e0; color: #f57c00; border: 1px solid #ffcc02; }",
-            ".qb-low { background-color: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }",
+            "/* Claude Scoring - Purple theme */",
+            ".claude-high { background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
+            ".claude-medium { background-color: #f8e4f8; color: #8e24aa; border: 1px solid #e1bee7; }",
+            ".claude-low { background-color: #fce4ec; color: #ab47bc; border: 1px solid #f8bbd0; }",
+            ".claude-none { background-color: #f5f5f5; color: #9e9e9e; border: 1px solid #e0e0e0; }",
             ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
             ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
@@ -9364,6 +9368,10 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         priority_map = {"High": 2, "Medium": 3, "Low": 4}
                         priority = priority_map.get(ai_priority, 4)
                     
+                        # Extract OpenAI and Claude scores from triage data
+                    openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
+                    claude_score = selected_article_data[idx].get("claude_score", 0) if is_ai_selected else 0
+
                     enhanced_articles.append({
                         "article": article,
                         "idx": idx,
@@ -9373,6 +9381,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         "is_problematic": is_problematic,
                         "triage_reason": triage_reason,
                         "ai_priority": ai_priority,
+                        "openai_score": openai_score,
+                        "claude_score": claude_score,
                         "published_at": article.get("published_at")
                     })
                 
@@ -9419,28 +9429,45 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if enhanced_article["is_ai_selected"] or (enhanced_article["is_quality_domain"] and not enhanced_article["is_problematic"]):
                         header_badges.append('<span class="flagged-badge">🚩 Flagged</span>')
                     
-                    # 5. AI Triage - normalized format
-                    if enhanced_article["is_ai_selected"]:
-                        ai_priority = enhanced_article["ai_priority"]
-                        badge_class = f"ai-{ai_priority.lower()}"
-                        ai_emoji = {"High": "🔥", "Medium": "⚡", "Low": "🔋"}.get(ai_priority, "🔋")
-                        header_badges.append(f'<span class="ai-triage {badge_class}">{ai_emoji} AI: {ai_priority}</span>')
-                    
-                    # 6. QB Score last
-                    qb_score = article.get('qb_score', 0)
-                    if qb_score >= 70:
-                        qb_class = "qb-high"
-                        qb_level = "QB: High"
-                        qb_emoji = "🏆"
-                    elif qb_score >= 40:
-                        qb_class = "qb-medium"
-                        qb_level = "QB: Medium"
-                        qb_emoji = "🥉"
+                    # 5. OpenAI Score - 0-3 scoring
+                    openai_score = enhanced_article.get("openai_score", 0)
+                    if openai_score >= 3:
+                        openai_class = "openai-high"
+                        openai_level = "OpenAI: High"
+                        openai_emoji = "🔥"
+                    elif openai_score >= 2:
+                        openai_class = "openai-medium"
+                        openai_level = "OpenAI: Medium"
+                        openai_emoji = "⚡"
+                    elif openai_score >= 1:
+                        openai_class = "openai-low"
+                        openai_level = "OpenAI: Low"
+                        openai_emoji = "🔋"
                     else:
-                        qb_class = "qb-low"
-                        qb_level = "QB: Low"
-                        qb_emoji = "📊"
-                    header_badges.append(f'<span class="qb-score {qb_class}">{qb_emoji} {qb_level}</span>')
+                        openai_class = "openai-none"
+                        openai_level = "OpenAI: None"
+                        openai_emoji = "○"
+                    header_badges.append(f'<span class="ai-triage {openai_class}">{openai_emoji} {openai_level}</span>')
+
+                    # 6. Claude Score - 0-3 scoring
+                    claude_score = enhanced_article.get("claude_score", 0)
+                    if claude_score >= 3:
+                        claude_class = "claude-high"
+                        claude_level = "Claude: High"
+                        claude_emoji = "🏆"
+                    elif claude_score >= 2:
+                        claude_class = "claude-medium"
+                        claude_level = "Claude: Medium"
+                        claude_emoji = "💎"
+                    elif claude_score >= 1:
+                        claude_class = "claude-low"
+                        claude_level = "Claude: Low"
+                        claude_emoji = "💡"
+                    else:
+                        claude_class = "claude-none"
+                        claude_level = "Claude: None"
+                        claude_emoji = "○"
+                    header_badges.append(f'<span class="qb-score {claude_class}">{claude_emoji} {claude_level}</span>')
                     
                     # Publication time
                     pub_time = ""
@@ -10179,44 +10206,6 @@ async def process_ticker_job(job: dict):
         else:
             LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
 
-        # COMMIT METADATA TO GITHUB after Phase 1
-        # This ensures AI-generated metadata is saved even if job is cancelled later
-        update_job_status(job_id, phase='commit_metadata', progress=62)
-        LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub...")
-
-        try:
-            # Check if this is the last job in the batch (to control [skip render] flag)
-            batch_id = job.get('batch_id')
-            is_last_job = False
-
-            if batch_id:
-                with db() as conn, conn.cursor() as cur:
-                    # Count remaining jobs in batch (queued + processing, excluding this one)
-                    cur.execute("""
-                        SELECT COUNT(*) as remaining
-                        FROM ticker_processing_jobs
-                        WHERE batch_id = %s
-                        AND status IN ('queued', 'processing')
-                        AND job_id != %s
-                    """, (batch_id, job_id))
-                    result = cur.fetchone()
-                    remaining_jobs = result['remaining'] if result else 0
-
-                    if remaining_jobs == 0:
-                        is_last_job = True
-                        LOG.info(f"[JOB {job_id}] 🎯 This is the LAST job in batch {batch_id}")
-
-            commit_result = await process_commit_phase(
-                job_id=job_id,
-                ticker=ticker,
-                batch_id=batch_id,
-                is_last_job=is_last_job
-            )
-            LOG.info(f"✅ [JOB {job_id}] Metadata committed to GitHub successfully")
-        except Exception as e:
-            LOG.error(f"⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
-            # Don't fail the job if commit fails - continue processing
-
         # Check if cancelled after Phase 1
         with db() as conn, conn.cursor() as cur:
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
@@ -10251,7 +10240,45 @@ async def process_ticker_job(job: dict):
                 LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
                 return
 
-        # PHASE 3: Complete (metadata already committed after Phase 1)
+        # COMMIT METADATA TO GITHUB after Phase 2 (final email sent)
+        # This ensures GitHub commit doesn't trigger server restart before final email is sent
+        update_job_status(job_id, phase='commit_metadata', progress=97)
+        LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
+
+        try:
+            # Check if this is the last job in the batch (to control [skip render] flag)
+            batch_id = job.get('batch_id')
+            is_last_job = False
+
+            if batch_id:
+                with db() as conn, conn.cursor() as cur:
+                    # Count remaining jobs in batch (queued + processing, excluding this one)
+                    cur.execute("""
+                        SELECT COUNT(*) as remaining
+                        FROM ticker_processing_jobs
+                        WHERE batch_id = %s
+                        AND status IN ('queued', 'processing')
+                        AND job_id != %s
+                    """, (batch_id, job_id))
+                    result = cur.fetchone()
+                    remaining_jobs = result['remaining'] if result else 0
+
+                    if remaining_jobs == 0:
+                        is_last_job = True
+                        LOG.info(f"[JOB {job_id}] 🎯 This is the LAST job in batch {batch_id}")
+
+            commit_result = await process_commit_phase(
+                job_id=job_id,
+                ticker=ticker,
+                batch_id=batch_id,
+                is_last_job=is_last_job
+            )
+            LOG.info(f"✅ [JOB {job_id}] Metadata committed to GitHub successfully")
+        except Exception as e:
+            LOG.error(f"⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
+            # Don't fail the job if commit fails - continue processing
+
+        # PHASE 3: Complete
         update_job_status(job_id, phase='finalizing', progress=99)
         LOG.info(f"✅ [JOB {job_id}] Finalizing job...")
 
@@ -11594,10 +11621,37 @@ async def cron_ingest(
             LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in batches in {elapsed:.1f}s")
             LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
             memory_monitor.take_snapshot("PHASE4_COMPLETE")
-            
-            log_scraping_success_rates()
-            log_enhanced_scraping_stats()
-            log_scrapfly_stats()
+
+            # Consolidated scraping statistics
+            total_attempts = enhanced_scraping_stats["total_attempts"]
+            if total_attempts > 0:
+                total_success = (enhanced_scraping_stats["requests_success"] +
+                                enhanced_scraping_stats["playwright_success"] +
+                                enhanced_scraping_stats.get("scrapfly_success", 0))
+                overall_rate = (total_success / total_attempts) * 100
+
+                requests_attempts = enhanced_scraping_stats["by_method"]["requests"]["attempts"]
+                requests_success = enhanced_scraping_stats["by_method"]["requests"]["successes"]
+                requests_rate = (requests_success / requests_attempts * 100) if requests_attempts > 0 else 0
+
+                playwright_attempts = enhanced_scraping_stats["by_method"]["playwright"]["attempts"]
+                playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
+                playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
+
+                scrapfly_attempts = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("attempts", 0)
+                scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
+                scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
+
+                LOG.info("=" * 60)
+                LOG.info("SCRAPING SUCCESS RATES")
+                LOG.info("=" * 60)
+                LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
+                LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
+                LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
+                LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
+                if scrapfly_stats["requests_made"] > 0:
+                    LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
+                LOG.info("=" * 60)
             
             # CRITICAL: Final cleanup before returning response
             LOG.info("=== PERFORMING FINAL CLEANUP ===")

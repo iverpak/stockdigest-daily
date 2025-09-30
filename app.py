@@ -7899,16 +7899,21 @@ def is_description_valuable(title: str, description: str) -> bool:
 def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
     """Generate AI summaries with enhanced financial context, industry analysis, and materiality focus"""
     if not OPENAI_API_KEY:
+        LOG.warning("⚠️ EXECUTIVE SUMMARY: OpenAI API key not configured - skipping")
         return {}
-    
+
+    LOG.info(f"🎯 EXECUTIVE SUMMARY: Starting generation for {len(articles_by_ticker)} tickers")
     summaries = {}
-    
+
     for ticker, categories in articles_by_ticker.items():
         company_articles = categories.get("company", [])
         competitor_articles = categories.get("competitor", [])
         industry_articles = categories.get("industry", [])
-        
+
+        LOG.info(f"🎯 EXECUTIVE SUMMARY [{ticker}]: Found {len(company_articles)} company, {len(industry_articles)} industry, {len(competitor_articles)} competitor articles")
+
         if not company_articles and not industry_articles:
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: Skipping - no company or industry articles")
             continue
         
         config = get_ticker_config(ticker)
@@ -7942,13 +7947,14 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
             if article.get("ai_summary")
         ]
 
-        LOG.info(f"📊 EXECUTIVE SUMMARY: Found {len(articles_with_ai_summary)} company articles with AI summaries")
-        LOG.info(f"📊 EXECUTIVE SUMMARY: Found {len(industry_articles_with_ai_summary)} industry articles with AI summaries")
-        LOG.info(f"📊 EXECUTIVE SUMMARY: Found {len(competitor_articles_with_ai_summary)} competitor articles with AI summaries")
+        LOG.info(f"📊 EXECUTIVE SUMMARY [{ticker}]: Found {len(articles_with_ai_summary)} company articles with AI summaries")
+        LOG.info(f"📊 EXECUTIVE SUMMARY [{ticker}]: Found {len(industry_articles_with_ai_summary)} industry articles with AI summaries")
+        LOG.info(f"📊 EXECUTIVE SUMMARY [{ticker}]: Found {len(competitor_articles_with_ai_summary)} competitor articles with AI summaries")
 
         ai_analysis_summary = ""
 
         if articles_with_ai_summary or industry_articles_with_ai_summary:
+            LOG.info(f"✅ EXECUTIVE SUMMARY [{ticker}]: Proceeding with summary generation")
             # Company AI summaries with sources
             content_summaries = []
             for article in articles_with_ai_summary[:20]:
@@ -7984,7 +7990,7 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
                     competitor_content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
 
             if content_summaries or industry_content_summaries:
-                LOG.info(f"📝 Generating executive summary from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
+                LOG.info(f"📝 EXECUTIVE SUMMARY [{ticker}]: Generating from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
                 ai_text = "\n".join(content_summaries)
                 industry_analysis = ""
                 if industry_content_summaries:
@@ -8058,7 +8064,13 @@ Provide a strategic investment thesis integrating company developments, industry
             "company_name": company_name,
             "industry_articles_analyzed": len(industry_articles_with_ai_summary)
         }
-    
+
+        if ai_analysis_summary:
+            LOG.info(f"✅ EXECUTIVE SUMMARY [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
+        else:
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: No summary generated (no AI summaries or all articles skipped)")
+
+    LOG.info(f"🎯 EXECUTIVE SUMMARY: Completed - generated summaries for {len(summaries)} tickers")
     return summaries
 
 def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:

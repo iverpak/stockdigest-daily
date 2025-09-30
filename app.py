@@ -8999,7 +8999,8 @@ async def process_commit_phase(job_id: str, ticker: str, batch_id: str = None, i
         else:
             LOG.info(f"[JOB {job_id}] [skip render] flag enabled - no deployment")
 
-        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker], job_id=job_id, skip_render=skip_render))
+        # Convert job_id to string (PostgreSQL returns UUID objects)
+        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker], job_id=str(job_id), skip_render=skip_render))
 
         LOG.info(f"[JOB {job_id}] GitHub commit completed for {ticker}")
         return result

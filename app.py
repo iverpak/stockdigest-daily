@@ -9188,8 +9188,7 @@ async def process_ticker_job(job: dict):
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 UPDATE ticker_processing_batches
-                SET completed_jobs = completed_jobs + 1,
-                    last_updated = NOW()
+                SET completed_jobs = completed_jobs + 1
                 WHERE batch_id = %s
             """, (job['batch_id'],))
 
@@ -9226,8 +9225,7 @@ async def process_ticker_job(job: dict):
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 UPDATE ticker_processing_batches
-                SET failed_jobs = failed_jobs + 1,
-                    last_updated = NOW()
+                SET failed_jobs = failed_jobs + 1
                 WHERE batch_id = %s
             """, (job['batch_id'],))
 
@@ -9738,8 +9736,7 @@ async def cancel_job(request: Request, job_id: str):
             # Update batch counters
             cur.execute("""
                 UPDATE ticker_processing_batches
-                SET failed_jobs = failed_jobs + 1,
-                    last_updated = NOW()
+                SET failed_jobs = failed_jobs + 1
                 WHERE batch_id = (
                     SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
                 )
@@ -9796,8 +9793,7 @@ async def cancel_batch(request: Request, batch_id: str):
                 cur.execute("""
                     UPDATE ticker_processing_batches
                     SET status = 'cancelled',
-                        failed_jobs = failed_jobs + %s,
-                        last_updated = NOW()
+                        failed_jobs = failed_jobs + %s
                     WHERE batch_id = %s
                 """, (len(cancelled_jobs), batch_id))
 

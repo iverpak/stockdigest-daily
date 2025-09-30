@@ -3921,7 +3921,8 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         ai_processed_count += 1
                         stats["ai_scored"] += 1
                     else:
-                        quality_score = _fallback_quality_score(title, final_domain, feed["ticker"], description, keywords)
+                        # No QB fallback - triage handles selection
+                        quality_score = None
                         ai_impact = None
                         ai_reasoning = None
                         source_tier = None
@@ -4724,25 +4725,7 @@ def calculate_quality_score(
     """No individual article scoring - return None values"""
     return None, None, None, None
 
-def _fallback_quality_score(title: str, domain: str, ticker: str, description: str = "", keywords: List[str] = None) -> float:
-    """Fallback scoring when AI is unavailable - GUARANTEED NO AI CALLS"""
-    base_score = 50.0
-    
-    # Domain tier bonus
-    domain_tier = _get_domain_tier(domain, title, description)
-    base_score += (domain_tier - 0.5) * 20  # Scale tier to score impact
-    
-    # Ticker mention bonus
-    if ticker and ticker.upper() in title.upper():
-        base_score += 10
-    
-    # Keyword relevance bonus
-    if keywords:
-        title_lower = title.lower()
-        keyword_matches = sum(1 for kw in keywords if kw.lower() in title_lower)
-        base_score += min(keyword_matches * 5, 15)
-    
-    return max(20.0, min(80.0, base_score))
+# QB fallback scoring removed - triage now handles all article selection
 
 async def generate_ai_individual_summary_async(scraped_content: str, title: str, ticker: str, description: str = "") -> Optional[str]:
     """Async version of AI summary generation with semaphore control"""
@@ -5686,14 +5669,18 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
 
-    # Prepare items for triage (title only, no domain quality info)
+    # Prepare items for triage (title + description)
     items = []
     for i, article in enumerate(articles):
-        items.append({
+        item = {
             "id": i,
             "title": article.get('title', ''),
             "published": article.get('published', '')
-        })
+        }
+        # Add description if available
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
 
     target_cap = min(20, len(articles))  # Explicit cap for company articles
     
@@ -5870,14 +5857,18 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, secto
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
 
-    # Prepare items for triage
+    # Prepare items for triage (title + description)
     items = []
     for i, article in enumerate(articles):
-        items.append({
+        item = {
             "id": i,
             "title": article.get('title', ''),
             "published": article.get('published', '')
-        })
+        }
+        # Add description if available
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
 
     # Extract industry keywords from the first article's search_keyword
     industry_keywords = [articles[0].get('search_keyword', '')] if articles else []
@@ -6058,14 +6049,18 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, pee
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
 
-    # Prepare items for triage
+    # Prepare items for triage (title + description)
     items = []
     for i, article in enumerate(articles):
-        items.append({
+        item = {
             "id": i,
             "title": article.get('title', ''),
             "published": article.get('published', '')
-        })
+        }
+        # Add description if available
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
 
     # Extract competitor names from peers
     competitors = [peer.split(' (')[0] if ' (' in peer else peer for peer in peers]
@@ -6574,9 +6569,312 @@ Articles: {json.dumps(items, separators=(',', ':'))}"""
 
 # ===== END CLAUDE TRIAGE FUNCTIONS =====
 
+# ===== DUAL SCORING LOGIC (OpenAI + Claude) =====
+
+async def merge_triage_scores(
+    openai_results: List[Dict],
+    claude_results: List[Dict],
+    articles: List[Dict],
+    target_cap: int,
+    category_type: str,
+    category_key: str
+) -> List[Dict]:
+    """
+    Merge OpenAI and Claude triage results by combined score.
+    Returns top N articles by combined score (openai_score + claude_score).
+    Handles fallback if one API fails (use single API's selections).
+    """
+    # Build URL-based lookup for matching articles across APIs
+    url_scores = {}  # url -> {"openai": score, "claude": score, "article": article_obj}
+
+    # Process OpenAI results
+    for result in openai_results:
+        article_id = result["id"]
+        if article_id < len(articles):
+            article = articles[article_id]
+            url = article.get("url", "")
+            if url:
+                if url not in url_scores:
+                    url_scores[url] = {"openai": 0, "claude": 0, "article": article, "id": article_id}
+                # Score: 1=high, 2=medium, 3=low -> convert to reverse (high=3, low=1)
+                priority = result.get("scrape_priority", 2)
+                url_scores[url]["openai"] = 4 - priority  # 3, 2, 1
+                url_scores[url]["why_openai"] = result.get("why", "")
+
+    # Process Claude results
+    for result in claude_results:
+        article_id = result["id"]
+        if article_id < len(articles):
+            article = articles[article_id]
+            url = article.get("url", "")
+            if url:
+                if url not in url_scores:
+                    url_scores[url] = {"openai": 0, "claude": 0, "article": article, "id": article_id}
+                priority = result.get("scrape_priority", 2)
+                url_scores[url]["claude"] = 4 - priority
+                url_scores[url]["why_claude"] = result.get("why", "")
+
+    # Filter out problematic domains BEFORE ranking
+    filtered_scores = {}
+    for url, data in url_scores.items():
+        article = data["article"]
+        domain = article.get("domain", "")
+        if domain in PROBLEMATIC_SCRAPE_DOMAINS:
+            LOG.info(f"Blocked {domain} from triage selection (problematic domain)")
+            continue
+        filtered_scores[url] = data
+
+    # Calculate combined scores and sort
+    scored_articles = []
+    for url, data in filtered_scores.items():
+        combined_score = data["openai"] + data["claude"]
+        if combined_score > 0:  # At least one API selected it
+            scored_articles.append({
+                "url": url,
+                "article": data["article"],
+                "id": data["id"],
+                "openai_score": data["openai"],
+                "claude_score": data["claude"],
+                "combined_score": combined_score,
+                "why_openai": data.get("why_openai", ""),
+                "why_claude": data.get("why_claude", "")
+            })
+
+    # Sort by combined score (descending), then by timestamp (recent first)
+    scored_articles.sort(key=lambda x: (
+        -x["combined_score"],
+        -x["article"].get("published_at", datetime.min).timestamp() if x["article"].get("published_at") else 0
+    ))
+
+    # Take top N
+    top_articles = scored_articles[:target_cap]
+
+    LOG.info(f"  Dual scoring {category_type}/{category_key}: {len(openai_results)} OpenAI + {len(claude_results)} Claude = {len(scored_articles)} unique → top {len(top_articles)}")
+
+    # Return in format expected by downstream code
+    result = []
+    for item in top_articles:
+        result.append({
+            "id": item["id"],
+            "scrape_priority": 1 if item["combined_score"] >= 5 else (2 if item["combined_score"] >= 3 else 3),
+            "why": f"OpenAI: {item['why_openai'][:50]}... Claude: {item['why_claude'][:50]}..." if item['why_openai'] and item['why_claude'] else (item['why_openai'] or item['why_claude']),
+            "confidence": 0.9 if (item["openai_score"] > 0 and item["claude_score"] > 0) else 0.7,
+            "likely_repeat": False,
+            "repeat_key": "",
+            "openai_score": item["openai_score"],
+            "claude_score": item["claude_score"],
+            "combined_score": item["combined_score"]
+        })
+
+    return result
+
+async def perform_ai_triage_with_dual_scoring_async(
+    articles_by_category: Dict[str, List[Dict]],
+    ticker: str,
+    triage_batch_size: int = 5  # Updated default to 5
+) -> Dict[str, List[Dict]]:
+    """
+    Dual scoring triage: OpenAI + Claude run concurrently, results merged by combined score.
+    Replaces perform_ai_triage_with_batching_async with dual API support.
+    """
+    selected_results = {"company": [], "industry": [], "competitor": []}
+
+    if not OPENAI_API_KEY and not ANTHROPIC_API_KEY:
+        LOG.warning("No AI API keys configured - skipping triage")
+        return selected_results
+
+    # Ensure async semaphores are initialized
+    init_async_semaphores()
+
+    # Get ticker metadata
+    config = get_ticker_config(ticker)
+    company_name = config.get("name", ticker) if config else ticker
+    industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
+    competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")]
+
+    LOG.info(f"=== DUAL SCORING TRIAGE (OpenAI + Claude): batch_size={triage_batch_size} ===")
+
+    # Collect ALL dual-triage operations
+    all_triage_operations = []
+
+    # Company operations
+    company_articles = articles_by_category.get("company", [])
+    if company_articles:
+        all_triage_operations.append({
+            "type": "company",
+            "key": "company",
+            "articles": company_articles,
+            "target_cap": min(20, len(company_articles)),
+            "openai_func": triage_company_articles_full,
+            "openai_args": (company_articles, ticker, company_name, {}, {}),
+            "claude_func": triage_company_articles_claude,
+            "claude_args": (company_articles, ticker, company_name)
+        })
+
+    # Industry operations (one per keyword)
+    industry_articles = articles_by_category.get("industry", [])
+    if industry_articles:
+        industry_by_keyword = {}
+        for idx, article in enumerate(industry_articles):
+            keyword = article.get("search_keyword", "unknown")
+            if keyword not in industry_by_keyword:
+                industry_by_keyword[keyword] = []
+            industry_by_keyword[keyword].append({"article": article, "original_idx": idx})
+
+        for keyword, keyword_articles in industry_by_keyword.items():
+            triage_articles = [item["article"] for item in keyword_articles]
+            all_triage_operations.append({
+                "type": "industry",
+                "key": keyword,
+                "articles": triage_articles,
+                "target_cap": min(5, len(triage_articles)),
+                "openai_func": triage_industry_articles_full,
+                "openai_args": (triage_articles, ticker, {}, []),
+                "claude_func": triage_industry_articles_claude,
+                "claude_args": (triage_articles, ticker, keyword),
+                "index_mapping": keyword_articles
+            })
+
+    # Competitor operations (one per competitor)
+    competitor_articles = articles_by_category.get("competitor", [])
+    if competitor_articles:
+        competitor_by_entity = {}
+        for idx, article in enumerate(competitor_articles):
+            entity_key = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+            if entity_key not in competitor_by_entity:
+                competitor_by_entity[entity_key] = []
+            competitor_by_entity[entity_key].append({"article": article, "original_idx": idx})
+
+        for entity_key, entity_articles in competitor_by_entity.items():
+            triage_articles = [item["article"] for item in entity_articles]
+            # Get competitor name for Claude
+            competitor_name = entity_articles[0]["article"].get("search_keyword", entity_key)
+            all_triage_operations.append({
+                "type": "competitor",
+                "key": entity_key,
+                "articles": triage_articles,
+                "target_cap": min(5, len(triage_articles)),
+                "openai_func": triage_competitor_articles_full,
+                "openai_args": (triage_articles, ticker, [], {}),
+                "claude_func": triage_competitor_articles_claude,
+                "claude_args": (triage_articles, ticker, competitor_name),
+                "index_mapping": entity_articles
+            })
+
+    total_operations = len(all_triage_operations)
+    LOG.info(f"Total dual-triage operations: {total_operations}")
+
+    if total_operations == 0:
+        return selected_results
+
+    # Process operations in batches
+    for batch_start in range(0, total_operations, triage_batch_size):
+        batch_end = min(batch_start + triage_batch_size, total_operations)
+        batch = all_triage_operations[batch_start:batch_end]
+        batch_num = (batch_start // triage_batch_size) + 1
+        total_batches = (total_operations + triage_batch_size - 1) // triage_batch_size
+
+        LOG.info(f"BATCH {batch_num}/{total_batches}: Processing {len(batch)} operations (OpenAI + Claude concurrent):")
+        for op in batch:
+            LOG.info(f"  - {op['type']}: {op['key']} ({len(op['articles'])} articles)")
+
+        # Create dual tasks for each operation (OpenAI + Claude in parallel)
+        batch_tasks = []
+        for op in batch:
+            async def run_dual_triage(operation):
+                # Run OpenAI and Claude concurrently with semaphore control
+                openai_task = None
+                claude_task = None
+
+                if OPENAI_API_KEY:
+                    async def run_openai():
+                        async with async_openai_sem:
+                            return await operation["openai_func"](*operation["openai_args"])
+                    openai_task = run_openai()
+
+                if ANTHROPIC_API_KEY:
+                    async def run_claude():
+                        async with async_claude_sem:
+                            return await operation["claude_func"](*operation["claude_args"])
+                    claude_task = run_claude()
+
+                # Wait for both to complete
+                tasks_to_run = [t for t in [openai_task, claude_task] if t]
+                results = await asyncio.gather(*tasks_to_run, return_exceptions=True)
+
+                # Extract results
+                openai_result = results[0] if OPENAI_API_KEY and len(results) > 0 else []
+                claude_result = results[1] if ANTHROPIC_API_KEY and len(results) > 1 else (results[0] if not OPENAI_API_KEY and len(results) > 0 else [])
+
+                # Handle exceptions
+                if isinstance(openai_result, Exception):
+                    LOG.error(f"OpenAI triage failed for {operation['type']}/{operation['key']}: {openai_result}")
+                    openai_result = []
+                if isinstance(claude_result, Exception):
+                    LOG.error(f"Claude triage failed for {operation['type']}/{operation['key']}: {claude_result}")
+                    claude_result = []
+
+                # Merge scores
+                merged = await merge_triage_scores(
+                    openai_result,
+                    claude_result,
+                    operation["articles"],
+                    operation["target_cap"],
+                    operation["type"],
+                    operation["key"]
+                )
+
+                return merged
+
+            task = run_dual_triage(op)
+            batch_tasks.append((op, task))
+
+        # Execute batch concurrently
+        batch_results = await asyncio.gather(*[task for _, task in batch_tasks], return_exceptions=True)
+
+        # Process results
+        for i, result in enumerate(batch_results):
+            op = batch_tasks[i][0]
+
+            if isinstance(result, Exception):
+                LOG.error(f"Dual triage failed for {op['type']}/{op['key']}: {result}")
+                continue
+
+            # Map results back to original indices and add to selected_results
+            if op["type"] == "company":
+                selected_results["company"].extend(result)
+                LOG.info(f"  ✓ Company: selected {len(result)} articles")
+
+            elif op["type"] == "industry":
+                # Map back to original indices
+                for selected_item in result:
+                    original_idx = op["index_mapping"][selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx
+                selected_results["industry"].extend(result)
+                LOG.info(f"  ✓ Industry '{op['key']}': selected {len(result)} articles")
+
+            elif op["type"] == "competitor":
+                # Map back to original indices
+                for selected_item in result:
+                    original_idx = op["index_mapping"][selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx
+                selected_results["competitor"].extend(result)
+                LOG.info(f"  ✓ Competitor '{op['key']}': selected {len(result)} articles")
+
+        LOG.info(f"BATCH {batch_num} COMPLETE")
+
+    LOG.info(f"DUAL SCORING TRIAGE COMPLETE:")
+    LOG.info(f"  Company: {len(selected_results['company'])} selected")
+    LOG.info(f"  Industry: {len(selected_results['industry'])} selected")
+    LOG.info(f"  Competitor: {len(selected_results['competitor'])} selected")
+
+    return selected_results
+
+# ===== END DUAL SCORING LOGIC =====
+
 async def perform_ai_triage_with_batching_async(
-    articles_by_category: Dict[str, List[Dict]], 
-    ticker: str, 
+    articles_by_category: Dict[str, List[Dict]],
+    ticker: str,
     triage_batch_size: int = 2
 ) -> Dict[str, List[Dict]]:
     """
@@ -10749,8 +11047,8 @@ async def cron_ingest(
                 memory_monitor.take_snapshot(f"TRIAGE_START_{ticker}")
                 
                 with resource_cleanup_context("ai_triage"):
-                    # Use pure AI triage only
-                    selected_results = await perform_ai_triage_with_batching_async(articles_by_ticker[ticker], ticker, triage_batch_size)
+                    # Use dual scoring triage (OpenAI + Claude)
+                    selected_results = await perform_ai_triage_with_dual_scoring_async(articles_by_ticker[ticker], ticker, triage_batch_size)
                     triage_results[ticker] = selected_results
                 
                 memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")

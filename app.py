@@ -756,7 +756,8 @@ def ensure_schema():
                     competitor_3_ticker VARCHAR(20),
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW(),
-                    data_source VARCHAR(50) DEFAULT 'csv_import'
+                    data_source VARCHAR(50) DEFAULT 'csv_import',
+                    last_github_sync TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS domain_names (
@@ -9686,6 +9687,50 @@ async def get_active_batches(request: Request):
         LOG.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+@APP.get("/jobs/stats")
+async def get_job_stats(request: Request):
+    """Get overall job queue statistics"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        # Job counts by status
+        cur.execute("""
+            SELECT status, COUNT(*) as count
+            FROM ticker_processing_jobs
+            GROUP BY status
+        """)
+        status_counts = {row['status']: row['count'] for row in cur.fetchall()}
+
+        # Recent completions (last hour)
+        cur.execute("""
+            SELECT COUNT(*) as count,
+                   AVG(duration_seconds) as avg_duration,
+                   AVG(memory_mb) as avg_memory
+            FROM ticker_processing_jobs
+            WHERE status = 'completed'
+            AND completed_at > NOW() - INTERVAL '1 hour'
+        """)
+        recent = cur.fetchone()
+
+        # Active batches
+        cur.execute("""
+            SELECT COUNT(*) as count
+            FROM ticker_processing_batches
+            WHERE status IN ('queued', 'processing')
+        """)
+        active_batches = cur.fetchone()['count']
+
+    return {
+        "status_counts": status_counts,
+        "recent_completions_1h": recent['count'] or 0,
+        "avg_duration_seconds": float(recent['avg_duration']) if recent['avg_duration'] else None,
+        "avg_memory_mb": float(recent['avg_memory']) if recent['avg_memory'] else None,
+        "active_batches": active_batches,
+        "circuit_breaker_state": job_circuit_breaker.state,
+        "circuit_breaker_failures": job_circuit_breaker.failure_count,
+        "worker_id": get_worker_id()
+    }
+
 @APP.get("/jobs/{job_id}")
 async def get_job_detail(request: Request, job_id: str):
     """Get detailed status of a single job"""
@@ -9844,50 +9889,6 @@ async def reset_circuit_breaker(request: Request):
     return {
         "status": "reset",
         "message": "Circuit breaker has been manually reset"
-    }
-
-@APP.get("/jobs/stats")
-async def get_job_stats(request: Request):
-    """Get overall job queue statistics"""
-    require_admin(request)
-
-    with db() as conn, conn.cursor() as cur:
-        # Job counts by status
-        cur.execute("""
-            SELECT status, COUNT(*) as count
-            FROM ticker_processing_jobs
-            GROUP BY status
-        """)
-        status_counts = {row['status']: row['count'] for row in cur.fetchall()}
-
-        # Recent completions (last hour)
-        cur.execute("""
-            SELECT COUNT(*) as count,
-                   AVG(duration_seconds) as avg_duration,
-                   AVG(memory_mb) as avg_memory
-            FROM ticker_processing_jobs
-            WHERE status = 'completed'
-            AND completed_at > NOW() - INTERVAL '1 hour'
-        """)
-        recent = cur.fetchone()
-
-        # Active batches
-        cur.execute("""
-            SELECT COUNT(*) as count
-            FROM ticker_processing_batches
-            WHERE status IN ('queued', 'processing')
-        """)
-        active_batches = cur.fetchone()['count']
-
-    return {
-        "status_counts": status_counts,
-        "recent_completions_1h": recent['count'] or 0,
-        "avg_duration_seconds": float(recent['avg_duration']) if recent['avg_duration'] else None,
-        "avg_memory_mb": float(recent['avg_memory']) if recent['avg_memory'] else None,
-        "active_batches": active_batches,
-        "circuit_breaker_state": job_circuit_breaker.state,
-        "circuit_breaker_failures": job_circuit_breaker.failure_count,
-        "worker_id": get_worker_id()
     }
 
 # ------------------------------------------------------------------------------

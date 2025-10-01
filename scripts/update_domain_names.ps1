@@ -7,6 +7,9 @@ param(
     [switch]$DryRun = $false
 )
 
+# Prevent window from closing on error
+$ErrorActionPreference = "Continue"
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Domain Formal Name Batch Updater" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
@@ -15,17 +18,26 @@ Write-Host ""
 # Validate environment variables
 if (-not $DatabaseUrl) {
     Write-Host "ERROR: DATABASE_URL environment variable not set" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
 if (-not $AnthropicApiKey) {
     Write-Host "ERROR: ANTHROPIC_API_KEY environment variable not set" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
 # Check if psql is available
 if (-not (Get-Command psql -ErrorAction SilentlyContinue)) {
     Write-Host "ERROR: psql command not found. Please install PostgreSQL client tools." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
@@ -174,3 +186,6 @@ if ($DryRun) {
 
 Write-Host ""
 Write-Host "Done!" -ForegroundColor Green
+Write-Host ""
+Write-Host "Press any key to exit..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

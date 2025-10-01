@@ -13109,6 +13109,114 @@ async def commit_csv_to_github_endpoint():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@APP.post("/admin/update-domain-names")
+async def update_domain_formal_names(request: Request):
+    """Batch update domain formal names using Claude API"""
+    require_admin(request)
+
+    try:
+        LOG.info("=== BATCH UPDATING DOMAIN FORMAL NAMES ===")
+
+        # Step 1: Fetch all domains from database
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT domain FROM domain_names ORDER BY domain;")
+            domains = [row["domain"] for row in cur.fetchall()]
+
+        if not domains:
+            return {"status": "error", "message": "No domains found in database"}
+
+        LOG.info(f"Found {len(domains)} domains to process")
+
+        # Step 2: Build Claude API prompt
+        domain_list = "\n".join([f"- {domain}" for domain in domains])
+
+        prompt = f"""You are a domain name expert. Below is a list of domain names. For EACH domain, provide ONLY the formal brand/publication name as it should appear in professional contexts.
+
+Rules:
+1. Return EXACTLY one name per domain
+2. Use proper capitalization (e.g., "The Wall Street Journal" not "wall street journal")
+3. For news outlets, include "The" if official (e.g., "The Guardian")
+4. For companies, use official brand name (e.g., "Bloomberg" not "Bloomberg LP")
+5. Do NOT include domain extensions (.com, .net, etc.) in the formal name
+6. If a domain is unknown or generic, return the domain name as-is with proper capitalization
+
+Format your response as a JSON object where keys are domains and values are formal names:
+{{
+  "domain1.com": "Formal Name 1",
+  "domain2.com": "Formal Name 2"
+}}
+
+Domains:
+{domain_list}
+"""
+
+        # Step 3: Call Claude API
+        LOG.info("Calling Claude API...")
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = message.content[0].text
+        LOG.info("Claude API response received")
+
+        # Step 4: Extract JSON from response
+        import json
+        import re
+
+        if '```json' in response_text:
+            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+            json_content = json_match.group(1) if json_match else response_text
+        elif '{' in response_text:
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            json_content = json_match.group(0) if json_match else response_text
+        else:
+            return {"status": "error", "message": "Could not extract JSON from Claude response"}
+
+        domain_mappings = json.loads(json_content)
+
+        # Step 5: Update database
+        LOG.info("Updating database...")
+        update_count = 0
+        error_count = 0
+
+        with db() as conn, conn.cursor() as cur:
+            for domain in domains:
+                formal_name = domain_mappings.get(domain)
+
+                if not formal_name:
+                    LOG.warning(f"Missing formal name for: {domain}")
+                    error_count += 1
+                    continue
+
+                cur.execute("""
+                    UPDATE domain_names
+                    SET formal_name = %s
+                    WHERE domain = %s
+                """, (formal_name, domain))
+
+                update_count += 1
+                LOG.info(f"✅ {domain} → {formal_name}")
+
+        LOG.info(f"Update complete: {update_count} updated, {error_count} errors")
+
+        return {
+            "status": "success",
+            "total_domains": len(domains),
+            "updated": update_count,
+            "errors": error_count
+        }
+
+    except Exception as e:
+        LOG.error(f"Domain name update failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/admin/safe-incremental-commit")
 async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
     """Safely commit individual tickers as they complete processing"""

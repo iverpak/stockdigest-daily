@@ -9748,10 +9748,9 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.found_at >= %s
                     AND ta.ticker = ANY(%s)
-                    AND (a.published_at >= %s OR a.published_at IS NULL)
                 ORDER BY a.url_hash, ta.ticker,
                     COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff, tickers, cutoff))
+            """, (cutoff, tickers))
         else:
             cur.execute("""
                 SELECT DISTINCT ON (a.url_hash, ta.ticker)
@@ -9764,10 +9763,9 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.found_at >= %s
-                    AND (a.published_at >= %s OR a.published_at IS NULL)
                 ORDER BY a.url_hash, ta.ticker,
                     COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff, cutoff))
+            """, (cutoff,))
         
         # Group articles by ticker
         articles_by_ticker = {}
@@ -11431,9 +11429,8 @@ async def cron_ingest(
                             JOIN ticker_articles ta ON a.id = ta.article_id
                             WHERE ta.found_at >= %s
                             AND ta.ticker = ANY(%s)
-                            AND (a.published_at >= %s OR a.published_at IS NULL)
                             ORDER BY ta.ticker, ta.category, ta.found_at DESC
-                        """, (cutoff, tickers, cutoff))
+                        """, (cutoff, tickers))
                     else:
                         cur.execute("""
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
@@ -11442,9 +11439,8 @@ async def cron_ingest(
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
                             WHERE ta.found_at >= %s
-                            AND (a.published_at >= %s OR a.published_at IS NULL)
                             ORDER BY ta.ticker, ta.category, ta.found_at DESC
-                        """, (cutoff, cutoff))
+                        """, (cutoff,))
                     
                     all_articles = list(cur.fetchall())
             

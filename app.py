@@ -13139,6 +13139,7 @@ Rules:
 4. For companies, use official brand name (e.g., "Bloomberg" not "Bloomberg LP")
 5. Do NOT include domain extensions (.com, .net, etc.) in the formal name
 6. If a domain is unknown or generic, return the domain name as-is with proper capitalization
+7. IMPORTANT: Use only basic ASCII characters (A-Z, a-z, 0-9, spaces, hyphens). Convert accented characters to their base form (é→e, ü→u, ñ→n, etc.)
 
 Format your response as a JSON object where keys are domains and values are formal names:
 {{

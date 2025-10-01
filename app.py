@@ -307,6 +307,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_API_URL = os.getenv("ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 USE_CLAUDE_FOR_SUMMARIES = os.getenv("USE_CLAUDE_FOR_SUMMARIES", "true").lower() == "true"
+USE_CLAUDE_FOR_METADATA = os.getenv("USE_CLAUDE_FOR_METADATA", "true").lower() == "true"
 
 SCRAPFLY_API_KEY = os.getenv("SCRAPFLY_API_KEY")
 
@@ -8384,18 +8385,191 @@ class TickerManager:
 ticker_manager = TickerManager()
 feed_manager = FeedManager()
 
-def generate_enhanced_ticker_metadata_with_ai(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
-    """
-    Enhanced AI generation with company context from ticker reference table
-    """
+# ===== TICKER METADATA GENERATION WITH CLAUDE PRIMARY, OPENAI FALLBACK =====
+
+def generate_claude_ticker_metadata(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
+    """Generate ticker metadata using Claude API"""
+    if not ANTHROPIC_API_KEY:
+        LOG.warning("Missing ANTHROPIC_API_KEY; skipping Claude metadata generation")
+        return None
+
     if company_name is None:
         company_name = ticker
-    
+
+    # Build context info
+    context_info = f"Company: {company_name} ({ticker})"
+    if sector:
+        context_info += f", Sector: {sector}"
+    if industry:
+        context_info += f", Industry: {industry}"
+
+    # Comprehensive prompt for Claude
+    prompt = f"""You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
+
+{context_info}
+
+CRITICAL REQUIREMENTS:
+- All competitors must be currently publicly traded with valid ticker symbols
+- Industry keywords must be SPECIFIC enough to avoid false positives in news filtering, but not so narrow that they miss material news
+- Benchmarks must be sector-specific, not generic market indices
+- All information must be factually accurate
+- The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
+- If any field is unknown, output an empty array for lists and omit optional fields
+
+TICKER FORMAT REQUIREMENTS:
+- US companies: Use simple ticker (AAPL, MSFT)
+- Canadian companies: Use .TO suffix (RY.TO, TD.TO, BMO.TO)
+- UK companies: Use .L suffix (BP.L, VOD.L)
+- Australian companies: Use .AX suffix (BHP.AX, CBA.AX)
+- Other international: Use appropriate Yahoo Finance suffix
+- Special classes: Use dash format (BRK-A, BRK-B, TECK-A.TO)
+
+INDUSTRY KEYWORDS (exactly 3):
+- Must be SPECIFIC to the company's primary business
+- Use proper capitalization like "Digital Advertising"
+- Avoid generic terms like "Technology", "Healthcare", "Energy", "Oil", "Services"
+- Use compound terms or specific product categories
+- Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
+
+COMPETITORS (exactly 3):
+- Must be direct business competitors, not just same-sector companies
+- Must be currently publicly traded
+- Format as structured objects with 'name' and 'ticker' fields
+- Verify ticker is correct Yahoo Finance format
+- Exclude: Private companies, subsidiaries, companies acquired in last 2 years
+
+Return ONLY valid JSON in this exact format:
+{{
+    "ticker": "{ticker}",
+    "company_name": "{company_name}",
+    "sector": "{sector if sector else 'GICS Sector'}",
+    "industry": "{industry if industry else 'GICS Industry'}",
+    "sub_industry": "GICS Sub-Industry",
+    "industry_keywords": ["keyword1", "keyword2", "keyword3"],
+    "competitors": [
+        {{"name": "Company Name", "ticker": "TICKER"}},
+        {{"name": "Company Name", "ticker": "TICKER.TO"}},
+        {{"name": "Company Name", "ticker": "TICKER"}}
+    ],
+    "sector_profile": {{
+        "core_inputs": ["input1", "input2", "input3"],
+        "core_channels": ["channel1", "channel2", "channel3"],
+        "core_geos": ["geo1", "geo2", "geo3"],
+        "benchmarks": ["benchmark1", "benchmark2", "benchmark3"]
+    }},
+    "aliases_brands_assets": {{
+        "aliases": ["alias1", "alias2", "alias3"],
+        "brands": ["brand1", "brand2", "brand3"],
+        "assets": ["asset1", "asset2", "asset3"]
+    }}
+}}"""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+
+        response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=(10, 180))
+
+        if response.status_code != 200:
+            LOG.error(f"Claude metadata API error {response.status_code}: {response.text[:200]}")
+            return None
+
+        result = response.json()
+        text = result.get("content", [{}])[0].get("text", "")
+
+        if not text:
+            LOG.warning(f"Claude metadata response empty for {ticker}")
+            return None
+
+        # Parse JSON
+        metadata = parse_json_with_fallback(text, ticker)
+        if not metadata:
+            LOG.warning(f"Claude metadata JSON parsing failed for {ticker}")
+            return None
+
+        # Process the results (same logic as OpenAI)
+        def _list3(x):
+            if isinstance(x, (list, tuple)):
+                items = [item for item in list(x)[:3] if item]
+                return items
+            return []
+
+        def _process_competitors(competitors_data):
+            processed = []
+            if not isinstance(competitors_data, list):
+                return processed
+
+            for comp in competitors_data[:3]:
+                if isinstance(comp, dict):
+                    name = comp.get('name', '').strip()
+                    ticker_field = comp.get('ticker', '').strip()
+
+                    if name:
+                        processed_comp = {"name": name}
+                        if ticker_field:
+                            normalized_ticker = normalize_ticker_format(ticker_field)
+                            if validate_ticker_format(normalized_ticker):
+                                processed_comp["ticker"] = normalized_ticker
+                            else:
+                                LOG.warning(f"Claude provided invalid competitor ticker: {ticker_field}")
+                        processed.append(processed_comp)
+                elif isinstance(comp, str):
+                    name = comp.strip()
+                    if name:
+                        processed.append({"name": name})
+
+            return processed
+
+        metadata.setdefault("ticker", ticker)
+        metadata["name"] = company_name
+        metadata["company_name"] = company_name
+
+        metadata.setdefault("sector", sector)
+        metadata.setdefault("industry", industry)
+        metadata.setdefault("sub_industry", "")
+
+        metadata["industry_keywords"] = _list3(metadata.get("industry_keywords", []))
+        metadata["competitors"] = _process_competitors(metadata.get("competitors", []))
+
+        sector_profile = metadata.setdefault("sector_profile", {})
+        aliases_brands = metadata.setdefault("aliases_brands_assets", {})
+
+        sector_profile["core_inputs"] = _list3(sector_profile.get("core_inputs", []))
+        sector_profile["core_channels"] = _list3(sector_profile.get("core_channels", []))
+        sector_profile["core_geos"] = _list3(sector_profile.get("core_geos", []))
+        sector_profile["benchmarks"] = _list3(sector_profile.get("benchmarks", []))
+
+        aliases_brands["aliases"] = _list3(aliases_brands.get("aliases", []))
+        aliases_brands["brands"] = _list3(aliases_brands.get("brands", []))
+        aliases_brands["assets"] = _list3(aliases_brands.get("assets", []))
+
+        LOG.info(f"Claude metadata generated for {ticker}: {company_name}")
+        return metadata
+
+    except Exception as e:
+        LOG.error(f"Claude metadata generation failed for {ticker}: {e}")
+        return None
+
+
+def generate_openai_ticker_metadata(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
+    """Generate ticker metadata using OpenAI API (fallback)"""
     if not OPENAI_API_KEY:
         LOG.warning("Missing OPENAI_API_KEY; skipping metadata generation")
         return None
 
-    # UPDATED: Enhanced system prompt with Yahoo Finance ticker format specification
+    if company_name is None:
+        company_name = ticker
+
+    # System prompt
     system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
@@ -8407,7 +8581,7 @@ CRITICAL REQUIREMENTS:
 - If any field is unknown, output an empty array for lists and omit optional fields. Never refuse; always return a valid JSON object.
 
 TICKER FORMAT REQUIREMENTS:
-- US companies: Use simple ticker (AAPL, MSFT)  
+- US companies: Use simple ticker (AAPL, MSFT)
 - Canadian companies: Use .TO suffix (RY.TO, TD.TO, BMO.TO)
 - UK companies: Use .L suffix (BP.L, VOD.L)
 - Australian companies: Use .AX suffix (BHP.AX, CBA.AX)
@@ -8430,7 +8604,6 @@ COMPETITORS (exactly 3):
 
 Generate response in valid JSON format with all required fields. Be concise and precise."""
 
-    # Enhanced prompt with context from ticker reference table
     context_info = f"Company: {company_name} ({ticker})"
     if sector:
         context_info += f", Sector: {sector}"
@@ -8476,8 +8649,7 @@ Required JSON format:
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json"
         }
-        
-        # First attempt with optimized settings
+
         data = {
             "model": OPENAI_MODEL,
             "input": f"{system_prompt}\n\n{user_prompt}",
@@ -8489,98 +8661,132 @@ Required JSON format:
             },
             "truncation": "auto"
         }
-        
+
         response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-        
+
         if response.status_code != 200:
-            print(f"API error {response.status_code}: {response.text}")
+            LOG.error(f"OpenAI metadata API error {response.status_code}: {response.text[:200]}")
             return None
-        
+
         result = response.json()
         text = extract_text_from_responses(result)
-        
-        # Log usage details for debugging
+
+        # Log usage
         u = result.get("usage", {}) or {}
-        LOG.info("Enhanced OpenAI usage – input:%s output:%s (cap:%s) status:%s reason:%s",
+        LOG.info("OpenAI metadata usage – input:%s output:%s (cap:%s) status:%s",
                  u.get("input_tokens"), u.get("output_tokens"),
                  result.get("max_output_tokens"),
-                 result.get("status"),
-                 (result.get("incomplete_details") or {}).get("reason"))
-        
+                 result.get("status"))
+
         if not text:
-            LOG.warning(f"OpenAI response empty for {ticker} metadata")
+            LOG.warning(f"OpenAI metadata response empty for {ticker}")
             return None
-        
-        # Parse JSON with robust fallback
+
+        # Parse JSON
         metadata = parse_json_with_fallback(text, ticker)
-        
-        # Process the results and ensure proper structure
-        def _list3(x): 
+        if not metadata:
+            LOG.warning(f"OpenAI metadata JSON parsing failed for {ticker}")
+            return None
+
+        # Process results (same logic)
+        def _list3(x):
             if isinstance(x, (list, tuple)):
                 items = [item for item in list(x)[:3] if item]
                 return items
             return []
-        
+
         def _process_competitors(competitors_data):
-            """Ensure competitors are in proper format with name and ticker validation"""
             processed = []
             if not isinstance(competitors_data, list):
                 return processed
-            
+
             for comp in competitors_data[:3]:
                 if isinstance(comp, dict):
                     name = comp.get('name', '').strip()
-                    ticker = comp.get('ticker', '').strip()
-                    
-                    if name:  # Name is required
+                    ticker_field = comp.get('ticker', '').strip()
+
+                    if name:
                         processed_comp = {"name": name}
-                        if ticker:
-                            # Validate and normalize ticker
-                            normalized_ticker = normalize_ticker_format(ticker)
+                        if ticker_field:
+                            normalized_ticker = normalize_ticker_format(ticker_field)
                             if validate_ticker_format(normalized_ticker):
                                 processed_comp["ticker"] = normalized_ticker
                             else:
-                                LOG.warning(f"AI provided invalid competitor ticker: {ticker}")
+                                LOG.warning(f"OpenAI provided invalid competitor ticker: {ticker_field}")
                         processed.append(processed_comp)
                 elif isinstance(comp, str):
-                    # Handle string format as fallback
                     name = comp.strip()
                     if name:
                         processed.append({"name": name})
-            
+
             return processed
-        
+
         metadata.setdefault("ticker", ticker)
-        metadata["name"] = company_name  # Use the provided company name
-        metadata["company_name"] = company_name  # Ensure both fields are set
-        
+        metadata["name"] = company_name
+        metadata["company_name"] = company_name
+
         metadata.setdefault("sector", sector)
         metadata.setdefault("industry", industry)
         metadata.setdefault("sub_industry", "")
-        
-        # Normalize lists (no padding)
+
         metadata["industry_keywords"] = _list3(metadata.get("industry_keywords", []))
         metadata["competitors"] = _process_competitors(metadata.get("competitors", []))
-        
-        # Ensure nested objects exist
+
         sector_profile = metadata.setdefault("sector_profile", {})
         aliases_brands = metadata.setdefault("aliases_brands_assets", {})
-        
+
         sector_profile["core_inputs"] = _list3(sector_profile.get("core_inputs", []))
         sector_profile["core_channels"] = _list3(sector_profile.get("core_channels", []))
         sector_profile["core_geos"] = _list3(sector_profile.get("core_geos", []))
         sector_profile["benchmarks"] = _list3(sector_profile.get("benchmarks", []))
-        
+
         aliases_brands["aliases"] = _list3(aliases_brands.get("aliases", []))
         aliases_brands["brands"] = _list3(aliases_brands.get("brands", []))
         aliases_brands["assets"] = _list3(aliases_brands.get("assets", []))
-        
-        LOG.info(f"Enhanced metadata generated for {ticker}: {company_name}")
+
+        LOG.info(f"OpenAI metadata generated for {ticker}: {company_name}")
         return metadata
-            
+
     except Exception as e:
-        print(f"Error generating enhanced metadata for {ticker}: {e}")
+        LOG.error(f"OpenAI metadata generation failed for {ticker}: {e}")
         return None
+
+
+def generate_ticker_metadata_with_fallback(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
+    """Main entry point: Try Claude first, fallback to OpenAI. Returns metadata dict"""
+    metadata = None
+
+    # Try Claude first (if enabled and API key available)
+    if USE_CLAUDE_FOR_METADATA and ANTHROPIC_API_KEY:
+        try:
+            metadata = generate_claude_ticker_metadata(ticker, company_name, sector, industry)
+            if metadata:
+                LOG.info(f"✅ Claude metadata generation succeeded for {ticker}")
+                return metadata
+            else:
+                LOG.warning(f"Claude returned no metadata for {ticker}, falling back to OpenAI")
+        except Exception as e:
+            LOG.warning(f"Claude metadata generation failed for {ticker}, falling back to OpenAI: {e}")
+
+    # Fallback to OpenAI
+    if OPENAI_API_KEY:
+        try:
+            metadata = generate_openai_ticker_metadata(ticker, company_name, sector, industry)
+            if metadata:
+                LOG.info(f"✅ OpenAI metadata generation succeeded for {ticker}")
+                return metadata
+        except Exception as e:
+            LOG.error(f"OpenAI metadata generation also failed for {ticker}: {e}")
+
+    return None
+
+
+def generate_enhanced_ticker_metadata_with_ai(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
+    """
+    Enhanced AI generation with company context from ticker reference table
+    Now uses Claude primary with OpenAI fallback
+    """
+    return generate_ticker_metadata_with_fallback(ticker, company_name, sector, industry)
 
 def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
     """Get ticker metadata with reference table lookup first, then AI enhancement"""

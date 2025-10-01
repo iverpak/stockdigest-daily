@@ -9298,13 +9298,34 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             f"<div class='summary'>",
             f"<strong>📅 Report Period:</strong> Last 24 hours<br>",
             f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
-            f"<strong>📊 Tickers Covered:</strong> {ticker_list}",
-            "</div>"
+            f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>"
         ]
-        
+
+        # Collect all industry keywords and competitors for header
+        all_industry_keywords = set()
+        all_competitors = []
+        for ticker in articles_by_ticker.keys():
+            config = get_ticker_config(ticker)
+            if config:
+                keywords = config.get("industry_keywords", [])
+                all_industry_keywords.update(keywords)
+                comps = config.get("competitors", [])
+                for comp in comps:
+                    comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                    if comp_display not in all_competitors:
+                        all_competitors.append(comp_display)
+
+        # Add industry keywords and competitors to header
+        if all_industry_keywords:
+            html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
+        if all_competitors:
+            html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
+
+        html.append("</div>")
+
         total_articles = 0
         total_selected = 0
-        
+
         for ticker, categories in articles_by_ticker.items():
             ticker_count = sum(len(articles) for articles in categories.values())
             total_articles += ticker_count
@@ -9322,21 +9343,6 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             
             html.append(f"<div class='ticker-section'>")
             html.append(f"<h2>🎯 Target Company: {full_company_name} ({ticker})</h2>")
-
-            # Display industry keywords and competitors - use array format from config
-            industry_keywords = config.get("industry_keywords", []) if config else []
-            competitors = config.get("competitors", []) if config else []
-
-            if industry_keywords or competitors:
-                html.append("<p style='margin: 10px 0; color: #555;'>")
-                if industry_keywords:
-                    html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(industry_keywords)}")
-                if competitors:
-                    if industry_keywords:
-                        html.append("<br>")
-                    competitor_display = [f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name'] for comp in competitors]
-                    html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(competitor_display)}")
-                html.append("</p>")
 
             # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
             openai_summary = openai_summaries.get(ticker, {}).get("titles_summary", "")

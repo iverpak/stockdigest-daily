@@ -4563,11 +4563,7 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
         extraction_patterns = [
             # Pattern 1: Standard providerContentUrl
             r'"providerContentUrl"\s*:\s*"([^"]*)"',
-            # Pattern 2: Alternative sourceUrl
-            r'"sourceUrl"\s*:\s*"([^"]*)"',
-            # Pattern 3: originalUrl
-            r'"originalUrl"\s*:\s*"([^"]*)"',
-            # Pattern 4: Escaped JSON patterns
+            # Pattern 2: Escaped JSON patterns
             r'\\+"providerContentUrl\\+"\s*:\s*\\+"([^\\]*?)\\+"'
         ]
         
@@ -4598,16 +4594,13 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                     for candidate_url in candidate_urls:
                         try:
                             parsed = urlparse(candidate_url)
-                            # Skip media.zenfs.com URLs
-                            if 'media.zenfs.com' in candidate_url:
-                                LOG.debug(f"Skipping media.zenfs.com URL: {candidate_url}")
-                                continue
                             if (parsed.scheme in ['http', 'https'] and
-                                parsed.netloc and 
+                                parsed.netloc and
                                 len(candidate_url) > 20 and
                                 'finance.yahoo.com' not in candidate_url and
                                 'ca.finance.yahoo.com' not in candidate_url and
                                 'video.media.yql.yahoo.com' not in candidate_url and  # Block video URLs
+                                'media.zenfs.com' not in candidate_url and  # Block media.zenfs.com redirects
                                 not candidate_url.startswith('//') and
                                 '.' in parsed.netloc and
                                 # Enhanced validation to exclude problematic URLs
@@ -4616,7 +4609,7 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                                 not 'yimg.com' in candidate_url.lower() and
                                 not '/author/' in candidate_url.lower() and
                                 not 'yahoo-finance-video' in candidate_url.lower()):
-                                
+
                                 LOG.info(f"Successfully extracted Yahoo source: {candidate_url}")
                                 return candidate_url
                         except Exception as e:
@@ -4626,35 +4619,10 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                 except Exception as e:
                     LOG.debug(f"Processing match failed: {e}")
                     continue
-        
-        # Enhanced fallback patterns that exclude author pages, videos, and problematic URLs
-        fallback_patterns = [
-            # Only match URLs that are likely to be news articles (not author pages or videos)
-            r'https://(?!finance\.yahoo\.com|ca\.finance\.yahoo\.com|s\.yimg\.com|video\.media\.yql\.yahoo\.com)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/(?!author/)[^\s"<>]*(?:news|article|story|press|finance|business)[^\s"<>]*',
-            r'https://stockstory\.org/[^\s"<>]*',
-        ]
-        
-        for pattern in fallback_patterns:
-            matches = re.finditer(pattern, html_content)
-            for match in matches:
-                candidate_url = match.group(0).rstrip('",')
-                try:
-                    parsed = urlparse(candidate_url)
-                    if (parsed.scheme and parsed.netloc and
-                        # Additional validation for fallback URLs
-                        not candidate_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js', '.mp4', '.avi', '.mov')) and
-                        not '/api/' in candidate_url.lower() and
-                        not '/author/' in candidate_url.lower() and
-                        not 'yahoo-finance-video' in candidate_url.lower() and
-                        'video.media.yql.yahoo.com' not in candidate_url and  # Block video URLs
-                        len(candidate_url) > 30):  # Minimum reasonable URL length
-                        LOG.info(f"Fallback extraction successful: {candidate_url}")
-                        return candidate_url
-                except Exception:
-                    continue
-        
-        LOG.warning(f"No original source found for Yahoo URL: {url}")
-        return None
+
+        # If no redirect found, keep the original Yahoo URL
+        LOG.info(f"No redirect found, keeping original Yahoo URL: {url}")
+        return url
         
     except Exception as e:
         LOG.error(f"Yahoo Finance source extraction failed for {url}: {e}")
@@ -9135,43 +9103,31 @@ def generate_claude_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[
         # Get industry keywords
         industry_keywords = config.get("industry_keywords", []) if config else []
 
-        # Collect titles + descriptions
+        # Collect titles only (no descriptions)
         titles_with_sources = []
         for article in company_articles[:20]:
             title = article.get("title", "")
-            description = article.get("description", "")
             if title:
                 domain = article.get("domain", "")
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                if description:
-                    titles_with_sources.append(f"• {title} | {description[:100]}... [{source_name}]")
-                else:
-                    titles_with_sources.append(f"• {title} [{source_name}]")
+                titles_with_sources.append(f"• {title} [{source_name}]")
 
         industry_titles_with_sources = []
         for article in industry_articles[:10]:
             title = article.get("title", "")
-            description = article.get("description", "")
             if title:
                 domain = article.get("domain", "")
                 keyword = article.get("search_keyword", "Industry")
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                if description:
-                    industry_titles_with_sources.append(f"• {title} | {description[:100]}... [Industry: {keyword}] [{source_name}]")
-                else:
-                    industry_titles_with_sources.append(f"• {title} [Industry: {keyword}] [{source_name}]")
+                industry_titles_with_sources.append(f"• {title} [Industry: {keyword}] [{source_name}]")
 
         competitor_titles_with_sources = []
         for article in competitor_articles[:10]:
             title = article.get("title", "")
-            description = article.get("description", "")
             if title:
                 domain = article.get("domain", "")
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                if description:
-                    competitor_titles_with_sources.append(f"• {title} | {description[:100]}... [{source_name}]")
-                else:
-                    competitor_titles_with_sources.append(f"• {title} [{source_name}]")
+                competitor_titles_with_sources.append(f"• {title} [{source_name}]")
 
         titles_summary = ""
 
@@ -9754,9 +9710,10 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.found_at >= %s
                     AND ta.ticker = ANY(%s)
+                    AND (a.published_at >= %s OR a.published_at IS NULL)
                 ORDER BY a.url_hash, ta.ticker,
                     COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff, tickers))
+            """, (cutoff, tickers, cutoff))
         else:
             cur.execute("""
                 SELECT DISTINCT ON (a.url_hash, ta.ticker)
@@ -9769,9 +9726,10 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.found_at >= %s
+                    AND (a.published_at >= %s OR a.published_at IS NULL)
                 ORDER BY a.url_hash, ta.ticker,
                     COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff,))
+            """, (cutoff, cutoff))
         
         # Group articles by ticker
         articles_by_ticker = {}
@@ -11435,8 +11393,9 @@ async def cron_ingest(
                             JOIN ticker_articles ta ON a.id = ta.article_id
                             WHERE ta.found_at >= %s
                             AND ta.ticker = ANY(%s)
+                            AND (a.published_at >= %s OR a.published_at IS NULL)
                             ORDER BY ta.ticker, ta.category, ta.found_at DESC
-                        """, (cutoff, tickers))
+                        """, (cutoff, tickers, cutoff))
                     else:
                         cur.execute("""
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
@@ -11445,9 +11404,10 @@ async def cron_ingest(
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
                             WHERE ta.found_at >= %s
+                            AND (a.published_at >= %s OR a.published_at IS NULL)
                             ORDER BY ta.ticker, ta.category, ta.found_at DESC
-                        """, (cutoff,))
-                    
+                        """, (cutoff, cutoff))
+
                     all_articles = list(cur.fetchall())
 
             memory_monitor.take_snapshot("ARTICLES_LOADED")

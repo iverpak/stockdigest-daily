@@ -356,7 +356,6 @@ SPAM_DOMAINS = {
     "investing.com", "www.investing.com",
     "fool.com", "www.fool.com", "fool.ca", "www.fool.ca",
     "marketsmojo.com", "www.marketsmojo.com",
-    "gurufocus.com", "www.gurufocus.com",
     "stocktitan.net", "www.stocktitan.net",
     "insidermonkey.com", "www.insidermonkey.com",
     "zacks.com", "www.zacks.com",
@@ -372,6 +371,7 @@ QUALITY_DOMAINS = {
 # Domains that can be ingested but NOT scraped (heavy JS/bot protection)
 PROBLEMATIC_SCRAPE_DOMAINS = {
     "defenseworld.net", "defense-world.net", "defensenews.com",
+    "gurufocus.com", "www.gurufocus.com",
 }
 
 # Known paywall domains to skip during content scraping
@@ -9757,16 +9757,16 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 html.append("</div>")
                 html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
             
-            # Process articles with quality domains first
+            # PHASE 1: Collect and enhance ALL articles across ALL categories
+            all_enhanced_articles = []
+
             for category, articles in categories.items():
                 if not articles:
                     continue
-                
+
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
-                
-                # Enhanced article sorting - Quality+Flagged domains first
-                enhanced_articles = []
+
                 for idx, article in enumerate(articles):
                     domain = normalize_domain(article.get("domain", ""))
                     is_ai_selected = idx in selected_article_data
@@ -9790,13 +9790,14 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     elif is_quality_domain and not is_problematic:
                         priority = 999  # Quality but NOT flagged = bottom
                         triage_reason = "Quality domain (not flagged)"
-                    
-                        # Extract OpenAI and Claude scores from triage data
+
+                    # Extract OpenAI and Claude scores from triage data
                     openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
                     claude_score = selected_article_data[idx].get("claude_score", 0) if is_ai_selected else 0
 
-                    enhanced_articles.append({
+                    all_enhanced_articles.append({
                         "article": article,
+                        "category": category,
                         "idx": idx,
                         "priority": priority,
                         "is_ai_selected": is_ai_selected,
@@ -9808,23 +9809,34 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         "claude_score": claude_score,
                         "published_at": article.get("published_at")
                     })
-                
-                # Sort by priority (quality first) and time
-                enhanced_articles.sort(key=lambda x: (
-                    x["priority"],
-                    -(x["published_at"].timestamp() if x["published_at"] else 0)
-                ))
-                
+
+            # PHASE 2: Sort ALL articles globally by priority, then time
+            all_enhanced_articles.sort(key=lambda x: (
+                x["priority"],
+                -(x["published_at"].timestamp() if x["published_at"] else 0)
+            ))
+
+            # PHASE 3: Group sorted articles by category for display
+            articles_by_category_sorted = {"company": [], "industry": [], "competitor": []}
+            for enhanced_article in all_enhanced_articles:
+                articles_by_category_sorted[enhanced_article["category"]].append(enhanced_article)
+
+            # PHASE 4: Display each category with globally-sorted articles
+            category_icons = {
+                "company": "🎯",
+                "industry": "🏭",
+                "competitor": "⚔️"
+            }
+
+            for category in ["company", "industry", "competitor"]:
+                enhanced_articles = articles_by_category_sorted.get(category, [])
+                if not enhanced_articles:
+                    continue
+
                 selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or (a["is_quality_domain"] and not a["is_problematic"])])
-                
-                category_icons = {
-                    "company": "🎯",
-                    "industry": "🏭", 
-                    "competitor": "⚔️"
-                }
-                
-                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
-                
+
+                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} ({len(enhanced_articles)} articles, {selected_count} selected)</h3>")
+
                 for enhanced_article in enhanced_articles[:50]:
                     article = enhanced_article["article"]
                     domain = article.get("domain", "unknown")
@@ -10032,10 +10044,31 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         f"<div class='summary'>",
         f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
         f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
-        f"<strong>📊 Tickers Covered:</strong> {ticker_list}",
-        "</div>"
+        f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>"
     ]
-        
+
+    # Collect all industry keywords and competitors for header (match triage email)
+    all_industry_keywords = set()
+    all_competitors = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        if config:
+            keywords = config.get("industry_keywords", [])
+            all_industry_keywords.update(keywords)
+            comps = config.get("competitors", [])
+            for comp in comps:
+                comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                if comp_display not in all_competitors:
+                    all_competitors.append(comp_display)
+
+    # Add industry keywords and competitors to header
+    if all_industry_keywords:
+        html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
+    if all_competitors:
+        html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
+
+    html.append("</div>")
+
     for ticker, categories in articles_by_ticker.items():
         total_articles = sum(len(articles) for articles in categories.values())
         
@@ -10045,21 +10078,6 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
-
-        # Display industry keywords and competitors - use array format from config
-        industry_keywords = config.get("industry_keywords", []) if config else []
-        competitors = config.get("competitors", []) if config else []
-
-        if industry_keywords or competitors:
-            html.append("<p style='margin: 10px 0; color: #555;'>")
-            if industry_keywords:
-                html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(industry_keywords)}")
-            if competitors:
-                if industry_keywords:
-                    html.append("<br>")
-                competitor_display = [f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name'] for comp in competitors]
-                html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(competitor_display)}")
-            html.append("</p>")
 
         # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
         openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")

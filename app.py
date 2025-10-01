@@ -359,6 +359,8 @@ PROBLEMATIC_SCRAPE_DOMAINS = {
     "zacks.com", "insidermonkey.com", "fool.com", "fool.ca",
     # Never flag for scraping (low-quality/problematic content)
     "gurufocus.com", "stocktitan.net",
+    "msn.com", "tipranks.com", "simplywall.st", "sharewise.com",
+    "stockstory.org", "news.stocktradersdaily.com", "earlytimes.in",
 }
 
 # Known paywall domains to skip during content scraping
@@ -371,10 +373,11 @@ PAYWALL_DOMAINS = {
     "seekingalpha.com", "www.seekingalpha.com",
     "washingtonpost.com", "www.washingtonpost.com",
     "barrons.com", "www.barrons.com",
-    
+    "marketwatch.com", "www.marketwatch.com",
+
     # Academic/research paywalls
     "sciencedirect.com", "www.sciencedirect.com",
-    
+
     # Specific financial paywalls that consistently block
     "thefly.com", "www.thefly.com",
     "accessnewswire.com", "www.accessnewswire.com",
@@ -3150,14 +3153,14 @@ def log_scraping_success_rates():
     scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
     scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
     
-    # Log prominent success rate summary
+    # Log prominent success rate summary with per-tier percentages
     LOG.info("=" * 60)
     LOG.info("SCRAPING SUCCESS RATES")
     LOG.info("=" * 60)
     LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
-    LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
-    LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
-    LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
+    LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% of tier attempts ({requests_success}/{requests_attempts})")
+    LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% of tier attempts ({playwright_success}/{playwright_attempts})")
+    LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% of tier attempts ({scrapfly_success}/{scrapfly_attempts})")
 
     if scrapfly_attempts > 0:
         LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
@@ -4533,13 +4536,14 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
         if not any(domain in url for domain in ["finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"]):
             return None
         
-        # Skip Yahoo author pages, video files, AND video.media.yql.yahoo.com
+        # Skip Yahoo author pages, video files, media.zenfs.com redirects, AND video.media.yql.yahoo.com
         skip_patterns = [
             "/author/", "yahoo-finance-video", ".mp4", ".avi", ".mov",
-            "video.media.yql.yahoo.com"  # Block video URLs
+            "video.media.yql.yahoo.com",  # Block video URLs
+            "media.zenfs.com"  # Block media.zenfs.com redirects
         ]
         if any(skip_pattern in url for skip_pattern in skip_patterns):
-            LOG.info(f"Skipping Yahoo video/author page: {url}")
+            LOG.info(f"Skipping Yahoo video/author/zenfs page: {url}")
             return None
             
         LOG.info(f"Extracting Yahoo Finance source from: {url}")
@@ -4594,7 +4598,11 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
                     for candidate_url in candidate_urls:
                         try:
                             parsed = urlparse(candidate_url)
-                            if (parsed.scheme in ['http', 'https'] and 
+                            # Skip media.zenfs.com URLs
+                            if 'media.zenfs.com' in candidate_url:
+                                LOG.debug(f"Skipping media.zenfs.com URL: {candidate_url}")
+                                continue
+                            if (parsed.scheme in ['http', 'https'] and
                                 parsed.netloc and 
                                 len(candidate_url) > 20 and
                                 'finance.yahoo.com' not in candidate_url and
@@ -9315,9 +9323,9 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             html.append(f"<div class='ticker-section'>")
             html.append(f"<h2>🎯 Target Company: {full_company_name} ({ticker})</h2>")
 
-            # Display industry keywords and competitors
-            industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
-            competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")]
+            # Display industry keywords and competitors - use array format from config
+            industry_keywords = config.get("industry_keywords", []) if config else []
+            competitors = config.get("competitors", []) if config else []
 
             if industry_keywords or competitors:
                 html.append("<p style='margin: 10px 0; color: #555;'>")
@@ -9326,7 +9334,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 if competitors:
                     if industry_keywords:
                         html.append("<br>")
-                    competitor_display = [f"{name} ({ticker})" if ticker else name for name, ticker in competitors]
+                    competitor_display = [f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name'] for comp in competitors]
                     html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(competitor_display)}")
                 html.append("</p>")
 
@@ -9355,26 +9363,31 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
                 
-                # Enhanced article sorting - Quality domains first
+                # Enhanced article sorting - Quality+Flagged domains first
                 enhanced_articles = []
                 for idx, article in enumerate(articles):
                     domain = normalize_domain(article.get("domain", ""))
                     is_ai_selected = idx in selected_article_data
                     is_quality_domain = domain in QUALITY_DOMAINS
                     is_problematic = domain in PROBLEMATIC_SCRAPE_DOMAINS
-                    
+
                     priority = 999
                     triage_reason = ""
                     ai_priority = "Low"
-                    
-                    if is_quality_domain and not is_problematic:
-                        priority = 1  # Quality domains get top priority
-                        triage_reason = "Quality domain auto-selected"
+
+                    # Only prioritize Quality domains that are ALSO flagged
+                    if is_quality_domain and is_ai_selected and not is_problematic:
+                        priority = 0  # Quality + Flagged = TOP priority
+                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
+                        triage_reason = f"Quality domain + AI flagged ({ai_priority})"
                     elif is_ai_selected:
                         ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
                         triage_reason = selected_article_data[idx].get("why", "")
-                        priority_map = {"High": 2, "Medium": 3, "Low": 4}
-                        priority = priority_map.get(ai_priority, 4)
+                        priority_map = {"High": 1, "Medium": 2, "Low": 3}
+                        priority = priority_map.get(ai_priority, 3)
+                    elif is_quality_domain and not is_problematic:
+                        priority = 999  # Quality but NOT flagged = bottom
+                        triage_reason = "Quality domain (not flagged)"
                     
                         # Extract OpenAI and Claude scores from triage data
                     openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
@@ -9624,9 +9637,9 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
-        # Display industry keywords and competitors
-        industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
-        competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")]
+        # Display industry keywords and competitors - use array format from config
+        industry_keywords = config.get("industry_keywords", []) if config else []
+        competitors = config.get("competitors", []) if config else []
 
         if industry_keywords or competitors:
             html.append("<p style='margin: 10px 0; color: #555;'>")
@@ -9635,7 +9648,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
             if competitors:
                 if industry_keywords:
                     html.append("<br>")
-                competitor_display = [f"{name} ({ticker})" if ticker else name for name, ticker in competitors]
+                competitor_display = [f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name'] for comp in competitors]
                 html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(competitor_display)}")
             html.append("</p>")
 
@@ -9719,9 +9732,9 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     LOG.info(f"=== FETCHING DIGEST ARTICLES ===")
     LOG.info(f"Time window: {period_label} (cutoff: {cutoff})")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
-    
+
     with db() as conn, conn.cursor() as cur:
-        # Enhanced query to get articles from new schema
+        # Enhanced query to get articles from new schema - MATCHES triage query
         if tickers:
             cur.execute("""
                 SELECT DISTINCT ON (a.url_hash, ta.ticker)
@@ -9735,9 +9748,10 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.found_at >= %s
                     AND ta.ticker = ANY(%s)
+                    AND (a.published_at >= %s OR a.published_at IS NULL)
                 ORDER BY a.url_hash, ta.ticker,
                     COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff, tickers))
+            """, (cutoff, tickers, cutoff))
         else:
             cur.execute("""
                 SELECT DISTINCT ON (a.url_hash, ta.ticker)
@@ -9750,17 +9764,18 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.found_at >= %s
+                    AND (a.published_at >= %s OR a.published_at IS NULL)
                 ORDER BY a.url_hash, ta.ticker,
                     COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff,))
+            """, (cutoff, cutoff))
         
         # Group articles by ticker
         articles_by_ticker = {}
         for row in cur.fetchall():
             target_ticker = row["ticker"]
 
-            # CRITICAL FIX: Determine correct category based on viewing ticker
-            category = determine_article_category_for_ticker(row, target_ticker)
+            # Use stored category from ticker_articles table
+            category = row["category"]
             
             if target_ticker not in articles_by_ticker:
                 articles_by_ticker[target_ticker] = {}

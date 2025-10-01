@@ -9,7 +9,7 @@ import pytz
 import json
 import openai
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Dict, Any, Tuple, Set
+from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from contextlib import contextmanager
 from urllib.parse import urlparse, parse_qs, unquote, quote
 import csv
@@ -306,6 +306,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_API_URL = os.getenv("ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+USE_CLAUDE_FOR_SUMMARIES = os.getenv("USE_CLAUDE_FOR_SUMMARIES", "true").lower() == "true"
 
 SCRAPFLY_API_KEY = os.getenv("SCRAPFLY_API_KEY")
 
@@ -333,15 +334,32 @@ DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
 # FIXED: Enhanced spam filtering with more comprehensive domain list
+# These domains are blocked at ingestion - articles never stored
 SPAM_DOMAINS = {
+    # Original spam domains
     "marketbeat.com", "www.marketbeat.com", "marketbeat",
-    "newser.com", "www.newser.com", "newser", 
+    "newser.com", "www.newser.com", "newser",
     "khodrobank.com", "www.khodrobank.com", "khodrobank",
     "defenseworld.net", "www.defenseworld.net", "defenseworld",
     "defenseworld.com", "www.defenseworld.com", "defenseworld",
     "defense-world.net", "www.defense-world.net", "defense-world",
     "defensenews.com", "www.defensenews.com", "defensenews",
     "facebook.com", "www.facebook.com", "facebook",
+    # Low-quality financial sites - block at ingestion
+    "msn.com", "www.msn.com",
+    "tipranks.com", "www.tipranks.com",
+    "simplywall.st", "www.simplywall.st",
+    "sharewise.com", "www.sharewise.com",
+    "stockstory.org", "www.stockstory.org",
+    "news.stocktradersdaily.com", "stocktradersdaily.com", "www.stocktradersdaily.com",
+    "earlytimes.in", "www.earlytimes.in",
+    "investing.com", "www.investing.com",
+    "fool.com", "www.fool.com", "fool.ca", "www.fool.ca",
+    "marketsmojo.com", "www.marketsmojo.com",
+    "gurufocus.com", "www.gurufocus.com",
+    "stocktitan.net", "www.stocktitan.net",
+    "insidermonkey.com", "www.insidermonkey.com",
+    "zacks.com", "www.zacks.com",
 }
 
 QUALITY_DOMAINS = {
@@ -351,16 +369,9 @@ QUALITY_DOMAINS = {
     "apnews.com",
 }
 
-# Domains known to have consistent scraping failures or poor content quality
+# Domains that can be ingested but NOT scraped (heavy JS/bot protection)
 PROBLEMATIC_SCRAPE_DOMAINS = {
-    # finance & article sites w/ bot protection or heavy JS
     "defenseworld.net", "defense-world.net", "defensenews.com",
-    # Sites to avoid scraping (not spam, just problematic)
-    "zacks.com", "insidermonkey.com", "fool.com", "fool.ca",
-    # Never flag for scraping (low-quality/problematic content)
-    "gurufocus.com", "stocktitan.net",
-    "msn.com", "tipranks.com", "simplywall.st", "sharewise.com",
-    "stockstory.org", "news.stocktradersdaily.com", "earlytimes.in",
 }
 
 # Known paywall domains to skip during content scraping
@@ -700,9 +711,13 @@ def ensure_schema():
                     scraping_failed BOOLEAN DEFAULT FALSE,
                     scraping_error TEXT,
                     ai_summary TEXT,
+                    ai_model VARCHAR(20),
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
+
+                -- Add ai_model column if it doesn't exist (for existing databases)
+                ALTER TABLE articles ADD COLUMN IF NOT EXISTS ai_model VARCHAR(20);
 
                 -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
                 CREATE TABLE IF NOT EXISTS feeds (
@@ -913,23 +928,31 @@ def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
             result = cur.fetchone()
             return result['id'] if result else None
 
-def link_article_to_ticker(article_id: int, ticker: str, category: str = 'company',
+def link_article_to_ticker(article_id: int, ticker: str, category: str = None,
                           feed_id: int = None, search_keyword: str = None,
                           competitor_ticker: str = None) -> None:
-    """Create relationship between article and ticker"""
+    """Create relationship between article and ticker - category is immutable after first insert"""
     with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO ticker_articles (ticker, article_id, category, feed_id, search_keyword, competitor_ticker)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ticker, article_id) DO UPDATE SET
-                category = EXCLUDED.category,
-                search_keyword = EXCLUDED.search_keyword,
-                competitor_ticker = EXCLUDED.competitor_ticker
-        """, (ticker, article_id, category, feed_id, search_keyword, competitor_ticker))
+        if category is not None:
+            # INSERT mode: Set category on first insert
+            cur.execute("""
+                INSERT INTO ticker_articles (ticker, article_id, category, feed_id, search_keyword, competitor_ticker)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, article_id) DO UPDATE SET
+                    search_keyword = EXCLUDED.search_keyword,
+                    competitor_ticker = EXCLUDED.competitor_ticker
+            """, (ticker, article_id, category, feed_id, search_keyword, competitor_ticker))
+        else:
+            # UPDATE mode: Only update metadata, don't touch category
+            cur.execute("""
+                UPDATE ticker_articles
+                SET search_keyword = %s, competitor_ticker = %s
+                WHERE ticker = %s AND article_id = %s
+            """, (search_keyword, competitor_ticker, ticker, article_id))
 
 def update_article_content(article_id: int, scraped_content: str = None, ai_summary: str = None,
-                          scraping_failed: bool = False, scraping_error: str = None) -> None:
-    """Update article with scraped content or AI summary"""
+                          ai_model: str = None, scraping_failed: bool = False, scraping_error: str = None) -> None:
+    """Update article with scraped content, AI summary, and model attribution"""
     with db() as conn, conn.cursor() as cur:
         updates = []
         params = []
@@ -942,6 +965,10 @@ def update_article_content(article_id: int, scraped_content: str = None, ai_summ
         if ai_summary is not None:
             updates.append("ai_summary = %s")
             params.append(ai_summary)
+
+        if ai_model is not None:
+            updates.append("ai_model = %s")
+            params.append(ai_model)
 
         if scraping_failed:
             updates.append("scraping_failed = %s")
@@ -3444,28 +3471,43 @@ def reset_enhanced_scraping_stats():
         "by_domain": defaultdict(lambda: {"attempts": 0, "successes": 0})
     }
 
-async def process_article_batch_async(articles_batch: List[Dict], category: str, metadata: Dict, analysis_ticker: str) -> List[Dict]:
+async def process_article_batch_async(articles_batch: List[Dict], categories: Union[str, List[str]], metadata: Dict, analysis_ticker: str) -> List[Dict]:
     """
     Process a batch of articles concurrently: scraping → AI summarization → database update
+    Now supports per-article categories for POV-agnostic summarization
     Returns list of results for each article in the batch
     """
     batch_size = len(articles_batch)
     LOG.info(f"BATCH START: Processing {batch_size} articles from {analysis_ticker}'s perspective")
-    
+
+    # Normalize categories to list
+    if isinstance(categories, str):
+        categories = [categories] * batch_size
+
+    # Build competitor name cache from metadata
+    competitor_name_cache = {}
+    for comp in metadata.get("competitors", []):
+        if comp.get("ticker") and comp.get("name"):
+            competitor_name_cache[comp["ticker"]] = comp["name"]
+
+    target_company_name = metadata.get("company_name", analysis_ticker)
+
     results = []
-    
+
     # Phase 1: Concurrent scraping for all articles in batch
     LOG.info(f"BATCH PHASE 1: Concurrent scraping of {batch_size} articles")
-    
+
     scraping_tasks = []
     for i, article in enumerate(articles_batch):
-        task = scrape_single_article_async(article, category, metadata, analysis_ticker, i)
+        # Use individual article's category
+        article_category = categories[i] if i < len(categories) else categories[0]
+        task = scrape_single_article_async(article, article_category, metadata, analysis_ticker, i)
         scraping_tasks.append(task)
-    
-    # Execute all scraping tasks concurrently, don't let one failure kill others
+
+    # Execute all scraping tasks concurrently
     scraping_results = await asyncio.gather(*scraping_tasks, return_exceptions=True)
-    
-    # Phase 2: Concurrent AI summarization for successfully scraped articles
+
+    # Phase 2: Concurrent AI summarization with category-specific prompts
     successful_scrapes = []
     for i, result in enumerate(scraping_results):
         if isinstance(result, Exception):
@@ -3475,44 +3517,53 @@ async def process_article_batch_async(articles_batch: List[Dict], category: str,
                 "success": False,
                 "error": f"Scraping failed: {str(result)}",
                 "scraped_content": None,
-                "ai_summary": None
+                "ai_summary": None,
+                "ai_model": None
             })
         elif result["success"]:
             successful_scrapes.append((i, result))
-            
+
     if successful_scrapes:
-        LOG.info(f"BATCH PHASE 2: AI summarization of {len(successful_scrapes)} successful scrapes")
-        
+        LOG.info(f"BATCH PHASE 2: AI summarization of {len(successful_scrapes)} successful scrapes with category-specific prompts")
+
         ai_tasks = []
         for i, scrape_result in successful_scrapes:
-            task = generate_ai_summary_for_scraped_article(
-                scrape_result["scraped_content"], 
-                articles_batch[i]["title"], 
+            article_category = categories[i] if i < len(categories) else categories[0]
+            task = generate_ai_summary_with_fallback(
+                scrape_result["scraped_content"],
+                articles_batch[i]["title"],
                 analysis_ticker,
-                articles_batch[i].get("description", "")
+                articles_batch[i].get("description", ""),
+                article_category,
+                articles_batch[i],  # article_metadata
+                target_company_name,
+                competitor_name_cache
             )
             ai_tasks.append((i, task))
-        
+
         # Execute AI summarization concurrently
         ai_results = await asyncio.gather(*[task for _, task in ai_tasks], return_exceptions=True)
-        
+
         # Combine scraping and AI results
         for j, (original_idx, _) in enumerate(ai_tasks):
             scrape_result = next(result for i, result in successful_scrapes if i == original_idx)
             ai_result = ai_results[j]
-            
+
             if isinstance(ai_result, Exception):
                 LOG.error(f"BATCH AI ERROR: Article {original_idx} failed: {ai_result}")
                 ai_summary = None
+                ai_model = None
             else:
-                ai_summary = ai_result
-            
+                # ai_result is tuple (summary, model_used)
+                ai_summary, ai_model = ai_result if isinstance(ai_result, tuple) else (ai_result, "unknown")
+
             results.append({
                 "article_id": articles_batch[original_idx]["id"],
                 "article_idx": original_idx,
                 "success": True,
                 "scraped_content": scrape_result["scraped_content"],
                 "ai_summary": ai_summary,
+                "ai_model": ai_model,
                 "content_scraped_at": scrape_result["content_scraped_at"],
                 "scraping_error": None
             })
@@ -3550,16 +3601,16 @@ async def process_article_batch_async(articles_batch: List[Dict], category: str,
                         article.get("published_at"), article.get("resolved_url")
                     )
 
-                    # Update article with scraped content and AI summary
+                    # Update article with scraped content, AI summary, and model attribution
                     if article_id:
                         update_article_content(
                             article_id, clean_content, clean_summary,
-                            False, None
+                            result.get("ai_model"), False, None
                         )
 
-                        # Ensure ticker relationship exists
+                        # Ensure ticker relationship exists (don't pass category - it's immutable)
                         link_article_to_ticker(
-                            article_id, analysis_ticker, category,
+                            article_id, analysis_ticker,
                             search_keyword=article.get("search_keyword"),
                             competitor_ticker=article.get("competitor_ticker")
                         )
@@ -3578,13 +3629,13 @@ async def process_article_batch_async(articles_batch: List[Dict], category: str,
                     # Update article with scraping failure
                     if article_id:
                         update_article_content(
-                            article_id, None, None,
+                            article_id, None, None, None,
                             True, clean_null_bytes(result.get("error", ""))
                         )
 
-                        # Ensure ticker relationship exists
+                        # Ensure ticker relationship exists (don't pass category - it's immutable)
                         link_article_to_ticker(
-                            article_id, analysis_ticker, category,
+                            article_id, analysis_ticker,
                             search_keyword=article.get("search_keyword"),
                             competitor_ticker=article.get("competitor_ticker")
                         )
@@ -4325,13 +4376,18 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
     
     # 2. SECOND BADGE: Source name
-    header_badges.append(f'<span class="source-badge">{display_source}</span>')
+    header_badges.append(f'<span class="source-badge">📰 {display_source}</span>')
 
-    # 3. Quality badge for quality domains
+    # 3. AI Model badge (if AI summary exists)
+    if article.get('ai_model'):
+        ai_model = article['ai_model']
+        header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
+
+    # 4. Quality badge for quality domains
     if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
         header_badges.append('<span class="quality-badge">⭐ Quality</span>')
 
-    # 4. Analysis badge if both content and summary exist
+    # 5. Analysis badge if both content and summary exist
     analyzed_html = ""
     if article.get('scraped_content') and article.get('ai_summary'):
         analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
@@ -4783,6 +4839,366 @@ Full Content: {scraped_content[:10000]}
         except Exception as e:
             LOG.error(f"AI enhanced summary generation failed for {ticker}: {e}")
             return None
+
+# ===== CATEGORIZED AI SUMMARIZATION WITH CLAUDE PRIMARY, OPENAI FALLBACK =====
+
+# Content character limit for AI summarization
+CONTENT_CHAR_LIMIT = 10000
+
+async def generate_claude_company_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """Generate Claude summary for company article - POV agnostic"""
+    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None
+
+    init_async_semaphores()
+    async with async_claude_sem:
+        try:
+            prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+
+**Focus:** This article is about {company_name}'s operations, financials, and strategic actions. Extract all material facts about {company_name}.
+
+**Content Priority (address only what article contains):**
+- Financial metrics: Revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods
+- Strategic actions: M&A, partnerships, products, capacity changes, buybacks, dividends with dollar amounts and dates
+- Competitive dynamics: How competitors are discussed in relation to {company_name}
+- Industry developments: Regulatory changes, supply chain shifts, sector trends affecting {company_name}
+- Analyst actions: Firm name, rating, price target, rationale for {company_name}
+- Administrative: Earnings dates, regulatory deadlines, completion timelines
+
+**Structure (no headers in output):**
+Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most material information.
+
+**Hard Rules:**
+- Every number MUST have: time period, units, comparison basis
+- Cite sources in parentheses using domain name only: (Reuters), (Business Wire)
+- FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
+- NO inference beyond explicit guidance/commentary
+- Each sentence must add new factual information
+
+TARGET: {company_name} ({ticker})
+TITLE: {title}
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+            data = {"model": ANTHROPIC_MODEL, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        summary = result.get("content", [{}])[0].get("text", "")
+                        if summary and len(summary.strip()) > 10:
+                            LOG.info(f"Claude company summary: {ticker} ({len(summary)} chars)")
+                            return summary.strip()
+                    else:
+                        LOG.error(f"Claude company API error {response.status}")
+        except Exception as e:
+            LOG.error(f"Claude company summary failed for {ticker}: {e}")
+    return None
+
+
+async def generate_claude_competitor_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """Generate Claude summary for competitor article - identical to company"""
+    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None
+
+    init_async_semaphores()
+    async with async_claude_sem:
+        try:
+            prompt = f"""You are a hedge fund analyst writing a factual memo on {competitor_name} ({competitor_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+
+**Focus:** This article is about {competitor_name}'s operations, financials, and strategic actions. Extract all material facts about {competitor_name}.
+
+**Content Priority (address only what article contains):**
+- Financial metrics: Revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods
+- Strategic actions: M&A, partnerships, products, capacity changes, buybacks, dividends with dollar amounts and dates
+- Competitive dynamics: How competitors are discussed in relation to {competitor_name}
+- Industry developments: Regulatory changes, supply chain shifts, sector trends affecting {competitor_name}
+- Analyst actions: Firm name, rating, price target, rationale for {competitor_name}
+- Administrative: Earnings dates, regulatory deadlines, completion timelines
+
+**Structure (no headers in output):**
+Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most material information.
+
+**Hard Rules:**
+- Every number MUST have: time period, units, comparison basis
+- Cite sources in parentheses using domain name only
+- FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
+- NO inference beyond explicit guidance/commentary
+- Each sentence must add new factual information
+
+TARGET: {competitor_name} ({competitor_ticker})
+TITLE: {title}
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+            data = {"model": ANTHROPIC_MODEL, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        summary = result.get("content", [{}])[0].get("text", "")
+                        if summary and len(summary.strip()) > 10:
+                            LOG.info(f"Claude competitor summary: {competitor_ticker} ({len(summary)} chars)")
+                            return summary.strip()
+                    else:
+                        LOG.error(f"Claude competitor API error {response.status}")
+        except Exception as e:
+            LOG.error(f"Claude competitor summary failed for {competitor_ticker}: {e}")
+    return None
+
+
+async def generate_claude_industry_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
+    """Generate Claude summary for industry article - sector focused"""
+    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None
+
+    init_async_semaphores()
+    async with async_claude_sem:
+        try:
+            prompt = f"""You are a hedge fund analyst covering the {industry_keyword} sector. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+
+**Perspective:** Evaluate industry developments, competitive dynamics, and market trends relevant to {industry_keyword}. Focus on sector-level insights.
+
+**Content Priority (address only what article contains):**
+- Market dynamics: TAM/SAM sizing, growth rates, adoption trends with specific figures
+- Technology developments: Product launches, performance benchmarks, standards adoption
+- Competitive landscape: Market share data, company positioning, partnerships
+- Financial metrics: Aggregate sector revenue/growth OR company metrics when comparing
+- Regulatory/policy: Government actions, standards, trade restrictions with dates and amounts
+- Supply chain: Manufacturing capacity, component availability, pricing trends
+
+**Structure (no headers in output):**
+Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most material sector information.
+
+**Hard Rules:**
+- Every number MUST have: time period, units, comparison basis
+- Cite sources in parentheses using domain name only
+- FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
+- NO inference beyond explicit projections/guidance
+- Treat all companies objectively
+
+SECTOR FOCUS: {industry_keyword}
+TITLE: {title}
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+            data = {"model": ANTHROPIC_MODEL, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        summary = result.get("content", [{}])[0].get("text", "")
+                        if summary and len(summary.strip()) > 10:
+                            LOG.info(f"Claude industry summary: {industry_keyword} ({len(summary)} chars)")
+                            return summary.strip()
+                    else:
+                        LOG.error(f"Claude industry API error {response.status}")
+        except Exception as e:
+            LOG.error(f"Claude industry summary failed for {industry_keyword}: {e}")
+    return None
+
+
+async def generate_openai_company_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """OpenAI fallback for company article"""
+    if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None
+
+    init_async_semaphores()
+    async with async_openai_sem:
+        try:
+            prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Write a summary using ONLY facts explicitly stated.
+
+**Focus:** Extract material facts about {company_name}'s operations, financials, strategic actions.
+
+**Include:** Financial metrics with time periods, strategic actions with amounts/dates, analyst actions, administrative dates.
+
+**Hard Rules:**
+- Every number needs time period, units, comparison basis
+- Cite sources in parentheses (domain name only)
+- NO speculation words: may, could, likely, appears, positioned
+- 4-8 sentences, no preamble
+
+TARGET: {company_name} ({ticker})
+TITLE: {title}
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+
+            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+            data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        summary = extract_text_from_responses(result)
+                        if summary and len(summary.strip()) > 10:
+                            LOG.info(f"OpenAI company summary: {ticker} ({len(summary)} chars)")
+                            return summary.strip()
+                    else:
+                        LOG.error(f"OpenAI company API error {response.status}")
+        except Exception as e:
+            LOG.error(f"OpenAI company summary failed for {ticker}: {e}")
+    return None
+
+
+async def generate_openai_competitor_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """OpenAI fallback for competitor article"""
+    if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None
+
+    init_async_semaphores()
+    async with async_openai_sem:
+        try:
+            prompt = f"""You are a hedge fund analyst writing a factual memo on {competitor_name} ({competitor_ticker}). Write a summary using ONLY facts explicitly stated.
+
+**Focus:** Extract material facts about {competitor_name}'s operations, financials, strategic actions.
+
+**Include:** Financial metrics with time periods, strategic actions with amounts/dates, analyst actions, administrative dates.
+
+**Hard Rules:**
+- Every number needs time period, units, comparison basis
+- Cite sources in parentheses (domain name only)
+- NO speculation words: may, could, likely, appears, positioned
+- 4-8 sentences, no preamble
+
+TARGET: {competitor_name} ({competitor_ticker})
+TITLE: {title}
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+
+            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+            data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        summary = extract_text_from_responses(result)
+                        if summary and len(summary.strip()) > 10:
+                            LOG.info(f"OpenAI competitor summary: {competitor_ticker} ({len(summary)} chars)")
+                            return summary.strip()
+                    else:
+                        LOG.error(f"OpenAI competitor API error {response.status}")
+        except Exception as e:
+            LOG.error(f"OpenAI competitor summary failed for {competitor_ticker}: {e}")
+    return None
+
+
+async def generate_openai_industry_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
+    """OpenAI fallback for industry article"""
+    if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None
+
+    init_async_semaphores()
+    async with async_openai_sem:
+        try:
+            prompt = f"""You are a hedge fund analyst covering the {industry_keyword} sector. Write a summary using ONLY facts explicitly stated.
+
+**Focus:** Sector-level insights - market dynamics, technology developments, competitive landscape, regulatory changes.
+
+**Include:** Market sizing, growth rates, company metrics when comparing, regulatory dates/amounts.
+
+**Hard Rules:**
+- Every number needs time period, units, comparison basis
+- Cite sources in parentheses (domain name only)
+- NO speculation words: may, could, likely, appears
+- 4-8 sentences, sector-focused
+
+SECTOR: {industry_keyword}
+TITLE: {title}
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+
+            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+            data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        summary = extract_text_from_responses(result)
+                        if summary and len(summary.strip()) > 10:
+                            LOG.info(f"OpenAI industry summary: {industry_keyword} ({len(summary)} chars)")
+                            return summary.strip()
+                    else:
+                        LOG.error(f"OpenAI industry API error {response.status}")
+        except Exception as e:
+            LOG.error(f"OpenAI industry summary failed for {industry_keyword}: {e}")
+    return None
+
+
+async def generate_claude_summary(scraped_content: str, title: str, ticker: str, category: str, 
+                                  article_metadata: dict, target_company_name: str, 
+                                  competitor_name_cache: dict) -> Optional[str]:
+    """Route to appropriate Claude function based on category"""
+    if category == "company":
+        return await generate_claude_company_summary(target_company_name, ticker, title, scraped_content)
+    elif category == "competitor":
+        competitor_ticker = article_metadata.get("competitor_ticker")
+        if not competitor_ticker:
+            return None
+        competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
+        return await generate_claude_competitor_summary(competitor_name, competitor_ticker, title, scraped_content)
+    elif category == "industry":
+        industry_keyword = article_metadata.get("search_keyword", "this industry")
+        return await generate_claude_industry_summary(industry_keyword, title, scraped_content)
+    return None
+
+
+async def generate_openai_summary(scraped_content: str, title: str, ticker: str, category: str,
+                                  article_metadata: dict, target_company_name: str,
+                                  competitor_name_cache: dict) -> Optional[str]:
+    """Route to appropriate OpenAI function based on category"""
+    if category == "company":
+        return await generate_openai_company_summary(target_company_name, ticker, title, scraped_content)
+    elif category == "competitor":
+        competitor_ticker = article_metadata.get("competitor_ticker")
+        if not competitor_ticker:
+            return None
+        competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
+        return await generate_openai_competitor_summary(competitor_name, competitor_ticker, title, scraped_content)
+    elif category == "industry":
+        industry_keyword = article_metadata.get("search_keyword", "this industry")
+        return await generate_openai_industry_summary(industry_keyword, title, scraped_content)
+    return None
+
+
+async def generate_ai_summary_with_fallback(scraped_content: str, title: str, ticker: str, description: str,
+                                           category: str, article_metadata: dict, target_company_name: str,
+                                           competitor_name_cache: dict) -> tuple[Optional[str], str]:
+    """Main entry point: Try Claude first, fallback to OpenAI. Returns (summary, model_used)"""
+    model_used = "none"
+    summary = None
+
+    # Try Claude first (if enabled and API key available)
+    if USE_CLAUDE_FOR_SUMMARIES and ANTHROPIC_API_KEY:
+        try:
+            summary = await generate_claude_summary(
+                scraped_content, title, ticker, category,
+                article_metadata, target_company_name, competitor_name_cache
+            )
+            if summary:
+                model_used = "Claude"
+                return summary, model_used
+            else:
+                LOG.warning(f"Claude returned no summary for {ticker}, falling back to OpenAI")
+        except Exception as e:
+            LOG.warning(f"Claude summarization failed for {ticker}, falling back to OpenAI: {e}")
+
+    # Fallback to OpenAI
+    if OPENAI_API_KEY:
+        try:
+            summary = await generate_openai_summary(
+                scraped_content, title, ticker, category,
+                article_metadata, target_company_name, competitor_name_cache
+            )
+            if summary:
+                model_used = "OpenAI"
+                return summary, model_used
+        except Exception as e:
+            LOG.error(f"OpenAI summarization also failed for {ticker}: {e}")
+
+    return None, "none"
 
 def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """
@@ -7591,15 +8007,30 @@ class DomainResolver:
             LOG.warning(f"Failed to store domain mapping {domain}: {e}")
     
     def _get_from_ai(self, domain):
-        """Get formal name from AI"""
+        """Get formal name from AI with improved prompt"""
         try:
             headers = {
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "Content-Type": "application/json"
             }
-            
-            prompt = f'What is the formal publication name for "{domain}"? Respond with just the name.'
-            
+
+            prompt = f'''Extract the formal publication name for "{domain}".
+
+Requirements:
+- Use proper capitalization and spacing
+- Return company/publication name only (no domain extension)
+- Format as it would appear in a citation
+
+Examples:
+- "reuters.com" → "Reuters"
+- "prnewswire.co.uk" → "PR Newswire"
+- "theglobeandmail.com" → "The Globe and Mail"
+- "businessmodelanalyst.com" → "Business Model Analyst"
+- "arabamericannews.com" → "Arab American News"
+
+Domain: {domain}
+Response:'''
+
             data = {
                 "model": OPENAI_MODEL,
                 "input": prompt,
@@ -9209,8 +9640,14 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
     """Quick email with metadata display removed"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
-        
-        ticker_list = ', '.join(articles_by_ticker.keys())
+
+        # Format ticker list with company names
+        ticker_display_list = []
+        for ticker in articles_by_ticker.keys():
+            config = get_ticker_config(ticker)
+            company_name = config.get("company_name", ticker) if config else ticker
+            ticker_display_list.append(f"{company_name} ({ticker})")
+        ticker_list = ', '.join(ticker_display_list)
 
         # Generate summaries from both OpenAI and Claude
         openai_summaries = generate_ai_titles_summary(articles_by_ticker)
@@ -9550,8 +9987,14 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
     # Generate summaries from both OpenAI and Claude (both use AI-analyzed content)
     openai_summaries = generate_ai_final_summaries(articles_by_ticker)
     claude_summaries = generate_claude_final_summaries(articles_by_ticker)
-    
-    ticker_list = ', '.join(articles_by_ticker.keys())
+
+    # Format ticker list with company names
+    ticker_display_list = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+        ticker_display_list.append(f"{company_name} ({ticker})")
+    ticker_list = ', '.join(ticker_display_list)
     current_time_est = format_timestamp_est(datetime.now(timezone.utc))
     
     html = [
@@ -9572,6 +10015,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
         ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+        ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
         ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
         ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
@@ -9706,7 +10150,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                     a.id, a.url, a.resolved_url, a.title, a.description,
                     ta.ticker, a.domain, a.published_at,
                     ta.found_at, ta.category,
-                    ta.search_keyword, a.ai_summary,
+                    ta.search_keyword, a.ai_summary, a.ai_model,
                     a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                     ta.competitor_ticker
                 FROM articles a
@@ -9723,7 +10167,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                     a.id, a.url, a.resolved_url, a.title, a.description,
                     ta.ticker, a.domain, a.published_at,
                     ta.found_at, ta.category,
-                    ta.search_keyword, a.ai_summary,
+                    ta.search_keyword, a.ai_summary, a.ai_model,
                     a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                     ta.competitor_ticker
                 FROM articles a
@@ -9815,9 +10259,14 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     
     # Use the enhanced digest function
     html = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1)
-    
-    # Enhanced subject with ticker list
-    ticker_list = ', '.join(articles_by_ticker.keys())
+
+    # Enhanced subject with ticker list (company names)
+    ticker_display_list = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+        ticker_display_list.append(f"{company_name} ({ticker})")
+    ticker_list = ', '.join(ticker_display_list)
     subject = f"📊 Stock Intelligence: {ticker_list} - {total_articles} articles"
     success = send_email(subject, html)
     
@@ -11586,12 +12035,14 @@ async def cron_ingest(
                         batch_articles.append(selected_article["article"])
                         batch_categories.append(selected_article["category"])
                     
-                    # Process batch asynchronously
+                    # Process batch asynchronously with per-article categories
+                    # Add company_name to metadata for AI summarization
+                    metadata["company_name"] = config.get("company_name", target_ticker) if config else target_ticker
                     try:
                         batch_results = await process_article_batch_async(
-                            batch_articles, 
-                            batch_categories[0],  # Use first category as primary (they should be similar in batch)
-                            metadata, 
+                            batch_articles,
+                            batch_categories,  # Pass all categories for per-article processing
+                            metadata,
                             target_ticker
                         )
                         

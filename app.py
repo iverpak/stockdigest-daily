@@ -7022,59 +7022,62 @@ class TriageResponse(BaseModel):
 def get_competitor_display_name(search_keyword: str, competitor_ticker: str = None) -> str:
     """
     Get standardized competitor display name using database lookup with proper fallback
-    Priority: competitor_ticker -> search_keyword -> fallback
+    Priority: ticker_reference.company_name -> competitor_metadata -> search_keyword -> fallback
+
+    ALWAYS uses competitor_ticker to lookup company_name in ticker_reference table.
+    Never relies on search_keyword for display (search_keyword is feed query parameter, not display name).
     """
-    
+
     # Input validation
     if competitor_ticker:
         competitor_ticker = normalize_ticker_format(competitor_ticker)
         if not validate_ticker_format(competitor_ticker):
             LOG.warning(f"Invalid competitor ticker format: {competitor_ticker}")
             competitor_ticker = None
-    
+
     if search_keyword:
         search_keyword = search_keyword.strip()
         if len(search_keyword) > 100 or not search_keyword:
             LOG.warning(f"Invalid search keyword: {search_keyword}")
             search_keyword = None
-    
-    # Try database lookup by ticker first (most reliable)
+
+    # STEP 1: Try ticker_reference table first (most comprehensive - 6,178 tickers)
     if competitor_ticker:
         try:
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT company_name FROM competitor_metadata 
+                    SELECT company_name FROM ticker_reference
                     WHERE ticker = %s AND active = TRUE
                     LIMIT 1
                 """, (competitor_ticker,))
                 result = cur.fetchone()
-                
+
                 if result and result["company_name"]:
                     return result["company_name"]
         except Exception as e:
-            LOG.debug(f"Database lookup failed for competitor {competitor_ticker}: {e}")
-    
-    # Try to get competitor name from feeds table using competitor_ticker (NEW ARCHITECTURE)
+            LOG.debug(f"ticker_reference lookup failed for competitor {competitor_ticker}: {e}")
+
+    # STEP 2: Try competitor_metadata table as backup
     if competitor_ticker:
         try:
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT search_keyword FROM feeds
-                    WHERE competitor_ticker = %s AND category = 'competitor' AND active = TRUE
+                    SELECT competitor_name FROM competitor_metadata
+                    WHERE competitor_ticker = %s AND active = TRUE
                     LIMIT 1
                 """, (competitor_ticker,))
                 result = cur.fetchone()
 
-                if result and result["search_keyword"]:
-                    return result["search_keyword"]
+                if result and result["competitor_name"]:
+                    return result["competitor_name"]
         except Exception as e:
-            LOG.debug(f"Feeds table lookup failed for competitor {competitor_ticker}: {e}")
-    
-    # Fallback to search_keyword (should be company name for Google feeds)
+            LOG.debug(f"competitor_metadata lookup failed for competitor {competitor_ticker}: {e}")
+
+    # STEP 3: Fallback to search_keyword ONLY if it looks like a company name (not ticker)
     if search_keyword and not search_keyword.isupper():  # Likely a company name, not ticker
         return search_keyword
-        
-    # Final fallback - use ticker if that's all we have
+
+    # STEP 4: Final fallback - use ticker if that's all we have
     return competitor_ticker or search_keyword or "Unknown Competitor"
 
 def determine_article_category_for_ticker(article_row: dict, viewing_ticker: str) -> str:

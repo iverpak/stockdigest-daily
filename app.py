@@ -11443,19 +11443,53 @@ async def cron_ingest(
                         """, (cutoff,))
                     
                     all_articles = list(cur.fetchall())
-            
+
             memory_monitor.take_snapshot("ARTICLES_LOADED")
-            
+
+            # Log filtering statistics
+            with db() as conn, conn.cursor() as cur:
+                if tickers:
+                    cur.execute("""
+                        SELECT
+                            ta.ticker,
+                            ta.category,
+                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
+                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
+                        FROM ticker_articles ta
+                        JOIN articles a ON ta.article_id = a.id
+                        WHERE ta.found_at >= %s AND ta.ticker = ANY(%s)
+                        GROUP BY ta.ticker, ta.category
+                        ORDER BY ta.ticker, ta.category
+                    """, (cutoff, cutoff, cutoff, tickers))
+                else:
+                    cur.execute("""
+                        SELECT
+                            ta.ticker,
+                            ta.category,
+                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
+                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
+                        FROM ticker_articles ta
+                        JOIN articles a ON ta.article_id = a.id
+                        WHERE ta.found_at >= %s
+                        GROUP BY ta.ticker, ta.category
+                        ORDER BY ta.ticker, ta.category
+                    """, (cutoff, cutoff, cutoff))
+
+                filter_stats = cur.fetchall()
+                for stat in filter_stats:
+                    if stat['outside_period'] > 0:
+                        LOG.info(f"📅 [{stat['ticker']}] {stat['category']}: {stat['within_period']} within report period, {stat['outside_period']} excluded (published outside {minutes}min window)")
+
             # Organize articles by ticker and category
             for article in all_articles:
                 ticker = article["ticker"]
                 category = article["category"] or "company"
-                
+
                 if ticker not in articles_by_ticker:
                     articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
-                
+
                 articles_by_ticker[ticker][category].append(article)
-            
+
             total_articles = len(all_articles)
             LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
             memory_monitor.take_snapshot("PHASE1_COMPLETE")

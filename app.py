@@ -4153,7 +4153,13 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                             final_source_url = resolved_url
                     except Exception as e:
                         LOG.warning(f"Yahoo source extraction failed for {resolved_url}: {e}")
-                
+
+                # CHECK SPAM DOMAINS AFTER RESOLUTION
+                if final_domain and final_domain in SPAM_DOMAINS:
+                    stats["blocked_spam"] += 1
+                    LOG.debug(f"SPAM DOMAIN BLOCKED: {final_domain} - {title[:50]}...")
+                    continue
+
                 # Generate hash for deduplication
                 url_hash = get_url_hash(url, final_resolved_url)
                 
@@ -9757,16 +9763,24 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 html.append("</div>")
                 html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
             
-            # PHASE 1: Collect and enhance ALL articles across ALL categories
-            all_enhanced_articles = []
+            # Process each category independently with proper sorting
+            category_icons = {
+                "company": "🎯",
+                "industry": "🏭",
+                "competitor": "⚔️"
+            }
 
-            for category, articles in categories.items():
+            for category in ["company", "industry", "competitor"]:
+                articles = categories.get(category, [])
                 if not articles:
                     continue
 
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
 
+                # Enhanced article sorting - Quality+Flagged first, then Flagged, then Non-Flagged
+                # Within each group, sort by time (newest first)
+                enhanced_articles = []
                 for idx, article in enumerate(articles):
                     domain = normalize_domain(article.get("domain", ""))
                     is_ai_selected = idx in selected_article_data
@@ -9777,16 +9791,16 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     triage_reason = ""
                     ai_priority = "Low"
 
-                    # Only prioritize Quality domains that are ALSO flagged
+                    # Determine priority tier
                     if is_quality_domain and is_ai_selected and not is_problematic:
                         priority = 0  # Quality + Flagged = TOP priority
                         ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
                         triage_reason = f"Quality domain + AI flagged ({ai_priority})"
                     elif is_ai_selected:
+                        # All flagged articles get priority 1 (sorted by time within this tier)
+                        priority = 1
                         ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
                         triage_reason = selected_article_data[idx].get("why", "")
-                        priority_map = {"High": 1, "Medium": 2, "Low": 3}
-                        priority = priority_map.get(ai_priority, 3)
                     elif is_quality_domain and not is_problematic:
                         priority = 999  # Quality but NOT flagged = bottom
                         triage_reason = "Quality domain (not flagged)"
@@ -9795,9 +9809,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
                     claude_score = selected_article_data[idx].get("claude_score", 0) if is_ai_selected else 0
 
-                    all_enhanced_articles.append({
+                    enhanced_articles.append({
                         "article": article,
-                        "category": category,
                         "idx": idx,
                         "priority": priority,
                         "is_ai_selected": is_ai_selected,
@@ -9810,32 +9823,15 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         "published_at": article.get("published_at")
                     })
 
-            # PHASE 2: Sort ALL articles globally by priority, then time
-            all_enhanced_articles.sort(key=lambda x: (
-                x["priority"],
-                -(x["published_at"].timestamp() if x["published_at"] else 0)
-            ))
-
-            # PHASE 3: Group sorted articles by category for display
-            articles_by_category_sorted = {"company": [], "industry": [], "competitor": []}
-            for enhanced_article in all_enhanced_articles:
-                articles_by_category_sorted[enhanced_article["category"]].append(enhanced_article)
-
-            # PHASE 4: Display each category with globally-sorted articles
-            category_icons = {
-                "company": "🎯",
-                "industry": "🏭",
-                "competitor": "⚔️"
-            }
-
-            for category in ["company", "industry", "competitor"]:
-                enhanced_articles = articles_by_category_sorted.get(category, [])
-                if not enhanced_articles:
-                    continue
+                # Sort by priority tier, then by time (newest first)
+                enhanced_articles.sort(key=lambda x: (
+                    x["priority"],
+                    -(x["published_at"].timestamp() if x["published_at"] else 0)
+                ))
 
                 selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or (a["is_quality_domain"] and not a["is_problematic"])])
 
-                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} ({len(enhanced_articles)} articles, {selected_count} selected)</h3>")
+                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
 
                 for enhanced_article in enhanced_articles[:50]:
                     article = enhanced_article["article"]

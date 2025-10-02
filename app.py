@@ -1979,62 +1979,105 @@ def import_ticker_reference_from_csv_content(csv_content: str):
     skipped = 0
     
     try:
+        LOG.debug(f"[CSV_IMPORT] Starting CSV import, content length: {len(csv_content) if csv_content else 'None'}")
+
+        if not csv_content:
+            LOG.error("[CSV_IMPORT] csv_content is None or empty!")
+            return {
+                "status": "error",
+                "message": "CSV content is empty or None",
+                "imported": 0, "updated": 0, "errors": []
+            }
+
         csv_reader = csv.DictReader(io.StringIO(csv_content))
-        
+
         # Validate CSV headers
         required_headers = ['ticker', 'country', 'company_name']
         missing_headers = [h for h in required_headers if h not in csv_reader.fieldnames]
         if missing_headers:
+            LOG.error(f"[CSV_IMPORT] Missing headers: {missing_headers}")
             return {
                 "status": "error",
                 "message": f"Missing required CSV columns: {missing_headers}",
                 "imported": 0, "updated": 0, "errors": []
             }
-        
-        LOG.info(f"CSV headers found: {csv_reader.fieldnames}")
+
+        LOG.info(f"[CSV_IMPORT] CSV headers found: {csv_reader.fieldnames}")
+        LOG.debug(f"[CSV_IMPORT] Has legacy 'competitors' column: {'competitors' in csv_reader.fieldnames}")
+        LOG.debug(f"[CSV_IMPORT] Has legacy 'industry_keywords' column: {'industry_keywords' in csv_reader.fieldnames}")
         
         # Collect all ticker data for bulk processing
         ticker_data_batch = []
         
         for row_num, row in enumerate(csv_reader, start=2):
             try:
+                LOG.debug(f"[CSV_IMPORT] Processing row {row_num}, row type: {type(row)}")
+
                 # Skip empty rows
-                if not row.get('ticker', '').strip() or not row.get('company_name', '').strip():
+                ticker_value = row.get('ticker', '')
+                company_value = row.get('company_name', '')
+
+                LOG.debug(f"[CSV_IMPORT] Row {row_num} - ticker type: {type(ticker_value)}, company type: {type(company_value)}")
+
+                if not ticker_value or not str(ticker_value).strip() or not company_value or not str(company_value).strip():
                     skipped += 1
+                    LOG.debug(f"[CSV_IMPORT] Row {row_num} skipped (empty ticker or company)")
                     continue
-                
+
                 # Build ticker data from CSV row
-                ticker = row.get('ticker', '').strip()
+                ticker = str(ticker_value).strip()
+                LOG.debug(f"[CSV_IMPORT] Row {row_num} processing ticker: {ticker}")
                 
-                ticker_data = {
-                    'ticker': ticker,
-                    'country': row.get('country', '').strip().upper(),
-                    'company_name': row.get('company_name', '').strip(),
-                    'industry': row.get('industry', '').strip() or None,
-                    'sector': row.get('sector', '').strip() or None,
-                    'sub_industry': row.get('sub_industry', '').strip() or None,
-                    'exchange': row.get('exchange', '').strip() or None,
-                    'currency': row.get('currency', '').strip().upper() or None,
-                    'market_cap_category': row.get('market_cap_category', '').strip() or None,
-                    'yahoo_ticker': row.get('yahoo_ticker', '').strip() or ticker,
-                    'active': str(row.get('active', 'true')).lower() in ('true', '1', 'yes', 'y', 't'),
-                    'is_etf': str(row.get('is_etf', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
-                    'data_source': 'csv_import',
-                    'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y')
-                }
+                # Build ticker_data with defensive string handling
+                try:
+                    country_val = row.get('country', '')
+                    if country_val is None:
+                        LOG.warning(f"[CSV_IMPORT] Row {row_num} has None country value")
+                        country_val = ''
+
+                    ticker_data = {
+                        'ticker': ticker,
+                        'country': str(country_val).strip().upper(),
+                        'company_name': str(row.get('company_name', '')).strip(),
+                        'industry': str(row.get('industry', '')).strip() or None,
+                        'sector': str(row.get('sector', '')).strip() or None,
+                        'sub_industry': str(row.get('sub_industry', '')).strip() or None,
+                        'exchange': str(row.get('exchange', '')).strip() or None,
+                        'currency': str(row.get('currency', '')).strip().upper() or None,
+                        'market_cap_category': str(row.get('market_cap_category', '')).strip() or None,
+                        'yahoo_ticker': str(row.get('yahoo_ticker', '')).strip() or ticker,
+                        'active': str(row.get('active', 'true')).lower() in ('true', '1', 'yes', 'y', 't'),
+                        'is_etf': str(row.get('is_etf', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
+                        'data_source': 'csv_import',
+                        'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y')
+                    }
+                    LOG.debug(f"[CSV_IMPORT] Row {row_num} ticker_data built successfully")
+                except Exception as e:
+                    LOG.error(f"[CSV_IMPORT] Row {row_num} failed building ticker_data: {e}, row keys: {row.keys()}")
+                    raise
                 
-                # Handle 3 industry keyword fields
-                ticker_data['industry_keyword_1'] = row.get('industry_keyword_1', '').strip() or None
-                ticker_data['industry_keyword_2'] = row.get('industry_keyword_2', '').strip() or None
-                ticker_data['industry_keyword_3'] = row.get('industry_keyword_3', '').strip() or None
-                
-                # Handle 6 competitor fields
-                ticker_data['competitor_1_name'] = row.get('competitor_1_name', '').strip() or None
-                ticker_data['competitor_1_ticker'] = row.get('competitor_1_ticker', '').strip() or None
-                ticker_data['competitor_2_name'] = row.get('competitor_2_name', '').strip() or None
-                ticker_data['competitor_2_ticker'] = row.get('competitor_2_ticker', '').strip() or None
-                ticker_data['competitor_3_name'] = row.get('competitor_3_name', '').strip() or None
-                ticker_data['competitor_3_ticker'] = row.get('competitor_3_ticker', '').strip() or None
+                # Handle 3 industry keyword fields (with None safety)
+                try:
+                    ticker_data['industry_keyword_1'] = str(row.get('industry_keyword_1', '') or '').strip() or None
+                    ticker_data['industry_keyword_2'] = str(row.get('industry_keyword_2', '') or '').strip() or None
+                    ticker_data['industry_keyword_3'] = str(row.get('industry_keyword_3', '') or '').strip() or None
+                    LOG.debug(f"[CSV_IMPORT] Row {row_num} industry keywords processed")
+                except Exception as e:
+                    LOG.error(f"[CSV_IMPORT] Row {row_num} failed processing industry keywords: {e}")
+                    raise
+
+                # Handle 6 competitor fields (with None safety)
+                try:
+                    ticker_data['competitor_1_name'] = str(row.get('competitor_1_name', '') or '').strip() or None
+                    ticker_data['competitor_1_ticker'] = str(row.get('competitor_1_ticker', '') or '').strip() or None
+                    ticker_data['competitor_2_name'] = str(row.get('competitor_2_name', '') or '').strip() or None
+                    ticker_data['competitor_2_ticker'] = str(row.get('competitor_2_ticker', '') or '').strip() or None
+                    ticker_data['competitor_3_name'] = str(row.get('competitor_3_name', '') or '').strip() or None
+                    ticker_data['competitor_3_ticker'] = str(row.get('competitor_3_ticker', '') or '').strip() or None
+                    LOG.debug(f"[CSV_IMPORT] Row {row_num} competitor fields processed")
+                except Exception as e:
+                    LOG.error(f"[CSV_IMPORT] Row {row_num} failed processing competitor fields: {e}")
+                    raise
                 
                 # LEGACY SUPPORT: Handle old "competitors" field format
                 competitors_field = row.get('competitors', '') or ''  # Handle None explicitly
@@ -2188,9 +2231,12 @@ def import_ticker_reference_from_csv_content(csv_content: str):
         }
         
     except Exception as e:
-        LOG.error(f"CSV parsing failed: {e}")
+        import traceback
+        full_trace = traceback.format_exc()
+        LOG.error(f"[CSV_IMPORT] CSV parsing failed with exception: {e}")
+        LOG.error(f"[CSV_IMPORT] Full traceback:\n{full_trace}")
         return {
-            "status": "error", 
+            "status": "error",
             "message": f"CSV parsing failed: {str(e)}",
             "imported": 0,
             "updated": 0,

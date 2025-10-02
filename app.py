@@ -482,6 +482,12 @@ DOMAIN_STRATEGIES = {
     }
 }
 
+# Domains that should skip TIER 1 (requests) and go directly to TIER 2 (Playwright)
+# These are typically JavaScript-heavy sites that timeout on standard requests
+SKIP_TIER1_DOMAINS = {
+    'businesswire.com',  # Slow to load, always requires Playwright
+}
+
 # FIXED: Ticker-specific ingestion stats to prevent race conditions
 ticker_ingestion_stats = {}
 
@@ -3335,27 +3341,32 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
     init_async_semaphores()
     
     enhanced_scraping_stats["total_attempts"] += 1
-    
-    # TIER 1: Try standard requests-based scraping
-    LOG.info(f"ASYNC TIER 1 (Requests): Attempting {domain}")
-    enhanced_scraping_stats["by_method"]["requests"]["attempts"] += 1
-    
-    # Use thread pool for sync requests call
-    import asyncio
-    loop = asyncio.get_event_loop()
-    
-    try:
-        content, error = await loop.run_in_executor(None, safe_content_scraper, url, domain, scraped_domains)
-        
-        if content:
-            enhanced_scraping_stats["requests_success"] += 1
-            enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
-            update_scraping_stats(category, keyword, True)
-            return content, f"ASYNC TIER 1 SUCCESS: {len(content)} chars via requests"
-    except Exception as e:
-        error = str(e)
-    
-    LOG.info(f"ASYNC TIER 1 FAILED: {domain} - {error}")
+
+    # Check if domain should skip TIER 1 (known Playwright-only domains)
+    if domain in SKIP_TIER1_DOMAINS:
+        LOG.info(f"⚡ SKIP TIER 1: {domain} (known Playwright-only domain)")
+        error = "Skipped TIER 1 (Playwright-only domain)"
+    else:
+        # TIER 1: Try standard requests-based scraping
+        LOG.info(f"ASYNC TIER 1 (Requests): Attempting {domain}")
+        enhanced_scraping_stats["by_method"]["requests"]["attempts"] += 1
+
+        # Use thread pool for sync requests call
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        try:
+            content, error = await loop.run_in_executor(None, safe_content_scraper, url, domain, scraped_domains)
+
+            if content:
+                enhanced_scraping_stats["requests_success"] += 1
+                enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
+                update_scraping_stats(category, keyword, True)
+                return content, f"ASYNC TIER 1 SUCCESS: {len(content)} chars via requests"
+        except Exception as e:
+            error = str(e)
+
+        LOG.info(f"ASYNC TIER 1 FAILED: {domain} - {error}")
     
     # TIER 2: Try Playwright fallback
     LOG.info(f"ASYNC TIER 2 (Playwright): Attempting {domain}")

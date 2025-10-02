@@ -10459,6 +10459,101 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 
 
 # ------------------------------------------------------------------------------
+# Structured Summary Parsing for Emails
+# ------------------------------------------------------------------------------
+
+def parse_structured_summary(summary_text: str) -> list:
+    """
+    Parse AI-generated structured summary into sections with headers and bullets.
+
+    Expected format:
+    🔴 MAJOR DEVELOPMENTS
+    • Bullet point 1
+    • Bullet point 2
+
+    📊 FINANCIAL/OPERATIONAL PERFORMANCE
+    • Bullet point 1
+    """
+    if not summary_text:
+        return []
+
+    sections = []
+    current_section = None
+
+    # Known section emojis to detect headers
+    section_emojis = ['🔴', '📊', '⚠️', '📈', '⚡', '📅']
+
+    for line in summary_text.split('\n'):
+        line = line.strip()
+
+        # Skip empty lines
+        if not line:
+            continue
+
+        # Detect section headers (lines with section emojis, not starting with bullet)
+        is_header = False
+        if not line.startswith('•') and not line.startswith('-'):
+            # Check if line contains any section emoji
+            for emoji in section_emojis:
+                if emoji in line:
+                    is_header = True
+                    break
+
+        if is_header:
+            # Save previous section if exists
+            if current_section:
+                sections.append(current_section)
+
+            # Start new section
+            current_section = {
+                'header': line,
+                'bullets': []
+            }
+
+        # Detect bullets (lines starting with • or -)
+        elif (line.startswith('•') or line.startswith('-')) and current_section:
+            # Remove leading bullet character and whitespace
+            bullet_text = line.lstrip('•- ').strip()
+            if bullet_text:  # Only add non-empty bullets
+                current_section['bullets'].append(bullet_text)
+
+    # Add final section
+    if current_section:
+        sections.append(current_section)
+
+    return sections
+
+
+def render_structured_summary_html(sections: list) -> str:
+    """
+    Convert parsed sections into properly formatted HTML.
+
+    Returns HTML string with sections, headers, and bullet lists.
+    """
+    if not sections:
+        return ""
+
+    html_parts = []
+
+    for section in sections:
+        html_parts.append("<div class='summary-section'>")
+
+        # Render section header with emoji
+        html_parts.append(f"<div class='section-header'>{section['header']}</div>")
+
+        # Render bullets as HTML list
+        if section['bullets']:
+            html_parts.append("<ul class='section-bullets'>")
+            for bullet in section['bullets']:
+                html_parts.append(f"<li>{bullet}</li>")
+            html_parts.append("</ul>")
+
+        html_parts.append("</div>")
+
+    return ''.join(html_parts)
+
+
+# ------------------------------------------------------------------------------
 # Email Digest
 # ------------------------------------------------------------------------------
 
@@ -10543,6 +10638,10 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
         ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
+        ".summary-section { margin: 20px 0; }",
+        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 10px; padding: 8px 0; border-bottom: 2px solid #ecf0f1; }",
+        ".section-bullets { margin: 0 0 0 20px; padding: 0; list-style-type: disc; }",
+        ".section-bullets li { margin: 8px 0; line-height: 1.6; color: #34495e; }",
         ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
@@ -10605,11 +10704,27 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
             html.append("<div class='company-summary'>")
             html.append("<div class='summary-title'>📰 Executive Summary (Deep Analysis)</div>")
             html.append("<div class='summary-content'>")
-            html.append("<strong>OpenAI Analysis:</strong><br>")
-            html.append(f"{openai_summary}")
-            html.append("<br><br>")
-            html.append("<strong>Claude Analysis:</strong><br>")
-            html.append(f"{claude_summary}")
+
+            # Parse and render OpenAI summary with structured sections
+            html.append("<strong>OpenAI Analysis:</strong>")
+            openai_sections = parse_structured_summary(openai_summary)
+            if openai_sections:
+                html.append(render_structured_summary_html(openai_sections))
+            else:
+                # Fallback to raw text if parsing fails
+                html.append(f"<div>{openai_summary.replace(chr(10), '<br>')}</div>")
+
+            html.append("<br>")
+
+            # Parse and render Claude summary with structured sections
+            html.append("<strong>Claude Analysis:</strong>")
+            claude_sections = parse_structured_summary(claude_summary)
+            if claude_sections:
+                html.append(render_structured_summary_html(claude_sections))
+            else:
+                # Fallback to raw text if parsing fails
+                html.append(f"<div>{claude_summary.replace(chr(10), '<br>')}</div>")
+
             html.append("</div>")
             html.append("</div>")
         

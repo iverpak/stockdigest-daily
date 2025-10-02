@@ -4397,9 +4397,10 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     header_badges.append(f'<span class="source-badge">📰 {display_source}</span>')
 
     # 3. AI Model badge (if AI summary exists and model is not "none")
-    ai_model = article.get('ai_model', '').strip().lower()
-    if ai_model and ai_model != 'none':
-        header_badges.append(f'<span class="ai-model-badge">🤖 {article["ai_model"]}</span>')
+    ai_model = article.get('ai_model') or ''
+    ai_model_clean = ai_model.strip().lower() if ai_model else ''
+    if ai_model_clean and ai_model_clean != 'none':
+        header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
 
     # 4. Quality badge for quality domains
     if normalize_domain(resolved_domain) in QUALITY_DOMAINS:

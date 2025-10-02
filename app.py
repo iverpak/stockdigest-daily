@@ -10027,194 +10027,242 @@ Generate a 6-section structured summary following the exact format above. Ensure
     LOG.info(f"🎯 EXECUTIVE SUMMARY: Completed - generated summaries for {len(summaries)} tickers")
     return summaries
 
-def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate Claude final summaries from AI-analyzed content (parallel to OpenAI final summaries)"""
+# ============================================================================
+# DUAL-PROMPT EXECUTIVE SUMMARY FUNCTIONS (Claude)
+# ============================================================================
+
+def generate_claude_company_summary(ticker: str, company_name: str, enterprise_value_formatted: str,
+                                   snapshot_date: str, company_articles: List[Dict]) -> Optional[str]:
+    """Generate company-focused summary (5 sections) using Claude - Prompt 1"""
+
     if not ANTHROPIC_API_KEY:
-        LOG.warning("⚠️ EXECUTIVE SUMMARY (Claude): Anthropic API key not configured - skipping")
-        return {}
+        return None
 
-    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude): Starting generation for {len(articles_by_ticker)} tickers")
-    summaries = {}
+    # Build article summaries
+    content_summaries = []
+    for article in company_articles[:20]:
+        title = article.get("title", "")
+        ai_summary = article.get("ai_summary", "")
+        domain = article.get("domain", "")
+        published_at = article.get("published_at")
+        date_str = format_date_short(published_at)
 
-    for ticker, categories in articles_by_ticker.items():
-        company_articles = categories.get("company", [])
-        competitor_articles = categories.get("competitor", [])
-        industry_articles = categories.get("industry", [])
+        if ai_summary:
+            source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+            content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
-        LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(company_articles)} company, {len(industry_articles)} industry, {len(competitor_articles)} competitor articles")
+    if not content_summaries:
+        LOG.warning(f"[{ticker}] Prompt 1: No company articles with AI summaries")
+        return None
 
-        if not company_articles and not industry_articles:
-            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (Claude) [{ticker}]: Skipping - no company or industry articles")
-            continue
+    ai_text = "\n".join(content_summaries)
 
-        config = get_ticker_config(ticker)
-        company_name = config.get("name", ticker) if config else ticker
+    prompt = f"""You are a hedge fund analyst creating a 7-day intelligence summary for {company_name} ({ticker}).
 
-        # Get sector information
-        sector = config.get("sector", "") if config else ""
-        industry = config.get("industry", "") if config else ""
-        financial_context = f"{company_name} operates in {sector}" if sector else f"{company_name}"
-        if industry:
-            financial_context += f" within the {industry} industry"
-
-        # Get industry keywords
-        industry_keywords = config.get("industry_keywords", []) if config else []
-
-        # Company articles with AI summaries
-        articles_with_ai_summary = [
-            article for article in company_articles
-            if article.get("ai_summary")
-        ]
-
-        # Industry articles with AI summaries
-        industry_articles_with_ai_summary = [
-            article for article in industry_articles
-            if article.get("ai_summary")
-        ]
-
-        # Competitor articles with AI summaries
-        competitor_articles_with_ai_summary = [
-            article for article in competitor_articles
-            if article.get("ai_summary")
-        ]
-
-        LOG.info(f"📊 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(articles_with_ai_summary)} company articles with AI summaries")
-        LOG.info(f"📊 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(industry_articles_with_ai_summary)} industry articles with AI summaries")
-        LOG.info(f"📊 EXECUTIVE SUMMARY (Claude) [{ticker}]: Found {len(competitor_articles_with_ai_summary)} competitor articles with AI summaries")
-
-        ai_analysis_summary = ""
-
-        if articles_with_ai_summary or industry_articles_with_ai_summary:
-            LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Proceeding with summary generation")
-
-            # Company AI summaries with sources AND dates
-            content_summaries = []
-            for article in articles_with_ai_summary[:20]:
-                title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")
-                domain = article.get("domain", "")
-                published_at = article.get("published_at")
-                date_str = format_date_short(published_at)
-
-                if ai_summary:
-                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
-
-            # Industry AI summaries with keyword context AND dates
-            industry_content_summaries = []
-            for article in industry_articles_with_ai_summary[:15]:
-                title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")
-                domain = article.get("domain", "")
-                keyword = article.get("search_keyword", "Industry")
-                published_at = article.get("published_at")
-                date_str = format_date_short(published_at)
-
-                if ai_summary:
-                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}] {date_str}: {ai_summary}")
-
-            # Competitor AI summaries with dates
-            competitor_content_summaries = []
-            for article in competitor_articles_with_ai_summary[:15]:
-                title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")
-                domain = article.get("domain", "")
-                published_at = article.get("published_at")
-                date_str = format_date_short(published_at)
-
-                if ai_summary:
-                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    competitor_content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
-
-            if content_summaries or industry_content_summaries:
-                LOG.info(f"📝 EXECUTIVE SUMMARY (Claude) [{ticker}]: Generating from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
-                ai_text = "\n".join(content_summaries)
-                industry_analysis = ""
-                if industry_content_summaries:
-                    industry_analysis = "\n\nINDUSTRY & SECTOR ANALYSIS:\n" + "\n".join(industry_content_summaries)
-                competitor_analysis = ""
-                if competitor_content_summaries:
-                    competitor_analysis = "\n\nCOMPETITOR ANALYSIS:\n" + "\n".join(competitor_content_summaries)
-
-                try:
-                    headers = {
-                        "x-api-key": ANTHROPIC_API_KEY,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json"
-                    }
-
-                    prompt = f"""You are a hedge fund analyst creating a structured 7-day intelligence summary for {company_name} ({ticker}). Your output must follow a STRICT 6-section format with consistent headers across all companies and industries.
-
-TARGET LENGTH: ~250 words total (adjust ±50 words based on news volume)
-
-MANDATORY STRUCTURE - Use these exact headers with emojis:
-
+OUTPUT FORMAT - Use these exact headers:
 🔴 MAJOR DEVELOPMENTS
 📊 FINANCIAL/OPERATIONAL PERFORMANCE
 ⚠️ RISK FACTORS
 📈 WALL STREET SENTIMENT
-⚡ COMPETITIVE/INDUSTRY DYNAMICS
 📅 UPCOMING CATALYSTS
 
-FORMATTING RULES:
-- Each section uses bullet points (•) only
-- Place 🆕 badge at START of bullets from last 24 hours
-- End each bullet with date in parentheses: (Oct 1) or (Sep 29)
-- NO citations, NO source names in bullets
-- NO section descriptions, NO prose paragraphs
-- Each bullet: 1-2 sentences maximum
-- Sort bullets within each section: NEWEST first (🆕 items at top)
+RULES:
+- Bullet points (•) only - each development is ONE bullet
+- End bullets with date: (Oct 1) or (Sep 29-30)
+- NO source names, NO citations (EXCEPTION: cite source when figures conflict)
+- Newest items first within each section
+- 2-3 sentences per bullet if needed for full context
+- OMIT section headers with no content
 
-CONTENT ALLOCATION & QUALITY STANDARDS:
+REPORTING PHILOSOPHY:
+- Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals
+- Provide context on scale when dollar amounts are available
+- Strategic significance matters more than transaction size
+- Better to include marginal news than miss something material
 
-🔴 MAJOR DEVELOPMENTS (3-5 bullets)
-- M&A deals, partnerships, disasters, regulatory actions, CEO changes, major contracts
-- Include: Deal size, timeline, strategic rationale if mentioned
-- Example: "🆕 Announced $100B OpenAI investment with phased deployment starting H2 2026 (Oct 1)"
+MATERIALITY - Include if ANY apply:
+- M&A: ALL deals, partnerships, investments (include rumors and undisclosed amounts)
+- Executive changes: VP level and above
+- Analyst actions: Rating changes OR price target changes
+- Partnerships: Named companies (even without dollar values)
+- Product launches: Core business lines only
+- Regulatory: Actions, investigations, litigation
+- Operations: Plant closures, production changes, disruptions
+- Financials: Quantified revenue/earnings/margin/guidance changes
+- Strategy: Market entry/exit, business model shifts, major capex
 
-📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets)
-- Earnings (EPS, revenue vs consensus), guidance, margins, production metrics, capex plans
-- Debt issuance, buybacks, dividends with amounts and dates
-- Report exact figures - no estimates or calculations unless both numbers present
-- MATERIALITY: Compare dollar amounts to company scale when possible (e.g., "$18B bond = 2.3% of market cap")
-- Example: "Q2 beat: $1.05 EPS on $46.7B revenue vs $46.05B consensus; Q3 guide $54B vs $53.43B Street (Sep 30)"
+ENTERPRISE VALUE CONTEXT:
+Company EV is {enterprise_value_formatted}. When articles mention transaction amounts (M&A, debt, buybacks, investments), calculate percentage of EV to provide scale context.
 
-⚠️ RISK FACTORS (2-4 bullets)
-- Regulatory probes, lawsuits, production disruptions, competitive threats
-- Insider selling patterns, operational failures, supply chain issues
-- Include: Timeline to resolution, financial impact if quantified
-- Example: "Grasberg mine may not return to pre-accident rates until 2027; Q4 output drop equals next year's forecast at world's #3 mine (Sep 29)"
+Examples:
+✓ "Acquired AI startup for $5B (0.2% of EV), expanding capabilities..."
+✓ "Issued $10B bonds (0.4% of EV) to fund datacenter expansion..."
+✓ "Announced partnership with undisclosed terms, targeting enterprise AI..."
+✓ "Rumored discussions to acquire competitor for ~$2B (0.07% of EV)..."
 
-📈 WALL STREET SENTIMENT (2-3 bullets)
-- Analyst upgrades/downgrades: Include FIRM NAME and PRICE TARGET
-- Ratings distribution, institutional flow direction
-- Example: "BofA upgraded to Buy, reiterated $42 target; average target $47.33 on 19 ratings (Sep 30)"
+Do NOT filter out deals based on size - include all M&A activity regardless of amount.
 
-⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-4 bullets)
-- Competitor strategic moves affecting {company_name}'s position
-- Industry supply/demand shifts, regulatory changes, pricing trends
-- Assess impact on {company_name}'s market share, pricing power, margins
-- Example: "🆕 BHP investing $555M to expand Australian copper production; sector faces 400K ton deficit in 2025 (Oct 1)"
+🔴 MAJOR DEVELOPMENTS (2-5 bullets, 100-150 words)
+Include: M&A, partnerships, regulatory actions, executive changes, major contracts, rumors
+Provide available details: Deal size, timeline, strategic rationale
+Combine related facts into single bullets
 
-📅 UPCOMING CATALYSTS (1-3 bullets)
-- Earnings dates, ex-dividend dates, analyst days, regulatory deadlines, product launches
-- Include SPECIFIC DATES for all events
-- Example: "Earnings October 21 after market close; analyst day October 16 focused on AI ROIC (Oct 1)"
+📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets, 80-120 words)
+Include: Earnings, revenue, guidance, margins, production, capex, debt, buybacks, dividends
+Report exact figures; include vs consensus if mentioned
+Provide EV context for major transactions when amounts are disclosed
 
-CRITICAL REQUIREMENTS:
-✓ Report all figures (%, $, units) EXACTLY as stated - no rounding or estimates
-✓ Include specific dates for: earnings, regulatory deadlines, investor events, completion timelines
-✓ Prioritize near-term (<1 year) developments but note medium/long-term implications
-✓ Assess how industry/competitor developments affect {company_name}'s business model and profitability
-✓ If section has no material news, write: "No significant developments this period"
-✓ Maintain investor focus: What moves the stock? What changes the thesis?
+⚠️ RISK FACTORS (2-4 bullets, 80-120 words)
+Include: Regulatory issues, litigation, production problems, competitive threats, insider selling
+Report C-suite selling or patterns across multiple executives with amounts/context
+Include financial impact and timelines when stated
 
-CONTEXT: {financial_context}
-INDUSTRY: {', '.join(industry_keywords) if industry_keywords else 'General'}
+📈 WALL STREET SENTIMENT (1-3 bullets, 40-80 words)
+Include: Rating changes, price target changes, notable research
+Format: "[Firm] [action] to [new rating/target], [rationale if given] (date)"
+Summarize if multiple analysts moved in same week
+
+📅 UPCOMING CATALYSTS (1-3 bullets, 30-60 words)
+Include: Earnings dates, investor days, regulatory deadlines, product launches
+Provide SPECIFIC DATES when available
+
+HANDLING CONFLICTS:
+Report BOTH figures with sources: "Stock rose 5.3% (Reuters) to 7% (Bloomberg) (Oct 1)"
+
+PRECISION:
+- Exact figures when available: "12.7%", "$4.932B"
+- Qualitative if numbers unavailable: "substantial investment"
+- Never replace numbers with vague terms when numbers exist
+- Priority: Specific numbers > Ranges > Directional > Omission
+
+BULLET CONSTRUCTION:
+Combine related facts telling one story. Add context/impact within same bullet.
+Example: "Halted Vision Pro refresh to redirect resources toward AI glasses targeting 2027 release; analysts estimate $500M+ R&D reallocation to compete with Meta (Oct 1)"
+
+CURRENT VALUATION (as of {snapshot_date}):
+Enterprise Value: {enterprise_value_formatted}
 
 COMPANY ARTICLES:
 {ai_text}
+
+Generate structured summary. Omit empty sections."""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 3000,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+
+        LOG.info(f"[{ticker}] Prompt 1: Calling Claude for company-focused summary")
+        response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
+
+        if response.status_code == 200:
+            result = response.json()
+            summary = result.get("content", [{}])[0].get("text", "")
+            LOG.info(f"✅ [{ticker}] Prompt 1: Generated company summary ({len(summary)} chars)")
+            return summary
+        else:
+            LOG.error(f"❌ [{ticker}] Prompt 1: Claude API error {response.status_code}: {response.text[:200]}")
+            return None
+
+    except Exception as e:
+        LOG.error(f"❌ [{ticker}] Prompt 1: Exception - {e}")
+        return None
+
+
+def generate_claude_competitive_summary(ticker: str, company_name: str,
+                                       industry_articles: List[Dict],
+                                       competitor_articles: List[Dict]) -> Optional[str]:
+    """Generate competitive/industry analysis (1 section) using Claude - Prompt 2"""
+
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    # Build industry summaries
+    industry_summaries = []
+    for article in industry_articles[:15]:
+        title = article.get("title", "")
+        ai_summary = article.get("ai_summary", "")
+        domain = article.get("domain", "")
+        keyword = article.get("search_keyword", "Industry")
+        published_at = article.get("published_at")
+        date_str = format_date_short(published_at)
+
+        if ai_summary:
+            source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+            industry_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}] {date_str}: {ai_summary}")
+
+    # Build competitor summaries
+    competitor_summaries = []
+    for article in competitor_articles[:15]:
+        title = article.get("title", "")
+        ai_summary = article.get("ai_summary", "")
+        domain = article.get("domain", "")
+        published_at = article.get("published_at")
+        date_str = format_date_short(published_at)
+
+        if ai_summary:
+            source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+            competitor_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
+
+    if not industry_summaries and not competitor_summaries:
+        LOG.info(f"[{ticker}] Prompt 2: No industry/competitor articles with AI summaries")
+        return ""
+
+    industry_analysis = "\n".join(industry_summaries) if industry_summaries else ""
+    competitor_analysis = "\n".join(competitor_summaries) if competitor_summaries else ""
+
+    prompt = f"""You are a hedge fund analyst analyzing how industry trends and competitor actions affect {company_name} ({ticker})'s competitive position.
+
+OUTPUT FORMAT - Use this exact header:
+⚡ COMPETITIVE/INDUSTRY DYNAMICS
+
+RULES:
+- Bullet points (•) only - each development is ONE bullet
+- End bullets with date: (Oct 1) or (Sep 29-30)
+- NO source names, NO citations (EXCEPTION: cite source when figures conflict)
+- Newest items first
+- 2-3 sentences per bullet explaining competitive impact
+- 2-4 bullets total, 80-120 words
+- If no material developments affect {company_name}, return empty string with no header
+
+IMPACT FRAMING:
+When information is available, explain how the development affects {company_name}'s competitive position, market share, pricing power, or margins.
+
+If article lacks details about impact on {company_name}, report the development and note competitive context without speculation.
+
+Examples:
+✓ GOOD (Impact known): "Alphabet posted largest quarterly gain since 2005 on AI strength, intensifying pressure on {company_name} to demonstrate AI monetization as both compete for enterprise cloud/AI market share (Sep 30)"
+
+✓ ALSO GOOD (Impact unclear, but competitive context clear): "Meta acquired AI startup for undisclosed amount to expand enterprise AI capabilities, entering {company_name}'s core market segment (Oct 1)"
+
+✗ BAD (No connection to target company): "Alphabet posted largest quarterly gain since 2005 on AI strength (Sep 30)"
+
+MATERIALITY - Include only if:
+- Competitor M&A: Strategic deals OR directly affects market structure in {company_name}'s core segments
+- Product launches: Direct competition to {company_name}'s revenue drivers
+- Pricing changes: Industry-wide moves affecting {company_name}'s pricing power or margins
+- Production/capacity: Supply/demand shifts impacting {company_name}'s market share
+- Regulation: Directly impacts {company_name}'s operations or competitive advantages
+- Technology: Shifts threatening {company_name}'s product positioning
+
+BULLET CONSTRUCTION:
+- Combine related competitor moves into single bullets when they represent one trend
+- Always connect competitor action to {company_name}'s business context
+- Focus on strategic implications: market share, pricing power, competitive moats
+Example: "Industry consolidation accelerating with two major acquisitions, reducing supplier options and potentially pressuring {company_name}'s margins (Oct 1-2)"
+
+VALIDATION:
+- Every bullet connects to {company_name}'s competitive environment
+- No bullets are isolated competitor facts
+- Dates in parentheses for all bullets
 
 INDUSTRY ARTICLES:
 {industry_analysis}
@@ -10222,43 +10270,131 @@ INDUSTRY ARTICLES:
 COMPETITOR ARTICLES:
 {competitor_analysis}
 
-Generate a 6-section structured summary following the exact format above. Ensure 🆕 badges appear on last 24-hour items and all bullets end with dates."""
+Generate competitive analysis. If no material developments affect {company_name}, return empty string."""
 
-                    data = {
-                        "model": ANTHROPIC_MODEL,
-                        "max_tokens": 3000,
-                        "messages": [{"role": "user", "content": prompt}]
-                    }
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
 
-                    response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 1500,
+            "messages": [{"role": "user", "content": prompt}]
+        }
 
-                    if response.status_code == 200:
-                        result = response.json()
-                        ai_analysis_summary = result.get("content", [{}])[0].get("text", "")
+        LOG.info(f"[{ticker}] Prompt 2: Calling Claude for competitive analysis")
+        response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
 
-                        # Post-process: Insert 🆕 badges for articles within 24 hours
-                        all_articles = articles_with_ai_summary + industry_articles_with_ai_summary + competitor_articles_with_ai_summary
-                        ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
+        if response.status_code == 200:
+            result = response.json()
+            summary = result.get("content", [{}])[0].get("text", "")
 
-                        LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
-                    else:
-                        LOG.warning(f"Claude final summary failed: {response.status_code}")
+            # Check if empty or too short
+            if len(summary.strip()) < 20:
+                LOG.info(f"[{ticker}] Prompt 2: Returned empty/short response ({len(summary)} chars)")
+                return ""
 
-                except Exception as e:
-                    LOG.warning(f"Failed to generate Claude final summary for {ticker}: {e}")
+            LOG.info(f"✅ [{ticker}] Prompt 2: Generated competitive summary ({len(summary)} chars)")
+            return summary
+        else:
+            LOG.warning(f"⚠️ [{ticker}] Prompt 2: Claude API error {response.status_code}: {response.text[:200]}")
+            return ""
+
+    except Exception as e:
+        LOG.warning(f"⚠️ [{ticker}] Prompt 2: Exception - {e}")
+        return ""
+
+
+def generate_claude_dual_prompt_summary(ticker: str, categories: Dict[str, List[Dict]],
+                                       config: Dict) -> Optional[str]:
+    """
+    Generate executive summary using two separate Claude prompts:
+    - Prompt 1: Company-focused (5 sections)
+    - Prompt 2: Competitive/Industry (1 section)
+
+    Returns combined 6-section summary or None if Prompt 1 fails
+    """
+
+    company_name = config.get("name", ticker)
+
+    # Extract articles by category
+    company_articles = [a for a in categories.get("company", []) if a.get("ai_summary")]
+    industry_articles = [a for a in categories.get("industry", []) if a.get("ai_summary")]
+    competitor_articles = [a for a in categories.get("competitor", []) if a.get("ai_summary")]
+
+    LOG.info(f"[{ticker}] Dual-prompt: {len(company_articles)} company, {len(industry_articles)} industry, {len(competitor_articles)} competitor articles")
+
+    # Must have company or industry articles
+    if not company_articles and not industry_articles:
+        LOG.warning(f"[{ticker}] Dual-prompt: Skipping - no company or industry articles with AI summaries")
+        return None
+
+    # Get financial context
+    enterprise_value_raw = config.get('financial_enterprise_value')
+    enterprise_value_formatted = format_financial_number(enterprise_value_raw) if enterprise_value_raw else "N/A"
+    snapshot_date = config.get('financial_snapshot_date', 'N/A')
+
+    # PROMPT 1: Company-focused summary (REQUIRED)
+    company_summary = generate_claude_company_summary(
+        ticker, company_name, enterprise_value_formatted, snapshot_date, company_articles
+    )
+
+    if not company_summary:
+        LOG.error(f"❌ [{ticker}] Dual-prompt: Prompt 1 failed - skipping entire summary")
+        return None
+
+    # PROMPT 2: Competitive/industry analysis (OPTIONAL)
+    competitive_summary = generate_claude_competitive_summary(
+        ticker, company_name, industry_articles, competitor_articles
+    )
+
+    if not competitive_summary or len(competitive_summary.strip()) < 20:
+        LOG.info(f"[{ticker}] Dual-prompt: Prompt 2 empty - returning 5-section summary only")
+        return company_summary
+
+    # Combine both summaries
+    full_summary = company_summary.strip() + "\n\n" + competitive_summary.strip()
+    LOG.info(f"✅ [{ticker}] Dual-prompt: Combined 6-section summary ({len(full_summary)} chars)")
+
+    return full_summary
+
+
+def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
+    """Generate Claude final summaries using DUAL-PROMPT architecture (company + competitive)"""
+    if not ANTHROPIC_API_KEY:
+        LOG.warning("⚠️ EXECUTIVE SUMMARY (Claude): Anthropic API key not configured - skipping")
+        return {}
+
+    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude DUAL-PROMPT): Starting generation for {len(articles_by_ticker)} tickers")
+    summaries = {}
+
+    for ticker, categories in articles_by_ticker.items():
+        # Get config for financial context
+        config = get_ticker_config(ticker)
+        if not config:
+            LOG.warning(f"[{ticker}] No config found - skipping")
+            continue
+
+        company_name = config.get("name", ticker)
+
+        # Use dual-prompt architecture
+        ai_analysis_summary = generate_claude_dual_prompt_summary(ticker, categories, config)
 
         if ai_analysis_summary:
             LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
         else:
-            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (Claude) [{ticker}]: No summary generated (no AI summaries or all articles skipped)")
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (Claude) [{ticker}]: No summary generated")
 
         summaries[ticker] = {
-            "ai_analysis_summary": ai_analysis_summary,
+            "ai_analysis_summary": ai_analysis_summary or "",
             "company_name": company_name,
-            "industry_articles_analyzed": len(industry_articles_with_ai_summary)
+            "industry_articles_analyzed": len([a for a in categories.get("industry", []) if a.get("ai_summary")])
         }
 
-    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude): Completed - generated summaries for {len(summaries)} tickers")
+    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude DUAL-PROMPT): Completed - generated summaries for {len(summaries)} tickers")
     return summaries
 
 def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:

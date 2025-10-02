@@ -62,6 +62,7 @@ from memory_monitor import (
     resource_cleanup_context,
     full_resource_cleanup
 )
+import yfinance as yf
 
 # Global session for OpenAI API calls with retries
 _openai_session = None
@@ -726,6 +727,22 @@ def ensure_schema():
                 -- Add ai_model column if it doesn't exist (for existing databases)
                 ALTER TABLE articles ADD COLUMN IF NOT EXISTS ai_model VARCHAR(20);
 
+                -- Add financial data columns to ticker_reference if they don't exist
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_last_price NUMERIC(15, 2);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_price_change_pct NUMERIC(10, 4);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_yesterday_return_pct NUMERIC(10, 4);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_ytd_return_pct NUMERIC(10, 4);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_market_cap NUMERIC(20, 2);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_enterprise_value NUMERIC(20, 2);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_volume NUMERIC(15, 0);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_avg_volume NUMERIC(15, 0);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_target NUMERIC(15, 2);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_range_low NUMERIC(15, 2);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_range_high NUMERIC(15, 2);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_count INTEGER;
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_recommendation VARCHAR(50);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_snapshot_date DATE;
+
                 -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
                 CREATE TABLE IF NOT EXISTS feeds (
                     id SERIAL PRIMARY KEY,
@@ -793,7 +810,21 @@ def ensure_schema():
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW(),
                     data_source VARCHAR(50) DEFAULT 'csv_import',
-                    last_github_sync TIMESTAMP
+                    last_github_sync TIMESTAMP,
+                    financial_last_price NUMERIC(15, 2),
+                    financial_price_change_pct NUMERIC(10, 4),
+                    financial_yesterday_return_pct NUMERIC(10, 4),
+                    financial_ytd_return_pct NUMERIC(10, 4),
+                    financial_market_cap NUMERIC(20, 2),
+                    financial_enterprise_value NUMERIC(20, 2),
+                    financial_volume NUMERIC(15, 0),
+                    financial_avg_volume NUMERIC(15, 0),
+                    financial_analyst_target NUMERIC(15, 2),
+                    financial_analyst_range_low NUMERIC(15, 2),
+                    financial_analyst_range_high NUMERIC(15, 2),
+                    financial_analyst_count INTEGER,
+                    financial_analyst_recommendation VARCHAR(50),
+                    financial_snapshot_date DATE
                 );
 
                 CREATE TABLE IF NOT EXISTS domain_names (
@@ -1539,6 +1570,187 @@ def get_ticker_reference(ticker: str):
     
     return None
 
+# ============================================================================
+# FINANCIAL DATA FUNCTIONS (yfinance integration)
+# ============================================================================
+
+def format_financial_number(num):
+    """Format large numbers with B/M/K suffixes"""
+    if num is None or num == 0:
+        return None
+
+    try:
+        num = float(num)
+        if num >= 1e12:
+            return f"${num/1e12:.2f}T"
+        elif num >= 1e9:
+            return f"${num/1e9:.2f}B"
+        elif num >= 1e6:
+            return f"${num/1e6:.2f}M"
+        elif num >= 1e3:
+            return f"${num/1e3:.2f}K"
+        else:
+            return f"${num:.2f}"
+    except:
+        return None
+
+def format_financial_volume(num):
+    """Format volume without dollar sign"""
+    if num is None or num == 0:
+        return None
+
+    try:
+        num = float(num)
+        if num >= 1e9:
+            return f"{num/1e9:.2f}B"
+        elif num >= 1e6:
+            return f"{num/1e6:.2f}M"
+        elif num >= 1e3:
+            return f"{num/1e3:.2f}K"
+        else:
+            return f"{num:,.0f}"
+    except:
+        return None
+
+def format_financial_percent(value, include_plus=True):
+    """Format percentage with + or - sign"""
+    if value is None:
+        return None
+
+    try:
+        value = float(value)
+        if value > 0 and include_plus:
+            return f"+{value:.2f}%"
+        return f"{value:.2f}%"
+    except:
+        return None
+
+def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optional[Dict]:
+    """
+    Fetch financial data from yfinance with retry logic and timeout.
+    Returns dict with 13 financial fields + snapshot_date, or None on failure.
+    All-or-nothing: if critical fields missing, returns None.
+    """
+
+    for attempt in range(retries):
+        try:
+            LOG.info(f"Fetching financial data for {ticker} (attempt {attempt + 1}/{retries})")
+
+            # Create a wrapper with timeout using threading
+            result = {'data': None, 'error': None}
+
+            def fetch_data():
+                try:
+                    ticker_obj = yf.Ticker(ticker)
+                    info = ticker_obj.info
+                    hist = ticker_obj.history(period="ytd")
+                    result['data'] = (info, hist)
+                except Exception as e:
+                    result['error'] = e
+
+            # Start fetch in thread with timeout
+            fetch_thread = threading.Thread(target=fetch_data)
+            fetch_thread.daemon = True
+            fetch_thread.start()
+            fetch_thread.join(timeout=timeout)
+
+            if fetch_thread.is_alive():
+                LOG.warning(f"yfinance timeout for {ticker} after {timeout}s (attempt {attempt + 1})")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    return None
+
+            # Check for errors
+            if result['error']:
+                raise result['error']
+
+            if not result['data']:
+                raise ValueError("No data returned from yfinance")
+
+            info, hist = result['data']
+
+            # Validate we got real data
+            if not info or not isinstance(info, dict):
+                raise ValueError(f"Invalid info data for {ticker}")
+
+            # Get price data
+            current_price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
+            if not current_price:
+                raise ValueError(f"No price data available for {ticker}")
+
+            # Calculate price change percentage
+            regular_market_change = info.get('regularMarketChangePercent', 0.0)
+
+            # Calculate yesterday's return
+            previous_close = info.get('previousClose')
+            regular_market_previous_close = info.get('regularMarketPreviousClose')
+            yesterday_return = None
+
+            if previous_close and regular_market_previous_close:
+                yesterday_return = ((previous_close - regular_market_previous_close) / regular_market_previous_close) * 100
+
+            # Calculate YTD return
+            ytd_return = None
+            try:
+                if not hist.empty and len(hist) > 0:
+                    ytd_start = hist['Close'].iloc[0]
+                    ytd_current = previous_close if previous_close else current_price
+                    ytd_return = ((ytd_current - ytd_start) / ytd_start) * 100
+            except Exception as e:
+                LOG.warning(f"YTD calculation failed for {ticker}: {e}")
+
+            # Get financial data
+            market_cap = info.get('marketCap')
+            enterprise_value = info.get('enterpriseValue')
+
+            # Get volume data
+            volume = info.get('volume')
+            avg_volume = info.get('averageVolume')
+
+            # Get analyst data
+            target_mean = info.get('targetMeanPrice')
+            target_low = info.get('targetLowPrice')
+            target_high = info.get('targetHighPrice')
+            num_analysts = info.get('numberOfAnalystOpinions')
+            recommendation = info.get('recommendationKey', '').capitalize() if info.get('recommendationKey') else None
+
+            # Validate critical fields (all-or-nothing)
+            if not current_price or not market_cap:
+                raise ValueError(f"Missing critical financial fields for {ticker}")
+
+            # Build financial data dict
+            financial_data = {
+                'financial_last_price': float(current_price) if current_price else None,
+                'financial_price_change_pct': float(regular_market_change) if regular_market_change else None,
+                'financial_yesterday_return_pct': float(yesterday_return) if yesterday_return else None,
+                'financial_ytd_return_pct': float(ytd_return) if ytd_return else None,
+                'financial_market_cap': float(market_cap) if market_cap else None,
+                'financial_enterprise_value': float(enterprise_value) if enterprise_value else None,
+                'financial_volume': float(volume) if volume else None,
+                'financial_avg_volume': float(avg_volume) if avg_volume else None,
+                'financial_analyst_target': float(target_mean) if target_mean else None,
+                'financial_analyst_range_low': float(target_low) if target_low else None,
+                'financial_analyst_range_high': float(target_high) if target_high else None,
+                'financial_analyst_count': int(num_analysts) if num_analysts else None,
+                'financial_analyst_recommendation': recommendation,
+                'financial_snapshot_date': datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
+            }
+
+            LOG.info(f"✅ Financial data retrieved for {ticker}: Price=${current_price:.2f}, MCap={format_financial_number(market_cap)}")
+            return financial_data
+
+        except Exception as e:
+            LOG.warning(f"yfinance attempt {attempt + 1}/{retries} failed for {ticker}: {e}")
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+            else:
+                LOG.error(f"❌ yfinance failed after {retries} attempts for {ticker}")
+                return None
+
+    return None
+
 # Backwards compatability ticker_reference to ticker_config
 def get_ticker_config(ticker: str) -> Optional[Dict]:
     """Get ticker configuration from ticker_reference table with proper field conversion"""
@@ -1563,7 +1775,14 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                    competitor_1_name, competitor_1_ticker,
                    competitor_2_name, competitor_2_ticker,
                    competitor_3_name, competitor_3_ticker,
-                   sector, industry, sub_industry
+                   sector, industry, sub_industry,
+                   financial_last_price, financial_price_change_pct,
+                   financial_yesterday_return_pct, financial_ytd_return_pct,
+                   financial_market_cap, financial_enterprise_value,
+                   financial_volume, financial_avg_volume,
+                   financial_analyst_target, financial_analyst_range_low,
+                   financial_analyst_range_high, financial_analyst_count,
+                   financial_analyst_recommendation, financial_snapshot_date
             FROM ticker_reference
             WHERE ticker = %s
         """, (ticker,))
@@ -1592,7 +1811,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                     comp["ticker"] = ticker_field.strip()
                 competitors.append(comp)
         
-        return {
+        config = {
             "name": result["company_name"],
             "company_name": result["company_name"],  # Some functions expect this field name
             "industry_keywords": industry_keywords,
@@ -1601,6 +1820,27 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
             "industry": result.get("industry", ""),
             "sub_industry": result.get("sub_industry", "")
         }
+
+        # Add financial data if available
+        if result.get("financial_snapshot_date"):
+            config.update({
+                "financial_last_price": float(result["financial_last_price"]) if result.get("financial_last_price") else None,
+                "financial_price_change_pct": float(result["financial_price_change_pct"]) if result.get("financial_price_change_pct") else None,
+                "financial_yesterday_return_pct": float(result["financial_yesterday_return_pct"]) if result.get("financial_yesterday_return_pct") else None,
+                "financial_ytd_return_pct": float(result["financial_ytd_return_pct"]) if result.get("financial_ytd_return_pct") else None,
+                "financial_market_cap": float(result["financial_market_cap"]) if result.get("financial_market_cap") else None,
+                "financial_enterprise_value": float(result["financial_enterprise_value"]) if result.get("financial_enterprise_value") else None,
+                "financial_volume": float(result["financial_volume"]) if result.get("financial_volume") else None,
+                "financial_avg_volume": float(result["financial_avg_volume"]) if result.get("financial_avg_volume") else None,
+                "financial_analyst_target": float(result["financial_analyst_target"]) if result.get("financial_analyst_target") else None,
+                "financial_analyst_range_low": float(result["financial_analyst_range_low"]) if result.get("financial_analyst_range_low") else None,
+                "financial_analyst_range_high": float(result["financial_analyst_range_high"]) if result.get("financial_analyst_range_high") else None,
+                "financial_analyst_count": int(result["financial_analyst_count"]) if result.get("financial_analyst_count") else None,
+                "financial_analyst_recommendation": result.get("financial_analyst_recommendation"),
+                "financial_snapshot_date": str(result["financial_snapshot_date"]) if result.get("financial_snapshot_date") else None
+            })
+
+        return config
 
 # 2. STORE TICKER REFERENCE - With 6 competitor fields
 def store_ticker_reference(ticker_data: dict) -> bool:
@@ -2111,6 +2351,13 @@ def export_ticker_references_to_csv():
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
+                       financial_last_price, financial_price_change_pct,
+                       financial_yesterday_return_pct, financial_ytd_return_pct,
+                       financial_market_cap, financial_enterprise_value,
+                       financial_volume, financial_avg_volume,
+                       financial_analyst_target, financial_analyst_range_low,
+                       financial_analyst_range_high, financial_analyst_count,
+                       financial_analyst_recommendation, financial_snapshot_date,
                        created_at, updated_at, data_source
                 FROM ticker_reference
                 ORDER BY ticker
@@ -2142,6 +2389,13 @@ def export_ticker_references_to_csv():
                 'competitor_1_name', 'competitor_1_ticker',
                 'competitor_2_name', 'competitor_2_ticker',
                 'competitor_3_name', 'competitor_3_ticker',
+                'financial_last_price', 'financial_price_change_pct',
+                'financial_yesterday_return_pct', 'financial_ytd_return_pct',
+                'financial_market_cap', 'financial_enterprise_value',
+                'financial_volume', 'financial_avg_volume',
+                'financial_analyst_target', 'financial_analyst_range_low',
+                'financial_analyst_range_high', 'financial_analyst_count',
+                'financial_analyst_recommendation', 'financial_snapshot_date',
                 'created_at', 'updated_at', 'data_source'
             ]
             
@@ -9062,7 +9316,18 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                 
                 # === MINIMAL CHANGE: update using the NORMALIZED ticker so the row matches
                 update_ticker_reference_ai_data(normalized_ticker, metadata)
-        
+
+                # Fetch financial data from yfinance if AI enhancement happened
+                LOG.info(f"Fetching financial data for {ticker} alongside AI metadata")
+                financial_data = get_stock_context(normalized_ticker)
+                if financial_data:
+                    # Update metadata dict with financial data
+                    metadata.update(financial_data)
+                    # Store financial data in database
+                    update_ticker_reference_financial_data(normalized_ticker, financial_data)
+                else:
+                    LOG.warning(f"Financial data fetch failed for {ticker}, keeping existing data")
+
         return metadata
     
     # === No config row, fallback to AI generation + INSERT (unchanged logic) ===
@@ -9179,6 +9444,54 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                 
     except Exception as e:
         LOG.error(f"Failed to update ticker reference AI data for {ticker}: {e}")
+
+def update_ticker_reference_financial_data(ticker: str, financial_data: Dict):
+    """Update reference table with financial data from yfinance"""
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_reference
+                SET financial_last_price = %s,
+                    financial_price_change_pct = %s,
+                    financial_yesterday_return_pct = %s,
+                    financial_ytd_return_pct = %s,
+                    financial_market_cap = %s,
+                    financial_enterprise_value = %s,
+                    financial_volume = %s,
+                    financial_avg_volume = %s,
+                    financial_analyst_target = %s,
+                    financial_analyst_range_low = %s,
+                    financial_analyst_range_high = %s,
+                    financial_analyst_count = %s,
+                    financial_analyst_recommendation = %s,
+                    financial_snapshot_date = %s,
+                    updated_at = NOW()
+                WHERE ticker = %s
+            """, (
+                financial_data.get('financial_last_price'),
+                financial_data.get('financial_price_change_pct'),
+                financial_data.get('financial_yesterday_return_pct'),
+                financial_data.get('financial_ytd_return_pct'),
+                financial_data.get('financial_market_cap'),
+                financial_data.get('financial_enterprise_value'),
+                financial_data.get('financial_volume'),
+                financial_data.get('financial_avg_volume'),
+                financial_data.get('financial_analyst_target'),
+                financial_data.get('financial_analyst_range_low'),
+                financial_data.get('financial_analyst_range_high'),
+                financial_data.get('financial_analyst_count'),
+                financial_data.get('financial_analyst_recommendation'),
+                financial_data.get('financial_snapshot_date'),
+                normalize_ticker_format(ticker)
+            ))
+
+            if cur.rowcount > 0:
+                LOG.info(f"✅ Updated {ticker} with financial data (snapshot: {financial_data.get('financial_snapshot_date')})")
+            else:
+                LOG.warning(f"No ticker reference found to update financial data for {ticker}")
+
+    except Exception as e:
+        LOG.error(f"Failed to update ticker reference financial data for {ticker}: {e}")
 
 def validate_metadata(metadata):
     """
@@ -10749,12 +11062,47 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
 
     for ticker, categories in articles_by_ticker.items():
         total_articles = sum(len(articles) for articles in categories.values())
-        
+
         # Get company name for display
         config = get_ticker_config(ticker)
         company_name = config.get("name", ticker) if config else ticker
-        
+
         html.append(f"<div class='ticker-section'>")
+
+        # Add financial context box if data is current (only in final email)
+        today_str = datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
+        if config and config.get("financial_snapshot_date") == today_str:
+            html.append("<div style='background:#f5f5f5; padding:12px; margin:16px 0; font-size:13px; border-left:3px solid #0066cc;'>")
+            html.append(f"<div style='font-weight:bold; margin-bottom:6px;'>📊 Market Context (as of {config.get('financial_snapshot_date')})</div>")
+
+            # Line 1: Price and returns
+            price = f"${config.get('financial_last_price', 0):.2f}" if config.get('financial_last_price') else "N/A"
+            price_chg = format_financial_percent(config.get('financial_price_change_pct')) or "N/A"
+            yesterday_ret = format_financial_percent(config.get('financial_yesterday_return_pct')) or "N/A"
+            ytd_ret = format_financial_percent(config.get('financial_ytd_return_pct')) or "N/A"
+            html.append(f"<div>Last Stock Price: {price} ({price_chg}) | Yesterday: {yesterday_ret} | YTD: {ytd_ret}</div>")
+
+            # Line 2: Market cap and enterprise value
+            mcap = format_financial_number(config.get('financial_market_cap')) or "N/A"
+            ev = format_financial_number(config.get('financial_enterprise_value')) or "N/A"
+            html.append(f"<div>Market Cap: {mcap} | Enterprise Value: {ev}</div>")
+
+            # Line 3: Volume
+            vol = format_financial_volume(config.get('financial_volume')) or "N/A"
+            avg_vol = format_financial_volume(config.get('financial_avg_volume')) or "N/A"
+            html.append(f"<div>Volume: {vol} yesterday / {avg_vol} avg</div>")
+
+            # Line 4: Analyst data (if available)
+            if config.get('financial_analyst_target'):
+                target = f"${config.get('financial_analyst_target'):.2f}"
+                low = f"${config.get('financial_analyst_range_low'):.2f}" if config.get('financial_analyst_range_low') else "N/A"
+                high = f"${config.get('financial_analyst_range_high'):.2f}" if config.get('financial_analyst_range_high') else "N/A"
+                count = config.get('financial_analyst_count', 0)
+                rec = config.get('financial_analyst_recommendation', 'N/A')
+                html.append(f"<div>Analysts: {target} target (range {low}-{high}, {count} analysts, {rec})</div>")
+
+            html.append("</div>")
+
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
         # Display Claude summary with OpenAI fallback

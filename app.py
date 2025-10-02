@@ -6126,7 +6126,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
         "items": items
     }
 
-    # Triage schema - OpenAI uses only priority 1-2 (no low tier)
+    # Triage schema - OpenAI now supports priority 1-3 (restored tier 3)
     triage_schema = {
         "type": "object",
         "properties": {
@@ -6134,7 +6134,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
                 "type": "array",
                 "items": {"type": "integer"},
                 "maxItems": target_cap,
-                "minItems": target_cap
+                "minItems": 0
             },
             "selected": {
                 "type": "array",
@@ -6142,7 +6142,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6152,7 +6152,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
                     "additionalProperties": False
                 },
                 "maxItems": target_cap,
-                "minItems": target_cap
+                "minItems": 0
             },
             "skipped": {
                 "type": "array",
@@ -6160,7 +6160,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6177,11 +6177,11 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
 
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {company_name} ({ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
-CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
 If you're unsure whether an article is relevant to {company_name}, assign 0 points rather than selecting it. Only select articles you are confident about.
 
-SELECT (choose exactly {target_cap}):
+SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard corporate events:
 - Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
@@ -6202,6 +6202,11 @@ TIER 2 - Strategic developments:
 - Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
 - Geographic: Market entry/exit WITH investment levels or unit counts
 
+TIER 3 - Context (ONLY if quota unfilled):
+- Analyst coverage WITH price targets visible in title
+- Industry awards, certifications if indicative of competitive position
+- Routine announcements WITH material operational details
+
 REJECT COMPLETELY - Never select:
 - Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
 - Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
@@ -6217,16 +6222,17 @@ DISAMBIGUATION - Avoid confusion:
 - If {company_name} only appears as news source attribution, not subject
 - For common words (Oracle, Amazon, Apple), verify context matches your company
 
-SCRAPE PRIORITY (assign integer 1-2 ONLY):
+SCRAPE PRIORITY (assign integer 1-3):
 1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
 2 = Tier 2 (leadership, partnerships, product launches, facilities)
+3 = Tier 3 (analyst coverage, awards, routine announcements)
 
 For each article assess:
 - likely_repeat: Same event as another selected article?
 - repeat_key: Event identifier (e.g., "q2_earnings_2025," "ceo_change_sept_2025")
 - confidence: 0.0-1.0, certainty this is specifically about {company_name}
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from best available. Never exceed {target_cap}.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
 
 CONSERVATIVE STANDARD: If you're unsure whether an article is directly relevant to {company_name}, skip it entirely. Only select articles you are confident about."""
 
@@ -6328,7 +6334,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
         "items": items
     }
 
-    # Triage schema - OpenAI uses only priority 1-2 (no low tier)
+    # Triage schema - OpenAI now supports priority 1-3 (restored tier 3)
     triage_schema = {
         "type": "object",
         "properties": {
@@ -6336,7 +6342,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
                 "type": "array",
                 "items": {"type": "integer"},
                 "maxItems": target_cap,
-                "minItems": target_cap
+                "minItems": 0
             },
             "selected": {
                 "type": "array",
@@ -6344,7 +6350,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6354,7 +6360,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
                     "additionalProperties": False
                 },
                 "maxItems": target_cap,
-                "minItems": target_cap
+                "minItems": 0
             },
             "skipped": {
                 "type": "array",
@@ -6362,7 +6368,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6388,9 +6394,9 @@ KNOWN PEERS: {peers_display}
 
 INDUSTRY CONTEXT: Select articles about industry trends and developments that are relevant to {company_name}'s competitive landscape. These should be sector-wide insights affecting {company_name} and its peers, not articles solely about non-peer companies.
 
-CRITICAL: You must select EXACTLY {target_cap} articles. If you're unsure whether an article is relevant to {company_name}'s industry position, DO NOT select it. Only select articles you are confident have industry implications for {company_name}.
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain. If you're unsure whether an article is relevant to {company_name}'s industry position, DO NOT select it. Only select articles you are confident have industry implications for {company_name}.
 
-SELECT (choose exactly {target_cap}):
+SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard industry events with quantified impact (scrape_priority=1):
 - Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting {sector}
@@ -6409,6 +6415,11 @@ TIER 2 - Strategic sector developments (scrape_priority=2):
 - Patent expirations, generic approvals, technology shifts WITH market impact on {sector}
 - Major peer company announcements revealing sector-wide trends (from peers: {peers_display})
 
+TIER 3 - Sector context (ONLY if quota unfilled):
+- Economic indicators directly affecting {sector} WITH specific data
+- Government initiatives WITH allocated budgets (not vague "plans")
+- Research findings WITH quantified sector implications
+
 REJECT COMPLETELY - Never select:
 - Market research reports: "Market to reach," "CAGR," "Forecast 20XX-20YY," "TAM," "Industry Report"
 - Generic trends: "Top Trends," "Future of," "Outlook," "What to Expect in [Year]"
@@ -6426,16 +6437,17 @@ INCLUDE when company news has sector implications for {company_name}:
 ✓ Technology deployment showing sector-wide adoption affecting {company_name}
 ✓ Company data revealing {sector} cost/margin trends
 
-SCRAPE PRIORITY (assign integer 1-2 ONLY):
+SCRAPE PRIORITY (assign integer 1-3):
 1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
 2 = Tier 2 (capacity, consolidation, policy WITH budgets, peer company moves with sector implications)
+3 = Tier 3 (economic indicators, sector context)
 
 For each article assess:
 - likely_repeat: Same sector event covered by multiple outlets?
 - repeat_key: Event identifier (e.g., "banking_regulation_sept_2025")
 - confidence: 0.0-1.0, certainty this has implications for {company_name} and its competitive position
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2 standards, leave remaining slots unfilled rather than selecting marginal articles. Never exceed {target_cap}.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
 
 CONSERVATIVE STANDARD: If you're unsure whether an article is relevant to {company_name}'s competitive landscape in {sector}, skip it entirely. Only select articles you are confident about."""
 
@@ -6535,7 +6547,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
         "items": items
     }
 
-    # Triage schema - OpenAI uses only priority 1-2 (no low tier)
+    # Triage schema - OpenAI now supports priority 1-3 (restored tier 3)
     triage_schema = {
         "type": "object",
         "properties": {
@@ -6543,7 +6555,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
                 "type": "array",
                 "items": {"type": "integer"},
                 "maxItems": target_cap,
-                "minItems": target_cap
+                "minItems": 0
             },
             "selected": {
                 "type": "array",
@@ -6551,7 +6563,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6561,7 +6573,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
                     "additionalProperties": False
                 },
                 "maxItems": target_cap,
-                "minItems": target_cap
+                "minItems": 0
             },
             "skipped": {
                 "type": "array",
@@ -6569,7 +6581,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6586,11 +6598,11 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
 
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} from {len(articles)} candidates based ONLY on titles and descriptions.
 
-CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
 If you're unsure whether an article is relevant to {competitor_name}, assign 0 points rather than selecting it. Only select articles you are confident about.
 
-SELECT (choose exactly {target_cap}):
+SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard corporate events:
 - Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
@@ -6611,6 +6623,11 @@ TIER 2 - Strategic developments:
 - Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
 - Geographic: Market entry/exit WITH investment levels or unit counts
 
+TIER 3 - Context (ONLY if quota unfilled):
+- Analyst coverage of {competitor_name} WITH price targets
+- Industry awards, certifications for {competitor_name}
+- Routine announcements WITH material details
+
 REJECT COMPLETELY - Never select:
 - Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
 - Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
@@ -6626,16 +6643,17 @@ DISAMBIGUATION - Avoid confusion:
 - If {competitor_name} only appears as news source attribution, not subject
 - For common words (Oracle, Amazon, Apple), verify context matches your company
 
-SCRAPE PRIORITY (assign integer 1-2 ONLY):
+SCRAPE PRIORITY (assign integer 1-3):
 1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
 2 = Tier 2 (leadership, partnerships, product launches, facilities)
+3 = Tier 3 (analyst coverage, awards, routine announcements)
 
 For each article assess:
 - likely_repeat: Same event as another selected article?
 - repeat_key: Event identifier (e.g., "q2_earnings_2025," "ceo_change_sept_2025")
 - confidence: 0.0-1.0, certainty this is specifically about {competitor_name}
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from best available. Never exceed {target_cap}.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
 
 CONSERVATIVE STANDARD: If you're unsure whether an article is directly relevant to {competitor_name}, skip it entirely. Only select articles you are confident about."""
 
@@ -6731,9 +6749,9 @@ async def triage_company_articles_claude(articles: List[Dict], ticker: str, comp
 
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {company_name} ({ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
-CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
-SELECT (choose exactly {target_cap}):
+SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard corporate events:
 - Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
@@ -6782,7 +6800,7 @@ SCRAPE PRIORITY (assign integer 1-3):
 Return a JSON array of selected articles. Each must have:
 [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -6891,9 +6909,9 @@ KNOWN PEERS: {peers_display}
 
 INDUSTRY CONTEXT: Select articles with sector-wide insights that affect multiple companies in this industry, even if they mention specific companies.
 
-CRITICAL: You must select EXACTLY {target_cap} articles. Focus on developments with broad industry implications.
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain. Focus on developments with broad industry implications.
 
-SELECT (choose exactly {target_cap}):
+SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard industry events with quantified impact:
 - Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs
@@ -6939,7 +6957,7 @@ SCRAPE PRIORITY (assign integer 1-3):
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
 
 SELECT FOR: Sector-wide developments in {sector} that reveal trends, constraints, or opportunities affecting {company_name} and its competitive landscape.
 
@@ -7020,9 +7038,9 @@ async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, c
 
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} from {len(articles)} candidates based ONLY on titles and descriptions.
 
-CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
-SELECT (choose exactly {target_cap}):
+SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard corporate events:
 - Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
@@ -7070,7 +7088,7 @@ SCRAPE PRIORITY (assign integer 1-3):
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 

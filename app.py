@@ -6144,48 +6144,62 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
         "additionalProperties": False
     }
 
-    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPANY articles about {company_name} ({ticker}).
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {company_name} ({ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
-You MUST select EXACTLY {target_cap} articles from {len(articles)} total articles.
-Focus SOLELY on title content. Ignore domain/source quality. Do not infer from outlet names embedded in titles.
+CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
 
-SELECTION PRIORITY (choose the {target_cap} BEST):
+SELECT (choose exactly {target_cap}):
 
-HIGH PRIORITY - Hard business events with company as primary subject:
-Event verbs: acquires, merger, divests, spin-off, bankruptcy, Chapter 11, delist, recall, halt, guidance, preannounce, beats, misses, earnings, margin, backlog, contract, long-term agreement, supply deal, price increase, price cut, capacity add, closure, curtailment, buyback, tender, equity offering, convertible, refinance, rating change, approval, license, tariff, quota, sanction, fine, settlement, DOJ, FTC, SEC, FDA, USDA, EPA, OSHA, NHTSA, FAA, FCC
+TIER 1 - Hard corporate events:
+- Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
+- Capital: "buyback," "dividend," "debt," "bond," "offering," "raises," "refinance," "converts"
+- M&A: "acquires," "buys," "sells," "divests," "stake," "merger," "spin-off," "joint venture"
+- Regulatory: "FDA," "SEC," "DOJ," "FTC," "investigation," "fine," "settlement," "approval," "lawsuit," "probe"
+- Operations: "accident," "disaster," "halt," "shutdown," "recall," "expansion," "closure," "layoffs," "strike"
+- Products: "approval," "launch," "recall," "trial results," "patent" WITH specific product/drug names
+- Contracts: Dollar amounts in title (e.g., "$500M contract," "£2B deal")
+- Ratings: "upgrade," "downgrade" WITH analyst firm name (e.g., "BofA upgrades," "Moody's cuts")
 
-MEDIUM PRIORITY - Strategic developments with specificity:
-* Investment/expansion announcements with specific amounts or timelines
-* Technology developments with ship dates or deployment specifics  
-* Leadership changes (CEO, CFO, division heads) with effective dates
-* Partnership announcements with scope/duration details
-* Product launches with market entry dates and revenue targets
-* Facility openings/closings with employment or capacity numbers
+TIER 2 - Strategic developments:
+- Leadership: CEO, CFO, President, CTO WITH "appoints," "names," "resigns," "retires," "replaces"
+- Partnerships: Named partner companies (e.g., "{company_name} partners with [Other Company]")
+- Technology: Specific tech/platform names WITH "launches," "announces," "deploys"
+- Facilities: Plant/office/branch/store openings, closures WITH locations and capacity/headcount numbers
+- Clinical: Trial phases, enrollment milestones, data releases (pharma/biotech)
+- Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
+- Geographic: Market entry/exit WITH investment levels or unit counts
 
-LOW PRIORITY - Routine coverage requiring backfill:
-* Analyst coverage with material rating changes and revised targets
-* Routine corporate announcements with minor operational impact
-* Market commentary where company is mentioned with business context
+TIER 3 - Context (ONLY if quota unfilled):
+- Analyst coverage WITH price targets visible in title
+- Industry awards, certifications if indicative of competitive position
+- Routine announcements WITH material operational details
 
-EXCLUDE COMPLETELY:
-* Listicles/opinion titles: "Top", "Best", "Should you", "Right now", "Reasons", "Prediction", "If you'd invested", "What to know", "How to", "Why", "Analysis", "Outlook"
-* PR/TAM phrasing: "Announces" (without hard event verb), "Reports Market Size", "CAGR", "Forecast 20XX-20YY", "to reach $X by 2030", "Market Report", "Press Release" (unless paired with hard event verb AND concrete numbers)
+REJECT COMPLETELY - Never select:
+- Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
+- Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
+- Clickbait: "This Could," "Why," "What Investors Need to Know," "How to"
+- Future speculation: "Heading to," "Could reach $X," "Price Prediction 20XX"
+- Historical: "If you'd invested," "20 years ago," "Where would $1000 be"
+- Market reports: "Market to reach," "CAGR," "Forecast 20XX-20YY"
+- Quote pages: "Stock Price | Live Quotes & Charts | [Exchange]"
+- Other companies: If title clearly focuses on different company, reject
 
-CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. If fewer than {target_cap} articles meet the criteria, select the best available but never exceed {target_cap}.
+DISAMBIGUATION - Avoid confusion:
+- If title leads with different company name, likely not about {company_name}
+- If {company_name} only appears as news source attribution, not subject
+- For common words (Oracle, Amazon, Apple), verify context matches your company
 
-CRITICAL SELECTION CONSTRAINT:
-You MUST select EXACTLY {target_cap} articles from the {len(articles)} provided.
-Be highly selective. Choose only the {target_cap} BEST articles based on the criteria above.
+SCRAPE PRIORITY (assign integer 1-3):
+1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
+2 = Tier 2 (leadership, partnerships, product launches, facilities)
+3 = Tier 3 (analyst coverage, awards, routine announcements)
 
-Your selected_ids array must contain exactly {target_cap} integers.
-Your selected array must contain exactly {target_cap} objects.
+For each article assess:
+- likely_repeat: Same event as another selected article?
+- repeat_key: Event identifier (e.g., "q2_earnings_2025," "ceo_change_sept_2025")
+- confidence: 0.0-1.0, certainty this is specifically about {company_name}
 
-PRIORITY SCALE (use integers):
-- 1 = High priority (most important articles requiring immediate scraping)
-- 2 = Medium priority (moderate importance)
-- 3 = Low priority (lower importance, backup selections)
-
-Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}."""
 
     try:
         headers = {
@@ -6254,7 +6268,7 @@ Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
         LOG.error(f"Async triage request failed: {str(e)}")
         return []
 
-async def triage_industry_articles_full(articles: List[Dict], ticker: str, sector_profile: Dict, peers: List[str]) -> List[Dict]:
+async def triage_industry_articles_full(articles: List[Dict], ticker: str, keyword: str) -> List[Dict]:
     """Enhanced industry triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -6273,16 +6287,13 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, secto
             item["description"] = article.get('description')
         items.append(item)
 
-    # Extract industry keywords from the first article's search_keyword
-    industry_keywords = [articles[0].get('search_keyword', '')] if articles else []
     target_cap = min(5, len(articles))
 
     payload = {
         "bucket": "industry",
         "target_cap": target_cap,
         "ticker": ticker,
-        "industry_keywords": industry_keywords,
-        "sector_profile": sector_profile,
+        "keyword": keyword,
         "items": items
     }
 
@@ -6335,49 +6346,64 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, secto
         "additionalProperties": False
     }
 
-    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for INDUSTRY articles.
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
 
-You MUST select EXACTLY {target_cap} articles from {len(articles)} total articles.
-Focus SOLELY on title content. Ignore domain/source quality. Do not infer from outlet names embedded in titles.
+INDUSTRY CONTEXT: These articles are about "{keyword}" sector. Select articles with sector-wide insights that affect multiple companies, even if they mention specific companies.
 
-SELECTION PRIORITY (choose the {target_cap} BEST):
+CRITICAL: You must select EXACTLY {target_cap} articles. Focus on developments with broad industry implications.
 
-HIGH PRIORITY - Policy/regulatory/benchmark shocks with quantified impact:
-Event verbs: tariff, ban, quota, price control, regulatory change with date, supply shock, inventory draw/build with numbers, price cap/floor, standard adopted, subsidy/credit, reimbursement change, safety requirement, environmental standard, trade agreement, export control, import restriction
-Must include: concrete numbers (%, $ amounts, effective dates, capacity figures, compliance costs)
+SELECT (choose exactly {target_cap}):
 
-MEDIUM PRIORITY - Sector developments with business implications:
-* Large infrastructure investments affecting sector with budgets/timelines
-* Industry consolidation with transaction values impacting capacity/pricing
-* Technology standards adoption with implementation schedules
-* Labor agreements affecting sector costs with wage/benefit specifics
-* Supply chain changes affecting core inputs with volume/pricing data
-* Capacity additions/reductions across sector with production impact
+TIER 1 - Hard industry events with quantified impact:
+- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs
+- Pricing: Commodity/service prices, reimbursement rates WITH specific figures
+- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers
+- Standards: New requirements, certifications, compliance rules WITH deadlines/costs
+- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines
+- Financial: Interest rates, capital requirements, reserve rules affecting sector
 
-LOW PRIORITY - Broad trends requiring backfill:
-* Government initiatives affecting sector without specific budgets/implementation dates
-* Economic indicators with sector-specific implications and historical context
-* Research findings with quantified sector impact and methodology details
+TIER 2 - Strategic sector developments:
+- Major capacity additions/closures WITH specific impact (e.g., "500MW," "1M units/year")
+- Industry consolidation WITH transaction values and market share implications
+- Technology adoption WITH implementation timelines and cost impacts
+- Labor agreements WITH wage/benefit details and coverage scope
+- Infrastructure investments WITH budgets and completion dates
+- Patent expirations, generic approvals, technology shifts WITH market impact
+- Company announcements revealing sector-wide trends (e.g., "BHP invests $555M signals sector shift")
 
-EXCLUDE COMPLETELY:
-* Market research/TAM reports: "Market Size", "CAGR", "Forecast 20XX-20YY", "to reach $X by 2030", "Market Report", "Analysis Report", "Industry Outlook" (unless tied to specific regulatory change with implementation dates)
-* Listicles/generic content: "Top", "Best", "Trends", "Future of", "Analysis", "Outlook", "How to", "Why", "What to know"
+TIER 3 - Sector context (ONLY if quota unfilled):
+- Economic indicators directly affecting this industry WITH specific data
+- Government initiatives WITH allocated budgets (not vague "plans")
+- Research findings WITH quantified sector implications
 
-CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. Never exceed {target_cap} selections.
+REJECT COMPLETELY - Never select:
+- Market research reports: "Market to reach," "CAGR," "Forecast 20XX-20YY," "TAM," "Industry Report"
+- Generic trends: "Top Trends," "Future of," "Outlook," "What to Expect in [Year]"
+- Pure company-specific news: Single-company earnings, appointments WITHOUT sector implications
+- Listicles: "X Best," "How to," "Why You Should," "Reasons to"
+- Opinion: "Analysis," "Commentary," "Perspective" (without hard data)
+- Small company routine announcements: Financing rounds, junior partnerships, minor appointments
 
-CRITICAL SELECTION CONSTRAINT:
-You MUST select EXACTLY {target_cap} articles from the {len(articles)} provided.
-Be highly selective. Choose only the {target_cap} BEST articles based on the criteria above.
+INCLUDE when company news has sector implications:
+✓ Major company investment indicating sector direction
+✓ Company action revealing regulatory/policy impacts on all players
+✓ Production disruption at major player affecting sector supply/pricing
+✓ Technology deployment showing sector-wide adoption patterns
+✓ Company data revealing industry-wide cost/margin trends
 
-Your selected_ids array must contain exactly {target_cap} integers.
-Your selected array must contain exactly {target_cap} objects.
+SCRAPE PRIORITY (assign integer 1-3):
+1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
+2 = Tier 2 (capacity, consolidation, policy WITH budgets, company moves with sector implications)
+3 = Tier 3 (economic indicators, sector context)
 
-PRIORITY SCALE (use integers):
-- 1 = High priority (most important articles requiring immediate scraping)
-- 2 = Medium priority (moderate importance)
-- 3 = Low priority (lower importance, backup selections)
+For each article assess:
+- likely_repeat: Same sector event covered by multiple outlets?
+- repeat_key: Event identifier (e.g., "copper_supply_disruption_sept_2025")
+- confidence: 0.0-1.0, certainty this has implications for MULTIPLE companies in "{keyword}"
 
-Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
+
+SELECT FOR: Sector-wide developments for "{keyword}" that reveal trends, constraints, or opportunities affecting multiple companies."""
 
     try:
         headers = {
@@ -6446,7 +6472,7 @@ Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
         LOG.error(f"Async triage request failed: {str(e)}")
         return []
 
-async def triage_competitor_articles_full(articles: List[Dict], ticker: str, peers: List[str], sector_profile: Dict) -> List[Dict]:
+async def triage_competitor_articles_full(articles: List[Dict], ticker: str, competitor_name: str) -> List[Dict]:
     """Enhanced competitor triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -6465,16 +6491,13 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, pee
             item["description"] = article.get('description')
         items.append(item)
 
-    # Extract competitor names from peers
-    competitors = [peer.split(' (')[0] if ' (' in peer else peer for peer in peers]
     target_cap = min(5, len(articles))
 
     payload = {
         "bucket": "competitor",
         "target_cap": target_cap,
         "ticker": ticker,
-        "competitors": competitors,
-        "sector_profile": sector_profile,
+        "competitor_name": competitor_name,
         "items": items
     }
 
@@ -6527,51 +6550,62 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, pee
         "additionalProperties": False
     }
 
-    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPETITOR articles.
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} from {len(articles)} candidates based ONLY on titles and descriptions.
 
-You MUST select EXACTLY {target_cap} articles from {len(articles)} total articles.
-Focus SOLELY on title content. Ignore domain/source quality. Do not infer from outlet names embedded in titles.
+CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
 
-SELECTION PRIORITY (choose the {target_cap} BEST):
+SELECT (choose exactly {target_cap}):
 
-HIGH PRIORITY - Hard competitive events with quantified market impact:
-Event verbs: capacity expansion/reduction with numbers, pricing actions with %, major customer win/loss, plant opening/closing with output figures, asset sale/acquisition with values, restructuring/bankruptcy, breakthrough/launch with ship dates, supply agreement with volumes, market entry/exit with investment amounts
-Must include: specific competitor name + quantified business impact (%, $ amounts, capacity figures, timelines, customer names)
+TIER 1 - Hard corporate events:
+- Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
+- Capital: "buyback," "dividend," "debt," "bond," "offering," "raises," "refinance," "converts"
+- M&A: "acquires," "buys," "sells," "divests," "stake," "merger," "spin-off," "joint venture"
+- Regulatory: "FDA," "SEC," "DOJ," "FTC," "investigation," "fine," "settlement," "approval," "lawsuit," "probe"
+- Operations: "accident," "disaster," "halt," "shutdown," "recall," "expansion," "closure," "layoffs," "strike"
+- Products: "approval," "launch," "recall," "trial results," "patent" WITH specific product/drug names
+- Contracts: Dollar amounts in title (e.g., "$500M contract," "£2B deal")
+- Ratings: "upgrade," "downgrade" WITH analyst firm name (e.g., "BofA upgrades," "Moody's cuts")
 
-MEDIUM PRIORITY - Strategic competitive moves with business implications:
-* Acquisitions/partnerships that change competitive landscape with deal values or strategic rationale
-* Technology developments with deployment timelines affecting competitive positioning
-* Management changes at key positions (CEO, division heads, key executives) with succession details
-* Geographic expansion with market entry specifics and investment commitments
-* Regulatory approvals enabling new capabilities or market access with timelines
-* Supply chain agreements affecting costs or availability with contract terms
+TIER 2 - Strategic developments:
+- Leadership: CEO, CFO, President, CTO WITH "appoints," "names," "resigns," "retires," "replaces"
+- Partnerships: Named partner companies (e.g., "{competitor_name} partners with [Other Company]")
+- Technology: Specific tech/platform names WITH "launches," "announces," "deploys"
+- Facilities: Plant/office/branch/store openings, closures WITH locations and capacity/headcount numbers
+- Clinical: Trial phases, enrollment milestones, data releases (pharma/biotech)
+- Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
+- Geographic: Market entry/exit WITH investment levels or unit counts
 
-LOW PRIORITY - Routine competitive intelligence requiring backfill:
-* Earnings releases with material guidance changes and specific numbers
-* Analyst coverage with significant rating changes and revised price targets
-* Product announcements with launch timelines and competitive positioning details
-* Financial metrics showing competitive performance changes
+TIER 3 - Context (ONLY if quota unfilled):
+- Analyst coverage WITH price targets visible in title
+- Industry awards, certifications if indicative of competitive position
+- Routine announcements WITH material operational details
 
-EXCLUDE COMPLETELY:
-* Generic analyst commentary without specific guidance/target changes
-* Stock performance discussions without underlying operational drivers
-* Listicles: "Top", "Best", "Should you", "Reasons", "Analysis", "Outlook", "How to", "Why"
+REJECT COMPLETELY - Never select:
+- Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
+- Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
+- Clickbait: "This Could," "Why," "What Investors Need to Know," "How to"
+- Future speculation: "Heading to," "Could reach $X," "Price Prediction 20XX"
+- Historical: "If you'd invested," "20 years ago," "Where would $1000 be"
+- Market reports: "Market to reach," "CAGR," "Forecast 20XX-20YY"
+- Quote pages: "Stock Price | Live Quotes & Charts | [Exchange]"
+- Other companies: If title clearly focuses on different company, reject
 
-CRITICAL: Be ruthlessly selective. Choose only the {target_cap} highest-priority articles. Never exceed {target_cap} selections.
+DISAMBIGUATION - Avoid confusion:
+- If title leads with different company name, likely not about {competitor_name}
+- If {competitor_name} only appears as news source attribution, not subject
+- For common words (Oracle, Amazon, Apple), verify context matches your company
 
-CRITICAL SELECTION CONSTRAINT:
-You MUST select EXACTLY {target_cap} articles from the {len(articles)} provided.
-Be highly selective. Choose only the {target_cap} BEST articles based on the criteria above.
+SCRAPE PRIORITY (assign integer 1-3):
+1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
+2 = Tier 2 (leadership, partnerships, product launches, facilities)
+3 = Tier 3 (analyst coverage, awards, routine announcements)
 
-Your selected_ids array must contain exactly {target_cap} integers.
-Your selected array must contain exactly {target_cap} objects.
+For each article assess:
+- likely_repeat: Same event as another selected article?
+- repeat_key: Event identifier (e.g., "q2_earnings_2025," "ceo_change_sept_2025")
+- confidence: 0.0-1.0, certainty this is specifically about {competitor_name}
 
-PRIORITY SCALE (use integers):
-- 1 = High priority (most important articles requiring immediate scraping)
-- 2 = Medium priority (moderate importance)
-- 3 = Low priority (lower importance, backup selections)
-
-Return only valid JSON with integer scrape_priority values (1, 2, or 3)."""
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}."""
 
     try:
         headers = {
@@ -6663,41 +6697,60 @@ async def triage_company_articles_claude(articles: List[Dict], ticker: str, comp
 
     target_cap = min(20, len(articles))
 
-    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPANY articles about {company_name} ({ticker}).
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {company_name} ({ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
-Review all articles and select UP TO {target_cap} articles that are highest quality based on the criteria below. You may select FEWER than {target_cap} if you don't find enough quality articles.
+CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
 
-For each article you select, you MUST assign a score of 1-3:
-- 1 = High priority (most important articles requiring immediate scraping)
-- 2 = Medium priority (moderate importance)
-- 3 = Low priority (lower importance, backup selections)
+SELECT (choose exactly {target_cap}):
 
-Articles you don't select receive a score of 0 (not flagged).
+TIER 1 - Hard corporate events:
+- Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
+- Capital: "buyback," "dividend," "debt," "bond," "offering," "raises," "refinance," "converts"
+- M&A: "acquires," "buys," "sells," "divests," "stake," "merger," "spin-off," "joint venture"
+- Regulatory: "FDA," "SEC," "DOJ," "FTC," "investigation," "fine," "settlement," "approval," "lawsuit," "probe"
+- Operations: "accident," "disaster," "halt," "shutdown," "recall," "expansion," "closure," "layoffs," "strike"
+- Products: "approval," "launch," "recall," "trial results," "patent" WITH specific product/drug names
+- Contracts: Dollar amounts in title (e.g., "$500M contract," "£2B deal")
+- Ratings: "upgrade," "downgrade" WITH analyst firm name (e.g., "BofA upgrades," "Moody's cuts")
 
-SELECTION PRIORITY:
+TIER 2 - Strategic developments:
+- Leadership: CEO, CFO, President, CTO WITH "appoints," "names," "resigns," "retires," "replaces"
+- Partnerships: Named partner companies (e.g., "{company_name} partners with [Other Company]")
+- Technology: Specific tech/platform names WITH "launches," "announces," "deploys"
+- Facilities: Plant/office/branch/store openings, closures WITH locations and capacity/headcount numbers
+- Clinical: Trial phases, enrollment milestones, data releases (pharma/biotech)
+- Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
+- Geographic: Market entry/exit WITH investment levels or unit counts
 
-HIGH PRIORITY - Hard business events with company as primary subject:
-Event verbs: acquires, merger, divests, spin-off, bankruptcy, Chapter 11, delist, recall, halt, guidance, preannounce, beats, misses, earnings, margin, backlog, contract, long-term agreement, supply deal, price increase, price cut, capacity add, closure, curtailment, buyback, tender, equity offering, convertible, refinance, rating change, approval, license, tariff, quota, sanction, fine, settlement, DOJ, FTC, SEC, FDA, USDA, EPA, OSHA, NHTSA, FAA, FCC
+TIER 3 - Context (ONLY if quota unfilled):
+- Analyst coverage WITH price targets visible in title
+- Industry awards, certifications if indicative of competitive position
+- Routine announcements WITH material operational details
 
-MEDIUM PRIORITY - Strategic developments with specificity:
-* Investment/expansion announcements with specific amounts or timelines
-* Technology developments with ship dates or deployment specifics
-* Leadership changes (CEO, CFO, division heads) with effective dates
-* Partnership announcements with scope/duration details
-* Product launches with market entry dates and revenue targets
-* Facility openings/closings with employment or capacity numbers
+REJECT COMPLETELY - Never select:
+- Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
+- Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
+- Clickbait: "This Could," "Why," "What Investors Need to Know," "How to"
+- Future speculation: "Heading to," "Could reach $X," "Price Prediction 20XX"
+- Historical: "If you'd invested," "20 years ago," "Where would $1000 be"
+- Market reports: "Market to reach," "CAGR," "Forecast 20XX-20YY"
+- Quote pages: "Stock Price | Live Quotes & Charts | [Exchange]"
+- Other companies: If title clearly focuses on different company, reject
 
-LOW PRIORITY - Routine coverage requiring backfill:
-* Analyst coverage with material rating changes and revised targets
-* Routine corporate announcements with minor operational impact
-* Market commentary where company is mentioned with business context
+DISAMBIGUATION - Avoid confusion:
+- If title leads with different company name, likely not about {company_name}
+- If {company_name} only appears as news source attribution, not subject
+- For common words (Oracle, Amazon, Apple), verify context matches your company
 
-EXCLUDE COMPLETELY:
-* Listicles/opinion titles: "Top", "Best", "Should you", "Right now", "Reasons", "Prediction", "If you'd invested", "What to know", "How to", "Why", "Analysis", "Outlook"
-* PR/TAM phrasing: "Announces" (without hard event verb), "Reports Market Size", "CAGR", "Forecast 20XX-20YY", "to reach $X by 2030", "Market Report", "Press Release" (unless paired with hard event verb AND concrete numbers)
+SCRAPE PRIORITY (assign integer 1-3):
+1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
+2 = Tier 2 (leadership, partnerships, product launches, facilities)
+3 = Tier 3 (analyst coverage, awards, routine announcements)
 
-Return a JSON array of selected articles. Each selected article must have:
+Return a JSON array of selected articles. Each must have:
 [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
+
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -6797,24 +6850,61 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, key
 
     target_cap = min(5, len(articles))
 
-    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for INDUSTRY articles related to ticker {ticker} and keyword "{keyword}".
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
 
-Review all articles and select UP TO {target_cap} articles that are highest quality. You may select FEWER if insufficient quality.
+INDUSTRY CONTEXT: These articles are about "{keyword}" sector. Select articles with sector-wide insights that affect multiple companies, even if they mention specific companies.
 
-For each selected article, assign score 1-3 (1=high, 2=medium, 3=low). Non-selected = 0.
+CRITICAL: You must select EXACTLY {target_cap} articles. Focus on developments with broad industry implications.
 
-SELECTION CRITERIA:
-- Industry trends affecting {ticker}'s business
-- Regulatory/policy changes impacting the sector
-- Supply chain or market developments
-- Technology shifts in the industry
+SELECT (choose exactly {target_cap}):
 
-EXCLUDE:
-- Generic market commentary
-- Listicles and opinion pieces
-- Company-specific news (unless sector-wide impact)
+TIER 1 - Hard industry events with quantified impact:
+- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs
+- Pricing: Commodity/service prices, reimbursement rates WITH specific figures
+- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers
+- Standards: New requirements, certifications, compliance rules WITH deadlines/costs
+- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines
+- Financial: Interest rates, capital requirements, reserve rules affecting sector
+
+TIER 2 - Strategic sector developments:
+- Major capacity additions/closures WITH specific impact (e.g., "500MW," "1M units/year")
+- Industry consolidation WITH transaction values and market share implications
+- Technology adoption WITH implementation timelines and cost impacts
+- Labor agreements WITH wage/benefit details and coverage scope
+- Infrastructure investments WITH budgets and completion dates
+- Patent expirations, generic approvals, technology shifts WITH market impact
+- Company announcements revealing sector-wide trends (e.g., "BHP invests $555M signals sector shift")
+
+TIER 3 - Sector context (ONLY if quota unfilled):
+- Economic indicators directly affecting this industry WITH specific data
+- Government initiatives WITH allocated budgets (not vague "plans")
+- Research findings WITH quantified sector implications
+
+REJECT COMPLETELY - Never select:
+- Market research reports: "Market to reach," "CAGR," "Forecast 20XX-20YY," "TAM," "Industry Report"
+- Generic trends: "Top Trends," "Future of," "Outlook," "What to Expect in [Year]"
+- Pure company-specific news: Single-company earnings, appointments WITHOUT sector implications
+- Listicles: "X Best," "How to," "Why You Should," "Reasons to"
+- Opinion: "Analysis," "Commentary," "Perspective" (without hard data)
+- Small company routine announcements: Financing rounds, junior partnerships, minor appointments
+
+INCLUDE when company news has sector implications:
+✓ Major company investment indicating sector direction
+✓ Company action revealing regulatory/policy impacts on all players
+✓ Production disruption at major player affecting sector supply/pricing
+✓ Technology deployment showing sector-wide adoption patterns
+✓ Company data revealing industry-wide cost/margin trends
+
+SCRAPE PRIORITY (assign integer 1-3):
+1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
+2 = Tier 2 (capacity, consolidation, policy WITH budgets, company moves with sector implications)
+3 = Tier 3 (economic indicators, sector context)
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
+
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
+
+SELECT FOR: Sector-wide developments for "{keyword}" that reveal trends, constraints, or opportunities affecting multiple companies.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -6891,24 +6981,59 @@ async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, c
 
     target_cap = min(5, len(articles))
 
-    system_prompt = f"""You are a financial analyst doing PRE-SCRAPE TRIAGE for COMPETITOR articles about {competitor_name} from {ticker}'s perspective.
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} from {len(articles)} candidates based ONLY on titles and descriptions.
 
-Review all articles and select UP TO {target_cap} articles that are highest quality. You may select FEWER if insufficient quality.
+CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
 
-For each selected article, assign score 1-3 (1=high, 2=medium, 3=low). Non-selected = 0.
+SELECT (choose exactly {target_cap}):
 
-SELECTION CRITERIA:
-- Major strategic moves by {competitor_name} (M&A, partnerships, launches)
-- Financial results that affect competitive positioning
-- Market share shifts or pricing actions
-- Regulatory actions affecting {competitor_name}
+TIER 1 - Hard corporate events:
+- Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
+- Capital: "buyback," "dividend," "debt," "bond," "offering," "raises," "refinance," "converts"
+- M&A: "acquires," "buys," "sells," "divests," "stake," "merger," "spin-off," "joint venture"
+- Regulatory: "FDA," "SEC," "DOJ," "FTC," "investigation," "fine," "settlement," "approval," "lawsuit," "probe"
+- Operations: "accident," "disaster," "halt," "shutdown," "recall," "expansion," "closure," "layoffs," "strike"
+- Products: "approval," "launch," "recall," "trial results," "patent" WITH specific product/drug names
+- Contracts: Dollar amounts in title (e.g., "$500M contract," "£2B deal")
+- Ratings: "upgrade," "downgrade" WITH analyst firm name (e.g., "BofA upgrades," "Moody's cuts")
 
-EXCLUDE:
-- Routine announcements
-- Listicles and opinion pieces
-- Generic market commentary
+TIER 2 - Strategic developments:
+- Leadership: CEO, CFO, President, CTO WITH "appoints," "names," "resigns," "retires," "replaces"
+- Partnerships: Named partner companies (e.g., "{competitor_name} partners with [Other Company]")
+- Technology: Specific tech/platform names WITH "launches," "announces," "deploys"
+- Facilities: Plant/office/branch/store openings, closures WITH locations and capacity/headcount numbers
+- Clinical: Trial phases, enrollment milestones, data releases (pharma/biotech)
+- Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
+- Geographic: Market entry/exit WITH investment levels or unit counts
+
+TIER 3 - Context (ONLY if quota unfilled):
+- Analyst coverage WITH price targets visible in title
+- Industry awards, certifications if indicative of competitive position
+- Routine announcements WITH material operational details
+
+REJECT COMPLETELY - Never select:
+- Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
+- Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
+- Clickbait: "This Could," "Why," "What Investors Need to Know," "How to"
+- Future speculation: "Heading to," "Could reach $X," "Price Prediction 20XX"
+- Historical: "If you'd invested," "20 years ago," "Where would $1000 be"
+- Market reports: "Market to reach," "CAGR," "Forecast 20XX-20YY"
+- Quote pages: "Stock Price | Live Quotes & Charts | [Exchange]"
+- Other companies: If title clearly focuses on different company, reject
+
+DISAMBIGUATION - Avoid confusion:
+- If title leads with different company name, likely not about {competitor_name}
+- If {competitor_name} only appears as news source attribution, not subject
+- For common words (Oracle, Amazon, Apple), verify context matches your company
+
+SCRAPE PRIORITY (assign integer 1-3):
+1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
+2 = Tier 2 (leadership, partnerships, product launches, facilities)
+3 = Tier 3 (analyst coverage, awards, routine announcements)
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
+
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -7137,7 +7262,7 @@ async def perform_ai_triage_with_dual_scoring_async(
                 "articles": triage_articles,
                 "target_cap": min(5, len(triage_articles)),
                 "openai_func": triage_industry_articles_full,
-                "openai_args": (triage_articles, ticker, {}, []),
+                "openai_args": (triage_articles, ticker, keyword),
                 "claude_func": triage_industry_articles_claude,
                 "claude_args": (triage_articles, ticker, keyword),
                 "index_mapping": keyword_articles
@@ -7155,7 +7280,7 @@ async def perform_ai_triage_with_dual_scoring_async(
 
         for entity_key, entity_articles in competitor_by_entity.items():
             triage_articles = [item["article"] for item in entity_articles]
-            # Get competitor name for Claude
+            # Get competitor name from article metadata
             competitor_name = entity_articles[0]["article"].get("search_keyword", entity_key)
             all_triage_operations.append({
                 "type": "competitor",
@@ -7163,7 +7288,7 @@ async def perform_ai_triage_with_dual_scoring_async(
                 "articles": triage_articles,
                 "target_cap": min(5, len(triage_articles)),
                 "openai_func": triage_competitor_articles_full,
-                "openai_args": (triage_articles, ticker, [], {}),
+                "openai_args": (triage_articles, ticker, competitor_name),
                 "claude_func": triage_competitor_articles_claude,
                 "claude_args": (triage_articles, ticker, competitor_name),
                 "index_mapping": entity_articles
@@ -9140,20 +9265,91 @@ def format_timestamp_est(dt: datetime) -> str:
     """Format datetime to EST without time emoji"""
     if not dt:
         return "N/A"
-    
+
     # Ensure we have a timezone-aware datetime
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    
+
     # Convert to Eastern Time
     eastern = pytz.timezone('US/Eastern')
     est_time = dt.astimezone(eastern)
-    
+
     # Format without emoji
     time_part = est_time.strftime("%I:%M%p").lower().lstrip('0')
     date_part = est_time.strftime("%b %d")
-    
+
     return f"{date_part}, {time_part} EST"
+
+def format_date_short(dt: datetime) -> str:
+    """Format date as (Oct 1) for compact display in AI summaries"""
+    if not dt:
+        return "(N/A)"
+
+    # Ensure we have a timezone-aware datetime
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    # Convert to Eastern Time
+    eastern = pytz.timezone('US/Eastern')
+    est_time = dt.astimezone(eastern)
+
+    # Format as (Oct 1) or (Sep 29)
+    return f"({est_time.strftime('%b %-d')})"
+
+def is_within_24_hours(dt: datetime) -> bool:
+    """Check if article is from last 24 hours for 🆕 badge"""
+    if not dt:
+        return False
+
+    # Ensure we have a timezone-aware datetime
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    time_diff = now - dt
+
+    return time_diff.total_seconds() < (24 * 60 * 60)
+
+def insert_new_badges(ai_summary: str, articles: List[Dict]) -> str:
+    """
+    Post-process AI-generated summary to insert 🆕 badges for <24h articles.
+    Matches dates in the summary against article published_at timestamps.
+    """
+    if not ai_summary or not articles:
+        return ai_summary
+
+    # Build a set of dates that are within 24 hours
+    recent_dates = set()
+    for article in articles:
+        published_at = article.get("published_at")
+        if published_at and is_within_24_hours(published_at):
+            date_str = format_date_short(published_at)
+            recent_dates.add(date_str)
+
+    if not recent_dates:
+        return ai_summary
+
+    # Process line by line, inserting 🆕 where bullets have recent dates
+    lines = ai_summary.split('\n')
+    processed_lines = []
+
+    for line in lines:
+        # Check if this is a bullet point
+        stripped = line.lstrip()
+        if stripped.startswith('•') or stripped.startswith('-'):
+            # Check if any recent date appears in this line
+            for recent_date in recent_dates:
+                if recent_date in line:
+                    # Only add 🆕 if not already present
+                    if '🆕' not in line:
+                        # Insert 🆕 after the bullet symbol
+                        line = line.replace('• ', '• 🆕 ', 1)
+                        line = line.replace('- ', '- 🆕 ', 1)
+                    break
+
+        processed_lines.append(line)
+
+    return '\n'.join(processed_lines)
 
 def is_description_valuable(title: str, description: str) -> bool:
     """Check if description adds value beyond the title"""
@@ -9265,39 +9461,46 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
 
         if articles_with_ai_summary or industry_articles_with_ai_summary:
             LOG.info(f"✅ EXECUTIVE SUMMARY [{ticker}]: Proceeding with summary generation")
-            # Company AI summaries with sources
+
+            # Company AI summaries with sources AND dates
             content_summaries = []
             for article in articles_with_ai_summary[:20]:
                 title = article.get("title", "")
                 ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
+                published_at = article.get("published_at")
+                date_str = format_date_short(published_at)
 
                 if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+                    content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
-            # Industry AI summaries with keyword context
+            # Industry AI summaries with keyword context AND dates
             industry_content_summaries = []
             for article in industry_articles_with_ai_summary[:15]:
                 title = article.get("title", "")
                 ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
                 keyword = article.get("search_keyword", "Industry")
+                published_at = article.get("published_at")
+                date_str = format_date_short(published_at)
 
                 if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}]: {ai_summary}")
+                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}] {date_str}: {ai_summary}")
 
-            # Competitor AI summaries
+            # Competitor AI summaries with dates
             competitor_content_summaries = []
             for article in competitor_articles_with_ai_summary[:15]:
                 title = article.get("title", "")
                 ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
+                published_at = article.get("published_at")
+                date_str = format_date_short(published_at)
 
                 if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    competitor_content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+                    competitor_content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
             if content_summaries or industry_content_summaries:
                 LOG.info(f"📝 EXECUTIVE SUMMARY [{ticker}]: Generating from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
@@ -9311,37 +9514,86 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
                 
                 try:
                     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-                    
-                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
 
-ANALYSIS FRAMEWORK:
-1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
-2. INDUSTRY/SECTOR DYNAMICS: Policy, regulatory, supply chain, or market developments affecting the sector and {company_name}'s position, if present.
-3. COMPETITIVE DYNAMICS: Competitor actions impacting {company_name}'s market position, if present.
-4. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts, if present.
-5. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships, if present.
+                    prompt = f"""You are a hedge fund analyst creating a structured 7-day intelligence summary for {company_name} ({ticker}). Your output must follow a STRICT 6-section format with consistent headers across all companies and industries.
+
+TARGET LENGTH: ~250 words total (adjust ±50 words based on news volume)
+
+MANDATORY STRUCTURE - Use these exact headers with emojis:
+
+🔴 MAJOR DEVELOPMENTS
+📊 FINANCIAL/OPERATIONAL PERFORMANCE
+⚠️ RISK FACTORS
+📈 WALL STREET SENTIMENT
+⚡ COMPETITIVE/INDUSTRY DYNAMICS
+📅 UPCOMING CATALYSTS
+
+FORMATTING RULES:
+- Each section uses bullet points (•) only
+- Place 🆕 badge at START of bullets from last 24 hours
+- End each bullet with date in parentheses: (Oct 1) or (Sep 29)
+- NO citations, NO source names in bullets
+- NO section descriptions, NO prose paragraphs
+- Each bullet: 1-2 sentences maximum
+- Sort bullets within each section: NEWEST first (🆕 items at top)
+
+CONTENT ALLOCATION & QUALITY STANDARDS:
+
+🔴 MAJOR DEVELOPMENTS (3-5 bullets)
+- M&A deals, partnerships, disasters, regulatory actions, CEO changes, major contracts
+- Include: Deal size, timeline, strategic rationale if mentioned
+- Example: "🆕 Announced $100B OpenAI investment with phased deployment starting H2 2026 (Oct 1)"
+
+📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets)
+- Earnings (EPS, revenue vs consensus), guidance, margins, production metrics, capex plans
+- Debt issuance, buybacks, dividends with amounts and dates
+- Report exact figures - no estimates or calculations unless both numbers present
+- MATERIALITY: Compare dollar amounts to company scale when possible (e.g., "$18B bond = 2.3% of market cap")
+- Example: "Q2 beat: $1.05 EPS on $46.7B revenue vs $46.05B consensus; Q3 guide $54B vs $53.43B Street (Sep 30)"
+
+⚠️ RISK FACTORS (2-4 bullets)
+- Regulatory probes, lawsuits, production disruptions, competitive threats
+- Insider selling patterns, operational failures, supply chain issues
+- Include: Timeline to resolution, financial impact if quantified
+- Example: "Grasberg mine may not return to pre-accident rates until 2027; Q4 output drop equals next year's forecast at world's #3 mine (Sep 29)"
+
+📈 WALL STREET SENTIMENT (2-3 bullets)
+- Analyst upgrades/downgrades: Include FIRM NAME and PRICE TARGET
+- Ratings distribution, institutional flow direction
+- Example: "BofA upgraded to Buy, reiterated $42 target; average target $47.33 on 19 ratings (Sep 30)"
+
+⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-4 bullets)
+- Competitor strategic moves affecting {company_name}'s position
+- Industry supply/demand shifts, regulatory changes, pricing trends
+- Assess impact on {company_name}'s market share, pricing power, margins
+- Example: "🆕 BHP investing $555M to expand Australian copper production; sector faces 400K ton deficit in 2025 (Oct 1)"
+
+📅 UPCOMING CATALYSTS (1-3 bullets)
+- Earnings dates, ex-dividend dates, analyst days, regulatory deadlines, product launches
+- Include SPECIFIC DATES for all events
+- Example: "Earnings October 21 after market close; analyst day October 16 focused on AI ROIC (Oct 1)"
 
 CRITICAL REQUIREMENTS:
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, investor days, conference dates, completion timelines, if present
-- Report figures (%/$/units) exactly if present; no estimates/price math unless both numbers are in-text
-- Synthesize quantitative metrics when available
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
-- ANALYST ACTIONS: Include firm names and price targets as mentioned in content
-- INDUSTRY IMPACT: Assess how sector developments affect {company_name}'s business model and profitability
-- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
-- Include specific numbers when available and cite sources using formal domain names exactly as written and nothing else: {source_name}. Cite them in parentheses, e.g., (Business Wire).
-- Assess competitor moves that could affect {company_name}'s performance
-- Keep to 7-8 sentences maximum
+✓ Report all figures (%, $, units) EXACTLY as stated - no rounding or estimates
+✓ Include specific dates for: earnings, regulatory deadlines, investor events, completion timelines
+✓ Prioritize near-term (<1 year) developments but note medium/long-term implications
+✓ Assess how industry/competitor developments affect {company_name}'s business model and profitability
+✓ If section has no material news, write: "No significant developments this period"
+✓ Maintain investor focus: What moves the stock? What changes the thesis?
 
-FINANCIAL CONTEXT: {financial_context}
-INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'N/A'}
+CONTEXT: {financial_context}
+INDUSTRY: {', '.join(industry_keywords) if industry_keywords else 'General'}
 
-TARGET: {company_name} ({ticker})
+COMPANY ARTICLES:
+{ai_text}
 
-COMPANY ARTICLE CONTENT ANALYSIS (sources in brackets):
-{ai_text}{industry_analysis}{competitor_analysis}
+INDUSTRY ARTICLES:
+{industry_analysis}
 
-Provide a strategic investment thesis integrating company developments, industry dynamics, and competitive positioning with specific dates, materiality context, and analyst price targets."""
+COMPETITOR ARTICLES:
+{competitor_analysis}
+
+Generate a 6-section structured summary following the exact format above. Ensure 🆕 badges appear on last 24-hour items and all bullets end with dates."""
 
                     data = {
                         "model": OPENAI_MODEL,
@@ -9357,7 +9609,11 @@ Provide a strategic investment thesis integrating company developments, industry
                     if response.status_code == 200:
                         result = response.json()
                         ai_analysis_summary = extract_text_from_responses(result)
-                        
+
+                        # Post-process: Insert 🆕 badges for articles within 24 hours
+                        all_articles = articles_with_ai_summary + industry_articles_with_ai_summary + competitor_articles_with_ai_summary
+                        ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
+
                         u = result.get("usage", {}) or {}
                         LOG.info("Enhanced AI Analysis usage — input:%s output:%s (cap:%s) status:%s",
                                  u.get("input_tokens"), u.get("output_tokens"),
@@ -9443,39 +9699,45 @@ def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List
         if articles_with_ai_summary or industry_articles_with_ai_summary:
             LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Proceeding with summary generation")
 
-            # Company AI summaries with sources
+            # Company AI summaries with sources AND dates
             content_summaries = []
             for article in articles_with_ai_summary[:20]:
                 title = article.get("title", "")
                 ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
+                published_at = article.get("published_at")
+                date_str = format_date_short(published_at)
 
                 if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+                    content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
-            # Industry AI summaries with keyword context
+            # Industry AI summaries with keyword context AND dates
             industry_content_summaries = []
             for article in industry_articles_with_ai_summary[:15]:
                 title = article.get("title", "")
                 ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
                 keyword = article.get("search_keyword", "Industry")
+                published_at = article.get("published_at")
+                date_str = format_date_short(published_at)
 
                 if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}]: {ai_summary}")
+                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}] {date_str}: {ai_summary}")
 
-            # Competitor AI summaries
+            # Competitor AI summaries with dates
             competitor_content_summaries = []
             for article in competitor_articles_with_ai_summary[:15]:
                 title = article.get("title", "")
                 ai_summary = article.get("ai_summary", "")
                 domain = article.get("domain", "")
+                published_at = article.get("published_at")
+                date_str = format_date_short(published_at)
 
                 if ai_summary:
                     source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    competitor_content_summaries.append(f"• {title} [{source_name}]: {ai_summary}")
+                    competitor_content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
             if content_summaries or industry_content_summaries:
                 LOG.info(f"📝 EXECUTIVE SUMMARY (Claude) [{ticker}]: Generating from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
@@ -9494,40 +9756,89 @@ def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List
                         "content-type": "application/json"
                     }
 
-                    prompt = f"""You are a hedge fund analyst synthesizing deep content analysis into an investment thesis for {company_name} ({ticker}). Transform individual article analyses into cohesive strategic assessment. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
+                    prompt = f"""You are a hedge fund analyst creating a structured 7-day intelligence summary for {company_name} ({ticker}). Your output must follow a STRICT 6-section format with consistent headers across all companies and industries.
 
-ANALYSIS FRAMEWORK:
-1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
-2. INDUSTRY/SECTOR DYNAMICS: Policy, regulatory, supply chain, or market developments affecting the sector and {company_name}'s position, if present.
-3. COMPETITIVE DYNAMICS: Competitor actions impacting {company_name}'s market position, if present.
-4. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts, if present.
-5. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships, if present.
+TARGET LENGTH: ~250 words total (adjust ±50 words based on news volume)
+
+MANDATORY STRUCTURE - Use these exact headers with emojis:
+
+🔴 MAJOR DEVELOPMENTS
+📊 FINANCIAL/OPERATIONAL PERFORMANCE
+⚠️ RISK FACTORS
+📈 WALL STREET SENTIMENT
+⚡ COMPETITIVE/INDUSTRY DYNAMICS
+📅 UPCOMING CATALYSTS
+
+FORMATTING RULES:
+- Each section uses bullet points (•) only
+- Place 🆕 badge at START of bullets from last 24 hours
+- End each bullet with date in parentheses: (Oct 1) or (Sep 29)
+- NO citations, NO source names in bullets
+- NO section descriptions, NO prose paragraphs
+- Each bullet: 1-2 sentences maximum
+- Sort bullets within each section: NEWEST first (🆕 items at top)
+
+CONTENT ALLOCATION & QUALITY STANDARDS:
+
+🔴 MAJOR DEVELOPMENTS (3-5 bullets)
+- M&A deals, partnerships, disasters, regulatory actions, CEO changes, major contracts
+- Include: Deal size, timeline, strategic rationale if mentioned
+- Example: "🆕 Announced $100B OpenAI investment with phased deployment starting H2 2026 (Oct 1)"
+
+📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets)
+- Earnings (EPS, revenue vs consensus), guidance, margins, production metrics, capex plans
+- Debt issuance, buybacks, dividends with amounts and dates
+- Report exact figures - no estimates or calculations unless both numbers present
+- MATERIALITY: Compare dollar amounts to company scale when possible (e.g., "$18B bond = 2.3% of market cap")
+- Example: "Q2 beat: $1.05 EPS on $46.7B revenue vs $46.05B consensus; Q3 guide $54B vs $53.43B Street (Sep 30)"
+
+⚠️ RISK FACTORS (2-4 bullets)
+- Regulatory probes, lawsuits, production disruptions, competitive threats
+- Insider selling patterns, operational failures, supply chain issues
+- Include: Timeline to resolution, financial impact if quantified
+- Example: "Grasberg mine may not return to pre-accident rates until 2027; Q4 output drop equals next year's forecast at world's #3 mine (Sep 29)"
+
+📈 WALL STREET SENTIMENT (2-3 bullets)
+- Analyst upgrades/downgrades: Include FIRM NAME and PRICE TARGET
+- Ratings distribution, institutional flow direction
+- Example: "BofA upgraded to Buy, reiterated $42 target; average target $47.33 on 19 ratings (Sep 30)"
+
+⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-4 bullets)
+- Competitor strategic moves affecting {company_name}'s position
+- Industry supply/demand shifts, regulatory changes, pricing trends
+- Assess impact on {company_name}'s market share, pricing power, margins
+- Example: "🆕 BHP investing $555M to expand Australian copper production; sector faces 400K ton deficit in 2025 (Oct 1)"
+
+📅 UPCOMING CATALYSTS (1-3 bullets)
+- Earnings dates, ex-dividend dates, analyst days, regulatory deadlines, product launches
+- Include SPECIFIC DATES for all events
+- Example: "Earnings October 21 after market close; analyst day October 16 focused on AI ROIC (Oct 1)"
 
 CRITICAL REQUIREMENTS:
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, investor days, conference dates, completion timelines, if present
-- Report figures (%/$/units) exactly if present; no estimates/price math unless both numbers are in-text
-- Synthesize quantitative metrics when available
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
-- ANALYST ACTIONS: Include firm names and price targets as mentioned in content
-- INDUSTRY IMPACT: Assess how sector developments affect {company_name}'s business model and profitability
-- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
-- Include specific numbers when available and cite sources using formal domain names in parentheses, e.g., (Business Wire).
-- Assess competitor moves that could affect {company_name}'s performance
-- Keep to 7-8 sentences maximum
+✓ Report all figures (%, $, units) EXACTLY as stated - no rounding or estimates
+✓ Include specific dates for: earnings, regulatory deadlines, investor events, completion timelines
+✓ Prioritize near-term (<1 year) developments but note medium/long-term implications
+✓ Assess how industry/competitor developments affect {company_name}'s business model and profitability
+✓ If section has no material news, write: "No significant developments this period"
+✓ Maintain investor focus: What moves the stock? What changes the thesis?
 
-FINANCIAL CONTEXT: {financial_context}
-INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'N/A'}
+CONTEXT: {financial_context}
+INDUSTRY: {', '.join(industry_keywords) if industry_keywords else 'General'}
 
-TARGET: {company_name} ({ticker})
+COMPANY ARTICLES:
+{ai_text}
 
-COMPANY ARTICLE CONTENT ANALYSIS (sources in brackets):
-{ai_text}{industry_analysis}{competitor_analysis}
+INDUSTRY ARTICLES:
+{industry_analysis}
 
-Provide a strategic investment thesis integrating company developments, industry dynamics, and competitive positioning with specific dates, materiality context, and analyst price targets."""
+COMPETITOR ARTICLES:
+{competitor_analysis}
+
+Generate a 6-section structured summary following the exact format above. Ensure 🆕 badges appear on last 24-hour items and all bullets end with dates."""
 
                     data = {
                         "model": ANTHROPIC_MODEL,
-                        "max_tokens": 2048,
+                        "max_tokens": 3000,
                         "messages": [{"role": "user", "content": prompt}]
                     }
 
@@ -9536,6 +9847,11 @@ Provide a strategic investment thesis integrating company developments, industry
                     if response.status_code == 200:
                         result = response.json()
                         ai_analysis_summary = result.get("content", [{}])[0].get("text", "")
+
+                        # Post-process: Insert 🆕 badges for articles within 24 hours
+                        all_articles = articles_with_ai_summary + industry_articles_with_ai_summary + competitor_articles_with_ai_summary
+                        ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
+
                         LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
                     else:
                         LOG.warning(f"Claude final summary failed: {response.status_code}")
@@ -9877,7 +10193,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".competitor { border-left-color: #e74c3c; }",
             ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
             ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
-            ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
+            ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
             ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
             ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
             ".quality-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
@@ -10226,7 +10542,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         ".competitor { border-left-color: #e74c3c; }",
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
-        ".summary-content { color: #34495e; line-height: 1.5; margin-bottom: 10px; }",
+        ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
         ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",

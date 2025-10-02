@@ -2340,35 +2340,39 @@ def fetch_csv_from_github():
         if response.status_code == 200:
             file_data = response.json()
 
-            # Debug: Check what we got from GitHub
-            LOG.debug(f"[GITHUB_FETCH] file_data keys: {file_data.keys()}")
-            LOG.debug(f"[GITHUB_FETCH] content field type: {type(file_data.get('content'))}")
-            LOG.debug(f"[GITHUB_FETCH] content length (raw): {len(file_data.get('content', ''))}")
-
-            # Decode base64 content
-            raw_content = file_data.get("content", "")
-            if not raw_content:
-                LOG.error("[GITHUB_FETCH] GitHub returned empty 'content' field")
-                return {
-                    "status": "error",
-                    "message": "GitHub API returned empty content field",
-                    "csv_content": None
-                }
-
-            csv_content = base64.b64decode(raw_content).decode('utf-8')
-
             # Get file metadata
             file_info = {
-                "sha": file_data["sha"],  # Important for updates
+                "sha": file_data["sha"],
                 "size": file_data["size"],
                 "last_modified": file_data.get("last_modified"),
                 "download_url": file_data["download_url"]
             }
 
-            LOG.info(f"Successfully fetched CSV from GitHub: {len(csv_content)} characters, SHA: {file_info['sha'][:8]}")
+            LOG.info(f"[GITHUB_FETCH] File size: {file_info['size']} bytes, SHA: {file_info['sha'][:8]}")
 
-            if len(csv_content) == 0:
-                LOG.warning("[GITHUB_FETCH] Decoded CSV content is 0 characters - this may indicate an issue")
+            # For files >1MB, GitHub's content field is empty - use download_url instead
+            raw_content = file_data.get("content", "")
+
+            if not raw_content or file_info["size"] > 1000000:
+                LOG.info(f"[GITHUB_FETCH] Using download_url for large file ({file_info['size']} bytes)")
+
+                # Fetch raw content directly via download_url
+                download_response = requests.get(file_info["download_url"], timeout=30)
+
+                if download_response.status_code == 200:
+                    csv_content = download_response.text
+                    LOG.info(f"[GITHUB_FETCH] Successfully downloaded {len(csv_content)} characters via download_url")
+                else:
+                    LOG.error(f"[GITHUB_FETCH] Failed to download from download_url: HTTP {download_response.status_code}")
+                    return {
+                        "status": "error",
+                        "message": f"Failed to download file content: HTTP {download_response.status_code}",
+                        "csv_content": None
+                    }
+            else:
+                # Small file - decode from base64 content field
+                LOG.info(f"[GITHUB_FETCH] Using base64 content field for small file")
+                csv_content = base64.b64decode(raw_content).decode('utf-8')
             
             return {
                 "status": "success",
@@ -11220,10 +11224,10 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
         ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
-        ".summary-section { margin: 8px 0; }",
-        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 4px; padding: 3px 0; border-bottom: 2px solid #ecf0f1; }",
+        ".summary-section { margin: 12px 0; }",
+        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 5px; padding: 4px 0; border-bottom: 2px solid #ecf0f1; }",
         ".section-bullets { margin: 0 0 0 20px; padding: 0; list-style-type: disc; }",
-        ".section-bullets li { margin: 2px 0; line-height: 1.25; color: #34495e; }",
+        ".section-bullets li { margin: 4px 0; line-height: 1.4; color: #34495e; }",
         ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",

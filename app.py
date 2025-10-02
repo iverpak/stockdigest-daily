@@ -2339,10 +2339,24 @@ def fetch_csv_from_github():
         
         if response.status_code == 200:
             file_data = response.json()
-            
+
+            # Debug: Check what we got from GitHub
+            LOG.debug(f"[GITHUB_FETCH] file_data keys: {file_data.keys()}")
+            LOG.debug(f"[GITHUB_FETCH] content field type: {type(file_data.get('content'))}")
+            LOG.debug(f"[GITHUB_FETCH] content length (raw): {len(file_data.get('content', ''))}")
+
             # Decode base64 content
-            csv_content = base64.b64decode(file_data["content"]).decode('utf-8')
-            
+            raw_content = file_data.get("content", "")
+            if not raw_content:
+                LOG.error("[GITHUB_FETCH] GitHub returned empty 'content' field")
+                return {
+                    "status": "error",
+                    "message": "GitHub API returned empty content field",
+                    "csv_content": None
+                }
+
+            csv_content = base64.b64decode(raw_content).decode('utf-8')
+
             # Get file metadata
             file_info = {
                 "sha": file_data["sha"],  # Important for updates
@@ -2350,8 +2364,11 @@ def fetch_csv_from_github():
                 "last_modified": file_data.get("last_modified"),
                 "download_url": file_data["download_url"]
             }
-            
+
             LOG.info(f"Successfully fetched CSV from GitHub: {len(csv_content)} characters, SHA: {file_info['sha'][:8]}")
+
+            if len(csv_content) == 0:
+                LOG.warning("[GITHUB_FETCH] Decoded CSV content is 0 characters - this may indicate an issue")
             
             return {
                 "status": "success",
@@ -4590,7 +4607,10 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                                 feed["id"], clean_search_keyword, clean_competitor_ticker
                             )
                             stats["inserted"] += 1
-                            LOG.info(f"INSERTED [{category}]: Total unique now: {projected_count}/{ingestion_stats['limits'][category if category == 'company' else f'{category}_per_keyword']} - {title[:50]}...")
+                            # Get current count after insertion
+                            limit_key = 'company' if category == 'company' else f'{category}_per_keyword'
+                            current_limit = ingestion_stats['limits'][limit_key]
+                            LOG.info(f"INSERTED [{category}]: Article inserted (limit: {current_limit}) - {title[:50]}...")
                         else:
                             LOG.info(f"DUPLICATE SKIPPED: {title[:30]}")
                             

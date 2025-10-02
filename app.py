@@ -4396,10 +4396,10 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # 2. SECOND BADGE: Source name
     header_badges.append(f'<span class="source-badge">📰 {display_source}</span>')
 
-    # 3. AI Model badge (if AI summary exists)
-    if article.get('ai_model'):
-        ai_model = article['ai_model']
-        header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
+    # 3. AI Model badge (if AI summary exists and model is not "none")
+    ai_model = article.get('ai_model', '').strip().lower()
+    if ai_model and ai_model != 'none':
+        header_badges.append(f'<span class="ai-model-badge">🤖 {article["ai_model"]}</span>')
 
     # 4. Quality badge for quality domains
     if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
@@ -10238,10 +10238,15 @@ Provide a comprehensive executive summary integrating company-specific news with
 
     return summaries
 
-def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]]) -> bool:
+def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440) -> bool:
     """Quick email with metadata display removed"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
+
+        # Calculate period display from time window
+        hours = time_window_minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        period_label = f"Last {days} days" if days > 0 else f"Last {int(hours)} hours"
 
         # Format ticker list with company names
         ticker_display_list = []
@@ -10290,7 +10295,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             "</style></head><body>",
             f"<h1>🚀 Quick Intelligence Report: {ticker_list} - Triage Complete</h1>",
             f"<div class='summary'>",
-            f"<strong>📅 Report Period:</strong> Last 24 hours<br>",
+            f"<strong>📅 Report Period:</strong> {period_label}<br>",
             f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
             f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>"
         ]
@@ -12663,9 +12668,9 @@ async def cron_ingest(
             # PHASE 3: Send enhanced quick email
             LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
             memory_monitor.take_snapshot("PHASE3_START")
-            
+
             with resource_cleanup_context("email_sending"):
-                quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results)
+                quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes)
             
             LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
             memory_monitor.take_snapshot("PHASE3_COMPLETE")

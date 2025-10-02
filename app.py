@@ -5228,11 +5228,21 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
         return {"company": [], "industry": [], "competitor": []}
     
     selected_results = {"company": [], "industry": [], "competitor": []}
-    
+
     # Get ticker metadata for enhanced prompts
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
-    
+    sector = config.get("sector", "") if config else ""
+
+    # Build peers list for industry triage
+    competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")] if config else []
+    peers = []
+    for comp_name, comp_ticker in competitors:
+        if comp_name and comp_ticker:
+            peers.append(f"{comp_name} ({comp_ticker})")
+        elif comp_name:
+            peers.append(comp_name)
+
     # Company articles - process as single batch (limit: 20)
     company_articles = articles_by_category.get("company", [])
     if company_articles:
@@ -5262,7 +5272,7 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
             try:
                 LOG.info(f"Processing industry keyword '{keyword}': {len(keyword_articles)} articles")
                 triage_articles = [item["article"] for item in keyword_articles]
-                selected = triage_industry_articles_full(triage_articles, ticker, {}, [])
+                selected = triage_industry_articles_full(triage_articles, ticker, company_name, sector, peers)
                 
                 # Map back to original indices
                 for selected_item in selected:
@@ -5801,19 +5811,29 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
         return {"company": [], "industry": [], "competitor": []}
     
     selected_results = {"company": [], "industry": [], "competitor": []}
-    
+
     # Get ticker metadata
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
-    
+    sector = config.get("sector", "") if config else ""
+
+    # Build peers list for industry triage
+    competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")] if config else []
+    peers = []
+    for comp_name, comp_ticker in competitors:
+        if comp_name and comp_ticker:
+            peers.append(f"{comp_name} ({comp_ticker})")
+        elif comp_name:
+            peers.append(comp_name)
+
     # DETAILED TRIAGE LOGGING FOR RENDER
     LOG.info("=== DETAILED TRIAGE BREAKDOWN ===")
     LOG.info(f"Ticker: {ticker} ({company_name})")
-    
+
     total_ai_selected = 0
     total_quality_selected = 0
     total_qb_backfill = 0
-    
+
     # COMPANY: Process with smart reuse and detailed logging
     company_articles = articles_by_category.get("company", [])
     if company_articles:
@@ -5940,7 +5960,7 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
             if remaining_slots > 0 and needs_triage:
                 try:
                     triage_articles = [item["article"] for item in needs_triage]
-                    new_selected = triage_industry_articles_full(triage_articles, ticker, {}, [])
+                    new_selected = triage_industry_articles_full(triage_articles, ticker, company_name, sector, peers)
                     
                     # Map back to original indices
                     for selected_item in new_selected[:remaining_slots]:
@@ -6097,7 +6117,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
         items.append(item)
 
     target_cap = min(20, len(articles))  # Explicit cap for company articles
-    
+
     payload = {
         "bucket": "company",
         "target_cap": target_cap,
@@ -6106,7 +6126,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
         "items": items
     }
 
-    # Triage schema
+    # Triage schema - OpenAI uses only priority 1-2 (no low tier)
     triage_schema = {
         "type": "object",
         "properties": {
@@ -6122,7 +6142,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6140,7 +6160,7 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6158,6 +6178,8 @@ async def triage_company_articles_full(articles: List[Dict], ticker: str, compan
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {company_name} ({ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
 CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
+
+If you're unsure whether an article is relevant to {company_name}, assign 0 points rather than selecting it. Only select articles you are confident about.
 
 SELECT (choose exactly {target_cap}):
 
@@ -6180,11 +6202,6 @@ TIER 2 - Strategic developments:
 - Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
 - Geographic: Market entry/exit WITH investment levels or unit counts
 
-TIER 3 - Context (ONLY if quota unfilled):
-- Analyst coverage WITH price targets visible in title
-- Industry awards, certifications if indicative of competitive position
-- Routine announcements WITH material operational details
-
 REJECT COMPLETELY - Never select:
 - Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
 - Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
@@ -6200,17 +6217,18 @@ DISAMBIGUATION - Avoid confusion:
 - If {company_name} only appears as news source attribution, not subject
 - For common words (Oracle, Amazon, Apple), verify context matches your company
 
-SCRAPE PRIORITY (assign integer 1-3):
+SCRAPE PRIORITY (assign integer 1-2 ONLY):
 1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
 2 = Tier 2 (leadership, partnerships, product launches, facilities)
-3 = Tier 3 (analyst coverage, awards, routine announcements)
 
 For each article assess:
 - likely_repeat: Same event as another selected article?
 - repeat_key: Event identifier (e.g., "q2_earnings_2025," "ceo_change_sept_2025")
 - confidence: 0.0-1.0, certainty this is specifically about {company_name}
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}."""
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from best available. Never exceed {target_cap}.
+
+CONSERVATIVE STANDARD: If you're unsure whether an article is directly relevant to {company_name}, skip it entirely. Only select articles you are confident about."""
 
     try:
         headers = {
@@ -6279,7 +6297,7 @@ CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If 
         LOG.error(f"Async triage request failed: {str(e)}")
         return []
 
-async def triage_industry_articles_full(articles: List[Dict], ticker: str, keyword: str) -> List[Dict]:
+async def triage_industry_articles_full(articles: List[Dict], ticker: str, company_name: str, sector: str, peers: List[str]) -> List[Dict]:
     """Enhanced industry triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -6304,11 +6322,13 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, keywo
         "bucket": "industry",
         "target_cap": target_cap,
         "ticker": ticker,
-        "keyword": keyword,
+        "company_name": company_name,
+        "sector": sector,
+        "peers": peers,
         "items": items
     }
 
-    # Triage schema
+    # Triage schema - OpenAI uses only priority 1-2 (no low tier)
     triage_schema = {
         "type": "object",
         "properties": {
@@ -6324,7 +6344,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, keywo
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6342,7 +6362,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, keywo
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6357,64 +6377,67 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, keywo
         "additionalProperties": False
     }
 
+    # Format peer list for display
+    peers_display = ', '.join(peers[:5]) if peers else 'None'
+
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
 
-INDUSTRY CONTEXT: These articles are about "{keyword}" sector. Select articles with sector-wide insights that affect multiple companies, even if they mention specific companies.
+TARGET COMPANY: {company_name} ({ticker})
+SECTOR: {sector}
+KNOWN PEERS: {peers_display}
 
-CRITICAL: You must select EXACTLY {target_cap} articles. Focus on developments with broad industry implications.
+INDUSTRY CONTEXT: Select articles about industry trends and developments that are relevant to {company_name}'s competitive landscape. These should be sector-wide insights affecting {company_name} and its peers, not articles solely about non-peer companies.
+
+CRITICAL: You must select EXACTLY {target_cap} articles. If you're unsure whether an article is relevant to {company_name}'s industry position, DO NOT select it. Only select articles you are confident have industry implications for {company_name}.
 
 SELECT (choose exactly {target_cap}):
 
-TIER 1 - Hard industry events with quantified impact:
-- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs
-- Pricing: Commodity/service prices, reimbursement rates WITH specific figures
-- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers
-- Standards: New requirements, certifications, compliance rules WITH deadlines/costs
-- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines
-- Financial: Interest rates, capital requirements, reserve rules affecting sector
+TIER 1 - Hard industry events with quantified impact (scrape_priority=1):
+- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting {sector}
+- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting {company_name} sector
+- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting {sector}
+- Standards: New requirements, certifications, compliance rules WITH deadlines/costs for {sector}
+- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines for {sector}
+- Financial: Interest rates, capital requirements, reserve rules affecting {sector}
 
-TIER 2 - Strategic sector developments:
-- Major capacity additions/closures WITH specific impact (e.g., "500MW," "1M units/year")
-- Industry consolidation WITH transaction values and market share implications
-- Technology adoption WITH implementation timelines and cost impacts
-- Labor agreements WITH wage/benefit details and coverage scope
-- Infrastructure investments WITH budgets and completion dates
-- Patent expirations, generic approvals, technology shifts WITH market impact
-- Company announcements revealing sector-wide trends (e.g., "BHP invests $555M signals sector shift")
-
-TIER 3 - Sector context (ONLY if quota unfilled):
-- Economic indicators directly affecting this industry WITH specific data
-- Government initiatives WITH allocated budgets (not vague "plans")
-- Research findings WITH quantified sector implications
+TIER 2 - Strategic sector developments (scrape_priority=2):
+- Major capacity additions/closures WITH specific impact (e.g., "500MW," "1M units/year") in {sector}
+- Industry consolidation WITH transaction values and market share implications for {sector}
+- Technology adoption WITH implementation timelines and cost impacts in {sector}
+- Labor agreements WITH wage/benefit details affecting {sector}
+- Infrastructure investments WITH budgets and completion dates for {sector}
+- Patent expirations, generic approvals, technology shifts WITH market impact on {sector}
+- Major peer company announcements revealing sector-wide trends (from peers: {peers_display})
 
 REJECT COMPLETELY - Never select:
 - Market research reports: "Market to reach," "CAGR," "Forecast 20XX-20YY," "TAM," "Industry Report"
 - Generic trends: "Top Trends," "Future of," "Outlook," "What to Expect in [Year]"
+- Articles ONLY about non-peer companies without clear {sector} implications
 - Pure company-specific news: Single-company earnings, appointments WITHOUT sector implications
 - Listicles: "X Best," "How to," "Why You Should," "Reasons to"
 - Opinion: "Analysis," "Commentary," "Perspective" (without hard data)
 - Small company routine announcements: Financing rounds, junior partnerships, minor appointments
+- Articles unrelated to {company_name}'s competitive landscape
 
-INCLUDE when company news has sector implications:
-✓ Major company investment indicating sector direction
-✓ Company action revealing regulatory/policy impacts on all players
-✓ Production disruption at major player affecting sector supply/pricing
-✓ Technology deployment showing sector-wide adoption patterns
-✓ Company data revealing industry-wide cost/margin trends
+INCLUDE when company news has sector implications for {company_name}:
+✓ Major peer company action indicating sector direction
+✓ Company action revealing regulatory/policy impacts on {company_name} and peers
+✓ Production disruption at major player affecting {sector} supply/pricing
+✓ Technology deployment showing sector-wide adoption affecting {company_name}
+✓ Company data revealing {sector} cost/margin trends
 
-SCRAPE PRIORITY (assign integer 1-3):
+SCRAPE PRIORITY (assign integer 1-2 ONLY):
 1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
-2 = Tier 2 (capacity, consolidation, policy WITH budgets, company moves with sector implications)
-3 = Tier 3 (economic indicators, sector context)
+2 = Tier 2 (capacity, consolidation, policy WITH budgets, peer company moves with sector implications)
 
 For each article assess:
 - likely_repeat: Same sector event covered by multiple outlets?
-- repeat_key: Event identifier (e.g., "copper_supply_disruption_sept_2025")
-- confidence: 0.0-1.0, certainty this has implications for MULTIPLE companies in "{keyword}"
+- repeat_key: Event identifier (e.g., "banking_regulation_sept_2025")
+- confidence: 0.0-1.0, certainty this has implications for {company_name} and its competitive position
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2 standards, leave remaining slots unfilled rather than selecting marginal articles. Never exceed {target_cap}.
 
-SELECT FOR: Sector-wide developments for "{keyword}" that reveal trends, constraints, or opportunities affecting multiple companies."""
+CONSERVATIVE STANDARD: If you're unsure whether an article is relevant to {company_name}'s competitive landscape in {sector}, skip it entirely. Only select articles you are confident about."""
 
     try:
         headers = {
@@ -6512,7 +6535,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
         "items": items
     }
 
-    # Triage schema
+    # Triage schema - OpenAI uses only priority 1-2 (no low tier)
     triage_schema = {
         "type": "object",
         "properties": {
@@ -6528,7 +6551,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6546,7 +6569,7 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
                     "type": "object",
                     "properties": {
                         "id": {"type": "integer"},
-                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "scrape_priority": {"type": "integer", "minimum": 1, "maximum": 2},
                         "likely_repeat": {"type": "boolean"},
                         "repeat_key": {"type": "string"},
                         "why": {"type": "string"},
@@ -6564,6 +6587,8 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} from {len(articles)} candidates based ONLY on titles and descriptions.
 
 CRITICAL: You must select EXACTLY {target_cap} articles. Prioritize ruthlessly.
+
+If you're unsure whether an article is relevant to {competitor_name}, assign 0 points rather than selecting it. Only select articles you are confident about.
 
 SELECT (choose exactly {target_cap}):
 
@@ -6586,11 +6611,6 @@ TIER 2 - Strategic developments:
 - Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
 - Geographic: Market entry/exit WITH investment levels or unit counts
 
-TIER 3 - Context (ONLY if quota unfilled):
-- Analyst coverage WITH price targets visible in title
-- Industry awards, certifications if indicative of competitive position
-- Routine announcements WITH material operational details
-
 REJECT COMPLETELY - Never select:
 - Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
 - Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
@@ -6606,17 +6626,18 @@ DISAMBIGUATION - Avoid confusion:
 - If {competitor_name} only appears as news source attribution, not subject
 - For common words (Oracle, Amazon, Apple), verify context matches your company
 
-SCRAPE PRIORITY (assign integer 1-3):
+SCRAPE PRIORITY (assign integer 1-2 ONLY):
 1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
 2 = Tier 2 (leadership, partnerships, product launches, facilities)
-3 = Tier 3 (analyst coverage, awards, routine announcements)
 
 For each article assess:
 - likely_repeat: Same event as another selected article?
 - repeat_key: Event identifier (e.g., "q2_earnings_2025," "ceo_change_sept_2025")
 - confidence: 0.0-1.0, certainty this is specifically about {competitor_name}
 
-CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}."""
+CRITICAL CONSTRAINT: Return exactly {target_cap} articles in selected array. If fewer than {target_cap} meet Tier 1-2, fill from best available. Never exceed {target_cap}.
+
+CONSERVATIVE STANDARD: If you're unsure whether an article is directly relevant to {competitor_name}, skip it entirely. Only select articles you are confident about."""
 
     try:
         headers = {
@@ -6842,7 +6863,7 @@ Articles: {json.dumps(items, separators=(',', ':'))}"""
         LOG.error(f"Claude triage request failed: {str(e)}")
         return []
 
-async def triage_industry_articles_claude(articles: List[Dict], ticker: str, keyword: str) -> List[Dict]:
+async def triage_industry_articles_claude(articles: List[Dict], ticker: str, company_name: str, sector: str, peers: List[str]) -> List[Dict]:
     """Claude-based industry keyword triage"""
     if not ANTHROPIC_API_KEY or not articles:
         return []
@@ -6860,10 +6881,15 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, key
         items.append(item)
 
     target_cap = min(5, len(articles))
+    peers_display = ', '.join(peers[:5]) if peers else 'None'
 
     system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
 
-INDUSTRY CONTEXT: These articles are about "{keyword}" sector. Select articles with sector-wide insights that affect multiple companies, even if they mention specific companies.
+TARGET COMPANY: {company_name} ({ticker})
+SECTOR: {sector}
+KNOWN PEERS: {peers_display}
+
+INDUSTRY CONTEXT: Select articles with sector-wide insights that affect multiple companies in this industry, even if they mention specific companies.
 
 CRITICAL: You must select EXACTLY {target_cap} articles. Focus on developments with broad industry implications.
 
@@ -6915,7 +6941,7 @@ Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
 
 CRITICAL CONSTRAINT: Return exactly {target_cap} articles. If fewer than {target_cap} meet Tier 1-2, fill from Tier 3. Never exceed {target_cap}.
 
-SELECT FOR: Sector-wide developments for "{keyword}" that reveal trends, constraints, or opportunities affecting multiple companies.
+SELECT FOR: Sector-wide developments in {sector} that reveal trends, constraints, or opportunities affecting {company_name} and its competitive landscape.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -7233,8 +7259,17 @@ async def perform_ai_triage_with_dual_scoring_async(
     # Get ticker metadata
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
+    sector = config.get("sector", "") if config else ""
     industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
     competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")]
+
+    # Build peers list for industry triage
+    peers = []
+    for comp_name, comp_ticker in competitors:
+        if comp_name and comp_ticker:
+            peers.append(f"{comp_name} ({comp_ticker})")
+        elif comp_name:
+            peers.append(comp_name)
 
     LOG.info(f"=== DUAL SCORING TRIAGE (OpenAI + Claude): batch_size={triage_batch_size} ===")
 
@@ -7273,9 +7308,9 @@ async def perform_ai_triage_with_dual_scoring_async(
                 "articles": triage_articles,
                 "target_cap": min(5, len(triage_articles)),
                 "openai_func": triage_industry_articles_full,
-                "openai_args": (triage_articles, ticker, keyword),
+                "openai_args": (triage_articles, ticker, company_name, sector, peers),
                 "claude_func": triage_industry_articles_claude,
-                "claude_args": (triage_articles, ticker, keyword),
+                "claude_args": (triage_articles, ticker, company_name, sector, peers),
                 "index_mapping": keyword_articles
             })
 
@@ -7432,11 +7467,21 @@ async def perform_ai_triage_with_batching_async(
     init_async_semaphores()
     
     selected_results = {"company": [], "industry": [], "competitor": []}
-    
+
     # Get ticker metadata for enhanced prompts
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
-    
+    sector = config.get("sector", "") if config else ""
+
+    # Build peers list for industry triage
+    competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")] if config else []
+    peers = []
+    for comp_name, comp_ticker in competitors:
+        if comp_name and comp_ticker:
+            peers.append(f"{comp_name} ({comp_ticker})")
+        elif comp_name:
+            peers.append(comp_name)
+
     LOG.info(f"=== TRUE CROSS-CATEGORY ASYNC TRIAGE: batch_size={triage_batch_size} ===")
     
     # Collect ALL triage operations into a single list
@@ -7471,7 +7516,7 @@ async def perform_ai_triage_with_batching_async(
                 "key": keyword,
                 "articles": triage_articles,
                 "task_func": triage_industry_articles_full,
-                "args": (triage_articles, ticker, {}, []),
+                "args": (triage_articles, ticker, company_name, sector, peers),
                 "index_mapping": keyword_articles  # For mapping back to original indices
             })
     
@@ -10188,10 +10233,6 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ticker_display_list.append(f"{company_name} ({ticker})")
         ticker_list = ', '.join(ticker_display_list)
 
-        # Generate summaries from both OpenAI and Claude
-        openai_summaries = generate_ai_titles_summary(articles_by_ticker)
-        claude_summaries = generate_claude_titles_summary(articles_by_ticker)
-        
         html = [
             "<html><head><style>",
             "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
@@ -10279,23 +10320,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             html.append(f"<div class='ticker-section'>")
             html.append(f"<h2>🎯 Target Company: {full_company_name} ({ticker})</h2>")
 
-            # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
-            openai_summary = openai_summaries.get(ticker, {}).get("titles_summary", "")
-            claude_summary = claude_summaries.get(ticker, {}).get("titles_summary", "")
+            html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
 
-            if openai_summary and claude_summary:
-                html.append("<div class='company-summary'>")
-                html.append("<div class='summary-title'>📰 Executive Summary (Headlines Analysis)</div>")
-                html.append("<div class='summary-content'>")
-                html.append("<strong>OpenAI Analysis:</strong><br>")
-                html.append(f"{openai_summary}")
-                html.append("<br><br>")
-                html.append("<strong>Claude Analysis:</strong><br>")
-                html.append(f"{claude_summary}")
-                html.append("</div>")
-                html.append("</div>")
-                html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
-            
             # Process each category independently with proper sorting
             category_icons = {
                 "company": "🎯",
@@ -10620,9 +10646,9 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
 def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
     """Enhanced digest with metadata display removed but keeping all badges/emojis"""
 
-    # Generate summaries from both OpenAI and Claude (both use AI-analyzed content)
-    openai_summaries = generate_ai_final_summaries(articles_by_ticker)
+    # Generate summaries from Claude (with OpenAI fallback)
     claude_summaries = generate_claude_final_summaries(articles_by_ticker)
+    openai_summaries = generate_ai_final_summaries(articles_by_ticker)
 
     # Format ticker list with company names
     ticker_display_list = []
@@ -10649,10 +10675,10 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
         ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
-        ".summary-section { margin: 20px 0; }",
-        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 10px; padding: 8px 0; border-bottom: 2px solid #ecf0f1; }",
+        ".summary-section { margin: 12px 0; }",
+        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 5px; padding: 4px 0; border-bottom: 2px solid #ecf0f1; }",
         ".section-bullets { margin: 0 0 0 20px; padding: 0; list-style-type: disc; }",
-        ".section-bullets li { margin: 8px 0; line-height: 1.6; color: #34495e; }",
+        ".section-bullets li { margin: 4px 0; line-height: 1.4; color: #34495e; }",
         ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
@@ -10707,34 +10733,26 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         html.append(f"<div class='ticker-section'>")
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
-        # Display dual AI summaries (OpenAI first, Claude second) - only if both succeed
-        openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
+        # Display Claude summary with OpenAI fallback
         claude_summary = claude_summaries.get(ticker, {}).get("ai_analysis_summary", "")
+        openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
 
-        if openai_summary and claude_summary:
+        # Use Claude if available, fallback to OpenAI
+        summary_to_display = claude_summary if claude_summary else openai_summary
+        summary_source = "Claude" if claude_summary else "OpenAI"
+
+        if summary_to_display:
             html.append("<div class='company-summary'>")
-            html.append("<div class='summary-title'>📰 Executive Summary (Deep Analysis)</div>")
+            html.append(f"<div class='summary-title'>📰 Executive Summary (Deep Analysis) - {summary_source}</div>")
             html.append("<div class='summary-content'>")
 
-            # Parse and render OpenAI summary with structured sections
-            html.append("<strong>OpenAI Analysis:</strong>")
-            openai_sections = parse_structured_summary(openai_summary)
-            if openai_sections:
-                html.append(render_structured_summary_html(openai_sections))
+            # Parse and render summary with structured sections
+            summary_sections = parse_structured_summary(summary_to_display)
+            if summary_sections:
+                html.append(render_structured_summary_html(summary_sections))
             else:
                 # Fallback to raw text if parsing fails
-                html.append(f"<div>{openai_summary.replace(chr(10), '<br>')}</div>")
-
-            html.append("<br>")
-
-            # Parse and render Claude summary with structured sections
-            html.append("<strong>Claude Analysis:</strong>")
-            claude_sections = parse_structured_summary(claude_summary)
-            if claude_sections:
-                html.append(render_structured_summary_html(claude_sections))
-            else:
-                # Fallback to raw text if parsing fails
-                html.append(f"<div>{claude_summary.replace(chr(10), '<br>')}</div>")
+                html.append(f"<div>{summary_to_display.replace(chr(10), '<br>')}</div>")
 
             html.append("</div>")
             html.append("</div>")

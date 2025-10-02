@@ -1252,7 +1252,7 @@ def validate_ticker_format(ticker: str) -> bool:
     patterns = [
         # Standard formats
         r'^[A-Z]{1,8}$',                          # US: MSFT, AAPL, GOOGL, BERKSHIRE
-        r'^[A-Z]{1,8}\.[A-Z]{1,4}$',             # International: RY.TO, BHP.AX, VOD.L
+        r'^[A-Z0-9]{1,8}\.[A-Z]{1,4}$',          # International: RY.TO, BHP.AX, VOD.L, 005930.KS (Korean), 7203.T (Tokyo)
         
         # Special class/series formats
         r'^[A-Z]{1,6}-[A-Z]$',                   # Class shares: BRK-A, BRK-B
@@ -1313,6 +1313,8 @@ def normalize_ticker_format(ticker: str) -> str:
         ':DE': '.DE',    # Germany: SAP:DE → SAP.DE
         ':PA': '.PA',    # Paris: MC:PA → MC.PA
         ':AS': '.AS',    # Amsterdam: ASML:AS → ASML.AS
+        ':KS': '.KS',    # Korea: 005930:KS → 005930.KS
+        ':T': '.T',      # Tokyo: 7203:T → 7203.T
     }
 
     # Apply colon-to-dot conversions
@@ -1413,6 +1415,10 @@ def get_ticker_exchange_info(ticker: str) -> Dict[str, str]:
         exchange_info.update({'exchange': 'HKEX', 'country': 'HK', 'currency': 'HKD'})
     elif '.AS' in normalized:
         exchange_info.update({'exchange': 'AEX', 'country': 'NL', 'currency': 'EUR'})
+    elif '.KS' in normalized:
+        exchange_info.update({'exchange': 'KRX', 'country': 'KR', 'currency': 'KRW'})
+    elif '.T' in normalized:
+        exchange_info.update({'exchange': 'TSE', 'country': 'JP', 'currency': 'JPY'})
     else:
         # Assume US market for tickers without suffix
         exchange_info.update({'exchange': 'NASDAQ/NYSE', 'country': 'US', 'currency': 'USD'})
@@ -2031,9 +2037,12 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                 ticker_data['competitor_3_ticker'] = row.get('competitor_3_ticker', '').strip() or None
                 
                 # LEGACY SUPPORT: Handle old "competitors" field format
-                if (row.get('competitors', '').strip() and 
+                competitors_field = row.get('competitors', '') or ''  # Handle None explicitly
+                LOG.debug(f"[CSV_DEBUG] Row {row_num} competitors field type: {type(competitors_field)}, value: {repr(competitors_field)[:100]}")
+
+                if (competitors_field and competitors_field.strip() and
                     not any(ticker_data.get(f'competitor_{i}_name') for i in range(1, 4))):
-                    legacy_competitors = row['competitors'].split(',')
+                    legacy_competitors = competitors_field.split(',')
                     for i, comp in enumerate(legacy_competitors[:3], 1):
                         comp = comp.strip()
                         if comp:
@@ -2055,9 +2064,12 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                                 ticker_data[f'competitor_{i}_name'] = comp
                 
                 # LEGACY SUPPORT: Handle old "industry_keywords" field
-                if (row.get('industry_keywords', '').strip() and 
+                keywords_field = row.get('industry_keywords', '') or ''  # Handle None explicitly
+                LOG.debug(f"[CSV_DEBUG] Row {row_num} industry_keywords field type: {type(keywords_field)}, value: {repr(keywords_field)[:100]}")
+
+                if (keywords_field and keywords_field.strip() and
                     not any(ticker_data.get(f'industry_keyword_{i}') for i in range(1, 4))):
-                    legacy_keywords = [kw.strip() for kw in row['industry_keywords'].split(',') if kw.strip()]
+                    legacy_keywords = [kw.strip() for kw in keywords_field.split(',') if kw.strip()]
                     for i, keyword in enumerate(legacy_keywords[:3], 1):
                         ticker_data[f'industry_keyword_{i}'] = keyword
                 
@@ -4474,25 +4486,22 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         
                         result = cur.fetchone()
                         existing_count = result["count"] if result and result["count"] is not None else 0
-                        
-                        # FIXED: Check limits based on existing count from database
-                        # Add 1 to existing count to account for this new article
-                        projected_count = existing_count + 1
-                        
-                        # Check against limits
-                        if category == "company" and projected_count > ingestion_stats["limits"]["company"]:
-                            stats["limit_reached"] += 1
-                            LOG.info(f"COMPANY LIMIT REACHED: {existing_count} existing + 1 new = {projected_count} > {ingestion_stats['limits']['company']}")
+
+                        # Check if we've already hit the limit (BEFORE inserting this article)
+                        limit_reached = False
+                        if category == "company" and existing_count >= ingestion_stats["limits"]["company"]:
+                            limit_reached = True
+                            LOG.info(f"COMPANY LIMIT ALREADY REACHED: {existing_count} >= {ingestion_stats['limits']['company']} - stopping ingestion for this feed")
                             break
-                        elif category == "industry" and projected_count > ingestion_stats["limits"]["industry_per_keyword"]:
-                            stats["limit_reached"] += 1
-                            LOG.info(f"INDUSTRY LIMIT REACHED for '{feed_keyword}': {existing_count} existing + 1 new = {projected_count} > {ingestion_stats['limits']['industry_per_keyword']}")
+                        elif category == "industry" and existing_count >= ingestion_stats["limits"]["industry_per_keyword"]:
+                            limit_reached = True
+                            LOG.info(f"INDUSTRY LIMIT ALREADY REACHED for '{feed_keyword}': {existing_count} >= {ingestion_stats['limits']['industry_per_keyword']} - stopping ingestion")
                             break
-                        elif category == "competitor" and projected_count > ingestion_stats["limits"]["competitor_per_keyword"]:
-                            stats["limit_reached"] += 1
-                            LOG.info(f"COMPETITOR LIMIT REACHED for '{feed_keyword}': {existing_count} existing + 1 new = {projected_count} > {ingestion_stats['limits']['competitor_per_keyword']}")
+                        elif category == "competitor" and existing_count >= ingestion_stats["limits"]["competitor_per_keyword"]:
+                            limit_reached = True
+                            LOG.info(f"COMPETITOR LIMIT ALREADY REACHED for '{feed_keyword}': {existing_count} >= {ingestion_stats['limits']['competitor_per_keyword']} - stopping ingestion")
                             break
-                        
+
                         # COUNT THIS NEW UNIQUE URL for tracking
                         _update_ingestion_stats(category, feed_keyword)
                         
@@ -5118,7 +5127,7 @@ Full Content: {scraped_content[:10000]}
 # Content character limit for AI summarization
 CONTENT_CHAR_LIMIT = 10000
 
-async def generate_claude_company_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
+async def generate_claude_article_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
     """Generate Claude summary for company article - POV agnostic"""
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
@@ -5170,7 +5179,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_claude_competitor_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+async def generate_claude_competitor_article_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
     """Generate Claude summary for competitor article - identical to company"""
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
@@ -5222,7 +5231,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_claude_industry_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
+async def generate_claude_industry_article_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
     """Generate Claude summary for industry article - sector focused"""
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
@@ -5274,7 +5283,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_openai_company_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
+async def generate_openai_article_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
     """OpenAI fallback for company article"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
@@ -5316,7 +5325,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_openai_competitor_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+async def generate_openai_competitor_article_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
     """OpenAI fallback for competitor article"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
@@ -5358,7 +5367,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_openai_industry_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
+async def generate_openai_industry_article_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
     """OpenAI fallback for industry article"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
@@ -5405,16 +5414,16 @@ async def generate_claude_summary(scraped_content: str, title: str, ticker: str,
                                   competitor_name_cache: dict) -> Optional[str]:
     """Route to appropriate Claude function based on category"""
     if category == "company":
-        return await generate_claude_company_summary(target_company_name, ticker, title, scraped_content)
+        return await generate_claude_article_summary(target_company_name, ticker, title, scraped_content)
     elif category == "competitor":
         competitor_ticker = article_metadata.get("competitor_ticker")
         if not competitor_ticker:
             return None
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
-        return await generate_claude_competitor_summary(competitor_name, competitor_ticker, title, scraped_content)
+        return await generate_claude_competitor_article_summary(competitor_name, competitor_ticker, title, scraped_content)
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
-        return await generate_claude_industry_summary(industry_keyword, title, scraped_content)
+        return await generate_claude_industry_article_summary(industry_keyword, title, scraped_content)
     return None
 
 
@@ -5423,16 +5432,16 @@ async def generate_openai_summary(scraped_content: str, title: str, ticker: str,
                                   competitor_name_cache: dict) -> Optional[str]:
     """Route to appropriate OpenAI function based on category"""
     if category == "company":
-        return await generate_openai_company_summary(target_company_name, ticker, title, scraped_content)
+        return await generate_openai_article_summary(target_company_name, ticker, title, scraped_content)
     elif category == "competitor":
         competitor_ticker = article_metadata.get("competitor_ticker")
         if not competitor_ticker:
             return None
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
-        return await generate_openai_competitor_summary(competitor_name, competitor_ticker, title, scraped_content)
+        return await generate_openai_competitor_article_summary(competitor_name, competitor_ticker, title, scraped_content)
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
-        return await generate_openai_industry_summary(industry_keyword, title, scraped_content)
+        return await generate_openai_industry_article_summary(industry_keyword, title, scraped_content)
     return None
 
 
@@ -6122,21 +6131,20 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
         # Start with existing triaged articles
         company_selected = list(already_triaged)
         
-        # Run AI triage on new articles if needed
-        remaining_slots = 20 - len(company_selected)
-        if remaining_slots > 0 and needs_triage:
+        # Run AI triage on new articles if needed (NO LIMIT - process all AI selections)
+        if needs_triage:
             try:
                 triage_articles = [article for _, article in needs_triage]
                 new_selected = triage_company_articles_full(triage_articles, ticker, company_name, {}, {})
-                
-                # Map back to original indices and add to selection
-                for selected_item in new_selected[:remaining_slots]:
+
+                # Map back to original indices and add to selection (NO CAP - take all AI selections)
+                for selected_item in new_selected:
                     original_idx = needs_triage[selected_item["id"]][0]
                     selected_item["id"] = original_idx
                     selected_item["selection_method"] = "new_ai_triage"
                     company_selected.append(selected_item)
-                
-                LOG.info(f"  COMPANY AI: {len(new_selected)} selected from new AI triage")
+
+                LOG.info(f"  COMPANY AI: {len(new_selected)} selected from new AI triage (no cap applied)")
                 total_ai_selected += len(new_selected)
             except Exception as e:
                 LOG.error(f"Company triage failed: {e}")
@@ -6209,16 +6217,15 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
             
             # Start with existing
             keyword_selected = list(already_triaged)
-            
-            # Run AI triage on new articles if needed (target: 5 per keyword)
-            remaining_slots = 5 - len(keyword_selected)
-            if remaining_slots > 0 and needs_triage:
+
+            # Run AI triage on new articles if needed (NO LIMIT - process all AI selections)
+            if needs_triage:
                 try:
                     triage_articles = [item["article"] for item in needs_triage]
                     new_selected = triage_industry_articles_full(triage_articles, ticker, company_name, sector, peers)
-                    
-                    # Map back to original indices
-                    for selected_item in new_selected[:remaining_slots]:
+
+                    # Map back to original indices (NO CAP - take all AI selections)
+                    for selected_item in new_selected:
                         original_idx = needs_triage[selected_item["id"]]["original_idx"]
                         selected_item["id"] = original_idx
                         selected_item["selection_method"] = "new_ai_triage"
@@ -6281,22 +6288,21 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
             
             # Start with existing
             entity_selected = list(already_triaged)
-            
-            # Run AI triage on new articles if needed (target: 5 per competitor)
-            remaining_slots = 5 - len(entity_selected)
-            if remaining_slots > 0 and needs_triage:
+
+            # Run AI triage on new articles if needed (NO LIMIT - process all AI selections)
+            if needs_triage:
                 try:
                     triage_articles = [item["article"] for item in needs_triage]
                     new_selected = triage_competitor_articles_full(triage_articles, ticker, [], {})
-                    
-                    # Map back to original indices
-                    for selected_item in new_selected[:remaining_slots]:
+
+                    # Map back to original indices (NO CAP - take all AI selections)
+                    for selected_item in new_selected:
                         original_idx = needs_triage[selected_item["id"]]["original_idx"]
                         selected_item["id"] = original_idx
                         selected_item["selection_method"] = "new_ai_triage"
                         entity_selected.append(selected_item)
-                    
-                    LOG.info(f"    AI TRIAGE: {len(new_selected)} selected")
+
+                    LOG.info(f"    AI TRIAGE: {len(new_selected)} selected (no cap applied)")
                     total_ai_selected += len(new_selected)
                 except Exception as e:
                     LOG.error(f"Competitor triage failed for entity '{entity_key}': {e}")
@@ -11148,10 +11154,10 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
         ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
-        ".summary-section { margin: 12px 0; }",
-        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 5px; padding: 4px 0; border-bottom: 2px solid #ecf0f1; }",
+        ".summary-section { margin: 8px 0; }",
+        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 4px; padding: 3px 0; border-bottom: 2px solid #ecf0f1; }",
         ".section-bullets { margin: 0 0 0 20px; padding: 0; list-style-type: disc; }",
-        ".section-bullets li { margin: 4px 0; line-height: 1.4; color: #34495e; }",
+        ".section-bullets li { margin: 2px 0; line-height: 1.25; color: #34495e; }",
         ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",

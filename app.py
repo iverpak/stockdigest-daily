@@ -12535,3 +12535,2343 @@ async def reset_circuit_breaker(request: Request):
 # ADMIN ENDPOINTS (Existing)
 # ------------------------------------------------------------------------------
 
+@APP.post("/admin/migrate-feeds")
+async def admin_migrate_feeds(request: Request):
+    """NEW ARCHITECTURE V2: Verify feeds + ticker_feeds architecture is ready"""
+    require_admin(request)
+
+    try:
+        # Step 1: Ensure schema is up to date (includes feeds + ticker_feeds tables)
+        ensure_schema()
+
+        # Step 2: Verify new architecture exists
+        with db() as conn, conn.cursor() as cur:
+            # Verify new architecture exists
+            cur.execute("SELECT COUNT(*) as feed_count FROM feeds")
+            new_feed_count = cur.fetchone()['feed_count']
+
+            cur.execute("SELECT COUNT(*) as association_count FROM ticker_feeds")
+            association_count = cur.fetchone()['association_count']
+
+            LOG.info(f"✅ NEW ARCHITECTURE V2 verified: {new_feed_count} feeds, {association_count} associations")
+
+            return {
+                "status": "success",
+                "message": "NEW ARCHITECTURE V2 (category-per-relationship) is active",
+                "feeds": new_feed_count,
+                "associations": association_count
+            }
+
+    except Exception as e:
+        LOG.error(f"❌ Migration failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/admin/fix-foreign-key")
+async def admin_fix_foreign_key(request: Request):
+    """Fix the found_url foreign key constraint to point to feeds table (DEPRECATED)"""
+    require_admin(request)
+
+    try:
+        # This endpoint is deprecated - foreign keys are handled in ensure_schema()
+
+        return {
+            "status": "success",
+            "message": "Foreign key constraint fixed successfully"
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Foreign key fix failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/admin/init")
+async def admin_init(request: Request, body: InitRequest):
+    async with TICKER_PROCESSING_LOCK:
+        """Initialize feeds for specified tickers using NEW ARCHITECTURE"""
+        require_admin(request)
+
+        # Global state to track if initialization already happened in this session
+        global _schema_initialized, _github_synced
+        if '_schema_initialized' not in globals():
+            _schema_initialized = False
+        if '_github_synced' not in globals():
+            _github_synced = False
+
+        # NEW ARCHITECTURE V2: Use functions directly from app.py (no import needed)
+
+        LOG.info("=== INITIALIZATION STARTING ===")
+
+        # CRITICAL: Clear any global state that might contaminate between tickers
+        LOG.info("=== CLEARING GLOBAL STATE FOR FRESH TICKER PROCESSING ===")
+        import gc
+        gc.collect()  # Force garbage collection to clear any lingering objects
+
+        # STEP 1: Ensure database schema is up to date (ONCE per session)
+        if not _schema_initialized:
+            LOG.info("=== ENSURING DATABASE SCHEMA (NEW FEED ARCHITECTURE) ===")
+            ensure_schema()
+            _schema_initialized = True
+        else:
+            LOG.info("=== SCHEMA ALREADY INITIALIZED - SKIPPING ===")
+
+        # STEP 2: Import CSV from GitHub (ONCE per session)
+        if not _github_synced:
+            LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
+            github_sync_result = sync_ticker_references_from_github()
+            _github_synced = True
+        else:
+            LOG.info("=== GITHUB SYNC ALREADY COMPLETED - SKIPPING ===")
+            github_sync_result = {"status": "skipped", "message": "Already synced in this session"}
+
+        if github_sync_result["status"] != "success":
+            LOG.warning(f"GitHub sync failed: {github_sync_result.get('message', 'Unknown error')}")
+        else:
+            LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
+
+        results = []
+
+        # CRITICAL: Process each ticker in complete isolation using NEW ARCHITECTURE
+        for ticker in body.tickers:
+            # STEP 1: Create isolated ticker variable to prevent corruption
+            isolated_ticker = str(ticker).strip()  # Force new string object
+
+            # CRITICAL: Clear any residual state between ticker processing
+            LOG.info(f"=== PROCESSING {isolated_ticker} - NEW ARCHITECTURE ===")
+            import gc
+            gc.collect()  # Force garbage collection between each ticker
+
+            LOG.info(f"=== INITIALIZING TICKER: {isolated_ticker} ===")
+
+            try:
+                # STEP 2: Get or generate metadata with enhanced ticker reference integration
+                # CRITICAL: Force refresh to ensure no cached contamination from previous tickers
+                metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker, force_refresh=True)
+
+                # CRITICAL DEBUG: Log what metadata was actually returned
+                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} metadata returned: {metadata}")
+                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} company_name in metadata: '{metadata.get('company_name', 'MISSING')}'")
+
+                # STEP 3: Create feeds using NEW MANY-TO-MANY ARCHITECTURE
+                feeds_created = create_feeds_for_ticker_new_architecture(isolated_ticker, metadata)
+
+                if not feeds_created:
+                    LOG.info(f"=== {isolated_ticker}: No new feeds created ===")
+                    results.append({
+                        "ticker": isolated_ticker,
+                        "message": "No new feeds created",
+                        "feeds_created": 0
+                    })
+                    continue
+
+                # STEP 4: Process results from new architecture
+                LOG.info(f"✅ Successfully created {len(feeds_created)} feeds for {isolated_ticker} using NEW ARCHITECTURE")
+
+                results.append({
+                    "ticker": isolated_ticker,
+                    "message": f"Successfully created feeds using new architecture",
+                    "feeds_created": len(feeds_created),
+                    "details": [{"feed_id": f["feed_id"], "category": f["config"].get("category", "unknown")} for f in feeds_created]
+                })
+
+            except Exception as e:
+                LOG.error(f"❌ Failed to create feeds for {isolated_ticker}: {e}")
+                results.append({
+                    "ticker": isolated_ticker,
+                    "message": f"Failed to create feeds: {str(e)}",
+                    "feeds_created": 0
+                })
+
+        # Return results
+        LOG.info("=== INITIALIZATION COMPLETE ===")
+        return {
+            "status": "success",
+            "message": "Feed initialization completed using NEW ARCHITECTURE",
+            "results": results,
+            "total_tickers": len(body.tickers),
+            "successful": len([r for r in results if r["feeds_created"] > 0])
+        }
+
+@APP.post("/cron/ingest")
+async def cron_ingest(
+    request: Request,
+    minutes: int = Query(default=15, description="Time window in minutes"),
+    tickers: List[str] = Query(default=None, description="Specific tickers to ingest"),
+    batch_size: int = Query(default=None, description="Batch size for concurrent processing"),
+    triage_batch_size: int = Query(default=2, description="Batch size for triage processing")
+):
+    """Enhanced ingest with comprehensive memory monitoring and async batch processing"""
+    async with TICKER_PROCESSING_LOCK:
+        # Set batch size from parameter or environment variable
+        global SCRAPE_BATCH_SIZE
+        if batch_size is not None:
+            SCRAPE_BATCH_SIZE = max(1, min(batch_size, 10))  # Limit between 1-10
+            LOG.info(f"BATCH SIZE OVERRIDE: Using batch_size={SCRAPE_BATCH_SIZE} from API parameter")
+        
+        start_time = time.time()
+        require_admin(request)
+        ensure_schema()
+        
+        # Initialize memory monitoring with error handling
+        try:
+            memory_monitor.start_monitoring()
+            memory_monitor.take_snapshot("CRON_INGEST_START")
+            LOG.info("=== CRON INGEST STARTING (WITH MEMORY MONITORING & ASYNC BATCHES) ===")
+        except Exception as e:
+            LOG.error(f"Memory monitoring failed to start: {e}")
+            LOG.info("=== CRON INGEST STARTING (WITHOUT MEMORY MONITORING) ===")
+        
+        LOG.info(f"Processing window: {minutes} minutes")
+        LOG.info(f"Target tickers: {tickers or 'ALL'}")
+        LOG.info(f"Batch size: {SCRAPE_BATCH_SIZE}")
+        
+        try:
+            # Reset statistics
+            reset_ingestion_stats()
+            reset_scraping_stats()
+            reset_enhanced_scraping_stats()
+            memory_monitor.take_snapshot("STATS_RESET")
+            
+            # Initialize async semaphores
+            init_async_semaphores()
+            
+            # Calculate dynamic scraping limits for each ticker using enhanced database
+            dynamic_limits = {}
+            if tickers:
+                for ticker in tickers:
+                    dynamic_limits[ticker] = calculate_dynamic_scraping_limits(ticker)
+                    LOG.info(f"DYNAMIC SCRAPING LIMITS for {ticker}: {dynamic_limits[ticker]}")
+            
+            memory_monitor.take_snapshot("LIMITS_CALCULATED")
+            
+            # PHASE 1: Process feeds for new articles
+            LOG.info("=== PHASE 1: PROCESSING FEEDS (NEW + EXISTING ARTICLES) ===")
+            memory_monitor.take_snapshot("PHASE1_START")
+            
+            # Get feeds using NEW ARCHITECTURE (feeds + ticker_feeds)
+            with resource_cleanup_context("database_connection"):
+                with db() as conn, conn.cursor() as cur:
+                    if tickers:
+                        cur.execute("""
+                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
+                            ORDER BY tf.ticker, tf.category, f.id
+                        """, (tickers,))
+                    else:
+                        cur.execute("""
+                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE f.active = TRUE AND tf.active = TRUE
+                            ORDER BY tf.ticker, tf.category, f.id
+                        """)
+                    feeds = list(cur.fetchall())
+            
+            if not feeds:
+                memory_monitor.take_snapshot("NO_FEEDS_FOUND")
+                return {"status": "no_feeds", "message": "No active feeds found"}
+            
+            memory_monitor.take_snapshot("FEEDS_LOADED")
+            
+            # DEBUG: Check what feeds exist before processing (NEW ARCHITECTURE)
+            with resource_cleanup_context("debug_feed_check"):
+                with db() as conn, conn.cursor() as cur:
+                    if tickers:
+                        cur.execute("""
+                            SELECT tf.ticker, tf.category, COUNT(*) as count,
+                                   STRING_AGG(f.name, ' | ') as feed_names
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE tf.ticker = ANY(%s) AND f.active = TRUE AND tf.active = TRUE
+                            GROUP BY tf.ticker, tf.category
+                            ORDER BY tf.ticker, tf.category
+                        """, (tickers,))
+                    else:
+                        cur.execute("""
+                            SELECT tf.ticker, tf.category, COUNT(*) as count,
+                                   STRING_AGG(f.name, ' | ') as feed_names
+                            FROM feeds f
+                            JOIN ticker_feeds tf ON f.id = tf.feed_id
+                            WHERE f.active = TRUE AND tf.active = TRUE
+                            GROUP BY tf.ticker, tf.category
+                            ORDER BY tf.ticker, tf.category
+                        """)
+                    
+                    feed_debug = list(cur.fetchall())
+                    LOG.info("=== FEED DEBUG BEFORE PROCESSING ===")
+                    for feed_row in feed_debug:
+                        LOG.info(f"  {feed_row['ticker']} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
+                    LOG.info("=== END FEED DEBUG ===")
+            
+            ingest_stats = {
+                "total_processed": 0, 
+                "total_inserted": 0,
+                "total_duplicates": 0, 
+                "total_spam_blocked": 0, 
+                "total_limit_reached": 0,
+                "total_insider_trading_blocked": 0,
+                "total_yahoo_rejected": 0
+            }
+
+            # Process feeds normally to get new articles
+            for i, feed in enumerate(feeds):
+                try:
+                    stats = ingest_feed_basic_only(feed)
+                    ingest_stats["total_processed"] += stats["processed"]
+                    ingest_stats["total_inserted"] += stats["inserted"]
+                    ingest_stats["total_duplicates"] += stats["duplicates"]
+                    ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
+                    ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
+                    ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)
+                    ingest_stats["total_yahoo_rejected"] += stats.get("yahoo_rejected", 0)
+                    
+                    # Memory monitoring every 10 feeds
+                    if i % 10 == 0:
+                        memory_monitor.take_snapshot(f"FEED_PROCESSING_{i}")
+                        current_memory = memory_monitor.get_memory_info()
+                        if current_memory["memory_mb"] > 500:  # 500MB threshold
+                            LOG.warning(f"High memory during feed processing: {current_memory['memory_mb']:.1f}MB")
+                            memory_monitor.force_garbage_collection()
+                            
+                except Exception as e:
+                    LOG.error(f"[{feed.get('ticker', 'UNKNOWN')}] Feed ingest failed for {feed['name']}: {e}")
+                    continue
+            
+            memory_monitor.take_snapshot("PHASE1_FEEDS_COMPLETE")
+            
+            # Now get ALL articles from the timeframe for ticker-specific analysis
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+            articles_by_ticker = {}
+
+            with resource_cleanup_context("database_connection"):
+                with db() as conn, conn.cursor() as cur:
+                    if tickers:
+                        cur.execute("""
+                            WITH ranked_articles AS (
+                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                       a.scraped_content, ta.ai_summary, a.url_hash,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY ta.ticker,
+                                               CASE
+                                                   WHEN ta.category = 'company' THEN ta.category
+                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
+                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                               END
+                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
+                                       ) as rn
+                                FROM articles a
+                                JOIN ticker_articles ta ON a.id = ta.article_id
+                                WHERE ta.found_at >= %s
+                                AND ta.ticker = ANY(%s)
+                                AND (a.published_at >= %s OR a.published_at IS NULL)
+                            )
+                            SELECT id, url, resolved_url, title, domain, published_at,
+                                   category, search_keyword, competitor_ticker, ticker,
+                                   scraped_content, ai_summary, url_hash
+                            FROM ranked_articles
+                            WHERE (category = 'company' AND rn <= 50)
+                               OR (category = 'industry' AND rn <= 25)
+                               OR (category = 'competitor' AND rn <= 25)
+                            ORDER BY ticker, category, rn
+                        """, (cutoff, tickers, cutoff))
+                    else:
+                        cur.execute("""
+                            WITH ranked_articles AS (
+                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                       a.scraped_content, ta.ai_summary, a.url_hash,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY ta.ticker,
+                                               CASE
+                                                   WHEN ta.category = 'company' THEN ta.category
+                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
+                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                               END
+                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
+                                       ) as rn
+                                FROM articles a
+                                JOIN ticker_articles ta ON a.id = ta.article_id
+                                WHERE ta.found_at >= %s
+                                AND (a.published_at >= %s OR a.published_at IS NULL)
+                            )
+                            SELECT id, url, resolved_url, title, domain, published_at,
+                                   category, search_keyword, competitor_ticker, ticker,
+                                   scraped_content, ai_summary, url_hash
+                            FROM ranked_articles
+                            WHERE (category = 'company' AND rn <= 50)
+                               OR (category = 'industry' AND rn <= 25)
+                               OR (category = 'competitor' AND rn <= 25)
+                            ORDER BY ticker, category, rn
+                        """, (cutoff, cutoff))
+
+                    all_articles = list(cur.fetchall())
+
+            memory_monitor.take_snapshot("ARTICLES_LOADED")
+
+            # Log filtering statistics
+            with db() as conn, conn.cursor() as cur:
+                if tickers:
+                    cur.execute("""
+                        SELECT
+                            ta.ticker,
+                            ta.category,
+                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
+                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
+                        FROM ticker_articles ta
+                        JOIN articles a ON ta.article_id = a.id
+                        WHERE ta.found_at >= %s AND ta.ticker = ANY(%s)
+                        GROUP BY ta.ticker, ta.category
+                        ORDER BY ta.ticker, ta.category
+                    """, (cutoff, cutoff, cutoff, tickers))
+                else:
+                    cur.execute("""
+                        SELECT
+                            ta.ticker,
+                            ta.category,
+                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
+                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
+                        FROM ticker_articles ta
+                        JOIN articles a ON ta.article_id = a.id
+                        WHERE ta.found_at >= %s
+                        GROUP BY ta.ticker, ta.category
+                        ORDER BY ta.ticker, ta.category
+                    """, (cutoff, cutoff, cutoff))
+
+                filter_stats = cur.fetchall()
+                for stat in filter_stats:
+                    if stat['outside_period'] > 0:
+                        LOG.info(f"📅 [{stat['ticker']}] {stat['category']}: {stat['within_period']} within report period, {stat['outside_period']} excluded (published outside {minutes}min window)")
+
+            # Organize articles by ticker and category
+            for article in all_articles:
+                ticker = article["ticker"]
+                category = article["category"] or "company"
+
+                if ticker not in articles_by_ticker:
+                    articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
+
+                articles_by_ticker[ticker][category].append(article)
+
+            total_articles = len(all_articles)
+            LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
+            memory_monitor.take_snapshot("PHASE1_COMPLETE")
+            
+            # PHASE 2: Pure AI triage
+            LOG.info("=== PHASE 2: PURE AI TRIAGE ===")
+            memory_monitor.take_snapshot("PHASE2_START")
+            triage_results = {}
+            
+            for ticker in articles_by_ticker.keys():
+                LOG.info(f"Running pure AI triage for {ticker}")
+                memory_monitor.take_snapshot(f"TRIAGE_START_{ticker}")
+                
+                with resource_cleanup_context("ai_triage"):
+                    # Use dual scoring triage (OpenAI + Claude)
+                    selected_results = await perform_ai_triage_with_dual_scoring_async(articles_by_ticker[ticker], ticker, triage_batch_size)
+                    triage_results[ticker] = selected_results
+
+                memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")
+
+                # Build flagged articles list (will be stored by process_ingest_phase)
+                flagged_articles = []
+                with resource_cleanup_context("database_connection"):
+                    for category, selected_items in selected_results.items():
+                        articles = articles_by_ticker[ticker][category]
+                        LOG.info(f"  Building flagged list for {category}: {len(selected_items)} selected from {len(articles)} articles")
+                        for item in selected_items:
+                            article_idx = item["id"]
+                            if article_idx < len(articles):
+                                article = articles[article_idx]
+                                article_id = article.get("id")
+                                if article_id:
+                                    flagged_articles.append(article_id)
+                                else:
+                                    LOG.warning(f"  Article at index {article_idx} in {category} has no ID!")
+
+                LOG.info(f"✅ Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
+                if flagged_articles:
+                    LOG.info(f"   Sample IDs: {flagged_articles[:5]}...")
+
+            memory_monitor.take_snapshot("PHASE2_COMPLETE")
+            
+            # PHASE 3: Send enhanced quick email
+            LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
+            memory_monitor.take_snapshot("PHASE3_START")
+
+            with resource_cleanup_context("email_sending"):
+                quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes)
+            
+            LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
+            memory_monitor.take_snapshot("PHASE3_COMPLETE")
+            
+            # PHASE 4: Ticker-specific content scraping and analysis (WITH ASYNC BATCH PROCESSING)
+            LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS (ASYNC BATCHES) ===")
+            memory_monitor.take_snapshot("PHASE4_START")
+            scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
+            
+            # Count total articles to be processed for heartbeat tracking
+            total_articles_to_process = 0
+            for target_ticker in articles_by_ticker.keys():
+                selected = triage_results.get(target_ticker, {})
+                for category in ["company", "industry", "competitor"]:
+                    total_articles_to_process += len(selected.get(category, []))
+            
+            processed_count = 0
+            LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process in batches of {SCRAPE_BATCH_SIZE}")
+            
+            # Track which tickers were successfully processed
+            successfully_processed_tickers = set()
+            
+            for target_ticker in articles_by_ticker.keys():
+                memory_monitor.take_snapshot(f"TICKER_START_{target_ticker}")
+                
+                config = get_ticker_config(target_ticker)
+                metadata = {
+                    "industry_keywords": config.get("industry_keywords", []) if config else [],
+                    "competitors": config.get("competitors", []) if config else []
+                }
+                
+                ticker_success_count = 0
+                selected = triage_results.get(target_ticker, {})
+                
+                # Collect all selected articles for this ticker across categories
+                all_selected_articles = []
+                for category in ["company", "industry", "competitor"]:
+                    category_selected = selected.get(category, [])
+                    
+                    for item in category_selected:
+                        article_idx = item["id"]
+                        if article_idx < len(articles_by_ticker[target_ticker][category]):
+                            article = articles_by_ticker[target_ticker][category][article_idx]
+                            all_selected_articles.append({
+                                "article": article,
+                                "category": category,
+                                "item": item
+                            })
+                
+                # Process articles in batches
+                total_batches = (len(all_selected_articles) + SCRAPE_BATCH_SIZE - 1) // SCRAPE_BATCH_SIZE
+                LOG.info(f"TICKER {target_ticker}: Processing {len(all_selected_articles)} articles in {total_batches} batches of {SCRAPE_BATCH_SIZE}")
+                
+                for batch_num in range(total_batches):
+                    start_idx = batch_num * SCRAPE_BATCH_SIZE
+                    end_idx = min(start_idx + SCRAPE_BATCH_SIZE, len(all_selected_articles))
+                    batch = all_selected_articles[start_idx:end_idx]
+                    
+                    LOG.info(f"TICKER {target_ticker}: Processing batch {batch_num + 1}/{total_batches} ({len(batch)} articles)")
+                    
+                    # Prepare batch for processing
+                    batch_articles = []
+                    batch_categories = []
+                    for selected_article in batch:
+                        batch_articles.append(selected_article["article"])
+                        batch_categories.append(selected_article["category"])
+                    
+                    # Process batch asynchronously with per-article categories
+                    # Add company_name to metadata for AI summarization
+                    metadata["company_name"] = config.get("company_name", target_ticker) if config else target_ticker
+                    try:
+                        batch_results = await process_article_batch_async(
+                            batch_articles,
+                            batch_categories,  # Pass all categories for per-article processing
+                            metadata,
+                            target_ticker
+                        )
+                        
+                        # Update statistics based on batch results
+                        for result in batch_results:
+                            processed_count += 1
+                            
+                            if result["success"]:
+                                ticker_success_count += 1
+                                if result.get("scraped_content") and result.get("ai_summary"):
+                                    scraping_final_stats["scraped"] += 1
+                                    scraping_final_stats["ai_analyzed"] += 1
+                                elif result.get("scraped_content"):
+                                    scraping_final_stats["reused_existing"] += 1
+                            else:
+                                scraping_final_stats["failed"] += 1
+                        
+                        # MEMORY MONITORING: Every batch
+                        elapsed = time.time() - start_time
+                        memory_monitor.take_snapshot(f"BATCH_{batch_num + 1}_COMPLETE")
+                        current_memory = memory_monitor.get_memory_info()
+                        
+                        LOG.info(f"BATCH COMPLETE: {batch_num + 1}/{total_batches} for {target_ticker} - {processed_count}/{total_articles_to_process} total ({elapsed:.1f}s elapsed)")
+                        LOG.info(f"BATCH STATS: Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
+                        LOG.info(f"MEMORY: {current_memory['memory_mb']:.1f}MB, CPU: {current_memory['cpu_percent']:.1f}%")
+                        
+                        # Force garbage collection if memory gets high
+                        if current_memory["memory_mb"] > 800:  # 800MB threshold
+                            LOG.warning(f"HIGH MEMORY USAGE: {current_memory['memory_mb']:.1f}MB - forcing garbage collection")
+                            gc_stats = memory_monitor.force_garbage_collection()
+                            memory_monitor.take_snapshot(f"BATCH_POST_GC_{batch_num + 1}")
+                            LOG.info(f"GC: Freed {gc_stats['objects_freed']} objects")
+                            
+                    except Exception as e:
+                        LOG.error(f"BATCH PROCESSING ERROR: Batch {batch_num + 1} for {target_ticker} failed: {e}")
+                        # Mark articles in failed batch as failed
+                        for _ in batch:
+                            processed_count += 1
+                            scraping_final_stats["failed"] += 1
+                        continue
+                
+                # Track tickers that had successful processing
+                if ticker_success_count > 0:
+                    successfully_processed_tickers.add(target_ticker)
+                
+                LOG.info(f"TICKER {target_ticker} COMPLETE: {ticker_success_count} successful articles")
+                memory_monitor.take_snapshot(f"TICKER_COMPLETE_{target_ticker}")
+            
+            # Final heartbeat before completion
+            elapsed = time.time() - start_time
+            LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in batches in {elapsed:.1f}s")
+            LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
+            memory_monitor.take_snapshot("PHASE4_COMPLETE")
+
+            # Consolidated scraping statistics
+            total_attempts = enhanced_scraping_stats["total_attempts"]
+            if total_attempts > 0:
+                total_success = (enhanced_scraping_stats["requests_success"] +
+                                enhanced_scraping_stats["playwright_success"] +
+                                enhanced_scraping_stats.get("scrapfly_success", 0))
+                overall_rate = (total_success / total_attempts) * 100
+
+                requests_attempts = enhanced_scraping_stats["by_method"]["requests"]["attempts"]
+                requests_success = enhanced_scraping_stats["by_method"]["requests"]["successes"]
+                requests_rate = (requests_success / requests_attempts * 100) if requests_attempts > 0 else 0
+
+                playwright_attempts = enhanced_scraping_stats["by_method"]["playwright"]["attempts"]
+                playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
+                playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
+
+                scrapfly_attempts = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("attempts", 0)
+                scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
+                scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
+
+                LOG.info("=" * 60)
+                LOG.info("SCRAPING SUCCESS RATES")
+                LOG.info("=" * 60)
+                LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
+                LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
+                LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
+                LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
+                if scrapfly_stats["requests_made"] > 0:
+                    LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
+                LOG.info("=" * 60)
+            
+            # CRITICAL: Final cleanup before returning response
+            LOG.info("=== PERFORMING FINAL CLEANUP ===")
+            memory_monitor.take_snapshot("BEFORE_FINAL_CLEANUP")
+            
+            try:
+                await full_resource_cleanup()  # Single call with await
+                memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
+                LOG.info("=== FINAL CLEANUP COMPLETE ===")
+            except Exception as cleanup_error:
+                LOG.error(f"Error during final cleanup: {cleanup_error}")
+                memory_monitor.take_snapshot("CLEANUP_ERROR")
+            
+            processing_time = time.time() - start_time
+            LOG.info(f"=== CRON INGEST COMPLETE - Total time: {processing_time:.1f}s ===")
+            
+            # Calculate scraping stats
+            total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
+            total_scraping_success = (enhanced_scraping_stats["requests_success"] +
+                                     enhanced_scraping_stats["playwright_success"] +
+                                     enhanced_scraping_stats.get("scrapfly_success", 0))
+            overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
+            
+            # Stop memory monitoring and get summary
+            memory_summary = memory_monitor.stop_monitoring()
+            
+            # Prepare response with monitoring data
+            response = {
+                "status": "completed",
+                "processing_time_seconds": round(processing_time, 1),
+                "workflow": "enhanced_ticker_reference_with_async_batch_processing",
+                "batch_size_used": SCRAPE_BATCH_SIZE,
+
+                "phase_1_ingest": {
+                    "total_processed": ingest_stats["total_processed"],
+                    "total_inserted": ingest_stats["total_inserted"],
+                    "total_duplicates": ingest_stats["total_duplicates"],
+                    "total_spam_blocked": ingest_stats["total_spam_blocked"],
+                    "total_limit_reached": ingest_stats["total_limit_reached"],
+                    "total_insider_trading_blocked": ingest_stats["total_insider_trading_blocked"],
+                    "total_yahoo_rejected": ingest_stats["total_yahoo_rejected"],
+                    "total_articles_in_timeframe": total_articles
+                },
+                "phase_2_triage": {
+                    "type": "pure_ai_triage_only",
+                    "tickers_processed": len(triage_results),
+                    "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()},
+                    "flagged_articles": flagged_articles  # Article IDs flagged during triage
+                },
+                "phase_3_quick_email": {"sent": quick_email_sent},
+                "phase_4_async_batch_scraping": {
+                    **scraping_final_stats,
+                    "overall_success_rate": f"{overall_scraping_rate:.1f}%",
+                    "tier_breakdown": {
+                        "requests_success": enhanced_scraping_stats["requests_success"],
+                        "playwright_success": enhanced_scraping_stats["playwright_success"],
+                        "scrapfly_success": enhanced_scraping_stats.get("scrapfly_success", 0),
+                        "total_attempts": total_scraping_attempts
+                    },
+                    "scrapfly_cost": f"${scrapfly_stats['cost_estimate']:.3f}",
+                    "dynamic_limits": dynamic_limits,
+                    "batch_processing": {
+                        "batch_size": SCRAPE_BATCH_SIZE,
+                        "total_articles": total_articles_to_process,
+                        "articles_per_batch": SCRAPE_BATCH_SIZE,
+                        "estimated_batches": total_articles_to_process // SCRAPE_BATCH_SIZE if total_articles_to_process > 0 else 0
+                    }
+                },
+                "successfully_processed_tickers": list(successfully_processed_tickers),
+                "message": f"Processing completed successfully with async batch processing (batch_size={SCRAPE_BATCH_SIZE})",
+                "github_sync_required": len(successfully_processed_tickers) > 0,
+
+                # Memory monitoring data
+                "memory_monitoring": {
+                    "enabled": True,
+                    "total_snapshots": len(memory_monitor.snapshots),
+                    "memory_summary": memory_summary,
+                    "peak_memory_mb": max([s.get("memory_mb", 0) for s in memory_monitor.snapshots]) if memory_monitor.snapshots else 0,
+                    "final_memory_mb": memory_summary.get("final_memory_mb") if memory_summary else None,
+                    "total_memory_change_mb": memory_summary.get("total_change_mb") if memory_summary else None
+                }
+            }
+            
+            return response
+            
+        except Exception as e:
+            # CRITICAL ERROR HANDLING WITH MEMORY SNAPSHOT
+            LOG.error(f"CRITICAL ERROR in cron_ingest: {str(e)}")
+            memory_monitor.take_snapshot("CRITICAL_ERROR")
+            
+            # Get detailed memory info at crash
+            current_memory = memory_monitor.get_memory_info()
+            tracemalloc_info = memory_monitor.get_tracemalloc_top(20)
+            
+            LOG.error(f"MEMORY AT CRASH: {current_memory}")
+            LOG.error(f"TOP MEMORY ALLOCATIONS AT CRASH: {tracemalloc_info}")
+            
+            # Emergency cleanup
+            try:
+                cleanup_result = await full_resource_cleanup()
+                LOG.info(f"Emergency cleanup completed: {cleanup_result}")
+            except Exception as cleanup_error:
+                LOG.error(f"Error during emergency cleanup: {cleanup_error}")
+            
+            return {
+                "status": "critical_error",
+                "message": str(e),
+                "batch_size_used": SCRAPE_BATCH_SIZE,
+                "memory_monitoring": {
+                    "snapshots_taken": len(memory_monitor.snapshots),
+                    "memory_at_crash": current_memory,
+                    "top_allocations": tracemalloc_info[:5],  # Top 5 memory allocations
+                    "error_occurred": True
+                }
+            }
+
+def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):
+    """Helper to update statistics"""
+    ticker_stats["inserted"] += stats["inserted"]
+    ticker_stats["duplicates"] += stats["duplicates"]
+    ticker_stats["blocked_spam"] += stats.get("blocked_spam", 0)
+    ticker_stats["content_scraped"] += stats.get("content_scraped", 0)
+    ticker_stats["content_failed"] += stats.get("content_failed", 0)
+    ticker_stats["scraping_skipped"] += stats.get("scraping_skipped", 0)
+    ticker_stats["ai_scored"] += stats.get("ai_scored", 0)
+    ticker_stats["basic_scored"] += stats.get("basic_scored", 0)
+    
+    total_stats["feeds_processed"] += 1
+    total_stats["total_inserted"] += stats["inserted"]
+    total_stats["total_duplicates"] += stats["duplicates"]
+    total_stats["total_blocked_spam"] += stats.get("blocked_spam", 0)
+    total_stats["total_content_scraped"] += stats.get("content_scraped", 0)
+    total_stats["total_content_failed"] += stats.get("content_failed", 0)
+    total_stats["total_scraping_skipped"] += stats.get("scraping_skipped", 0)
+    total_stats["total_ai_scored"] += stats.get("ai_scored", 0)
+    total_stats["total_basic_scored"] += stats.get("basic_scored", 0)
+    total_stats["by_category"][category] += stats["inserted"]
+
+@APP.post("/cron/digest")
+async def cron_digest(
+    request: Request,
+    minutes: int = Query(default=1440, description="Time window in minutes"),
+    tickers: List[str] = Query(default=None, description="Specific tickers for digest")
+):
+    async with TICKER_PROCESSING_LOCK:
+        """Generate and send email digest with content scraping data and AI summaries"""
+        require_admin(request)
+        ensure_schema()
+
+        try:
+            LOG.info(f"=== DIGEST GENERATION STARTING ===")
+            LOG.info(f"Time window: {minutes} minutes, Tickers: {tickers}")
+
+            # Use the existing enhanced digest function that sends emails
+            LOG.info("Calling enhanced digest function...")
+            result = fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
+
+            # The function returns a detailed result dict, let's pass it through with additional metadata
+            if isinstance(result, dict):
+                result["minutes"] = minutes
+                result["requested_tickers"] = tickers
+                LOG.info(f"Digest result: {result.get('status', 'unknown')} - {result.get('articles', 0)} articles")
+                return result
+            else:
+                LOG.error(f"Unexpected result type from digest function: {type(result)}")
+                return {
+                    "status": "error",
+                    "message": "Unexpected result from digest generation",
+                    "minutes": minutes,
+                    "tickers": tickers
+                }
+
+        except Exception as e:
+            LOG.error(f"Digest generation failed: {e}")
+            LOG.error(f"Error details: {traceback.format_exc()}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "tickers": tickers,
+                "minutes": minutes
+            }
+        
+# FIXED: Updated endpoint with proper request body handling
+@APP.post("/admin/clean-feeds")
+async def clean_old_feeds(request: Request, body: CleanFeedsRequest):
+    async with TICKER_PROCESSING_LOCK:
+        """Clean old Reddit/Twitter feeds from database"""
+        require_admin(request)
+        
+        with db() as conn, conn.cursor() as cur:
+            # Check if tables exist first (safe for fresh database)
+            try:
+                cur.execute("SELECT 1 FROM ticker_feeds LIMIT 1")
+                cur.execute("SELECT 1 FROM feeds LIMIT 1")
+            except Exception as e:
+                LOG.info(f"📋 Tables don't exist yet (fresh database) - clean-feeds skipped: {e}")
+                return {"status": "skipped", "message": "Tables don't exist yet - nothing to clean", "deleted": 0}
+
+            # Delete feeds that contain Reddit, Twitter, SEC, StockTwits
+            cleanup_patterns = [
+                "Reddit", "Twitter", "SEC EDGAR", "StockTwits",
+                "r/investing", "r/stocks", "r/SecurityAnalysis",
+                "r/ValueInvesting", "r/energy", "@TalenEnergy"
+            ]
+
+            total_deleted = 0
+            if body.tickers:
+                # NEW ARCHITECTURE: Remove ticker-feed associations for specific tickers
+                for pattern in cleanup_patterns:
+                    # First, remove ticker-feed associations for feeds matching the pattern
+                    cur.execute("""
+                        DELETE FROM ticker_feeds
+                        WHERE ticker = ANY(%s) AND feed_id IN (
+                            SELECT id FROM feeds WHERE name LIKE %s
+                        )
+                    """, (body.tickers, f"%{pattern}%"))
+                    total_deleted += cur.rowcount
+
+                    # Then, delete feeds that have no more associations
+                    cur.execute("""
+                        DELETE FROM feeds
+                        WHERE name LIKE %s AND id NOT IN (
+                            SELECT DISTINCT feed_id FROM ticker_feeds WHERE active = TRUE
+                        )
+                    """, (f"%{pattern}%",))
+                    total_deleted += cur.rowcount
+            else:
+                # NEW ARCHITECTURE: Delete all feeds matching patterns (and their associations)
+                for pattern in cleanup_patterns:
+                    # First remove all ticker-feed associations for these feeds
+                    cur.execute("""
+                        DELETE FROM ticker_feeds
+                        WHERE feed_id IN (SELECT id FROM feeds WHERE name LIKE %s)
+                    """, (f"%{pattern}%",))
+
+                    # Then delete the feeds themselves
+                    cur.execute("""
+                        DELETE FROM feeds
+                        WHERE name LIKE %s
+                    """, (f"%{pattern}%",))
+                    total_deleted += cur.rowcount
+        
+        return {"status": "cleaned", "feeds_deleted": total_deleted, "tickers": body.tickers or "all"}
+
+@APP.get("/admin/ticker-metadata/{ticker}")
+def get_ticker_metadata(request: Request, ticker: str):
+    """Get AI-generated metadata for a ticker"""
+    require_admin(request)
+    
+    config = get_ticker_config(ticker)
+    if config:
+        return {
+            "ticker": ticker,
+            "ai_generated": config.get("ai_generated", False),
+            "industry_keywords": config.get("industry_keywords", []),
+            "competitors": config.get("competitors", [])
+        }
+    
+    return {"ticker": ticker, "message": "No metadata found. Use /admin/init to generate."}
+
+@APP.get("/admin/domain-names")
+def get_domain_names(request: Request, limit: int = 1000, offset: int = 0):
+    """Export domain names database (domain → formal name mappings)"""
+    require_admin(request)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT domain, formal_name, ai_generated, created_at, updated_at
+                FROM domain_names
+                ORDER BY domain
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
+
+            domains = cur.fetchall()
+
+            # Get total count
+            cur.execute("SELECT COUNT(*) as total FROM domain_names")
+            total = cur.fetchone()['total']
+
+            return {
+                "status": "success",
+                "total": total,
+                "returned": len(domains),
+                "limit": limit,
+                "offset": offset,
+                "domains": [dict(d) for d in domains]
+            }
+    except Exception as e:
+        LOG.error(f"Failed to fetch domain names: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@APP.post("/admin/regenerate-metadata")
+async def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
+    """Force regeneration of AI metadata for a ticker"""
+    async with TICKER_PROCESSING_LOCK:
+        require_admin(request)
+
+        if not OPENAI_API_KEY:
+            return {"status": "error", "message": "OpenAI API key not configured"}
+
+        LOG.info(f"Regenerating metadata for {body.ticker}")
+        metadata = ticker_manager.get_or_create_metadata(body.ticker)
+
+        # Rebuild feeds using NEW ARCHITECTURE V2
+        feeds_created = create_feeds_for_ticker_new_architecture(body.ticker, metadata)
+
+        return {
+            "status": "regenerated",
+            "ticker": body.ticker,
+            "metadata": metadata,
+            "feeds_created": len(feeds_created)
+        }
+
+
+@APP.post("/admin/force-digest")
+def force_digest(request: Request, body: ForceDigestRequest):
+    """Force digest with existing articles (for testing) - Enhanced with AI analysis"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        if body.tickers:
+            cur.execute("""
+                SELECT
+                    a.url, a.resolved_url, a.title, a.description,
+                    ta.ticker, a.domain, a.published_at,
+                    ta.found_at, ta.category,
+                    ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                    AND ta.ticker = ANY(%s)
+                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+            """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
+        else:
+            cur.execute("""
+                SELECT
+                    a.url, a.resolved_url, a.title, a.description,
+                    ta.ticker, a.domain, a.published_at,
+                    ta.found_at, ta.category,
+                    ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+            """, (datetime.now(timezone.utc) - timedelta(days=7),))
+        
+        articles_by_ticker = {}
+        for row in cur.fetchall():
+            ticker = row["ticker"] or "UNKNOWN"
+            category = row["category"] or "company"
+            
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = {}
+            if category not in articles_by_ticker[ticker]:
+                articles_by_ticker[ticker][category] = []
+            
+            articles_by_ticker[ticker][category].append(dict(row))
+    
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles_by_ticker.values()
+    )
+    
+    if total_articles == 0:
+        return {"status": "no_articles", "message": "No articles found in database"}
+    
+    # FIXED: Extract HTML from tuple and add empty text attachment
+    html = build_enhanced_digest_html(articles_by_ticker, 7)
+    tickers_str = ', '.join(articles_by_ticker.keys())
+    subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
+    success = send_email(subject, html)
+    
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "recipient": DIGEST_TO
+    }
+
+@APP.post("/admin/wipe-database")
+def wipe_database(request: Request):
+    """DANGER: Completely wipe all feeds, ticker configs, and articles from database"""
+    require_admin(request)
+    
+    # Extra safety check - require a confirmation header
+    confirm = request.headers.get("x-confirm-wipe", "")
+    if confirm != "YES-WIPE-EVERYTHING":
+        raise HTTPException(
+            status_code=400, 
+            detail="Safety check failed. Add header 'X-Confirm-Wipe: YES-WIPE-EVERYTHING' to confirm"
+        )
+    
+    with db() as conn, conn.cursor() as cur:
+        # Delete everything in order of dependencies
+        deleted_stats = {}
+        
+        # Delete all articles
+        cur.execute("DELETE FROM ticker_articles")
+        cur.execute("DELETE FROM articles")
+        deleted_stats["articles"] = cur.rowcount
+        
+        # Delete all feeds (NEW ARCHITECTURE)
+        cur.execute("DELETE FROM ticker_feeds")
+        deleted_stats["ticker_feeds"] = cur.rowcount
+        cur.execute("DELETE FROM feeds")
+        deleted_stats["feeds"] = cur.rowcount
+        
+        # Delete all ticker configurations (keywords, competitors, etc.)
+        cur.execute("DELETE FROM ticker_reference")  
+        deleted_stats["ticker_references"] = cur.rowcount
+        
+        LOG.warning(f"DATABASE WIPED: {deleted_stats}")
+    
+    return {
+        "status": "database_wiped",
+        "deleted": deleted_stats,
+        "warning": "All feeds, ticker configurations, and articles have been deleted"
+    }
+
+@APP.post("/admin/wipe-ticker")
+def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
+    """Wipe all data for a specific ticker"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # Check if tables exist first (safe for fresh database)
+        try:
+            cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
+            cur.execute("SELECT 1 FROM ticker_feeds LIMIT 1")
+            cur.execute("SELECT 1 FROM feeds LIMIT 1")
+            cur.execute("SELECT 1 FROM ticker_reference LIMIT 1")
+        except Exception as e:
+            LOG.info(f"📋 Tables don't exist yet (fresh database) - wipe-ticker skipped: {e}")
+            return {"status": "skipped", "message": "Tables don't exist yet - nothing to wipe", "ticker": ticker, "deleted": {}}
+
+        deleted_stats = {}
+
+        # Delete articles for this ticker
+        cur.execute("DELETE FROM ticker_articles WHERE ticker = %s", (ticker,))
+        deleted_stats["articles"] = cur.rowcount
+        
+        # Delete feeds for this ticker (NEW ARCHITECTURE)
+        cur.execute("DELETE FROM ticker_feeds WHERE ticker = %s", (ticker,))
+        deleted_stats["ticker_feeds"] = cur.rowcount
+
+        # Delete orphaned feeds (feeds with no ticker associations)
+        cur.execute("""
+            DELETE FROM feeds
+            WHERE id NOT IN (SELECT DISTINCT feed_id FROM ticker_feeds WHERE active = TRUE)
+        """)
+        deleted_stats["orphaned_feeds"] = cur.rowcount
+        
+        # Delete ticker configuration
+        cur.execute("DELETE FROM ticker_reference WHERE ticker = %s", (ticker,))
+        deleted_stats["ticker_reference"] = cur.rowcount
+        
+        LOG.info(f"Wiped all data for ticker {ticker}: {deleted_stats}")
+    
+    return {
+        "status": "ticker_wiped",
+        "ticker": ticker,
+        "deleted": deleted_stats
+    }
+
+@APP.post("/admin/test-email")
+def test_email(request: Request):
+    """Send test email"""
+    require_admin(request)
+    
+    test_html = """
+    <html><body>
+        <h2>Quantbrief Test Email</h2>
+        <p>Your email configuration is working correctly!</p>
+        <p>Time: {}</p>
+        <p>AI Integration: {}</p>
+        <p>Yahoo Source Extraction: Enabled</p>
+    </body></html>
+    """.format(
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Enabled" if OPENAI_API_KEY else "Not configured"
+    )
+    
+    success = send_email("Quantbrief Test Email", test_html)
+    return {"status": "sent" if success else "failed", "recipient": DIGEST_TO}
+
+@APP.get("/admin/stats")
+async def get_stats(
+    request: Request,
+    tickers: List[str] = Query(default=None, description="Filter stats by tickers")
+):
+    async with TICKER_PROCESSING_LOCK:
+        """Get system statistics"""
+        require_admin(request)
+        ensure_schema()
+        
+        with db() as conn, conn.cursor() as cur:
+            # Build queries based on tickers
+            if tickers:
+                # Article stats
+                cur.execute("""
+                    SELECT
+                        COUNT(*) as total_articles,
+                        COUNT(DISTINCT ta.ticker) as tickers,
+                        COUNT(DISTINCT a.domain) as domains,
+                        MAX(a.published_at) as latest_article
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
+                """, (tickers,))
+                stats = dict(cur.fetchone())
+                
+                # Stats by category
+                cur.execute("""
+                    SELECT ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
+                    GROUP BY ta.category
+                    ORDER BY ta.category
+                """, (tickers,))
+                stats["by_category"] = list(cur.fetchall())
+                
+                # Top domains
+                cur.execute("""
+                    SELECT a.domain, COUNT(*) as count
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
+                    GROUP BY a.domain
+                    ORDER BY count DESC
+                    LIMIT 10
+                """, (tickers,))
+                stats["top_domains"] = list(cur.fetchall())
+                
+                # Articles by ticker and category
+                cur.execute("""
+                    SELECT ta.ticker, ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                        AND ta.ticker = ANY(%s)
+                    GROUP BY ta.ticker, ta.category
+                    ORDER BY ta.ticker, ta.category
+                """, (tickers,))
+                stats["by_ticker_category"] = list(cur.fetchall())
+            else:
+                # Article stats
+                cur.execute("""
+                    SELECT
+                        COUNT(*) as total_articles,
+                        COUNT(DISTINCT ta.ticker) as tickers,
+                        COUNT(DISTINCT a.domain) as domains,
+                        MAX(a.published_at) as latest_article
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                """)
+                stats = dict(cur.fetchone())
+                
+                # Stats by category
+                cur.execute("""
+                    SELECT ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                    GROUP BY ta.category
+                    ORDER BY ta.category
+                """)
+                stats["by_category"] = list(cur.fetchall())
+                
+                # Top domains
+                cur.execute("""
+                    SELECT a.domain, COUNT(*) as count
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                    GROUP BY a.domain
+                    ORDER BY count DESC
+                    LIMIT 10
+                """)
+                stats["top_domains"] = list(cur.fetchall())
+                
+                # Articles by ticker and category
+                cur.execute("""
+                    SELECT ta.ticker, ta.category, COUNT(*) as count
+                    FROM ticker_articles ta
+                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
+                    GROUP BY ta.ticker, ta.category
+                    ORDER BY ta.ticker, ta.category
+                """)
+                stats["by_ticker_category"] = list(cur.fetchall())
+            
+            # Check AI metadata status
+            cur.execute("""
+                SELECT COUNT(*) as total, 
+                       COUNT(CASE WHEN ai_generated THEN 1 END) as ai_generated
+                FROM ticker_reference
+                WHERE active = TRUE
+            """)
+            ai_stats = cur.fetchone()
+            stats["ai_metadata"] = ai_stats
+        
+        return stats
+
+@APP.post("/admin/reset-digest-flags")
+async def reset_digest_flags(request: Request, body: ResetDigestRequest):
+    async with TICKER_PROCESSING_LOCK:
+        """Reset sent_in_digest flags for testing"""
+        require_admin(request)
+        # Note: ensure_schema() not needed for simple UPDATE operation
+
+        with db() as conn, conn.cursor() as cur:
+            # Check if ticker_articles table exists first (safe for fresh database)
+            try:
+                cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
+            except Exception as e:
+                LOG.info(f"📋 ticker_articles table doesn't exist yet (fresh database) - reset-digest-flags skipped: {e}")
+                return {"status": "skipped", "message": "ticker_articles table doesn't exist yet - nothing to reset", "articles_reset": 0, "tickers": body.tickers or "all"}
+
+            if body.tickers:
+                cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (body.tickers,))
+            else:
+                cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE")
+            count = cur.rowcount
+        
+        return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
+
+@APP.post("/admin/cleanup-domains")
+def admin_cleanup_domains(request: Request):
+    """One-time cleanup of domain data"""
+    require_admin(request)
+    
+    updated_count = cleanup_domain_data()
+    
+    return {
+        "status": "completed",
+        "records_updated": updated_count,
+        "message": "Domain data has been cleaned up. Publication names converted to actual domains."
+    }
+
+@APP.post("/admin/reset-ai-analysis")
+def reset_ai_analysis(request: Request, tickers: List[str] = Query(default=None, description="Specific tickers to reset")):
+    """Reset AI analysis data and force re-scoring of existing articles"""
+    require_admin(request)
+    
+    with db() as conn, conn.cursor() as cur:
+        # AI analysis is no longer stored in database with new schema
+        # This operation is no longer needed
+        reset_count = 0
+        
+        LOG.info(f"Reset AI analysis for {reset_count} articles")
+    
+    return {
+        "status": "ai_analysis_reset",
+        "articles_reset": reset_count,
+        "tickers": tickers or "all",
+        "message": f"Cleared AI analysis data for {reset_count} articles. Run re-analysis to generate fresh scores."
+    }
+
+@APP.post("/admin/rerun-ai-analysis")
+def rerun_ai_analysis(
+    request: Request, 
+    tickers: List[str] = Query(default=None, description="Specific tickers to re-analyze"),
+    limit: int = Query(default=500, description="Max articles to process per run (no upper limit)")
+):
+    """Re-run AI analysis on existing articles that have NULL ai_impact - UNLIMITED PROCESSING"""
+    require_admin(request)
+    
+    if not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    # Get ticker metadata for keywords
+    ticker_metadata_cache = {}
+    if tickers:
+        for ticker in tickers:
+            config = get_ticker_config(ticker)
+            if config:
+                ticker_metadata_cache[ticker] = {
+                    "industry_keywords": config.get("industry_keywords", []),
+                    "competitors": config.get("competitors", [])
+                }
+    
+    with db() as conn, conn.cursor() as cur:
+        # Get articles that need AI analysis - NO LIMIT restriction
+        if tickers:
+            cur.execute("""
+                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = ANY(%s)
+                ORDER BY ta.found_at DESC
+                LIMIT %s
+            """, (tickers, limit))
+        else:
+            cur.execute("""
+                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                ORDER BY ta.found_at DESC
+                LIMIT %s
+            """, (limit,))
+        
+        articles = list(cur.fetchall())
+    
+    if not articles:
+        return {
+            "status": "no_articles",
+            "message": "No articles found that need AI re-analysis"
+        }
+    
+    processed = 0
+    updated = 0
+    errors = 0
+    
+    LOG.info(f"Starting AI re-analysis of {len(articles)} articles (limit={limit})")
+    
+    for article in articles:
+        try:
+            processed += 1
+            
+            # Get appropriate keywords based on category
+            ticker = article["ticker"]
+            category = article["category"] or "company"
+            
+            if ticker in ticker_metadata_cache:
+                metadata = ticker_metadata_cache[ticker]
+                if category == "industry":
+                    keywords = metadata.get("industry_keywords", [])
+                elif category == "competitor":
+                    keywords = metadata.get("competitors", [])
+                else:
+                    keywords = []
+            else:
+                keywords = []
+            
+            # Run AI analysis - UPDATED to handle 4-parameter return
+            quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
+                title=article["title"],
+                domain=article["domain"],
+                ticker=ticker,
+                description=article["description"] or "",
+                category=category,
+                keywords=keywords
+            )
+            
+            # Extract components for database storage
+            source_tier = components.get('source_tier') if components else None
+            event_multiplier = components.get('event_multiplier') if components else None
+            event_multiplier_reason = components.get('event_multiplier_reason') if components else None
+            relevance_boost = components.get('relevance_boost') if components else None
+            relevance_boost_reason = components.get('relevance_boost_reason') if components else None
+            numeric_bonus = components.get('numeric_bonus') if components else None
+            penalty_multiplier = components.get('penalty_multiplier') if components else None
+            penalty_reason = components.get('penalty_reason') if components else None
+            
+            # AI analysis is no longer stored in database with new schema
+            # Analysis results are calculated on-demand
+            updated += 1
+            
+            # Progress logging every 25 articles
+            if processed % 25 == 0:
+                LOG.info(f"Progress: {processed}/{len(articles)} articles processed, {updated} updated")
+            
+            # Small delay to avoid overwhelming OpenAI API
+            time.sleep(0.1)
+            
+        except Exception as e:
+            errors += 1
+            LOG.error(f"Failed to re-analyze article {article['id']}: {e}")
+            continue
+    
+    return {
+        "status": "completed",
+        "processed": processed,
+        "updated": updated,
+        "errors": errors,
+        "limit_used": limit,
+        "tickers": tickers or "all",
+        "message": f"Re-analyzed {updated} articles with fresh AI scoring"
+    }
+
+@APP.get("/admin/test-yahoo-resolution")
+def test_yahoo_resolution(request: Request, url: str = Query(...)):
+    """Test Yahoo Finance URL resolution"""
+    require_admin(request)
+    
+    result = domain_resolver.resolve_url_and_domain(url, "Test Title")
+    return {
+        "original_url": url,
+        "resolved_url": result[0],
+        "domain": result[1],
+        "source_url": result[2]
+    }
+
+@APP.post("/admin/import-ticker-reference")
+def import_ticker_reference(request: Request, file_path: str = Body(..., embed=True)):
+    """Import ticker reference data from CSV file"""
+    require_admin(request)
+
+    file_path = r"C:\Users\14166\Desktop\QuantBrief\data\ticker_reference.csv"
+    import csv
+    import os
+    from datetime import datetime
+    
+    if not os.path.exists(file_path):
+        return {"status": "error", "message": f"File not found: {file_path}"}
+    
+    # Ensure table exists
+    create_ticker_reference_table()
+    
+    imported = 0
+    updated = 0
+    errors = []
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            
+            with db() as conn, conn.cursor() as cur:
+                for row_num, row in enumerate(reader, start=2):
+                    try:
+                        # Parse arrays from string
+                        industry_keywords = []
+                        competitors = []
+                        
+                        if row.get('industry_keywords'):
+                            industry_keywords = [kw.strip() for kw in row['industry_keywords'].split(',')]
+                        
+                        if row.get('competitors'):
+                            competitors = [comp.strip() for comp in row['competitors'].split(',')]
+                        
+                        # Convert boolean
+                        active = row.get('active', 'TRUE').upper() in ('TRUE', '1', 'YES')
+                        ai_generated = row.get('ai_generated', 'FALSE').upper() in ('TRUE', '1', 'YES')
+                        
+                        cur.execute("""
+                            INSERT INTO ticker_reference (
+                                ticker, country, company_name, industry, sector, 
+                                yahoo_ticker, exchange, active, industry_keywords, 
+                                competitors, ai_generated
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (ticker) DO UPDATE SET
+                                country = EXCLUDED.country,
+                                company_name = EXCLUDED.company_name,
+                                industry = EXCLUDED.industry,
+                                sector = EXCLUDED.sector,
+                                yahoo_ticker = EXCLUDED.yahoo_ticker,
+                                exchange = EXCLUDED.exchange,
+                                active = EXCLUDED.active,
+                                industry_keywords = EXCLUDED.industry_keywords,
+                                competitors = EXCLUDED.competitors,
+                                updated_at = NOW()
+                        """, (
+                            row['ticker'], row['country'], row['company_name'],
+                            row.get('industry'), row.get('sector'),
+                            row.get('yahoo_ticker', row['ticker']), row.get('exchange'),
+                            active, industry_keywords, competitors, ai_generated
+                        ))
+                        
+                        if cur.rowcount == 1:
+                            imported += 1
+                        else:
+                            updated += 1
+                            
+                    except Exception as e:
+                        errors.append(f"Row {row_num}: {str(e)}")
+                        
+        return {
+            "status": "completed",
+            "imported": imported,
+            "updated": updated,
+            "errors": errors[:10],  # Limit error display
+            "total_errors": len(errors)
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Pydantic models for request bodies
+class TickerReferenceRequest(BaseModel):
+    ticker: str
+    country: str
+    company_name: str
+    industry: Optional[str] = None
+    sector: Optional[str] = None
+    sub_industry: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+    market_cap_category: Optional[str] = None
+    yahoo_ticker: Optional[str] = None
+    active: bool = True
+    is_etf: bool = False
+    industry_keyword_1: Optional[str] = None
+    industry_keyword_2: Optional[str] = None
+    industry_keyword_3: Optional[str] = None
+    competitor_1_name: Optional[str] = None
+    competitor_1_ticker: Optional[str] = None
+    competitor_2_name: Optional[str] = None
+    competitor_2_ticker: Optional[str] = None
+    competitor_3_name: Optional[str] = None
+    competitor_3_ticker: Optional[str] = None
+
+class GitHubSyncRequest(BaseModel):
+    commit_message: Optional[str] = None
+
+class UpdateTickersRequest(BaseModel):
+    tickers: List[str]
+    commit_message: Optional[str] = None
+    job_id: Optional[str] = None  # For idempotency tracking
+    skip_render: Optional[bool] = True  # Default: skip render to prevent auto-deployment
+
+# 1. GITHUB SYNC ENDPOINTS
+@APP.post("/admin/sync-ticker-reference-from-github")
+def sync_from_github(request: Request):
+    """Sync ticker reference data FROM GitHub TO database"""
+    require_admin(request)
+    
+    result = sync_ticker_references_from_github()
+    return result
+
+@APP.post("/admin/sync-ticker-reference-to-github")
+def sync_to_github(request: Request, body: GitHubSyncRequest):
+    """Sync ticker reference data FROM database TO GitHub"""
+    require_admin(request)
+    
+    result = sync_ticker_references_to_github(body.commit_message)
+    return result
+
+@APP.post("/admin/update-specific-tickers-on-github")
+def update_tickers_on_github(request: Request, body: UpdateTickersRequest):
+    """Update only specific tickers on GitHub (for post-processing sync)"""
+    require_admin(request)
+    
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+    
+    result = update_specific_tickers_on_github(body.tickers, body.commit_message)
+    return result
+
+# 2. CSV UPLOAD ENDPOINT
+@APP.post("/admin/upload-ticker-csv")
+async def upload_ticker_csv(request: Request, file: UploadFile = File(...)):
+    """Upload CSV file and import ticker reference data"""
+    require_admin(request)
+    
+    if not file.filename or not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="File must be a CSV file")
+    
+    try:
+        content = await file.read()
+        csv_content = content.decode('utf-8')
+        
+        result = import_ticker_reference_from_csv_content(csv_content)
+        return result
+        
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV file must be UTF-8 encoded")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}")
+
+# 3. INDIVIDUAL TICKER MANAGEMENT
+@APP.get("/admin/ticker-reference/{ticker}")
+async def get_ticker_reference_endpoint(request: Request, ticker: str):
+    async with TICKER_PROCESSING_LOCK:
+        """Get specific ticker reference data"""
+        require_admin(request)
+        
+        ticker_data = get_ticker_reference(ticker)
+        if ticker_data:
+            return {
+                "status": "found",
+                "ticker": ticker,
+                "data": ticker_data
+            }
+        else:
+            return {
+                "status": "not_found",
+                "ticker": ticker,
+                "message": "Ticker reference not found"
+            }
+
+@APP.post("/admin/ticker-reference")
+def add_ticker_reference_endpoint(request: Request, body: TickerReferenceRequest):
+    """Add or update a single ticker reference manually"""
+    require_admin(request)
+    
+    ticker_data = {
+        'ticker': body.ticker,
+        'country': body.country,
+        'company_name': body.company_name,
+        'industry': body.industry,
+        'sector': body.sector,
+        'sub_industry': body.sub_industry,
+        'exchange': body.exchange,
+        'currency': body.currency,
+        'market_cap_category': body.market_cap_category,
+        'yahoo_ticker': body.yahoo_ticker,
+        'active': body.active,
+        'is_etf': body.is_etf,
+        'industry_keyword_1': body.industry_keyword_1,
+        'industry_keyword_2': body.industry_keyword_2,
+        'industry_keyword_3': body.industry_keyword_3,
+        'competitor_1_name': body.competitor_1_name,
+        'competitor_1_ticker': body.competitor_1_ticker,
+        'competitor_2_name': body.competitor_2_name,
+        'competitor_2_ticker': body.competitor_2_ticker,
+        'competitor_3_name': body.competitor_3_name,
+        'competitor_3_ticker': body.competitor_3_ticker,
+        'data_source': 'manual_api'
+    }
+    
+    success = store_ticker_reference(ticker_data)
+    
+    if success:
+        return {
+            "status": "success",
+            "ticker": body.ticker,
+            "message": f"Successfully stored ticker reference for {body.ticker}"
+        }
+    else:
+        return {
+            "status": "error",
+            "ticker": body.ticker,
+            "message": "Failed to store ticker reference"
+        }
+
+@APP.delete("/admin/ticker-reference/{ticker}")
+def delete_ticker_reference_endpoint(request: Request, ticker: str):
+    """Delete (deactivate) a ticker reference"""
+    require_admin(request)
+    
+    success = delete_ticker_reference(ticker)
+    
+    if success:
+        return {
+            "status": "success",
+            "ticker": ticker,
+            "message": f"Successfully deactivated ticker reference for {ticker}"
+        }
+    else:
+        return {
+            "status": "error",
+            "ticker": ticker,
+            "message": "Ticker reference not found or already inactive"
+        }
+
+# 4. BULK TICKER OPERATIONS
+@APP.get("/admin/ticker-references")
+def list_ticker_references(
+    request: Request,
+    limit: int = Query(default=50, description="Number of records to return"),
+    offset: int = Query(default=0, description="Number of records to skip"),
+    country: Optional[str] = Query(default=None, description="Filter by country (US, CA, etc.)")
+):
+    """List ticker references with pagination and filtering"""
+    require_admin(request)
+    
+    if limit > 1000:
+        raise HTTPException(status_code=400, detail="Limit cannot exceed 1000")
+    
+    try:
+        ticker_references = get_all_ticker_references(limit, offset, country)
+        total_count = count_ticker_references(country)
+        
+        return {
+            "status": "success",
+            "data": ticker_references,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count,
+                "returned": len(ticker_references)
+            },
+            "filter": {
+                "country": country
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve ticker references: {str(e)}")
+
+@APP.get("/admin/ticker-references/stats")
+def get_ticker_reference_stats(request: Request):
+    """Get statistics about ticker reference data"""
+    require_admin(request)
+    
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Total counts by country
+            cur.execute("""
+                SELECT country, COUNT(*) as count
+                FROM ticker_reference
+                WHERE active = TRUE
+                GROUP BY country
+                ORDER BY count DESC
+            """)
+            by_country = list(cur.fetchall())
+            
+            # AI enhancement status
+            cur.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN ai_generated THEN 1 END) as ai_enhanced,
+                    COUNT(CASE WHEN industry_keyword_1 IS NOT NULL THEN 1 END) as has_keywords,
+                    COUNT(CASE WHEN competitor_1_name IS NOT NULL THEN 1 END) as has_competitors
+                FROM ticker_reference
+                WHERE active = TRUE
+            """)
+            ai_stats = dict(cur.fetchone())
+            
+            # Recent updates
+            cur.execute("""
+                SELECT COUNT(*) as count
+                FROM ticker_reference
+                WHERE active = TRUE AND updated_at > NOW() - INTERVAL '7 days'
+            """)
+            recent_updates = cur.fetchone()["count"]
+            
+            return {
+                "status": "success",
+                "stats": {
+                    "total_active_tickers": sum(row["count"] for row in by_country),
+                    "by_country": by_country,
+                    "ai_enhancement": {
+                        "total_tickers": ai_stats["total"],
+                        "ai_enhanced": ai_stats["ai_enhanced"],
+                        "has_industry_keywords": ai_stats["has_keywords"],
+                        "has_competitors": ai_stats["has_competitors"]
+                    },
+                    "recent_updates_7_days": recent_updates
+                }
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+
+# 5. TICKER VALIDATION AND TESTING
+@APP.post("/admin/validate-ticker-format")
+def validate_ticker_endpoint(request: Request, ticker: str = Body(..., embed=True)):
+    """Test ticker format validation"""
+    require_admin(request)
+    
+    normalized = normalize_ticker_format(ticker)
+    is_valid = validate_ticker_format(normalized)
+    exchange_info = get_ticker_exchange_info(normalized)
+    
+    return {
+        "status": "success",
+        "original_ticker": ticker,
+        "normalized_ticker": normalized,
+        "is_valid": is_valid,
+        "exchange_info": exchange_info
+    }
+
+@APP.post("/admin/test-ticker-validation")
+def test_ticker_validation_endpoint(request: Request):
+    """Run comprehensive ticker validation tests"""
+    require_admin(request)
+    
+    test_results = test_ticker_validation()
+    return {
+        "status": "success",
+        "test_results": test_results
+    }
+
+# 6. ENHANCED METADATA INTEGRATION
+@APP.post("/admin/enhance-ticker-with-ai")
+def enhance_ticker_with_ai_endpoint(request: Request, ticker: str = Body(..., embed=True)):
+    """Enhance a specific ticker with AI-generated metadata"""
+    require_admin(request)
+    
+    if not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI API key not configured"}
+    
+    try:
+        # Get current ticker data
+        ticker_data = get_ticker_reference(ticker)
+        if not ticker_data:
+            return {
+                "status": "error",
+                "message": f"Ticker {ticker} not found in reference database"
+            }
+        
+        # Generate enhanced metadata
+        enhanced_metadata = get_or_create_enhanced_ticker_metadata(ticker)
+        
+        return {
+            "status": "success",
+            "ticker": ticker,
+            "original_data": ticker_data,
+            "enhanced_metadata": enhanced_metadata,
+            "message": f"Successfully enhanced {ticker} with AI-generated metadata"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "ticker": ticker,
+            "message": f"Failed to enhance ticker: {str(e)}"
+        }
+
+# 7. WORKFLOW INTEGRATION ENDPOINTS
+@APP.post("/admin/prepare-ticker-for-processing")
+def prepare_ticker_for_processing(request: Request, ticker: str = Body(..., embed=True)):
+    """Complete workflow: Sync from GitHub -> Get ticker metadata -> Ready for processing"""
+    require_admin(request)
+    
+    try:
+        # Step 1: Sync latest data from GitHub
+        LOG.info(f"Preparing {ticker} for processing - syncing from GitHub")
+        sync_result = sync_ticker_references_from_github()
+        
+        if sync_result["status"] != "success":
+            return {
+                "status": "error",
+                "message": f"GitHub sync failed: {sync_result.get('message', 'Unknown error')}"
+            }
+        
+        # Step 2: Get ticker data with enhancement
+        ticker_metadata = get_or_create_enhanced_ticker_metadata(ticker)
+        
+        # Step 3: Check if ticker has required data
+        ticker_reference = get_ticker_reference(ticker)
+        
+        return {
+            "status": "ready",
+            "ticker": ticker,
+            "github_sync": {
+                "imported": sync_result.get("database_import", {}).get("imported", 0),
+                "updated": sync_result.get("database_import", {}).get("updated", 0)
+            },
+            "ticker_reference": ticker_reference,
+            "enhanced_metadata": ticker_metadata,
+            "message": f"Ticker {ticker} is ready for processing"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "ticker": ticker,
+            "message": f"Preparation failed: {str(e)}"
+        }
+
+@APP.post("/admin/finalize-ticker-processing")
+def finalize_ticker_processing(request: Request, body: UpdateTickersRequest):
+    """Complete workflow: Update specific processed tickers back to GitHub"""
+    require_admin(request)
+    
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+    
+    try:
+        # Update the processed tickers back to GitHub
+        result = update_specific_tickers_on_github(body.tickers, body.commit_message)
+        
+        return {
+            "status": result["status"],
+            "processed_tickers": body.tickers,
+            "github_update": result,
+            "message": f"Finalized processing for {len(body.tickers)} tickers"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "tickers": body.tickers,
+            "message": f"Finalization failed: {str(e)}"
+        }
+
+@APP.post("/admin/sync-processed-tickers-to-github")
+def sync_processed_tickers_to_github(request: Request, body: UpdateTickersRequest):
+    """Prepare processed ticker data for sync (no GitHub commit)"""
+    require_admin(request)
+    
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+    
+    LOG.info(f"=== PREPARING {len(body.tickers)} PROCESSED TICKERS FOR SYNC ===")
+    
+    try:
+        # Get current successfully processed tickers that have AI enhancements
+        successfully_enhanced_tickers = []
+        
+        with db() as conn, conn.cursor() as cur:
+            # Check which tickers actually have AI enhancements
+            cur.execute("""
+                SELECT DISTINCT ticker 
+                FROM ticker_reference 
+                WHERE ticker = ANY(%s) 
+                AND ai_generated = TRUE 
+                AND (industry_keyword_1 IS NOT NULL OR competitor_1_name IS NOT NULL)
+            """, (body.tickers,))
+            
+            successfully_enhanced_tickers = [row["ticker"] for row in cur.fetchall()]
+        
+        if not successfully_enhanced_tickers:
+            return {
+                "status": "no_changes", 
+                "message": "No tickers found with AI enhancements",
+                "requested_tickers": body.tickers
+            }
+        
+        # Export the enhanced data to CSV format
+        export_result = export_ticker_references_to_csv()
+        
+        return {
+            "status": "ready_for_sync",
+            "requested_tickers": body.tickers,
+            "enhanced_tickers": successfully_enhanced_tickers,
+            "csv_content": export_result.get("csv_content", ""),
+            "message": f"Prepared {len(successfully_enhanced_tickers)} enhanced tickers for sync"
+        }
+        
+    except Exception as e:
+        LOG.error(f"Failed to prepare processed tickers: {e}")
+        return {
+            "status": "error",
+            "message": f"Preparation failed: {str(e)}",
+            "tickers": body.tickers
+        }
+
+@APP.get("/admin/memory")
+async def get_memory_info():
+    """Get current memory usage"""
+    return memory_monitor.get_memory_info()
+
+@APP.get("/admin/debug/digest-check/{ticker}")
+async def debug_digest_check(request: Request, ticker: str):
+    """Debug endpoint to check digest data for a specific ticker"""
+    require_admin(request)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Check if tables exist first (safe for fresh database)
+            try:
+                cur.execute("SELECT 1 FROM articles LIMIT 1")
+                cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
+            except Exception as e:
+                LOG.info(f"📋 Tables don't exist yet (fresh database) - digest-check skipped: {e}")
+                return {"status": "skipped", "message": "Tables don't exist yet - cannot check digest", "ticker": ticker}
+
+            # Check articles for this ticker in the last 24 hours
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
+            cur.execute("""
+                SELECT COUNT(*) as total_articles,
+                       COUNT(CASE WHEN ta.ai_summary IS NOT NULL THEN 1 END) as with_ai_summary,
+                       COUNT(CASE WHEN a.scraped_content IS NOT NULL THEN 1 END) as with_content,
+                       COUNT(CASE WHEN ta.sent_in_digest = TRUE THEN 1 END) as already_sent
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND ta.found_at >= %s
+            """, (ticker, cutoff))
+
+            stats = dict(cur.fetchone())
+
+            # Get sample articles
+            cur.execute("""
+                SELECT a.id, a.title, ta.category,
+                       ta.ai_summary IS NOT NULL as has_ai_summary,
+                       a.scraped_content IS NOT NULL as has_content,
+                       ta.sent_in_digest
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND ta.found_at >= %s
+                ORDER BY ta.found_at DESC
+                LIMIT 5
+            """, (ticker, cutoff))
+
+            sample_articles = [dict(row) for row in cur.fetchall()]
+
+            return {
+                "ticker": ticker,
+                "time_window": "24 hours",
+                "stats": stats,
+                "sample_articles": sample_articles,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "ticker": ticker
+        }
+
+@APP.get("/admin/memory-snapshots")
+async def get_memory_snapshots():
+    """Get all memory snapshots"""
+    return {
+        "snapshots": memory_monitor.snapshots,
+        "tracemalloc_top": memory_monitor.get_tracemalloc_top() if memory_monitor.tracemalloc_started else []
+    }
+
+@APP.post("/admin/force-cleanup")
+async def force_cleanup():
+    """Force garbage collection"""
+    cleanup_result = memory_monitor.force_garbage_collection()
+    return {
+        "status": "success", 
+        "cleanup_result": cleanup_result
+    }
+
+@APP.post("/admin/commit-csv-to-github")
+async def commit_csv_to_github_endpoint():
+    """HTTP endpoint to export DB to CSV and commit to GitHub"""
+    try:
+        # Step 1: Export database to CSV
+        export_result = export_ticker_references_to_csv()
+        if export_result["status"] != "success":
+            return export_result
+        
+        # Step 2: Commit CSV to GitHub
+        commit_result = commit_csv_to_github(export_result["csv_content"])
+        
+        return {
+            "status": commit_result["status"],
+            "export_info": {
+                "ticker_count": export_result["ticker_count"],
+                "csv_size": len(export_result["csv_content"])
+            },
+            "github_commit": commit_result,
+            "message": f"Exported {export_result['ticker_count']} tickers and committed to GitHub"
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/admin/update-domain-names")
+async def update_domain_formal_names(request: Request):
+    """Batch update domain formal names using Claude API"""
+    require_admin(request)
+
+    try:
+        LOG.info("=== BATCH UPDATING DOMAIN FORMAL NAMES ===")
+
+        # Step 1: Fetch all domains from database
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT domain FROM domain_names ORDER BY domain;")
+            domains = [row["domain"] for row in cur.fetchall()]
+
+        if not domains:
+            return {"status": "error", "message": "No domains found in database"}
+
+        LOG.info(f"Found {len(domains)} domains to process")
+
+        # Step 2: Build Claude API prompt
+        domain_list = "\n".join([f"- {domain}" for domain in domains])
+
+        prompt = f"""You are a domain name expert. Below is a list of domain names. For EACH domain, provide ONLY the formal brand/publication name as it should appear in professional contexts.
+
+Rules:
+1. Return EXACTLY one name per domain
+2. Use proper capitalization (e.g., "The Wall Street Journal" not "wall street journal")
+3. For news outlets, include "The" if official (e.g., "The Guardian")
+4. For companies, use official brand name (e.g., "Bloomberg" not "Bloomberg LP")
+5. Do NOT include domain extensions (.com, .net, etc.) in the formal name
+6. If a domain is unknown or generic, return the domain name as-is with proper capitalization
+7. IMPORTANT: Use only basic ASCII characters (A-Z, a-z, 0-9, spaces, hyphens). Convert accented characters to their base form (é→e, ü→u, ñ→n, etc.)
+
+Format your response as a JSON object where keys are domains and values are formal names:
+{{
+  "domain1.com": "Formal Name 1",
+  "domain2.com": "Formal Name 2"
+}}
+
+Domains:
+{domain_list}
+"""
+
+        # Step 3: Call Claude API
+        LOG.info("Calling Claude API...")
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = message.content[0].text
+        LOG.info("Claude API response received")
+
+        # Step 4: Extract JSON from response
+        import json
+        import re
+
+        if '```json' in response_text:
+            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+            json_content = json_match.group(1) if json_match else response_text
+        elif '{' in response_text:
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            json_content = json_match.group(0) if json_match else response_text
+        else:
+            return {"status": "error", "message": "Could not extract JSON from Claude response"}
+
+        domain_mappings = json.loads(json_content)
+
+        # Step 5: Update database
+        LOG.info("Updating database...")
+        update_count = 0
+        error_count = 0
+
+        with db() as conn, conn.cursor() as cur:
+            for domain in domains:
+                formal_name = domain_mappings.get(domain)
+
+                if not formal_name:
+                    LOG.warning(f"Missing formal name for: {domain}")
+                    error_count += 1
+                    continue
+
+                cur.execute("""
+                    UPDATE domain_names
+                    SET formal_name = %s
+                    WHERE domain = %s
+                """, (formal_name, domain))
+
+                update_count += 1
+                LOG.info(f"✅ {domain} → {formal_name}")
+
+        LOG.info(f"Update complete: {update_count} updated, {error_count} errors")
+
+        return {
+            "status": "success",
+            "total_domains": len(domains),
+            "updated": update_count,
+            "errors": error_count
+        }
+
+    except Exception as e:
+        LOG.error(f"Domain name update failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/admin/safe-incremental-commit")
+async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
+    """Safely commit individual tickers as they complete processing"""
+    require_admin(request)
+
+    if not body.tickers:
+        return {"status": "error", "message": "No tickers specified"}
+
+    LOG.info(f"=== SAFE INCREMENTAL COMMIT: {len(body.tickers)} TICKERS ===")
+
+    try:
+        # Step 1: Verify all tickers have AI-generated metadata
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, ai_generated, industry_keyword_1, competitor_1_name,
+                       ai_enhanced_at, updated_at
+                FROM ticker_reference
+                WHERE ticker = ANY(%s)
+                ORDER BY ticker
+            """, (body.tickers,))
+
+            ticker_status = {}
+            for row in cur.fetchall():
+                ticker = row["ticker"]
+                has_ai_data = (row["ai_generated"] and
+                             (row["industry_keyword_1"] or row["competitor_1_name"]))
+                ticker_status[ticker] = {
+                    "has_ai_metadata": has_ai_data,
+                    "ai_enhanced_at": row["ai_enhanced_at"],
+                    "updated_at": row["updated_at"]
+                }
+
+        # Step 2: Filter to only commit tickers with AI metadata
+        valid_tickers = [t for t, status in ticker_status.items() if status["has_ai_metadata"]]
+        invalid_tickers = [t for t, status in ticker_status.items() if not status["has_ai_metadata"]]
+
+        if not valid_tickers:
+            return {
+                "status": "no_changes",
+                "message": "No tickers have AI-generated metadata to commit",
+                "invalid_tickers": invalid_tickers,
+                "ticker_status": ticker_status
+            }
+
+        # Step 3: Create backup before commit (include job_id for idempotency)
+        # [skip render] controlled by skip_render flag (default: True)
+        backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        job_id_suffix = f" [job:{body.job_id[:8]}]" if body.job_id else ""
+
+        # Add [skip render] prefix only if skip_render=True
+        skip_prefix = "[skip render] " if body.skip_render else ""
+        commit_message = f"{skip_prefix}Incremental update: {', '.join(valid_tickers)} - {backup_timestamp}{job_id_suffix}"
+
+        if not body.skip_render:
+            LOG.warning(f"⚠️ RENDER DEPLOYMENT WILL BE TRIGGERED by this commit")
+            LOG.warning(f"   Commit message: {commit_message}")
+        else:
+            LOG.info(f"✅ [skip render] enabled - no deployment will be triggered")
+
+        # Step 4: Export and commit with retry logic
+        LOG.info(f"Exporting {len(valid_tickers)} enhanced tickers: {valid_tickers}")
+        export_result = export_ticker_references_to_csv()
+
+        if export_result["status"] != "success":
+            return {
+                "status": "export_failed",
+                "message": export_result["message"],
+                "valid_tickers": valid_tickers,
+                "invalid_tickers": invalid_tickers
+            }
+
+        LOG.info(f"Committing to GitHub with message: {commit_message}")
+
+        # Wrap GitHub commit in try/except to make it non-fatal
+        try:
+            commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
+
+            if commit_result["status"] == "success":
+                # Step 5: Update commit tracking in database (with column existence check)
+                try:
+                    with db() as conn, conn.cursor() as cur:
+                        # Verify column exists before attempting update (bulletproofing for schema mismatches)
+                        cur.execute("""
+                            SELECT column_name
+                            FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                            AND table_name = 'ticker_reference'
+                            AND column_name = 'last_github_sync'
+                        """)
+
+                        if cur.fetchone():
+                            cur.execute("""
+                                UPDATE ticker_reference
+                                SET last_github_sync = %s
+                                WHERE ticker = ANY(%s)
+                            """, (datetime.now(timezone.utc), valid_tickers))
+
+                            LOG.info(f"✅ Updated GitHub sync timestamp for {len(valid_tickers)} tickers")
+                        else:
+                            LOG.warning("⚠️ Column 'last_github_sync' does not exist in ticker_reference table")
+                            LOG.warning("   CSV committed successfully, but sync timestamp not recorded")
+                            LOG.warning("   Run: ALTER TABLE ticker_reference ADD COLUMN last_github_sync TIMESTAMP;")
+
+                except Exception as db_error:
+                    LOG.error(f"⚠️ Failed to update last_github_sync timestamp: {db_error}")
+                    LOG.warning("   CSV was committed to GitHub successfully, but DB timestamp update failed")
+                    # Don't fail the entire operation - GitHub commit succeeded
+
+        except Exception as commit_error:
+            LOG.error(f"⚠️ GitHub commit failed (non-fatal): {commit_error}")
+            commit_result = {
+                "status": "error",
+                "message": f"GitHub commit failed: {str(commit_error)}"
+            }
+
+        return {
+            "status": commit_result["status"],
+            "message": f"Successfully committed {len(valid_tickers)} tickers",
+            "committed_tickers": valid_tickers,
+            "skipped_tickers": invalid_tickers,
+            "ticker_status": ticker_status,
+            "export_info": {
+                "total_tickers_in_csv": export_result["ticker_count"],
+                "csv_size": len(export_result["csv_content"])
+            },
+            "commit_info": commit_result
+        }
+
+    except Exception as e:
+        LOG.error(f"Safe incremental commit failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "message": f"Incremental commit failed: {str(e)}",
+            "requested_tickers": body.tickers
+        }
+
+# ------------------------------------------------------------------------------
+# CLI Support for PowerShell Commands
+# ------------------------------------------------------------------------------
+@APP.post("/cli/run")
+def cli_run(request: Request, body: CLIRequest):
+    """CLI endpoint for PowerShell commands"""
+    require_admin(request)
+    
+    results = {}
+    
+    if body.action in ["ingest", "both"]:
+        # Initialize feeds using NEW ARCHITECTURE V2
+        ensure_schema()
+        for ticker in body.tickers:
+            metadata = ticker_manager.get_or_create_metadata(ticker)
+            create_feeds_for_ticker_new_architecture(ticker, metadata)
+        
+        # Run ingestion
+        ingest_result = cron_ingest(request, body.minutes, body.tickers)
+        results["ingest"] = ingest_result
+    
+    if body.action in ["digest", "both"]:
+        # Run digest
+        digest_result = cron_digest(request, body.minutes, body.tickers)
+        results["digest"] = digest_result
+    
+    return results
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "10000"))
+    uvicorn.run(APP, host="0.0.0.0", port=port)

@@ -38,11 +38,12 @@ The new job queue system decouples long-running processing from HTTP requests, e
 
 **QuantBrief** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
 
-- **Single-file monolithic design**: All functionality is contained in `app.py` (~13,000+ lines)
-- **PostgreSQL database**: Stores articles, ticker metadata, processing state, and job queue
+- **Single-file monolithic design**: All functionality is contained in `app.py` (~14,877 lines)
+- **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, and executive summaries
 - **Job queue system**: Background worker for reliable, resumable processing (eliminates HTTP 520 errors)
 - **AI-powered content analysis**: Uses OpenAI API for article summarization and relevance scoring
 - **Multi-source content scraping**: Supports various scraping strategies including Playwright for anti-bot domains
+- **3-Email QA workflow**: Automated quality assurance pipeline with triage, content review, and user-facing reports
 
 ### Key Components
 
@@ -50,6 +51,7 @@ The new job queue system decouples long-running processing from HTTP requests, e
 - Ticker reference data stored in PostgreSQL with CSV backup (`data/ticker_reference.csv`)
 - Articles table with deduplication via URL hashing
 - Metadata tracking for company information and processing state
+- Executive summaries table (`executive_summaries`) - stores daily AI-generated summaries with unique constraint on (ticker, summary_date)
 
 #### Content Pipeline
 
@@ -57,13 +59,20 @@ The new job queue system decouples long-running processing from HTTP requests, e
 1. **Job Submission** (`/jobs/submit`): Submit batch of tickers for processing
 2. **Background Worker**: Polls database, processes jobs sequentially with full isolation
 3. **Status Polling** (`/jobs/batch/{id}`): Real-time progress monitoring
-4. Each job executes: Ingest → Digest → GitHub Commit
+4. Each job executes: Ingest Phase → Digest Phase (3 Emails) → GitHub Commit
+
+**Processing Timeline per Ticker:**
+- 0-60%: Ingest Phase - RSS feed parsing, AI triage, Email #1 (Article Selection QA)
+- 60-95%: Digest Phase - Content scraping, AI analysis, Email #2 (Content QA)
+- 95-97%: Email #3 Generation - User-facing intelligence report (fetches executive summary from database)
+- 97-99%: GitHub Commit - Incremental commit to data repository
+- 100%: Complete
 
 **Legacy: Direct HTTP Processing**
-1. **Feed Ingestion** (`/cron/ingest`): RSS feed parsing and article discovery
+1. **Feed Ingestion** (`/cron/ingest` - Line 12695): RSS feed parsing and article discovery
 2. **Content Scraping**: Multi-strategy approach with fallbacks (newspaper3k → Playwright → ScrapingBee → ScrapFly)
 3. **AI Triage**: OpenAI-powered relevance scoring and categorization
-4. **Digest Generation** (`/cron/digest`): Email compilation using Jinja2 templates
+4. **Digest Generation** (`/cron/digest` - Line 13303): Email compilation using Jinja2 templates
 
 #### Anti-Bot and Rate Limiting
 - Domain-specific scraping strategies defined in `get_domain_strategy()`
@@ -131,6 +140,12 @@ Key tables managed through schema initialization:
   - Includes: retry logic, timeout protection, resource tracking, error stacktraces
   - Atomic job claiming via `FOR UPDATE SKIP LOCKED` (prevents race conditions)
 
+**AI-Generated Content:**
+- `executive_summaries`: Daily AI-generated summaries (Line 939)
+  - Columns: ticker, summary_date, summary_text, ai_provider, article_ids, counts, generated_at
+  - UNIQUE(ticker, summary_date) - overwrites on same-day re-runs
+  - Generated during Email #2, reused in Email #3
+
 **Other:**
 - `domain_names`: Formal domain name mappings (AI-generated)
 - `competitor_metadata`: Ticker competitor relationships
@@ -151,6 +166,15 @@ Multi-tier domain quality assessment:
 - Tier 3: General news sources
 - Tier 4: Lower-quality domains with content filtering
 
+#### Article Priority Sorting
+Within each category (company/industry/competitor), articles are sorted by priority:
+1. FLAGGED + QUALITY domains (newest first)
+2. FLAGGED only (newest first)
+3. All remaining (newest first)
+
+This sorting is applied to all 3 email reports to ensure the most important content appears first.
+Function: `sort_articles_by_priority()` - Line 10278
+
 ### Email Template System
 
 Uses Jinja2 templating (`email_template.html`) with:
@@ -158,6 +182,81 @@ Uses Jinja2 templating (`email_template.html`) with:
 - Categorized article sections
 - Publisher attribution and timestamps
 - Toronto timezone standardization (America/Toronto)
+
+### 3-Email Quality Assurance Workflow
+
+QuantBrief generates 3 distinct emails per ticker during the digest phase, forming a complete QA pipeline:
+
+#### Email #1: Article Selection QA (Line 10353)
+**Function:** `send_enhanced_quick_intelligence_email()`
+**Subject:** `🔍 Article Selection QA: [Company Names] ([Tickers]) - [X] flagged from [Y] articles`
+**Purpose:** Quick triage results to verify AI article selection quality
+**Content:**
+- Shows ONLY flagged articles (high relevance scores from AI triage)
+- Displays dual AI scoring badges:
+  - Main score (0-10): Overall relevance to ticker
+  - Category score (0-10): Strength of category assignment (company/industry/competitor)
+- Minimal metadata: title, publisher, timestamp
+- NO full content, NO descriptions
+- Sorted by priority (flagged+quality first, then flagged, then rest)
+**Timing:** Sent at ~60% progress (end of ingest phase)
+
+#### Email #2: Content QA (Line 10955)
+**Function:** `fetch_digest_articles_with_enhanced_content()` + template rendering
+**Subject:** `📝 Content QA: [Tickers] - [X] articles analyzed`
+**Purpose:** Full content review with AI analysis for internal QA
+**Content:**
+- Shows ONLY flagged articles (same filtering as Email #1)
+- Full article content (title, description, full text)
+- AI Analysis boxes with:
+  - Key topics and themes
+  - Relevance explanation
+  - Sentiment indicators
+  - Business impact assessment
+- Executive Summary section (AI-generated overview of all flagged articles)
+- Sorted by priority (same algorithm as Email #1)
+**Timing:** Sent at ~95% progress (end of digest phase)
+**Key Behavior:** Generates and SAVES executive summary to database via `save_executive_summary()` (Line 1050)
+
+#### Email #3: Stock Intelligence Report (Line 11175)
+**Function:** `send_user_intelligence_report()`
+**Subject:** `📊 Stock Intelligence: [Company Names] ([Tickers]) - [X] articles`
+**Purpose:** Clean, user-facing intelligence report
+**Content:**
+- Shows ONLY flagged articles (same filtering as Email #1 and #2)
+- Article titles, descriptions, timestamps, publishers
+- NO AI analysis boxes (clean presentation)
+- Executive Summary section - **FETCHED FROM DATABASE** (does NOT regenerate)
+- Sorted by priority (same algorithm as Email #1 and #2)
+**Timing:** Sent at ~97% progress (after Email #2, before GitHub commit)
+**Key Behavior:** Retrieves pre-generated executive summary from `executive_summaries` table
+
+#### Flagged Article Filtering
+**CRITICAL:** Email #2 and #3 show ONLY flagged articles (those with high AI relevance scores).
+- Email #1: Shows all articles, highlights which are flagged (dual AI scoring badges)
+- Email #2: Filters to flagged only (SQL filter at Line 10996: `AND a.id = ANY(%s)`)
+- Email #3: Filters to flagged only (parameter at Line 11212: `flagged_article_ids=flagged_article_ids`)
+
+The "Selected" count in Email #1 reflects ONLY flagged articles, not all QUALITY domain articles.
+
+#### Executive Summary Storage
+**Table:** `executive_summaries` (Line 939)
+**Columns:**
+- ticker (text)
+- summary_date (date)
+- summary_text (text)
+- ai_provider (text)
+- article_ids (int[])
+- company_count (int)
+- industry_count (int)
+- competitor_count (int)
+- generated_at (timestamptz)
+**Constraint:** UNIQUE(ticker, summary_date) - overwrites on same-day re-runs
+
+**Function:** `save_executive_summary()` - Line 1050
+- Called during Email #2 generation
+- Stores summary with metadata for reuse in Email #3
+- Prevents redundant AI calls and ensures consistency
 
 ## Job Queue System (Production Architecture)
 
@@ -209,11 +308,17 @@ PowerShell → /jobs/batch/{id} (<1s) → Real-time status (poll every 20s)
 1. Client submits batch → Jobs created in database (status: queued)
 2. Worker polls database → Claims job atomically (FOR UPDATE SKIP LOCKED)
 3. Update status: processing, acquire TICKER_PROCESSING_LOCK
-4. Phase 1: Ingest (RSS, AI triage) → Update progress: 60%
-5. Phase 2: Digest (scrape, AI analysis, emails) → Update progress: 95%
-6. Phase 3: GitHub commit → Update progress: 99%
-7. Mark complete → Release lock → Poll for next job
+4. Phase 1: Ingest (RSS, AI triage, Email #1) → Update progress: 60%
+5. Phase 2: Digest (scrape, AI analysis, Email #2) → Update progress: 95%
+6. Email #3: User intelligence report (fetch summary from DB) → Update progress: 97%
+7. Phase 3: GitHub commit → Update progress: 99%
+8. Mark complete → Release lock → Poll for next job
 ```
+
+**Email Timeline:**
+- Email #1 (Article Selection QA): Sent at 60% progress (end of ingest phase)
+- Email #2 (Content QA): Sent at 95% progress (end of digest phase, saves executive summary)
+- Email #3 (Stock Intelligence): Sent at 97% progress (fetches executive summary from database)
 
 ### Production Features
 
@@ -282,3 +387,20 @@ SELECT COUNT(*) FROM ticker_processing_jobs WHERE status = 'queued';
 - Robust error handling with fallback strategies for content extraction
 - Built-in rate limiting and respect for robots.txt files
 - **Job queue worker starts automatically on FastAPI startup** (see `@APP.on_event("startup")`)
+
+## Key Function Locations
+
+**3-Email System:**
+- `send_enhanced_quick_intelligence_email()` - Line 10353 (Email #1: Article Selection QA)
+- `fetch_digest_articles_with_enhanced_content()` - Line 10955 (Email #2: Content QA)
+- `send_user_intelligence_report()` - Line 11175 (Email #3: Stock Intelligence)
+- `sort_articles_by_priority()` - Line 10278 (Article priority sorting)
+- `save_executive_summary()` - Line 1050 (Executive summary database storage)
+
+**Job Queue System:**
+- `process_digest_phase()` - Line 11393 (Main digest phase orchestrator)
+
+**Legacy Endpoints:**
+- `cron_ingest()` - Line 12695 (RSS feed processing)
+- `cron_digest()` - Line 13303 (Digest generation)
+- `safe_incremental_commit()` - Line 14707 (GitHub commit)

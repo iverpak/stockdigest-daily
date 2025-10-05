@@ -11438,7 +11438,8 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
 
 def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
                                                show_ai_analysis: bool = True,
-                                               show_descriptions: bool = True) -> Dict[str, Dict[str, List[Dict]]]:
+                                               show_descriptions: bool = True,
+                                               flagged_article_ids: List[int] = None) -> Dict[str, Dict[str, List[Dict]]]:
     """Fetch categorized articles for digest with ticker-specific AI analysis
 
     Args:
@@ -11446,6 +11447,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         tickers: Specific tickers to fetch, or None for all
         show_ai_analysis: If True, include AI analysis boxes in HTML (default True)
         show_descriptions: If True, include article descriptions in HTML (default True)
+        flagged_article_ids: If provided, only fetch articles with these IDs (from triage)
     """
     start_time = time.time()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -11459,39 +11461,77 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
 
     with db() as conn, conn.cursor() as cur:
         # Enhanced query to get articles from new schema - MATCHES triage query
+        # Add optional filter for flagged articles (from triage selection)
         if tickers:
-            cur.execute("""
-                SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                    a.id, a.url, a.resolved_url, a.title, a.description,
-                    ta.ticker, a.domain, a.published_at,
-                    ta.found_at, ta.category,
-                    ta.search_keyword, ta.ai_summary, ta.ai_model,
-                    a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                    ta.competitor_ticker
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.found_at >= %s
-                    AND ta.ticker = ANY(%s)
-                    AND (a.published_at >= %s OR a.published_at IS NULL)
-                ORDER BY a.url_hash, ta.ticker,
-                    COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff, tickers, cutoff))
+            if flagged_article_ids:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND ta.ticker = ANY(%s)
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                        AND a.id = ANY(%s)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, tickers, cutoff, flagged_article_ids))
+            else:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND ta.ticker = ANY(%s)
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, tickers, cutoff))
         else:
-            cur.execute("""
-                SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                    a.id, a.url, a.resolved_url, a.title, a.description,
-                    ta.ticker, a.domain, a.published_at,
-                    ta.found_at, ta.category,
-                    ta.search_keyword, ta.ai_summary, ta.ai_model,
-                    a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                    ta.competitor_ticker
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.found_at >= %s
-                    AND (a.published_at >= %s OR a.published_at IS NULL)
-                ORDER BY a.url_hash, ta.ticker,
-                    COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (cutoff, cutoff))
+            if flagged_article_ids:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                        AND a.id = ANY(%s)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, cutoff, flagged_article_ids))
+            else:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, cutoff))
         
         # Group articles by ticker
         articles_by_ticker = {}
@@ -11615,7 +11655,8 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         "recipient": DIGEST_TO
     }
 
-def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None) -> Dict:
+def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
+                                   flagged_article_ids: List[int] = None) -> Dict:
     """
     Send Email #3: User Intelligence Report
     - Same flagged articles as Stock Intelligence email
@@ -11624,13 +11665,16 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None) ->
     - Clean presentation for end users
     """
     LOG.info("=== EMAIL #3: USER INTELLIGENCE REPORT ===")
+    if flagged_article_ids:
+        LOG.info(f"Filtering to {len(flagged_article_ids)} flagged articles from triage")
 
     # Fetch articles with AI/descriptions hidden
     result = fetch_digest_articles_with_enhanced_content(
         hours=hours,
         tickers=tickers,
         show_ai_analysis=False,   # Hide AI analysis boxes
-        show_descriptions=False   # Hide description boxes
+        show_descriptions=False,  # Hide description boxes
+        flagged_article_ids=flagged_article_ids  # Filter to flagged articles only
     )
 
     # If fetch returns dict with status (error case), return it
@@ -11814,7 +11858,7 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
         LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
         raise
 
-async def process_digest_phase(job_id: str, ticker: str, minutes: int):
+async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
     """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary"""
     try:
         # CRITICAL: fetch_digest_articles_with_enhanced_content sends the Stock Intelligence Email
@@ -11824,8 +11868,16 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int):
             raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
 
         LOG.info(f"[JOB {job_id}] Calling fetch_digest (will send Stock Intelligence Email) for {ticker}...")
+        if flagged_article_ids:
+            LOG.info(f"[JOB {job_id}] Filtering to {len(flagged_article_ids)} flagged articles from triage")
 
-        result = fetch_digest_func(minutes / 60, [ticker])
+        result = fetch_digest_func(
+            minutes / 60,
+            [ticker],
+            show_ai_analysis=True,
+            show_descriptions=True,
+            flagged_article_ids=flagged_article_ids
+        )
 
         LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Email sent: {result.get('status') == 'sent'}")
         return result
@@ -11969,12 +12021,15 @@ async def process_ticker_job(job: dict):
     minutes = config.get('minutes', 1440)
     batch_size = config.get('batch_size', 3)
     triage_batch_size = config.get('triage_batch_size', 3)
+    flagged_article_ids = config.get('flagged_articles', [])  # Get flagged articles from triage
 
     start_time = time.time()
     memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
 
     LOG.info(f"🚀 [JOB {job_id}] Starting processing for {ticker}")
     LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
+    if flagged_article_ids:
+        LOG.info(f"   Flagged articles from triage: {len(flagged_article_ids)}")
 
     try:
         # NOTE: TICKER_PROCESSING_LOCK is acquired inside cron_ingest/cron_digest
@@ -12037,8 +12092,13 @@ async def process_ticker_job(job: dict):
         update_job_status(job_id, phase='digest_start', progress=65)
         LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
 
-        # Call digest function (defined later in file)
-        digest_result = await process_digest_phase(job_id=job_id, ticker=ticker, minutes=minutes)
+        # Call digest function (defined later in file) - pass flagged articles from triage
+        digest_result = await process_digest_phase(
+            job_id=job_id,
+            ticker=ticker,
+            minutes=minutes,
+            flagged_article_ids=flagged_article_ids
+        )
 
         update_job_status(job_id, phase='digest_complete', progress=95)
 
@@ -12064,7 +12124,11 @@ async def process_ticker_job(job: dict):
         LOG.info(f"📧 [JOB {job_id}] Sending Email #3: User Intelligence Report...")
 
         try:
-            user_report_result = send_user_intelligence_report(hours=int(minutes/60), tickers=[ticker])
+            user_report_result = send_user_intelligence_report(
+                hours=int(minutes/60),
+                tickers=[ticker],
+                flagged_article_ids=flagged_article_ids  # Filter to same articles as Email #2
+            )
             if user_report_result:
                 LOG.info(f"✅ [JOB {job_id}] Email #3 sent successfully")
                 if isinstance(user_report_result, dict):

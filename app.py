@@ -718,14 +718,9 @@ def ensure_schema():
                     content_scraped_at TIMESTAMP,
                     scraping_failed BOOLEAN DEFAULT FALSE,
                     scraping_error TEXT,
-                    ai_summary TEXT,
-                    ai_model VARCHAR(20),
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
-
-                -- Add ai_model column if it doesn't exist (for existing databases)
-                ALTER TABLE articles ADD COLUMN IF NOT EXISTS ai_model VARCHAR(20);
 
                 -- Add financial data columns to ticker_reference if they don't exist
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_last_price NUMERIC(15, 2);
@@ -778,9 +773,15 @@ def ensure_schema():
                     search_keyword TEXT,
                     competitor_ticker VARCHAR(10),
                     sent_in_digest BOOLEAN DEFAULT FALSE,
+                    ai_summary TEXT,
+                    ai_model VARCHAR(50),
                     found_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(ticker, article_id)
                 );
+
+                -- Add ai_summary and ai_model columns to ticker_articles if they don't exist (for existing databases)
+                ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS ai_summary TEXT;
+                ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS ai_model VARCHAR(50);
 
                 -- ticker_reference table - EXACT match to CSV structure
                 CREATE TABLE IF NOT EXISTS ticker_reference (
@@ -990,7 +991,7 @@ def link_article_to_ticker(article_id: int, ticker: str, category: str = None,
 
 def update_article_content(article_id: int, scraped_content: str = None, ai_summary: str = None,
                           ai_model: str = None, scraping_failed: bool = False, scraping_error: str = None) -> None:
-    """Update article with scraped content, AI summary, and model attribution"""
+    """Update article with scraped content and error status (ai_summary/ai_model params ignored, kept for backward compatibility)"""
     with db() as conn, conn.cursor() as cur:
         updates = []
         params = []
@@ -1000,13 +1001,8 @@ def update_article_content(article_id: int, scraped_content: str = None, ai_summ
             params.append(scraped_content)
             updates.append("content_scraped_at = NOW()")
 
-        if ai_summary is not None:
-            updates.append("ai_summary = %s")
-            params.append(ai_summary)
-
-        if ai_model is not None:
-            updates.append("ai_model = %s")
-            params.append(ai_model)
+        # NOTE: ai_summary and ai_model now stored in ticker_articles (POV-specific)
+        # These parameters kept for backward compatibility but ignored
 
         if scraping_failed:
             updates.append("scraping_failed = %s")
@@ -1023,6 +1019,15 @@ def update_article_content(article_id: int, scraped_content: str = None, ai_summ
             cur.execute(f"""
                 UPDATE articles SET {', '.join(updates)} WHERE id = %s
             """, params)
+
+def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str, ai_model: str) -> None:
+    """Update ticker-specific AI summary (POV-based analysis)"""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            UPDATE ticker_articles
+            SET ai_summary = %s, ai_model = %s
+            WHERE ticker = %s AND article_id = %s
+        """, (ai_summary, ai_model, ticker, article_id))
 
 # NEW FEED ARCHITECTURE V2 - Category per Relationship Functions
 def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None,
@@ -3946,11 +3951,11 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                         article.get("published_at"), article.get("resolved_url")
                     )
 
-                    # Update article with scraped content, AI summary, and model attribution
+                    # Update article with scraped content and error status
                     if article_id:
                         update_article_content(
-                            article_id, clean_content, clean_summary,
-                            result.get("ai_model"), False, None
+                            article_id, clean_content, None,
+                            None, False, None
                         )
 
                         # Ensure ticker relationship exists (don't pass category - it's immutable)
@@ -3959,6 +3964,13 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                             search_keyword=article.get("search_keyword"),
                             competitor_ticker=article.get("competitor_ticker")
                         )
+
+                        # Update ticker-specific AI summary (POV-based)
+                        if clean_summary and result.get("ai_model"):
+                            update_ticker_article_summary(
+                                analysis_ticker, article_id, clean_summary, result.get("ai_model")
+                            )
+
                         successful_updates += 1
                 else:
                     # Update with scraping failure
@@ -6849,7 +6861,7 @@ CONSERVATIVE STANDARD: If you're unsure whether an article is relevant to {compa
         LOG.error(f"Async triage request failed: {str(e)}")
         return []
 
-async def triage_competitor_articles_full(articles: List[Dict], ticker: str, competitor_name: str) -> List[Dict]:
+async def triage_competitor_articles_full(articles: List[Dict], competitor_name: str, competitor_ticker: str) -> List[Dict]:
     """Enhanced competitor triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -6873,8 +6885,8 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
     payload = {
         "bucket": "competitor",
         "target_cap": target_cap,
-        "ticker": ticker,
         "competitor_name": competitor_name,
+        "competitor_ticker": competitor_ticker,
         "items": items
     }
 
@@ -6927,11 +6939,11 @@ async def triage_competitor_articles_full(articles: List[Dict], ticker: str, com
         "additionalProperties": False
     }
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} from {len(articles)} candidates based ONLY on titles and descriptions.
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} ({competitor_ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
 CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
-If you're unsure whether an article is relevant to {competitor_name}, assign 0 points rather than selecting it. Only select articles you are confident about.
+If you're unsure whether an article is relevant to {competitor_name} ({competitor_ticker}), assign 0 points rather than selecting it. Only select articles you are confident about.
 
 SELECT (choose up to {target_cap}):
 
@@ -6986,7 +6998,7 @@ For each article assess:
 
 CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
 
-CONSERVATIVE STANDARD: If you're unsure whether an article is directly relevant to {competitor_name}, skip it entirely. Only select articles you are confident about."""
+CONSERVATIVE STANDARD: If you're unsure whether an article is directly relevant to {competitor_name} ({competitor_ticker}), skip it entirely. Only select articles you are confident about."""
 
     try:
         headers = {
@@ -7348,7 +7360,7 @@ Articles: {json.dumps(items, separators=(',', ':'))}"""
         LOG.error(f"Claude industry triage failed: {str(e)}")
         return []
 
-async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, competitor_name: str) -> List[Dict]:
+async def triage_competitor_articles_claude(articles: List[Dict], competitor_name: str, competitor_ticker: str) -> List[Dict]:
     """Claude-based competitor triage"""
     if not ANTHROPIC_API_KEY or not articles:
         return []
@@ -7367,7 +7379,7 @@ async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, c
 
     target_cap = min(5, len(articles))
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} from {len(articles)} candidates based ONLY on titles and descriptions.
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} ({competitor_ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
 CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
@@ -7675,7 +7687,8 @@ async def perform_ai_triage_with_dual_scoring_async(
 
         for entity_key, entity_articles in competitor_by_entity.items():
             triage_articles = [item["article"] for item in entity_articles]
-            # Get competitor name from article metadata
+            # Get competitor name and ticker from article metadata
+            competitor_ticker = entity_articles[0]["article"].get("competitor_ticker", entity_key)
             competitor_name = entity_articles[0]["article"].get("search_keyword", entity_key)
             all_triage_operations.append({
                 "type": "competitor",
@@ -7683,9 +7696,9 @@ async def perform_ai_triage_with_dual_scoring_async(
                 "articles": triage_articles,
                 "target_cap": min(5, len(triage_articles)),
                 "openai_func": triage_competitor_articles_full,
-                "openai_args": (triage_articles, ticker, competitor_name),
+                "openai_args": (triage_articles, competitor_name, competitor_ticker),
                 "claude_func": triage_competitor_articles_claude,
-                "claude_args": (triage_articles, ticker, competitor_name),
+                "claude_args": (triage_articles, competitor_name, competitor_ticker),
                 "index_mapping": entity_articles
             })
 
@@ -9998,8 +10011,13 @@ FORMATTING RULES:
 - End each bullet with date in parentheses: (Oct 1) or (Sep 29)
 - NO citations, NO source names in bullets
 - NO section descriptions, NO prose paragraphs
-- Each bullet: 1-2 sentences maximum
+- Each bullet: 2-3 sentences providing full context
 - Sort bullets within each section: NEWEST first (🆕 items at top)
+
+VERBOSITY REQUIREMENTS:
+- Target length: 400-600 words total across all sections
+- Prioritize depth - investors need complete information, not brevity
+- Each bullet should provide full context with specific details
 
 CONTENT ALLOCATION & QUALITY STANDARDS:
 
@@ -10460,6 +10478,13 @@ def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List
         ai_analysis_summary = generate_claude_dual_prompt_summary(ticker, categories, config)
 
         if ai_analysis_summary:
+            # Add NEW badges for articles within 24 hours
+            all_articles = (
+                [a for a in categories.get("company", []) if a.get("ai_summary")] +
+                [a for a in categories.get("industry", []) if a.get("ai_summary")] +
+                [a for a in categories.get("competitor", []) if a.get("ai_summary")]
+            )
+            ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
             LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
         else:
             LOG.warning(f"⚠️ EXECUTIVE SUMMARY (Claude) [{ticker}]: No summary generated")
@@ -11414,7 +11439,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                     a.id, a.url, a.resolved_url, a.title, a.description,
                     ta.ticker, a.domain, a.published_at,
                     ta.found_at, ta.category,
-                    ta.search_keyword, a.ai_summary, a.ai_model,
+                    ta.search_keyword, ta.ai_summary, ta.ai_model,
                     a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                     ta.competitor_ticker
                 FROM articles a
@@ -11431,7 +11456,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                     a.id, a.url, a.resolved_url, a.title, a.description,
                     ta.ticker, a.domain, a.published_at,
                     ta.found_at, ta.category,
-                    ta.search_keyword, a.ai_summary, a.ai_model,
+                    ta.search_keyword, ta.ai_summary, ta.ai_model,
                     a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                     ta.competitor_ticker
                 FROM articles a
@@ -13102,26 +13127,62 @@ async def cron_ingest(
                 with db() as conn, conn.cursor() as cur:
                     if tickers:
                         cur.execute("""
-                            SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                   a.scraped_content, a.ai_summary, a.url_hash
-                            FROM articles a
-                            JOIN ticker_articles ta ON a.id = ta.article_id
-                            WHERE ta.found_at >= %s
-                            AND ta.ticker = ANY(%s)
-                            AND (a.published_at >= %s OR a.published_at IS NULL)
-                            ORDER BY ta.ticker, ta.category, ta.found_at DESC
+                            WITH ranked_articles AS (
+                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                       a.scraped_content, ta.ai_summary, a.url_hash,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY ta.ticker,
+                                               CASE
+                                                   WHEN ta.category = 'company' THEN ta.category
+                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
+                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                               END
+                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
+                                       ) as rn
+                                FROM articles a
+                                JOIN ticker_articles ta ON a.id = ta.article_id
+                                WHERE ta.found_at >= %s
+                                AND ta.ticker = ANY(%s)
+                                AND (a.published_at >= %s OR a.published_at IS NULL)
+                            )
+                            SELECT id, url, resolved_url, title, domain, published_at,
+                                   category, search_keyword, competitor_ticker, ticker,
+                                   scraped_content, ai_summary, url_hash
+                            FROM ranked_articles
+                            WHERE (category = 'company' AND rn <= 50)
+                               OR (category = 'industry' AND rn <= 25)
+                               OR (category = 'competitor' AND rn <= 25)
+                            ORDER BY ticker, category, rn
                         """, (cutoff, tickers, cutoff))
                     else:
                         cur.execute("""
-                            SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                   a.scraped_content, a.ai_summary, a.url_hash
-                            FROM articles a
-                            JOIN ticker_articles ta ON a.id = ta.article_id
-                            WHERE ta.found_at >= %s
-                            AND (a.published_at >= %s OR a.published_at IS NULL)
-                            ORDER BY ta.ticker, ta.category, ta.found_at DESC
+                            WITH ranked_articles AS (
+                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                       a.scraped_content, ta.ai_summary, a.url_hash,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY ta.ticker,
+                                               CASE
+                                                   WHEN ta.category = 'company' THEN ta.category
+                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
+                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                               END
+                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
+                                       ) as rn
+                                FROM articles a
+                                JOIN ticker_articles ta ON a.id = ta.article_id
+                                WHERE ta.found_at >= %s
+                                AND (a.published_at >= %s OR a.published_at IS NULL)
+                            )
+                            SELECT id, url, resolved_url, title, domain, published_at,
+                                   category, search_keyword, competitor_ticker, ticker,
+                                   scraped_content, ai_summary, url_hash
+                            FROM ranked_articles
+                            WHERE (category = 'company' AND rn <= 50)
+                               OR (category = 'industry' AND rn <= 25)
+                               OR (category = 'competitor' AND rn <= 25)
+                            ORDER BY ticker, category, rn
                         """, (cutoff, cutoff))
 
                     all_articles = list(cur.fetchall())
@@ -14740,7 +14801,7 @@ async def debug_digest_check(request: Request, ticker: str):
 
             cur.execute("""
                 SELECT COUNT(*) as total_articles,
-                       COUNT(CASE WHEN a.ai_summary IS NOT NULL THEN 1 END) as with_ai_summary,
+                       COUNT(CASE WHEN ta.ai_summary IS NOT NULL THEN 1 END) as with_ai_summary,
                        COUNT(CASE WHEN a.scraped_content IS NOT NULL THEN 1 END) as with_content,
                        COUNT(CASE WHEN ta.sent_in_digest = TRUE THEN 1 END) as already_sent
                 FROM articles a
@@ -14754,7 +14815,7 @@ async def debug_digest_check(request: Request, ticker: str):
             # Get sample articles
             cur.execute("""
                 SELECT a.id, a.title, ta.category,
-                       a.ai_summary IS NOT NULL as has_ai_summary,
+                       ta.ai_summary IS NOT NULL as has_ai_summary,
                        a.scraped_content IS NOT NULL as has_content,
                        ta.sent_in_digest
                 FROM articles a

@@ -934,6 +934,24 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_jobs_batch ON ticker_processing_jobs(batch_id);
                 CREATE INDEX IF NOT EXISTS idx_jobs_ticker ON ticker_processing_jobs(ticker);
                 CREATE INDEX IF NOT EXISTS idx_batches_status ON ticker_processing_batches(status, created_at);
+
+                -- EXECUTIVE SUMMARIES: Store final AI-generated summaries per ticker per date
+                CREATE TABLE IF NOT EXISTS executive_summaries (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    summary_date DATE NOT NULL,
+                    summary_text TEXT NOT NULL,
+                    ai_provider VARCHAR(20) NOT NULL,
+                    article_ids TEXT,
+                    company_articles_count INTEGER,
+                    industry_articles_count INTEGER,
+                    competitor_articles_count INTEGER,
+                    generated_at TIMESTAMP DEFAULT NOW(),
+
+                    UNIQUE(ticker, summary_date)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_exec_summ_ticker_date ON executive_summaries(ticker, summary_date DESC);
             """)
 
     LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE")
@@ -1028,6 +1046,44 @@ def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str,
             SET ai_summary = %s, ai_model = %s
             WHERE ticker = %s AND article_id = %s
         """, (ai_summary, ai_model, ticker, article_id))
+
+def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
+                          article_ids: List[int], company_count: int,
+                          industry_count: int, competitor_count: int) -> None:
+    """
+    Store/update executive summary for ticker on current date.
+    Overwrites if run multiple times same day.
+
+    Args:
+        ticker: Target company ticker (e.g., "NVDA")
+        summary_text: Generated executive summary
+        ai_provider: "claude" or "openai"
+        article_ids: List of article IDs included in summary
+        company_count: Number of company articles analyzed
+        industry_count: Number of industry articles analyzed
+        competitor_count: Number of competitor articles analyzed
+    """
+    with db() as conn, conn.cursor() as cur:
+        article_ids_json = json.dumps(article_ids)
+
+        cur.execute("""
+            INSERT INTO executive_summaries
+                (ticker, summary_date, summary_text, ai_provider, article_ids,
+                 company_articles_count, industry_articles_count, competitor_articles_count)
+            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ticker, summary_date)
+            DO UPDATE SET
+                summary_text = EXCLUDED.summary_text,
+                ai_provider = EXCLUDED.ai_provider,
+                article_ids = EXCLUDED.article_ids,
+                company_articles_count = EXCLUDED.company_articles_count,
+                industry_articles_count = EXCLUDED.industry_articles_count,
+                competitor_articles_count = EXCLUDED.competitor_articles_count,
+                generated_at = NOW()
+        """, (ticker, summary_text, ai_provider, article_ids_json,
+              company_count, industry_count, competitor_count))
+
+        LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, {len(article_ids)} articles)")
 
 # NEW FEED ARCHITECTURE V2 - Category per Relationship Functions
 def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None,
@@ -5269,37 +5325,43 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_claude_competitor_article_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """Generate Claude summary for competitor article - identical to company"""
+async def generate_claude_competitor_article_summary(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """Generate Claude summary for competitor article with target company POV"""
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
     init_async_semaphores()
     async with async_claude_sem:
         try:
-            prompt = f"""You are a hedge fund analyst writing a factual memo on {competitor_name} ({competitor_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+            prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
-**Focus:** This article is about {competitor_name}'s operations, financials, and strategic actions. Extract all material facts about {competitor_name}.
+**Focus:** This article is about {competitor_name}'s operations, but your analysis must explain competitive implications for {target_company}. Extract facts about {competitor_name} AND assess impact on {target_company}'s competitive position.
 
 **Content Priority (address only what article contains):**
-- Financial metrics: Revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods
-- Strategic actions: M&A, partnerships, products, capacity changes, buybacks, dividends with dollar amounts and dates
-- Competitive dynamics: How competitors are discussed in relation to {competitor_name}
-- Industry developments: Regulatory changes, supply chain shifts, sector trends affecting {competitor_name}
-- Analyst actions: Firm name, rating, price target, rationale for {competitor_name}
-- Administrative: Earnings dates, regulatory deadlines, completion timelines
+- Financial metrics: {competitor_name}'s revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods → Explain competitive pressure/opportunity for {target_company}
+- Strategic actions: {competitor_name}'s M&A, partnerships, products, capacity changes → Assess how this shifts competitive landscape for {target_company}
+- Market positioning: {competitor_name}'s market share gains/losses, pricing actions → Quantify threat/benefit to {target_company}'s position
+- Technology/products: {competitor_name}'s launches, capabilities → Compare to {target_company}'s offerings, identify competitive gaps/advantages
+- Analyst actions: Firm name, rating, price target on {competitor_name} → Contextualize relative to {target_company}'s valuation/sentiment
+- Operational changes: {competitor_name}'s capacity, efficiency, cost structure → Implications for {target_company}'s competitive cost position
 
 **Structure (no headers in output):**
-Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most material information.
+Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with competitive implications for {target_company}, then supporting {competitor_name} facts.
+
+**Competitive Impact Framework:**
+- If {competitor_name} gains advantage → explain pressure on {target_company} (market share, pricing power, margins)
+- If {competitor_name} faces challenges → explain opportunity for {target_company} (market share capture, pricing leverage)
+- If neutral development → explain why it doesn't change {target_company}'s competitive position
 
 **Hard Rules:**
 - Every number MUST have: time period, units, comparison basis
-- Cite sources in parentheses using domain name only
+- Cite sources in parentheses using domain name only: (Reuters), (Bloomberg)
 - FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
 - NO inference beyond explicit guidance/commentary
-- Each sentence must add new factual information
+- Each paragraph must connect {competitor_name} facts to {target_company} competitive impact
 
-TARGET: {competitor_name} ({competitor_ticker})
+TARGET COMPANY: {target_company} ({target_ticker})
+COMPETITOR: {competitor_name} ({competitor_ticker})
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
@@ -5321,36 +5383,44 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_claude_industry_article_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
-    """Generate Claude summary for industry article - sector focused"""
+async def generate_claude_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """Generate Claude summary for industry article with target company POV"""
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
     init_async_semaphores()
     async with async_claude_sem:
         try:
-            prompt = f"""You are a hedge fund analyst covering the {industry_keyword} sector. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+            prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
-**Perspective:** Evaluate industry developments, competitive dynamics, and market trends relevant to {industry_keyword}. Focus on sector-level insights.
+**Focus:** This article contains {industry_keyword} industry insights, but your analysis must explain specific implications for {target_company}'s operations, costs, demand, or competitive position.
 
 **Content Priority (address only what article contains):**
-- Market dynamics: TAM/SAM sizing, growth rates, adoption trends with specific figures
-- Technology developments: Product launches, performance benchmarks, standards adoption
-- Competitive landscape: Market share data, company positioning, partnerships
-- Financial metrics: Aggregate sector revenue/growth OR company metrics when comparing
-- Regulatory/policy: Government actions, standards, trade restrictions with dates and amounts
-- Supply chain: Manufacturing capacity, component availability, pricing trends
+- Market dynamics: TAM/SAM sizing, growth rates, adoption trends with specific figures → How this affects {target_company}'s addressable market and growth runway
+- Technology developments: Product launches, performance benchmarks, standards adoption → Impact on {target_company}'s product roadmap, R&D priorities, or competitive differentiation
+- Competitive landscape: Market share data, company positioning, partnerships → Where {target_company} stands relative to sector trends
+- Financial metrics: Aggregate sector revenue/growth OR company metrics when comparing → {target_company}'s performance vs. sector benchmarks
+- Regulatory/policy: Government actions, standards, trade restrictions with dates and amounts → Compliance costs, competitive advantages, or operational constraints for {target_company}
+- Supply chain: Manufacturing capacity, component availability, pricing trends → Impact on {target_company}'s input costs, production capacity, or delivery timelines
 
 **Structure (no headers in output):**
-Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most material sector information.
+Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with {target_company}-specific implications, then supporting sector facts.
+
+**Impact Analysis Framework:**
+- Supply-side changes → explain effect on {target_company}'s costs, capacity, or supply security
+- Demand-side changes → explain effect on {target_company}'s revenue opportunities or pricing power
+- Regulatory changes → explain {target_company}'s compliance burden or competitive positioning shift
+- Competitive dynamics → explain where {target_company} wins/loses from sector trends
+- Technology shifts → explain whether {target_company} is ahead/behind the curve
 
 **Hard Rules:**
 - Every number MUST have: time period, units, comparison basis
-- Cite sources in parentheses using domain name only
+- Cite sources in parentheses using domain name only: (WSJ), (FT)
 - FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
 - NO inference beyond explicit projections/guidance
-- Treat all companies objectively
+- Each paragraph must connect sector facts to {target_company}-specific impact
 
+TARGET COMPANY: {target_company} ({target_ticker})
 SECTOR FOCUS: {industry_keyword}
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
@@ -5364,12 +5434,12 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                         result = await response.json()
                         summary = result.get("content", [{}])[0].get("text", "")
                         if summary and len(summary.strip()) > 10:
-                            LOG.info(f"Claude industry summary: {industry_keyword} ({len(summary)} chars)")
+                            LOG.info(f"Claude industry summary: {industry_keyword} for {target_ticker} ({len(summary)} chars)")
                             return summary.strip()
                     else:
                         LOG.error(f"Claude industry API error {response.status}")
         except Exception as e:
-            LOG.error(f"Claude industry summary failed for {industry_keyword}: {e}")
+            LOG.error(f"Claude industry summary failed for {industry_keyword}/{target_ticker}: {e}")
     return None
 
 
@@ -5415,27 +5485,43 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_openai_competitor_article_summary(competitor_name: str, competitor_ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """OpenAI fallback for competitor article"""
+async def generate_openai_competitor_article_summary(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """OpenAI fallback for competitor article with target company POV"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
     init_async_semaphores()
     async with async_openai_sem:
         try:
-            prompt = f"""You are a hedge fund analyst writing a factual memo on {competitor_name} ({competitor_ticker}). Write a summary using ONLY facts explicitly stated.
+            prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
-**Focus:** Extract material facts about {competitor_name}'s operations, financials, strategic actions.
+**Focus:** This article is about {competitor_name}'s operations, but your analysis must explain competitive implications for {target_company}. Extract facts about {competitor_name} AND assess impact on {target_company}'s competitive position.
 
-**Include:** Financial metrics with time periods, strategic actions with amounts/dates, analyst actions, administrative dates.
+**Content Priority (address only what article contains):**
+- Financial metrics: {competitor_name}'s revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods → Explain competitive pressure/opportunity for {target_company}
+- Strategic actions: {competitor_name}'s M&A, partnerships, products, capacity changes → Assess how this shifts competitive landscape for {target_company}
+- Market positioning: {competitor_name}'s market share gains/losses, pricing actions → Quantify threat/benefit to {target_company}'s position
+- Technology/products: {competitor_name}'s launches, capabilities → Compare to {target_company}'s offerings, identify competitive gaps/advantages
+- Analyst actions: Firm name, rating, price target on {competitor_name} → Contextualize relative to {target_company}'s valuation/sentiment
+- Operational changes: {competitor_name}'s capacity, efficiency, cost structure → Implications for {target_company}'s competitive cost position
+
+**Structure (no headers in output):**
+Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with competitive implications for {target_company}, then supporting {competitor_name} facts.
+
+**Competitive Impact Framework:**
+- If {competitor_name} gains advantage → explain pressure on {target_company} (market share, pricing power, margins)
+- If {competitor_name} faces challenges → explain opportunity for {target_company} (market share capture, pricing leverage)
+- If neutral development → explain why it doesn't change {target_company}'s competitive position
 
 **Hard Rules:**
-- Every number needs time period, units, comparison basis
-- Cite sources in parentheses (domain name only)
-- NO speculation words: may, could, likely, appears, positioned
-- 4-8 sentences, no preamble
+- Every number MUST have: time period, units, comparison basis
+- Cite sources in parentheses using domain name only: (Reuters), (Bloomberg)
+- FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
+- NO inference beyond explicit guidance/commentary
+- Each paragraph must connect {competitor_name} facts to {target_company} competitive impact
 
-TARGET: {competitor_name} ({competitor_ticker})
+TARGET COMPANY: {target_company} ({target_ticker})
+COMPETITOR: {competitor_name} ({competitor_ticker})
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
@@ -5457,27 +5543,45 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_openai_industry_article_summary(industry_keyword: str, title: str, scraped_content: str) -> Optional[str]:
-    """OpenAI fallback for industry article"""
+async def generate_openai_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
+    """OpenAI fallback for industry article with target company POV"""
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
     init_async_semaphores()
     async with async_openai_sem:
         try:
-            prompt = f"""You are a hedge fund analyst covering the {industry_keyword} sector. Write a summary using ONLY facts explicitly stated.
+            prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
-**Focus:** Sector-level insights - market dynamics, technology developments, competitive landscape, regulatory changes.
+**Focus:** This article contains {industry_keyword} industry insights, but your analysis must explain specific implications for {target_company}'s operations, costs, demand, or competitive position.
 
-**Include:** Market sizing, growth rates, company metrics when comparing, regulatory dates/amounts.
+**Content Priority (address only what article contains):**
+- Market dynamics: TAM/SAM sizing, growth rates, adoption trends with specific figures → How this affects {target_company}'s addressable market and growth runway
+- Technology developments: Product launches, performance benchmarks, standards adoption → Impact on {target_company}'s product roadmap, R&D priorities, or competitive differentiation
+- Competitive landscape: Market share data, company positioning, partnerships → Where {target_company} stands relative to sector trends
+- Financial metrics: Aggregate sector revenue/growth OR company metrics when comparing → {target_company}'s performance vs. sector benchmarks
+- Regulatory/policy: Government actions, standards, trade restrictions with dates and amounts → Compliance costs, competitive advantages, or operational constraints for {target_company}
+- Supply chain: Manufacturing capacity, component availability, pricing trends → Impact on {target_company}'s input costs, production capacity, or delivery timelines
+
+**Structure (no headers in output):**
+Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with {target_company}-specific implications, then supporting sector facts.
+
+**Impact Analysis Framework:**
+- Supply-side changes → explain effect on {target_company}'s costs, capacity, or supply security
+- Demand-side changes → explain effect on {target_company}'s revenue opportunities or pricing power
+- Regulatory changes → explain {target_company}'s compliance burden or competitive positioning shift
+- Competitive dynamics → explain where {target_company} wins/loses from sector trends
+- Technology shifts → explain whether {target_company} is ahead/behind the curve
 
 **Hard Rules:**
-- Every number needs time period, units, comparison basis
-- Cite sources in parentheses (domain name only)
-- NO speculation words: may, could, likely, appears
-- 4-8 sentences, sector-focused
+- Every number MUST have: time period, units, comparison basis
+- Cite sources in parentheses using domain name only: (WSJ), (FT)
+- FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
+- NO inference beyond explicit projections/guidance
+- Each paragraph must connect sector facts to {target_company}-specific impact
 
-SECTOR: {industry_keyword}
+TARGET COMPANY: {target_company} ({target_ticker})
+SECTOR FOCUS: {industry_keyword}
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
@@ -5499,8 +5603,8 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
     return None
 
 
-async def generate_claude_summary(scraped_content: str, title: str, ticker: str, category: str, 
-                                  article_metadata: dict, target_company_name: str, 
+async def generate_claude_summary(scraped_content: str, title: str, ticker: str, category: str,
+                                  article_metadata: dict, target_company_name: str,
                                   competitor_name_cache: dict) -> Optional[str]:
     """Route to appropriate Claude function based on category"""
     if category == "company":
@@ -5510,10 +5614,10 @@ async def generate_claude_summary(scraped_content: str, title: str, ticker: str,
         if not competitor_ticker:
             return None
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
-        return await generate_claude_competitor_article_summary(competitor_name, competitor_ticker, title, scraped_content)
+        return await generate_claude_competitor_article_summary(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
-        return await generate_claude_industry_article_summary(industry_keyword, title, scraped_content)
+        return await generate_claude_industry_article_summary(industry_keyword, target_company_name, ticker, title, scraped_content)
     return None
 
 
@@ -5528,10 +5632,10 @@ async def generate_openai_summary(scraped_content: str, title: str, ticker: str,
         if not competitor_ticker:
             return None
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
-        return await generate_openai_competitor_article_summary(competitor_name, competitor_ticker, title, scraped_content)
+        return await generate_openai_competitor_article_summary(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
-        return await generate_openai_industry_article_summary(industry_keyword, title, scraped_content)
+        return await generate_openai_industry_article_summary(industry_keyword, target_company_name, ticker, title, scraped_content)
     return None
 
 
@@ -7253,65 +7357,69 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
     target_cap = min(5, len(articles))
     peers_display = ', '.join(peers[:5]) if peers else 'None'
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates that have demonstrable impact on {company_name} ({ticker}).
 
 TARGET COMPANY: {company_name} ({ticker})
 SECTOR: {sector}
 KNOWN PEERS: {peers_display}
 
-INDUSTRY CONTEXT: Select articles with sector-wide insights that affect multiple companies in this industry, even if they mention specific companies.
-
-CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain. Focus on developments with broad industry implications.
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain. ONLY select articles where {ticker}-specific impact is clear and material.
 
 SELECT (choose up to {target_cap}):
 
-TIER 1 - Hard industry events with quantified impact:
-- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs
-- Pricing: Commodity/service prices, reimbursement rates WITH specific figures
-- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers
-- Standards: New requirements, certifications, compliance rules WITH deadlines/costs
-- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines
-- Financial: Interest rates, capital requirements, reserve rules affecting sector
+TIER 1 - Direct operational impact on {ticker}:
+- Regulatory/Policy affecting {ticker}'s operations: New laws, rules, tariffs, bans WITH specific rates/dates/costs that apply to {ticker}
+- Input costs for {ticker}: Commodity/component prices, labor rates WITH figures affecting {ticker}'s cost structure
+- Supply disruptions affecting {ticker}: Production stoppages, capacity constraints WITH volume impacts on {ticker}'s supply chain
+- Demand drivers for {ticker}: End-market trends, customer budget changes WITH implications for {ticker}'s revenue
+- Compliance requirements for {ticker}: New standards, certifications WITH deadlines/costs {ticker} must meet
+- Trade impacts on {ticker}: Tariffs, quotas, sanctions WITH specific effect on {ticker}'s markets or costs
 
-TIER 2 - Strategic sector developments:
-- Major capacity additions/closures WITH specific impact (e.g., "500MW," "1M units/year")
-- Industry consolidation WITH transaction values and market share implications
-- Technology adoption WITH implementation timelines and cost impacts
-- Labor agreements WITH wage/benefit details and coverage scope
-- Infrastructure investments WITH budgets and completion dates
-- Patent expirations, generic approvals, technology shifts WITH market impact
-- Company announcements revealing sector-wide trends (e.g., "BHP invests $555M signals sector shift")
+TIER 2 - Competitive positioning impact on {ticker}:
+- Capacity changes affecting {ticker}: Major additions/closures WITH impact on {ticker}'s market share or pricing power
+- Technology adoption revealing {ticker}'s position: Industry shifts WITH data showing {ticker} ahead/behind
+- Industry consolidation affecting {ticker}: M&A changing competitive landscape for {ticker}
+- Standards evolution affecting {ticker}: Protocol/spec changes WITH {ticker}'s compliance position or advantage
+- Infrastructure investment affecting {ticker}: Government/private buildouts WITH impact on {ticker}'s business
+- Sector financial trends revealing {ticker}'s performance: Industry margins, growth rates WITH {ticker} comparison context
 
-TIER 3 - Sector context (ONLY if quota unfilled):
-- Economic indicators directly affecting this industry WITH specific data
-- Government initiatives WITH allocated budgets (not vague "plans")
-- Research findings WITH quantified sector implications
+TIER 3 - Material sector context for {ticker} (ONLY if quota unfilled):
+- Economic indicators directly affecting {ticker}'s end markets WITH quantified demand/pricing impact
+- Government initiatives WITH budgets that create opportunities/risks for {ticker}
+- Research findings WITH specific implications for {ticker}'s technology or market position
 
 REJECT COMPLETELY - Never select:
-- Market research reports: "Market to reach," "CAGR," "Forecast 20XX-20YY," "TAM," "Industry Report"
-- Generic trends: "Top Trends," "Future of," "Outlook," "What to Expect in [Year]"
-- Pure company-specific news: Single-company earnings, appointments WITHOUT sector implications
-- Listicles: "X Best," "How to," "Why You Should," "Reasons to"
-- Opinion: "Analysis," "Commentary," "Perspective" (without hard data)
-- Small company routine announcements: Financing rounds, junior partnerships, minor appointments
+- Market research reports: "Market to reach," "CAGR," "Forecast 20XX-20YY," "TAM" (unless {ticker} explicitly discussed)
+- Generic trends: "Top Trends," "Future of," "Outlook" (no {ticker} connection)
+- Pure competitor news: Single-company earnings, appointments WITHOUT {ticker} competitive context
+- Listicles: "X Best," "How to," "Why You Should" (not actionable for {ticker})
+- Opinion pieces: "Analysis," "Commentary" WITHOUT hard data affecting {ticker}
+- Routine announcements: Small company moves with no {ticker} relevance
 
-INCLUDE when company news has sector implications:
-✓ Major company investment indicating sector direction
-✓ Company action revealing regulatory/policy impacts on all players
-✓ Production disruption at major player affecting sector supply/pricing
-✓ Technology deployment showing sector-wide adoption patterns
-✓ Company data revealing industry-wide cost/margin trends
+VALIDATION - Article must pass this test:
+✓ Can you explain in ONE sentence how this affects {ticker}'s operations, costs, revenues, or competitive position?
+✗ If NO clear {ticker} connection → REJECT
+
+Examples of GOOD selections:
+✓ "EU mandates 30% recycled content by 2026" → {ticker} must adjust supply chain, compliance costs quantified
+✓ "Semiconductor equipment lead times extend to 18 months" → {ticker} capacity expansion delayed, competitive impact
+✓ "Copper prices hit $12,000/ton" → {ticker} input costs rise X%, margin pressure
+✓ "FDA approves competitor drug" → {ticker} market share threatened in $XXB segment
+
+Examples of BAD selections (REJECT these):
+✗ "Sector employment rises 5%" → No specific {ticker} operational impact
+✗ "Industry to grow 12% CAGR through 2030" → Generic forecast, no {ticker} positioning
+✗ "Small biotech raises $50M Series B" → Irrelevant to {ticker}
+✗ "Expert predicts AI transformation" → Opinion, no actionable {ticker} impact
 
 SCRAPE PRIORITY (assign integer 1-3):
-1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
-2 = Tier 2 (capacity, consolidation, policy WITH budgets, company moves with sector implications)
-3 = Tier 3 (economic indicators, sector context)
+1 = Tier 1 (direct operational impact on {ticker} WITH numbers)
+2 = Tier 2 (competitive positioning impact on {ticker} WITH data)
+3 = Tier 3 (material sector context for {ticker})
 
-Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
+Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "Explain {ticker} impact in 10 words"}}]
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
-
-SELECT FOR: Sector-wide developments in {sector} that reveal trends, constraints, or opportunities affecting {company_name} and its competitive landscape.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Every selection must have clear {ticker} relevance. If uncertain, DO NOT SELECT.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -9888,261 +9996,26 @@ def is_description_valuable(title: str, description: str) -> bool:
     
     return True
 
-def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries with enhanced financial context, industry analysis, and materiality focus"""
+def generate_openai_executive_summary(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[str]:
+    """Generate unified executive summary using single comprehensive Claude prompt"""
+
     if not OPENAI_API_KEY:
-        LOG.warning("⚠️ EXECUTIVE SUMMARY: OpenAI API key not configured - skipping")
-        return {}
-
-    LOG.info(f"🎯 EXECUTIVE SUMMARY: Starting generation for {len(articles_by_ticker)} tickers")
-    summaries = {}
-
-    for ticker, categories in articles_by_ticker.items():
-        company_articles = categories.get("company", [])
-        competitor_articles = categories.get("competitor", [])
-        industry_articles = categories.get("industry", [])
-
-        LOG.info(f"🎯 EXECUTIVE SUMMARY [{ticker}]: Found {len(company_articles)} company, {len(industry_articles)} industry, {len(competitor_articles)} competitor articles")
-
-        if not company_articles and not industry_articles:
-            LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: Skipping - no company or industry articles")
-            continue
-        
-        config = get_ticker_config(ticker)
-        company_name = config.get("name", ticker) if config else ticker
-        
-        # Get enhanced sector information
-        sector = config.get("sector", "") if config else ""
-        industry = config.get("industry", "") if config else ""
-        financial_context = f"{company_name} operates in {sector}" if sector else f"{company_name}"
-        if industry:
-            financial_context += f" within the {industry} industry"
-        
-        # Get industry keywords for enhanced context
-        industry_keywords = config.get("industry_keywords", []) if config else []
-        
-        # Company articles with AI summaries (no complex filtering - use ALL articles with ai_summary)
-        articles_with_ai_summary = [
-            article for article in company_articles
-            if article.get("ai_summary")
-        ]
-
-        # Industry articles with AI summaries
-        industry_articles_with_ai_summary = [
-            article for article in industry_articles
-            if article.get("ai_summary")
-        ]
-
-        # Competitor articles with AI summaries
-        competitor_articles_with_ai_summary = [
-            article for article in competitor_articles
-            if article.get("ai_summary")
-        ]
-
-        LOG.info(f"📊 EXECUTIVE SUMMARY [{ticker}]: Found {len(articles_with_ai_summary)} company articles with AI summaries")
-        LOG.info(f"📊 EXECUTIVE SUMMARY [{ticker}]: Found {len(industry_articles_with_ai_summary)} industry articles with AI summaries")
-        LOG.info(f"📊 EXECUTIVE SUMMARY [{ticker}]: Found {len(competitor_articles_with_ai_summary)} competitor articles with AI summaries")
-
-        ai_analysis_summary = ""
-
-        if articles_with_ai_summary or industry_articles_with_ai_summary:
-            LOG.info(f"✅ EXECUTIVE SUMMARY [{ticker}]: Proceeding with summary generation")
-
-            # Company AI summaries with sources AND dates
-            content_summaries = []
-            for article in articles_with_ai_summary[:20]:
-                title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")
-                domain = article.get("domain", "")
-                published_at = article.get("published_at")
-                date_str = format_date_short(published_at)
-
-                if ai_summary:
-                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
-
-            # Industry AI summaries with keyword context AND dates
-            industry_content_summaries = []
-            for article in industry_articles_with_ai_summary[:15]:
-                title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")
-                domain = article.get("domain", "")
-                keyword = article.get("search_keyword", "Industry")
-                published_at = article.get("published_at")
-                date_str = format_date_short(published_at)
-
-                if ai_summary:
-                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    industry_content_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}] {date_str}: {ai_summary}")
-
-            # Competitor AI summaries with dates
-            competitor_content_summaries = []
-            for article in competitor_articles_with_ai_summary[:15]:
-                title = article.get("title", "")
-                ai_summary = article.get("ai_summary", "")
-                domain = article.get("domain", "")
-                published_at = article.get("published_at")
-                date_str = format_date_short(published_at)
-
-                if ai_summary:
-                    source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    competitor_content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
-
-            if content_summaries or industry_content_summaries:
-                LOG.info(f"📝 EXECUTIVE SUMMARY [{ticker}]: Generating from {len(content_summaries)} company + {len(industry_content_summaries)} industry + {len(competitor_content_summaries)} competitor summaries")
-                ai_text = "\n".join(content_summaries)
-                industry_analysis = ""
-                if industry_content_summaries:
-                    industry_analysis = "\n\nINDUSTRY & SECTOR ANALYSIS:\n" + "\n".join(industry_content_summaries)
-                competitor_analysis = ""
-                if competitor_content_summaries:
-                    competitor_analysis = "\n\nCOMPETITOR ANALYSIS:\n" + "\n".join(competitor_content_summaries)
-                
-                try:
-                    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-
-                    prompt = f"""You are a hedge fund analyst creating a structured 7-day intelligence summary for {company_name} ({ticker}). Your output must follow a STRICT 6-section format with consistent headers across all companies and industries.
-
-TARGET LENGTH: ~250 words total (adjust ±50 words based on news volume)
-
-MANDATORY STRUCTURE - Use these exact headers with emojis:
-
-🔴 MAJOR DEVELOPMENTS
-📊 FINANCIAL/OPERATIONAL PERFORMANCE
-⚠️ RISK FACTORS
-📈 WALL STREET SENTIMENT
-⚡ COMPETITIVE/INDUSTRY DYNAMICS
-📅 UPCOMING CATALYSTS
-
-FORMATTING RULES:
-- Each section uses bullet points (•) only
-- Place 🆕 badge at START of bullets from last 24 hours
-- End each bullet with date in parentheses: (Oct 1) or (Sep 29)
-- NO citations, NO source names in bullets
-- NO section descriptions, NO prose paragraphs
-- Each bullet: 2-3 sentences providing full context
-- Sort bullets within each section: NEWEST first (🆕 items at top)
-
-VERBOSITY REQUIREMENTS:
-- Target length: 400-600 words total across all sections
-- Prioritize depth - investors need complete information, not brevity
-- Each bullet should provide full context with specific details
-
-CONTENT ALLOCATION & QUALITY STANDARDS:
-
-🔴 MAJOR DEVELOPMENTS (3-5 bullets)
-- M&A deals, partnerships, disasters, regulatory actions, CEO changes, major contracts
-- Include: Deal size, timeline, strategic rationale if mentioned
-- Example: "🆕 Announced $100B OpenAI investment with phased deployment starting H2 2026 (Oct 1)"
-
-📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets)
-- Earnings (EPS, revenue vs consensus), guidance, margins, production metrics, capex plans
-- Debt issuance, buybacks, dividends with amounts and dates
-- Report exact figures - no estimates or calculations unless both numbers present
-- MATERIALITY: Compare dollar amounts to company scale when possible (e.g., "$18B bond = 2.3% of market cap")
-- Example: "Q2 beat: $1.05 EPS on $46.7B revenue vs $46.05B consensus; Q3 guide $54B vs $53.43B Street (Sep 30)"
-
-⚠️ RISK FACTORS (2-4 bullets)
-- Regulatory probes, lawsuits, production disruptions, competitive threats
-- Insider selling patterns, operational failures, supply chain issues
-- Include: Timeline to resolution, financial impact if quantified
-- Example: "Grasberg mine may not return to pre-accident rates until 2027; Q4 output drop equals next year's forecast at world's #3 mine (Sep 29)"
-
-📈 WALL STREET SENTIMENT (2-3 bullets)
-- Analyst upgrades/downgrades: Include FIRM NAME and PRICE TARGET
-- Ratings distribution, institutional flow direction
-- Example: "BofA upgraded to Buy, reiterated $42 target; average target $47.33 on 19 ratings (Sep 30)"
-
-⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-4 bullets)
-- Competitor strategic moves affecting {company_name}'s position
-- Industry supply/demand shifts, regulatory changes, pricing trends
-- Assess impact on {company_name}'s market share, pricing power, margins
-- Example: "🆕 BHP investing $555M to expand Australian copper production; sector faces 400K ton deficit in 2025 (Oct 1)"
-
-📅 UPCOMING CATALYSTS (1-3 bullets)
-- Earnings dates, ex-dividend dates, analyst days, regulatory deadlines, product launches
-- Include SPECIFIC DATES for all events
-- Example: "Earnings October 21 after market close; analyst day October 16 focused on AI ROIC (Oct 1)"
-
-CRITICAL REQUIREMENTS:
-✓ Report all figures (%, $, units) EXACTLY as stated - no rounding or estimates
-✓ Include specific dates for: earnings, regulatory deadlines, investor events, completion timelines
-✓ Prioritize near-term (<1 year) developments but note medium/long-term implications
-✓ Assess how industry/competitor developments affect {company_name}'s business model and profitability
-✓ If section has no material news, write: "No significant developments this period"
-✓ Maintain investor focus: What moves the stock? What changes the thesis?
-
-CONTEXT: {financial_context}
-INDUSTRY: {', '.join(industry_keywords) if industry_keywords else 'General'}
-
-COMPANY ARTICLES:
-{ai_text}
-
-INDUSTRY ARTICLES:
-{industry_analysis}
-
-COMPETITOR ARTICLES:
-{competitor_analysis}
-
-Generate a 6-section structured summary following the exact format above. Ensure 🆕 badges appear on last 24-hour items and all bullets end with dates."""
-
-                    data = {
-                        "model": OPENAI_MODEL,
-                        "input": prompt,
-                        "max_output_tokens": 10000,
-                        "reasoning": {"effort": "medium"},
-                        "text": {"verbosity": "low"},
-                        "truncation": "auto"
-                    }
-                    
-                    response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        ai_analysis_summary = extract_text_from_responses(result)
-
-                        # Post-process: Insert 🆕 badges for articles within 24 hours
-                        all_articles = articles_with_ai_summary + industry_articles_with_ai_summary + competitor_articles_with_ai_summary
-                        ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
-
-                        u = result.get("usage", {}) or {}
-                        LOG.info("Enhanced AI Analysis usage — input:%s output:%s (cap:%s) status:%s",
-                                 u.get("input_tokens"), u.get("output_tokens"),
-                                 result.get("max_output_tokens"),
-                                 result.get("status"))
-                    else:
-                        LOG.warning(f"Enhanced AI analysis summary failed: {response.status_code}")
-                        
-                except Exception as e:
-                    LOG.warning(f"Failed to generate enhanced AI analysis summary for {ticker}: {e}")
-        
-        summaries[ticker] = {
-            "ai_analysis_summary": ai_analysis_summary,
-            "company_name": company_name,
-            "industry_articles_analyzed": len(industry_articles_with_ai_summary)
-        }
-
-        if ai_analysis_summary:
-            LOG.info(f"✅ EXECUTIVE SUMMARY [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
-        else:
-            LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: No summary generated (no AI summaries or all articles skipped)")
-
-    LOG.info(f"🎯 EXECUTIVE SUMMARY: Completed - generated summaries for {len(summaries)} tickers")
-    return summaries
-
-# ============================================================================
-# DUAL-PROMPT EXECUTIVE SUMMARY FUNCTIONS (Claude)
-# ============================================================================
-
-def generate_claude_company_summary(ticker: str, company_name: str, enterprise_value_formatted: str,
-                                   snapshot_date: str, company_articles: List[Dict]) -> Optional[str]:
-    """Generate company-focused summary (5 sections) using Claude - Prompt 1"""
-
-    if not ANTHROPIC_API_KEY:
         return None
 
-    # Build article summaries
-    content_summaries = []
+    company_name = config.get("name", ticker)
+
+    # Extract articles by category
+    company_articles = [a for a in categories.get("company", []) if a.get("ai_summary")]
+    industry_articles = [a for a in categories.get("industry", []) if a.get("ai_summary")]
+    competitor_articles = [a for a in categories.get("competitor", []) if a.get("ai_summary")]
+
+    # Must have at least some content
+    if not company_articles and not industry_articles and not competitor_articles:
+        LOG.warning(f"[{ticker}] No articles with AI summaries - skipping executive summary")
+        return None
+
+    # Build content sections
+    company_summaries = []
     for article in company_articles[:20]:
         title = article.get("title", "")
         ai_summary = article.get("ai_summary", "")
@@ -10152,143 +10025,8 @@ def generate_claude_company_summary(ticker: str, company_name: str, enterprise_v
 
         if ai_summary:
             source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            content_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
+            company_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
-    if not content_summaries:
-        LOG.warning(f"[{ticker}] Prompt 1: No company articles with AI summaries")
-        return None
-
-    ai_text = "\n".join(content_summaries)
-
-    prompt = f"""You are a hedge fund analyst creating a 7-day intelligence summary for {company_name} ({ticker}).
-
-OUTPUT FORMAT - Use these exact headers:
-🔴 MAJOR DEVELOPMENTS
-📊 FINANCIAL/OPERATIONAL PERFORMANCE
-⚠️ RISK FACTORS
-📈 WALL STREET SENTIMENT
-📅 UPCOMING CATALYSTS
-
-RULES:
-- Bullet points (•) only - each development is ONE bullet
-- End bullets with date: (Oct 1) or (Sep 29-30)
-- NO source names, NO citations (EXCEPTION: cite source when figures conflict)
-- Newest items first within each section
-- 2-3 sentences per bullet if needed for full context
-- OMIT section headers with no content
-
-REPORTING PHILOSOPHY:
-- Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals
-- Provide context on scale when dollar amounts are available
-- Strategic significance matters more than transaction size
-- Better to include marginal news than miss something material
-
-MATERIALITY - Include if ANY apply:
-- M&A: ALL deals, partnerships, investments (include rumors and undisclosed amounts)
-- Executive changes: VP level and above
-- Analyst actions: Rating changes OR price target changes
-- Partnerships: Named companies (even without dollar values)
-- Product launches: Core business lines only
-- Regulatory: Actions, investigations, litigation
-- Operations: Plant closures, production changes, disruptions
-- Financials: Quantified revenue/earnings/margin/guidance changes
-- Strategy: Market entry/exit, business model shifts, major capex
-
-ENTERPRISE VALUE CONTEXT:
-Company EV is {enterprise_value_formatted}. When articles mention transaction amounts (M&A, debt, buybacks, investments), calculate percentage of EV to provide scale context.
-
-Examples:
-✓ "Acquired AI startup for $5B (0.2% of EV), expanding capabilities..."
-✓ "Issued $10B bonds (0.4% of EV) to fund datacenter expansion..."
-✓ "Announced partnership with undisclosed terms, targeting enterprise AI..."
-✓ "Rumored discussions to acquire competitor for ~$2B (0.07% of EV)..."
-
-Do NOT filter out deals based on size - include all M&A activity regardless of amount.
-
-🔴 MAJOR DEVELOPMENTS (2-5 bullets, 100-150 words)
-Include: M&A, partnerships, regulatory actions, executive changes, major contracts, rumors
-Provide available details: Deal size, timeline, strategic rationale
-Combine related facts into single bullets
-
-📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets, 80-120 words)
-Include: Earnings, revenue, guidance, margins, production, capex, debt, buybacks, dividends
-Report exact figures; include vs consensus if mentioned
-Provide EV context for major transactions when amounts are disclosed
-
-⚠️ RISK FACTORS (2-4 bullets, 80-120 words)
-Include: Regulatory issues, litigation, production problems, competitive threats, insider selling
-Report C-suite selling or patterns across multiple executives with amounts/context
-Include financial impact and timelines when stated
-
-📈 WALL STREET SENTIMENT (1-3 bullets, 40-80 words)
-Include: Rating changes, price target changes, notable research
-Format: "[Firm] [action] to [new rating/target], [rationale if given] (date)"
-Summarize if multiple analysts moved in same week
-
-📅 UPCOMING CATALYSTS (1-3 bullets, 30-60 words)
-Include: Earnings dates, investor days, regulatory deadlines, product launches
-Provide SPECIFIC DATES when available
-
-HANDLING CONFLICTS:
-Report BOTH figures with sources: "Stock rose 5.3% (Reuters) to 7% (Bloomberg) (Oct 1)"
-
-PRECISION:
-- Exact figures when available: "12.7%", "$4.932B"
-- Qualitative if numbers unavailable: "substantial investment"
-- Never replace numbers with vague terms when numbers exist
-- Priority: Specific numbers > Ranges > Directional > Omission
-
-BULLET CONSTRUCTION:
-Combine related facts telling one story. Add context/impact within same bullet.
-Example: "Halted Vision Pro refresh to redirect resources toward AI glasses targeting 2027 release; analysts estimate $500M+ R&D reallocation to compete with Meta (Oct 1)"
-
-CURRENT VALUATION (as of {snapshot_date}):
-Enterprise Value: {enterprise_value_formatted}
-
-COMPANY ARTICLES:
-{ai_text}
-
-Generate structured summary. Omit empty sections."""
-
-    try:
-        headers = {
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
-        }
-
-        data = {
-            "model": ANTHROPIC_MODEL,
-            "max_tokens": 3000,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-
-        LOG.info(f"[{ticker}] Prompt 1: Calling Claude for company-focused summary")
-        response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
-
-        if response.status_code == 200:
-            result = response.json()
-            summary = result.get("content", [{}])[0].get("text", "")
-            LOG.info(f"✅ [{ticker}] Prompt 1: Generated company summary ({len(summary)} chars)")
-            return summary
-        else:
-            LOG.error(f"❌ [{ticker}] Prompt 1: Claude API error {response.status_code}: {response.text[:200]}")
-            return None
-
-    except Exception as e:
-        LOG.error(f"❌ [{ticker}] Prompt 1: Exception - {e}")
-        return None
-
-
-def generate_claude_competitive_summary(ticker: str, company_name: str,
-                                       industry_articles: List[Dict],
-                                       competitor_articles: List[Dict]) -> Optional[str]:
-    """Generate competitive/industry analysis (1 section) using Claude - Prompt 2"""
-
-    if not ANTHROPIC_API_KEY:
-        return None
-
-    # Build industry summaries
     industry_summaries = []
     for article in industry_articles[:15]:
         title = article.get("title", "")
@@ -10302,7 +10040,6 @@ def generate_claude_competitive_summary(ticker: str, company_name: str,
             source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             industry_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}] {date_str}: {ai_summary}")
 
-    # Build competitor summaries
     competitor_summaries = []
     for article in competitor_articles[:15]:
         title = article.get("title", "")
@@ -10315,167 +10052,185 @@ def generate_claude_competitive_summary(ticker: str, company_name: str,
             source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             competitor_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
-    if not industry_summaries and not competitor_summaries:
-        LOG.info(f"[{ticker}] Prompt 2: No industry/competitor articles with AI summaries")
-        return ""
+    # Build combined article text
+    all_content = []
+    if company_summaries:
+        all_content.append("COMPANY ARTICLES:")
+        all_content.extend(company_summaries)
+    if industry_summaries:
+        all_content.append("\nINDUSTRY ARTICLES:")
+        all_content.extend(industry_summaries)
+    if competitor_summaries:
+        all_content.append("\nCOMPETITOR ARTICLES:")
+        all_content.extend(competitor_summaries)
 
-    industry_analysis = "\n".join(industry_summaries) if industry_summaries else ""
-    competitor_analysis = "\n".join(competitor_summaries) if competitor_summaries else ""
+    combined_content = "\n".join(all_content)
 
-    prompt = f"""You are a hedge fund analyst analyzing how industry trends and competitor actions affect {company_name} ({ticker})'s competitive position.
+    prompt = f"""You are a hedge fund analyst creating an intelligence summary for {company_name} ({ticker}). All article summaries are already written from {ticker} investor perspective.
 
-OUTPUT FORMAT - Use this exact header:
+OUTPUT FORMAT - Use these exact headers (omit sections with no content):
+🔴 MAJOR DEVELOPMENTS
+📊 FINANCIAL/OPERATIONAL PERFORMANCE
+⚠️ RISK FACTORS
+📈 WALL STREET SENTIMENT
 ⚡ COMPETITIVE/INDUSTRY DYNAMICS
+📅 UPCOMING CATALYSTS
 
 RULES:
 - Bullet points (•) only - each development is ONE bullet
 - End bullets with date: (Oct 1) or (Sep 29-30)
 - NO source names, NO citations (EXCEPTION: cite source when figures conflict)
-- Newest items first
-- 2-3 sentences per bullet explaining competitive impact
-- 2-4 bullets total, 80-120 words
-- If no material developments affect {company_name}, return empty string with no header
+- Newest items first within each section
+- 2-3 sentences per bullet if needed for full context
+- Omit section headers with no content
 
-IMPACT FRAMING:
-When information is available, explain how the development affects {company_name}'s competitive position, market share, pricing power, or margins.
+REPORTING PHILOSOPHY:
+- Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals
+- Include transaction amounts when available for scale context
+- Strategic significance matters more than transaction size
+- Better to include marginal news than miss something material
 
-If article lacks details about impact on {company_name}, report the development and note competitive context without speculation.
+---
+
+🔴 MAJOR DEVELOPMENTS (2-5 bullets, 100-150 words)
+Source: Company articles primarily, plus relevant competitor/industry moves
+
+Include: M&A, partnerships, regulatory actions, executive changes, major contracts, rumors
+- {ticker} M&A activity: ALL deals regardless of size (include rumors, undisclosed amounts)
+- {ticker} partnerships: Named companies (even without dollar values)
+- {ticker} leadership: VP level and above
+- {ticker} regulatory: Actions, investigations, litigation
+- Competitor moves WITH competitive implications for {ticker}
+
+Provide available details: Deal size, timeline, strategic rationale
+Combine related facts into single bullets
+
+---
+
+📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets, 80-120 words)
+Source: Company articles only
+
+Include: Earnings, revenue, guidance, margins, production, capex, debt, buybacks, dividends
+- Report exact figures with vs consensus if mentioned
+- Production metrics, capacity changes, operational KPIs
+- Include dollar amounts for major transactions when disclosed
+
+---
+
+⚠️ RISK FACTORS (2-4 bullets, 80-120 words)
+Source: Company, industry, and competitor articles
+
+Include: Regulatory issues, litigation, production problems, competitive threats, insider selling
+- {ticker} operational risks: Production issues, supply chain, quality problems
+- {ticker} regulatory/legal: Investigations, lawsuits, compliance issues with financial impact
+- Competitive threats: Competitor actions that directly threaten {ticker} position
+- Industry headwinds: Sector trends creating risks for {ticker}
+- Insider activity: C-suite selling with amounts/context
+
+---
+
+📈 WALL STREET SENTIMENT (1-3 bullets, 40-80 words)
+Source: Company articles only
+
+Include: Rating changes, price target changes, notable research on {ticker}
+Format: "[Firm] [action] to [new rating/target], [rationale if given] (date)"
+Summarize if multiple analysts moved in same week
+
+---
+
+⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-4 bullets, 80-120 words)
+Source: Industry and competitor articles (already written with {ticker} impact framing)
+
+Include ONLY developments that affect {ticker}'s competitive position:
+- Competitor M&A: Strategic deals affecting market structure in {ticker}'s segments
+- Industry regulation: Directly impacts {ticker}'s operations or competitive advantages
+- Technology shifts: Threaten or enhance {ticker}'s product positioning
+- Pricing/capacity: Industry-wide moves affecting {ticker}'s pricing power or margins
+- Market dynamics: Supply/demand shifts impacting {ticker}'s market share
+
+CRITICAL: Every bullet must connect to {ticker}'s competitive environment. The article summaries already explain impact on {ticker} - synthesize those insights.
 
 Examples:
-✓ GOOD (Impact known): "Alphabet posted largest quarterly gain since 2005 on AI strength, intensifying pressure on {company_name} to demonstrate AI monetization as both compete for enterprise cloud/AI market share (Sep 30)"
+✓ "Competitor acquired AI startup for $2B to expand enterprise capabilities, entering {ticker}'s core market segment (Oct 1)"
+✓ "Industry consolidation accelerating with two major acquisitions totaling $5B, reducing supplier options and potentially pressuring {ticker}'s margins (Oct 1-2)"
+✓ "New semiconductor tariffs impose 25% levy on imports, increasing {ticker}'s production costs while domestic competitors gain pricing advantage (Sep 30)"
 
-✓ ALSO GOOD (Impact unclear, but competitive context clear): "Meta acquired AI startup for undisclosed amount to expand enterprise AI capabilities, entering {company_name}'s core market segment (Oct 1)"
+Omit this section entirely if no material competitive/industry developments affect {ticker}.
 
-✗ BAD (No connection to target company): "Alphabet posted largest quarterly gain since 2005 on AI strength (Sep 30)"
+---
 
-MATERIALITY - Include only if:
-- Competitor M&A: Strategic deals OR directly affects market structure in {company_name}'s core segments
-- Product launches: Direct competition to {company_name}'s revenue drivers
-- Pricing changes: Industry-wide moves affecting {company_name}'s pricing power or margins
-- Production/capacity: Supply/demand shifts impacting {company_name}'s market share
-- Regulation: Directly impacts {company_name}'s operations or competitive advantages
-- Technology: Shifts threatening {company_name}'s product positioning
+📅 UPCOMING CATALYSTS (1-3 bullets, 30-60 words)
+Source: Company articles only
+
+Include: Earnings dates, investor days, regulatory deadlines, product launches
+Provide SPECIFIC DATES when available
+
+---
+
+HANDLING CONFLICTS:
+Report BOTH figures with sources: "Stock rose 5.3% (Reuters) to 7% (Bloomberg) (Oct 1)"
+
+PRECISION:
+- Exact figures when available: "12.7%", "$4.932B"
+- Qualitative if numbers unavailable: "substantial investment"
+- Never replace numbers with vague terms when numbers exist
+- Priority: Specific numbers > Ranges > Directional > Omission
 
 BULLET CONSTRUCTION:
-- Combine related competitor moves into single bullets when they represent one trend
-- Always connect competitor action to {company_name}'s business context
-- Focus on strategic implications: market share, pricing power, competitive moats
-Example: "Industry consolidation accelerating with two major acquisitions, reducing supplier options and potentially pressuring {company_name}'s margins (Oct 1-2)"
+Combine related facts telling one story. Add context/impact within same bullet.
 
-VALIDATION:
-- Every bullet connects to {company_name}'s competitive environment
-- No bullets are isolated competitor facts
-- Dates in parentheses for all bullets
+Example: "Halted Vision Pro refresh to redirect resources toward AI glasses targeting 2027 release; analysts estimate $500M+ R&D reallocation to compete with Meta (Oct 1)"
 
-INDUSTRY ARTICLES:
-{industry_analysis}
+CROSS-CATEGORY INTELLIGENCE:
+- If company article has competitive implications → include in BOTH Major Developments AND Competitive Dynamics
+- If competitor/industry development is major for {ticker} → can appear in Major Developments
+- Sort insights by TYPE (what they are) not SOURCE (where they came from)
 
-COMPETITOR ARTICLES:
-{competitor_analysis}
+ALL ARTICLE SUMMARIES (already {ticker}-focused):
+{combined_content}
 
-Generate competitive analysis. If no material developments affect {company_name}, return empty string."""
+Generate structured summary. Omit empty sections."""
 
     try:
         headers = {
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
+            "x-api-key": OPENAI_API_KEY,
+            
             "content-type": "application/json"
         }
 
         data = {
-            "model": ANTHROPIC_MODEL,
-            "max_tokens": 1500,
-            "messages": [{"role": "user", "content": prompt}]
+            "model": OPENAI_MODEL,
+            "input": prompt, "max_output_tokens": 10000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto",
+            "messages": [prompt]
         }
 
-        LOG.info(f"[{ticker}] Prompt 2: Calling Claude for competitive analysis")
-        response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
+        LOG.info(f"[{ticker}] Calling Claude for unified executive summary")
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=180)
 
         if response.status_code == 200:
             result = response.json()
-            summary = result.get("content", [{}])[0].get("text", "")
-
-            # Check if empty or too short
-            if len(summary.strip()) < 20:
-                LOG.info(f"[{ticker}] Prompt 2: Returned empty/short response ({len(summary)} chars)")
-                return ""
-
-            LOG.info(f"✅ [{ticker}] Prompt 2: Generated competitive summary ({len(summary)} chars)")
+            summary = extract_text_from_responses(result)
+            LOG.info(f"✅ [{ticker}] Generated unified summary ({len(summary)} chars)")
             return summary
         else:
-            LOG.warning(f"⚠️ [{ticker}] Prompt 2: Claude API error {response.status_code}: {response.text[:200]}")
-            return ""
+            LOG.error(f"❌ [{ticker}] Claude API error {response.status_code}: {response.text[:200]}")
+            return None
 
     except Exception as e:
-        LOG.warning(f"⚠️ [{ticker}] Prompt 2: Exception - {e}")
-        return ""
-
-
-def generate_claude_dual_prompt_summary(ticker: str, categories: Dict[str, List[Dict]],
-                                       config: Dict) -> Optional[str]:
-    """
-    Generate executive summary using two separate Claude prompts:
-    - Prompt 1: Company-focused (5 sections)
-    - Prompt 2: Competitive/Industry (1 section)
-
-    Returns combined 6-section summary or None if Prompt 1 fails
-    """
-
-    company_name = config.get("name", ticker)
-
-    # Extract articles by category
-    company_articles = [a for a in categories.get("company", []) if a.get("ai_summary")]
-    industry_articles = [a for a in categories.get("industry", []) if a.get("ai_summary")]
-    competitor_articles = [a for a in categories.get("competitor", []) if a.get("ai_summary")]
-
-    LOG.info(f"[{ticker}] Dual-prompt: {len(company_articles)} company, {len(industry_articles)} industry, {len(competitor_articles)} competitor articles")
-
-    # Must have company or industry articles
-    if not company_articles and not industry_articles:
-        LOG.warning(f"[{ticker}] Dual-prompt: Skipping - no company or industry articles with AI summaries")
+        LOG.error(f"❌ [{ticker}] Exception generating summary: {e}")
         return None
 
-    # Get financial context
-    enterprise_value_raw = config.get('financial_enterprise_value')
-    enterprise_value_formatted = format_financial_number(enterprise_value_raw) if enterprise_value_raw else "N/A"
-    snapshot_date = config.get('financial_snapshot_date', 'N/A')
 
-    # PROMPT 1: Company-focused summary (REQUIRED)
-    company_summary = generate_claude_company_summary(
-        ticker, company_name, enterprise_value_formatted, snapshot_date, company_articles
-    )
-
-    if not company_summary:
-        LOG.error(f"❌ [{ticker}] Dual-prompt: Prompt 1 failed - skipping entire summary")
-        return None
-
-    # PROMPT 2: Competitive/industry analysis (OPTIONAL)
-    competitive_summary = generate_claude_competitive_summary(
-        ticker, company_name, industry_articles, competitor_articles
-    )
-
-    if not competitive_summary or len(competitive_summary.strip()) < 20:
-        LOG.info(f"[{ticker}] Dual-prompt: Prompt 2 empty - returning 5-section summary only")
-        return company_summary
-
-    # Combine both summaries
-    full_summary = company_summary.strip() + "\n\n" + competitive_summary.strip()
-    LOG.info(f"✅ [{ticker}] Dual-prompt: Combined 6-section summary ({len(full_summary)} chars)")
-
-    return full_summary
-
-
-def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate Claude final summaries using DUAL-PROMPT architecture (company + competitive)"""
-    if not ANTHROPIC_API_KEY:
-        LOG.warning("⚠️ EXECUTIVE SUMMARY (Claude): Anthropic API key not configured - skipping")
+def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
+    """Generate OpenAI final summaries using UNIFIED prompt architecture (fallback to Claude)"""
+    if not OPENAI_API_KEY:
+        LOG.warning("⚠️ EXECUTIVE SUMMARY (OpenAI): API key not configured - skipping")
         return {}
 
-    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude DUAL-PROMPT): Starting generation for {len(articles_by_ticker)} tickers")
+    LOG.info(f"🎯 EXECUTIVE SUMMARY (OpenAI UNIFIED): Starting generation for {len(articles_by_ticker)} tickers")
     summaries = {}
 
     for ticker, categories in articles_by_ticker.items():
-        # Get config for financial context
         config = get_ticker_config(ticker)
         if not config:
             LOG.warning(f"[{ticker}] No config found - skipping")
@@ -10483,8 +10238,8 @@ def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List
 
         company_name = config.get("name", ticker)
 
-        # Use dual-prompt architecture
-        ai_analysis_summary = generate_claude_dual_prompt_summary(ticker, categories, config)
+        # Use unified prompt
+        ai_analysis_summary = generate_openai_executive_summary(ticker, categories, config)
 
         if ai_analysis_summary:
             # Add NEW badges for articles within 24 hours
@@ -10494,9 +10249,17 @@ def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List
                 [a for a in categories.get("competitor", []) if a.get("ai_summary")]
             )
             ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
-            LOG.info(f"✅ EXECUTIVE SUMMARY (Claude) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
+            LOG.info(f"✅ EXECUTIVE SUMMARY (OpenAI) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
+
+            # Save to database
+            article_ids = [a.get("id") for a in all_articles if a.get("id")]
+            company_count = len([a for a in categories.get("company", []) if a.get("ai_summary")])
+            industry_count = len([a for a in categories.get("industry", []) if a.get("ai_summary")])
+            competitor_count = len([a for a in categories.get("competitor", []) if a.get("ai_summary")])
+            save_executive_summary(ticker, ai_analysis_summary, "openai", article_ids,
+                                 company_count, industry_count, competitor_count)
         else:
-            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (Claude) [{ticker}]: No summary generated")
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (OpenAI) [{ticker}]: No summary generated")
 
         summaries[ticker] = {
             "ai_analysis_summary": ai_analysis_summary or "",
@@ -10504,4861 +10267,7 @@ def generate_claude_final_summaries(articles_by_ticker: Dict[str, Dict[str, List
             "industry_articles_analyzed": len([a for a in categories.get("industry", []) if a.get("ai_summary")])
         }
 
-    LOG.info(f"🎯 EXECUTIVE SUMMARY (Claude DUAL-PROMPT): Completed - generated summaries for {len(summaries)} tickers")
+    LOG.info(f"🎯 EXECUTIVE SUMMARY (OpenAI UNIFIED): Completed - generated summaries for {len(summaries)} tickers")
     return summaries
 
-def generate_ai_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate AI summaries from company + industry article titles with enhanced financial focus"""
-    if not OPENAI_API_KEY:
-        return {}
-    
-    summaries = {}
-    
-    for ticker, categories in articles_by_ticker.items():
-        company_articles = categories.get("company", [])
-        competitor_articles = categories.get("competitor", [])
-        industry_articles = categories.get("industry", [])  # Add industry articles
-        
-        if not company_articles and not industry_articles:
-            continue
-        
-        config = get_ticker_config(ticker)
-        company_name = config.get("name", ticker) if config else ticker
-        
-        # Get enhanced competitor information
-        competitor_names = []
-        if config and config.get("competitors"):
-            for comp in config["competitors"]:
-                if isinstance(comp, dict):
-                    if comp.get('ticker'):
-                        competitor_names.append(f"{comp['name']} ({comp['ticker']})")
-                    else:
-                        competitor_names.append(comp['name'])
-                else:
-                    # Handle string format "Name (TICKER)"
-                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?)\)$', comp)
-                    if match:
-                        competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
-                    else:
-                        competitor_names.append(comp)
-        
-        # Get enhanced industry keywords
-        industry_keywords = config.get("industry_keywords", []) if config else []
-        
-        # Get enhanced sector information  
-        sector_info = ""
-        if config:
-            sector = config.get("sector", "")
-            industry = config.get("industry", "") 
-            if sector and industry:
-                sector_info = f"Sector: {sector}, Industry: {industry}"
-            elif sector:
-                sector_info = f"Sector: {sector}"
-            elif industry:
-                sector_info = f"Industry: {industry}"
-        
-        # Company titles
-        titles_with_sources = []
-        for article in company_articles[:20]:
-            title = article.get("title", "")
-            if title:
-                domain = article.get("domain", "")
-                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                titles_with_sources.append(f"• {title} [{source_name}]")
-        
-        # Industry titles with keyword context
-        industry_titles_with_sources = []
-        for article in industry_articles[:10]:  # Add industry articles
-            title = article.get("title", "")
-            if title:
-                domain = article.get("domain", "")
-                keyword = article.get("search_keyword", "Industry")
-                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                industry_titles_with_sources.append(f"• {title} [Industry: {keyword}] [{source_name}]")
-        
-        # Competitor titles
-        competitor_titles_with_sources = []
-        for article in competitor_articles[:10]:
-            title = article.get("title", "")
-            if title:
-                domain = article.get("domain", "")
-                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                competitor_titles_with_sources.append(f"• {title} [{source_name}]")
-        
-        titles_summary = ""
-        
-        if titles_with_sources or industry_titles_with_sources:
-            titles_text = "\n".join(titles_with_sources)
-            industry_text = ""
-            if industry_titles_with_sources:
-                industry_text = "\n\nINDUSTRY DEVELOPMENTS:\n" + "\n".join(industry_titles_with_sources)
-            competitor_text = ""
-            if competitor_titles_with_sources:
-                competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(competitor_titles_with_sources)
-            
-            try:
-                headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-                
-                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
 
-ANALYSIS FRAMEWORK:
-1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
-2. INDUSTRY/SECTOR DYNAMICS: Policy, regulatory, supply chain, or market developments affecting the sector and {company_name}'s position, if present.
-3. COMPETITIVE DYNAMICS: Competitor actions impacting {company_name}'s market position, if present.
-4. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts, if present.
-5. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships, if present.
-
-CRITICAL REQUIREMENTS:
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines, if present
-- Report figures (%/$/units) exactly if present; no estimates/price math unless both numbers are in-text
-- Synthesize quantitative metrics when available
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
-- ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
-- INDUSTRY IMPACT: Assess how sector developments affect {company_name}'s business model and profitability
-- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
-- Include specific numbers when available and cite sources using formal domain names and nothing else: {source_name}. Cite them in parentheses, e.g., (Business Wire).
-- Keep to 5-6 sentences maximum
-
-TARGET COMPANY: {company_name} ({ticker})
-INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'None specified'}
-KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
-
-COMPANY HEADLINES (sources provided in brackets):
-{titles_text}{industry_text}{competitor_text}
-
-Provide a comprehensive executive summary integrating company-specific news with relevant industry and competitive developments."""
-
-                data = {
-                    "model": OPENAI_MODEL,
-                    "input": prompt,
-                    "max_output_tokens": 10000,
-                    "reasoning": {"effort": "medium"},
-                    "text": {"verbosity": "low"},
-                    "truncation": "auto"
-                }
-                
-                response = get_openai_session().post(OPENAI_API_URL, headers=headers, json=data, timeout=(10, 180))
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    titles_summary = extract_text_from_responses(result)
-                    
-                    u = result.get("usage", {}) or {}
-                    LOG.info("Enhanced titles summary usage — input:%s output:%s (cap:%s) status:%s",
-                             u.get("input_tokens"), u.get("output_tokens"),
-                             result.get("max_output_tokens"),
-                             result.get("status"))
-                else:
-                    LOG.warning(f"Enhanced titles summary failed: {response.status_code}")
-                         
-            except Exception as e:
-                LOG.warning(f"Failed to generate enhanced titles summary for {ticker}: {e}")
-        
-        summaries[ticker] = {
-            "titles_summary": titles_summary,
-            "company_name": company_name,
-            "industry_coverage": len(industry_titles_with_sources)
-        }
-    
-    return summaries
-
-def generate_claude_titles_summary(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate Claude summaries from company + industry article titles (parallel to OpenAI)"""
-    if not ANTHROPIC_API_KEY:
-        return {}
-
-    summaries = {}
-
-    for ticker, categories in articles_by_ticker.items():
-        company_articles = categories.get("company", [])
-        competitor_articles = categories.get("competitor", [])
-        industry_articles = categories.get("industry", [])
-
-        if not company_articles and not industry_articles:
-            continue
-
-        config = get_ticker_config(ticker)
-        company_name = config.get("name", ticker) if config else ticker
-
-        # Get competitor information
-        competitor_names = []
-        if config and config.get("competitors"):
-            for comp in config["competitors"]:
-                if isinstance(comp, dict):
-                    if comp.get('ticker'):
-                        competitor_names.append(f"{comp['name']} ({comp['ticker']})")
-                    else:
-                        competitor_names.append(comp['name'])
-                else:
-                    match = re.search(r'^(.+?)\s*\(([A-Z]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?)\)$', comp)
-                    if match:
-                        competitor_names.append(f"{match.group(1).strip()} ({match.group(2)})")
-                    else:
-                        competitor_names.append(comp)
-
-        # Get industry keywords
-        industry_keywords = config.get("industry_keywords", []) if config else []
-
-        # Collect titles only (no descriptions)
-        titles_with_sources = []
-        for article in company_articles[:20]:
-            title = article.get("title", "")
-            if title:
-                domain = article.get("domain", "")
-                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                titles_with_sources.append(f"• {title} [{source_name}]")
-
-        industry_titles_with_sources = []
-        for article in industry_articles[:10]:
-            title = article.get("title", "")
-            if title:
-                domain = article.get("domain", "")
-                keyword = article.get("search_keyword", "Industry")
-                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                industry_titles_with_sources.append(f"• {title} [Industry: {keyword}] [{source_name}]")
-
-        competitor_titles_with_sources = []
-        for article in competitor_articles[:10]:
-            title = article.get("title", "")
-            if title:
-                domain = article.get("domain", "")
-                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                competitor_titles_with_sources.append(f"• {title} [{source_name}]")
-
-        titles_summary = ""
-
-        if titles_with_sources or industry_titles_with_sources:
-            titles_text = "\n".join(titles_with_sources)
-            industry_text = ""
-            if industry_titles_with_sources:
-                industry_text = "\n\nINDUSTRY DEVELOPMENTS:\n" + "\n".join(industry_titles_with_sources)
-            competitor_text = ""
-            if competitor_titles_with_sources:
-                competitor_text = "\n\nCOMPETITOR NEWS:\n" + "\n".join(competitor_titles_with_sources)
-
-            try:
-                headers = {
-                    "x-api-key": ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                }
-
-                prompt = f"""You are a hedge fund analyst creating a daily executive summary for {company_name} ({ticker}). Analyze recent company and industry news headlines to assess near-term financial impact. Write in flowing paragraphs without section headers, bullet points, or bolded categories. Present analysis as natural prose that reads like a professional investment memo.
-
-ANALYSIS FRAMEWORK:
-1. COMPANY FINANCIAL IMPACT: Developments affecting sales, margins, EBITDA, FCF, or growth, if present. Discuss M&A, debt issuance, buybacks, dividends, analyst actions, if present.
-2. INDUSTRY/SECTOR DYNAMICS: Policy, regulatory, supply chain, or market developments affecting the sector and {company_name}'s position, if present.
-3. COMPETITIVE DYNAMICS: Competitor actions impacting {company_name}'s market position, if present.
-4. OPERATIONAL DEVELOPMENTS: Highlight capacity changes, strategic moves, regulatory impacts, if present.
-5. MARKET POSITIONING: Evaluate brand strength, pricing power, customer relationships, if present.
-
-CRITICAL REQUIREMENTS:
-- Include SPECIFIC DATES: earnings dates, regulatory deadlines, completion timelines, if present
-- Report figures (%/$/units) exactly if present; no estimates/price math unless both numbers are in-text
-- Synthesize quantitative metrics when available
-- MATERIALITY ASSESSMENT: Compare dollar amounts to company scale where mentioned
-- ANALYST ACTIONS: Include firm names and price targets as mentioned in headlines
-- INDUSTRY IMPACT: Assess how sector developments affect {company_name}'s business model and profitability
-- NEAR-TERM FOCUS: Emphasize next-term (<1 year) but note medium/long-term implications
-- Include specific numbers when available and cite sources using formal domain names in parentheses, e.g., (Business Wire).
-- Keep to 5-6 sentences maximum
-
-TARGET COMPANY: {company_name} ({ticker})
-INDUSTRY KEYWORDS: {', '.join(industry_keywords) if industry_keywords else 'None specified'}
-KNOWN COMPETITORS: {', '.join(competitor_names) if competitor_names else 'None specified'}
-
-COMPANY HEADLINES (sources provided in brackets):
-{titles_text}{industry_text}{competitor_text}
-
-Provide a comprehensive executive summary integrating company-specific news with relevant industry and competitive developments."""
-
-                data = {
-                    "model": ANTHROPIC_MODEL,
-                    "max_tokens": 2048,
-                    "messages": [{"role": "user", "content": prompt}]
-                }
-
-                response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
-
-                if response.status_code == 200:
-                    result = response.json()
-                    titles_summary = result.get("content", [{}])[0].get("text", "")
-                    LOG.info(f"Claude titles summary generated for {ticker}")
-                else:
-                    LOG.warning(f"Claude titles summary failed: {response.status_code}")
-
-            except Exception as e:
-                LOG.warning(f"Failed to generate Claude titles summary for {ticker}: {e}")
-
-        summaries[ticker] = {
-            "titles_summary": titles_summary,
-            "company_name": company_name,
-            "industry_coverage": len(industry_titles_with_sources)
-        }
-
-    return summaries
-
-def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440) -> bool:
-    """Quick email with metadata display removed"""
-    try:
-        current_time_est = format_timestamp_est(datetime.now(timezone.utc))
-
-        # Calculate period display from time window
-        hours = time_window_minutes / 60
-        days = int(hours / 24) if hours >= 24 else 0
-        period_label = f"Last {days} days" if days > 0 else f"Last {int(hours)} hours"
-
-        # Format ticker list with company names
-        ticker_display_list = []
-        for ticker in articles_by_ticker.keys():
-            config = get_ticker_config(ticker)
-            company_name = config.get("company_name", ticker) if config else ticker
-            ticker_display_list.append(f"{company_name} ({ticker})")
-        ticker_list = ', '.join(ticker_display_list)
-
-        html = [
-            "<html><head><style>",
-            "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
-            "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
-            "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
-            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
-            ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
-            ".company { border-left-color: #27ae60; }",
-            ".industry { border-left-color: #f39c12; }",
-            ".competitor { border-left-color: #e74c3c; }",
-            ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
-            ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
-            ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
-            ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-            ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
-            ".quality-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
-            ".flagged-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
-            ".ai-triage { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            "/* OpenAI Scoring - Blue theme */",
-            ".openai-high { background-color: #d4edff; color: #0d47a1; border: 1px solid #90caf9; }",
-            ".openai-medium { background-color: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }",
-            ".openai-low { background-color: #f1f8ff; color: #1976d2; border: 1px solid #dce9f7; }",
-            ".openai-none { background-color: #f5f5f5; color: #9e9e9e; border: 1px solid #e0e0e0; }",
-            ".qb-score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
-            "/* Claude Scoring - Purple theme */",
-            ".claude-high { background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
-            ".claude-medium { background-color: #f8e4f8; color: #8e24aa; border: 1px solid #e1bee7; }",
-            ".claude-low { background-color: #fce4ec; color: #ab47bc; border: 1px solid #f8bbd0; }",
-            ".claude-none { background-color: #f5f5f5; color: #9e9e9e; border: 1px solid #e0e0e0; }",
-            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
-            ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
-            ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
-            ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-            ".meta { color: #95a5a6; font-size: 11px; }",
-            "a { color: #2980b9; text-decoration: none; }",
-            "a:hover { text-decoration: underline; }",
-            "</style></head><body>",
-            f"<h1>🚀 Quick Intelligence Report: {ticker_list} - Triage Complete</h1>",
-            f"<div class='summary'>",
-            f"<strong>📅 Report Period:</strong> {period_label}<br>",
-            f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
-            f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>"
-        ]
-
-        # Collect all industry keywords and competitors for header
-        all_industry_keywords = set()
-        all_competitors = []
-        for ticker in articles_by_ticker.keys():
-            config = get_ticker_config(ticker)
-            if config:
-                keywords = config.get("industry_keywords", [])
-                all_industry_keywords.update(keywords)
-                comps = config.get("competitors", [])
-                for comp in comps:
-                    comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
-                    if comp_display not in all_competitors:
-                        all_competitors.append(comp_display)
-
-        # Add industry keywords and competitors to header
-        if all_industry_keywords:
-            html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
-        if all_competitors:
-            html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
-
-        html.append("</div>")
-
-        total_articles = 0
-        total_selected = 0
-
-        for ticker, categories in articles_by_ticker.items():
-            ticker_count = sum(len(articles) for articles in categories.values())
-            total_articles += ticker_count
-            
-            # Get company name from config for display
-            config = get_ticker_config(ticker)
-            full_company_name = config.get("name", ticker) if config else ticker
-            
-            ticker_selected = 0
-            triage_data = triage_results.get(ticker, {})
-            for category in ["company", "industry", "competitor"]:
-                ticker_selected += len(triage_data.get(category, []))
-            
-            total_selected += ticker_selected
-            
-            html.append(f"<div class='ticker-section'>")
-            html.append(f"<h2>🎯 Target Company: {full_company_name} ({ticker})</h2>")
-
-            html.append(f"<p><strong>✅ Selected for Analysis:</strong> {ticker_selected} articles</p>")
-
-            # Process each category independently with proper sorting
-            category_icons = {
-                "company": "🎯",
-                "industry": "🏭",
-                "competitor": "⚔️"
-            }
-
-            for category in ["company", "industry", "competitor"]:
-                articles = categories.get(category, [])
-                if not articles:
-                    continue
-
-                category_triage = triage_data.get(category, [])
-                selected_article_data = {item["id"]: item for item in category_triage}
-
-                # Enhanced article sorting - Quality+Flagged first, then Flagged, then Non-Flagged
-                # Within each group, sort by time (newest first)
-                enhanced_articles = []
-                for idx, article in enumerate(articles):
-                    domain = normalize_domain(article.get("domain", ""))
-                    is_ai_selected = idx in selected_article_data
-                    is_quality_domain = domain in QUALITY_DOMAINS
-                    is_problematic = domain in PROBLEMATIC_SCRAPE_DOMAINS
-
-                    priority = 999
-                    triage_reason = ""
-                    ai_priority = "Low"
-
-                    # Determine priority tier
-                    if is_quality_domain and is_ai_selected and not is_problematic:
-                        priority = 0  # Quality + Flagged = TOP priority
-                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
-                        triage_reason = f"Quality domain + AI flagged ({ai_priority})"
-                    elif is_ai_selected:
-                        # All flagged articles get priority 1 (sorted by time within this tier)
-                        priority = 1
-                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
-                        triage_reason = selected_article_data[idx].get("why", "")
-                    elif is_quality_domain and not is_problematic:
-                        priority = 999  # Quality but NOT flagged = bottom
-                        triage_reason = "Quality domain (not flagged)"
-
-                    # Extract OpenAI and Claude scores from triage data
-                    openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
-                    claude_score = selected_article_data[idx].get("claude_score", 0) if is_ai_selected else 0
-
-                    enhanced_articles.append({
-                        "article": article,
-                        "idx": idx,
-                        "priority": priority,
-                        "is_ai_selected": is_ai_selected,
-                        "is_quality_domain": is_quality_domain,
-                        "is_problematic": is_problematic,
-                        "triage_reason": triage_reason,
-                        "ai_priority": ai_priority,
-                        "openai_score": openai_score,
-                        "claude_score": claude_score,
-                        "published_at": article.get("published_at")
-                    })
-
-                # Sort by priority tier, then by time (newest first)
-                enhanced_articles.sort(key=lambda x: (
-                    x["priority"],
-                    -(x["published_at"].timestamp() if x["published_at"] else 0)
-                ))
-
-                selected_count = len([a for a in enhanced_articles if a["is_ai_selected"] or (a["is_quality_domain"] and not a["is_problematic"])])
-
-                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} ({len(articles)} articles, {selected_count} selected)</h3>")
-
-                for enhanced_article in enhanced_articles[:50]:
-                    article = enhanced_article["article"]
-                    domain = article.get("domain", "unknown")
-                    title = article.get("title", "No Title")
-                    
-                    header_badges = []
-                    
-                    # 1. First badge depends on category
-                    if category == "company":
-                        header_badges.append(f'<span class="company-name-badge">🎯 {full_company_name}</span>')
-                    elif category == "competitor":
-                        comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
-                        header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
-                    elif category == "industry" and article.get('search_keyword'):
-                        header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
-                    
-                    # 2. Domain name second
-                    header_badges.append(f'<span class="source-badge">📰 {get_or_create_formal_domain_name(domain)}</span>')
-                    
-                    # 3. Quality badge third
-                    if enhanced_article["is_quality_domain"]:
-                        header_badges.append('<span class="quality-badge">⭐ Quality</span>')
-                    
-                    # 4. Flagged badge ONLY if dual AI selected it
-                    if enhanced_article["is_ai_selected"]:
-                        header_badges.append('<span class="flagged-badge">🚩 Flagged</span>')
-                    
-                    # 5. OpenAI Score - 0-3 scoring
-                    openai_score = enhanced_article.get("openai_score", 0)
-                    if openai_score >= 3:
-                        openai_class = "openai-high"
-                        openai_level = "OpenAI: High"
-                        openai_emoji = "🔥"
-                    elif openai_score >= 2:
-                        openai_class = "openai-medium"
-                        openai_level = "OpenAI: Medium"
-                        openai_emoji = "⚡"
-                    elif openai_score >= 1:
-                        openai_class = "openai-low"
-                        openai_level = "OpenAI: Low"
-                        openai_emoji = "🔋"
-                    else:
-                        openai_class = "openai-none"
-                        openai_level = "OpenAI: None"
-                        openai_emoji = "○"
-                    header_badges.append(f'<span class="ai-triage {openai_class}">{openai_emoji} {openai_level}</span>')
-
-                    # 6. Claude Score - 0-3 scoring
-                    claude_score = enhanced_article.get("claude_score", 0)
-                    if claude_score >= 3:
-                        claude_class = "claude-high"
-                        claude_level = "Claude: High"
-                        claude_emoji = "🏆"
-                    elif claude_score >= 2:
-                        claude_class = "claude-medium"
-                        claude_level = "Claude: Medium"
-                        claude_emoji = "💎"
-                    elif claude_score >= 1:
-                        claude_class = "claude-low"
-                        claude_level = "Claude: Low"
-                        claude_emoji = "💡"
-                    else:
-                        claude_class = "claude-none"
-                        claude_level = "Claude: None"
-                        claude_emoji = "○"
-                    header_badges.append(f'<span class="qb-score {claude_class}">{claude_emoji} {claude_level}</span>')
-                    
-                    # Publication time
-                    pub_time = ""
-                    if article.get("published_at"):
-                        pub_time = format_timestamp_est(article["published_at"])
-                    
-                    html.append(f"""
-                    <div class='article {category}'>
-                        <div class='article-header'>
-                            {' '.join(header_badges)}
-                        </div>
-                        <div class='article-content'>
-                            <a href='{article.get("resolved_url") or article.get("url", "")}'>{title}</a>
-                            <span class='meta'> | {pub_time}</span>
-                        </div>
-                    </div>
-                    """)
-            
-            html.append("</div>")
-        
-        html.append(f"<div class='summary'>")
-        html.append(f"<strong>📊 Total Articles:</strong> {total_articles}<br>")
-        html.append(f"<strong>✅ Selected for Analysis:</strong> {total_selected}<br>")
-        html.append(f"<strong>📄 Next:</strong> Full content analysis and hedge fund summaries in progress...")
-        html.append("</div>")
-        html.append("</body></html>")
-        
-        html_content = "".join(html)
-        subject = f"🚀 Quick Intelligence: {ticker_list} - {total_selected} articles selected"
-        
-        return send_email(subject, html_content)
-        
-    except Exception as e:
-        LOG.error(f"Enhanced quick intelligence email failed: {e}")
-        return False
-
-
-# ------------------------------------------------------------------------------
-# Structured Summary Parsing for Emails
-# ------------------------------------------------------------------------------
-
-def parse_structured_summary(summary_text: str) -> list:
-    """
-    Parse AI-generated structured summary into sections with headers and bullets.
-
-    Expected format:
-    🔴 MAJOR DEVELOPMENTS
-    • Bullet point 1
-    • Bullet point 2
-
-    📊 FINANCIAL/OPERATIONAL PERFORMANCE
-    • Bullet point 1
-    """
-    if not summary_text:
-        return []
-
-    sections = []
-    current_section = None
-
-    # Known section emojis to detect headers
-    section_emojis = ['🔴', '📊', '⚠️', '📈', '⚡', '📅']
-
-    for line in summary_text.split('\n'):
-        line = line.strip()
-
-        # Skip empty lines
-        if not line:
-            continue
-
-        # Detect section headers (lines with section emojis, not starting with bullet)
-        is_header = False
-        if not line.startswith('•') and not line.startswith('-'):
-            # Check if line contains any section emoji
-            for emoji in section_emojis:
-                if emoji in line:
-                    is_header = True
-                    break
-
-        if is_header:
-            # Save previous section if exists
-            if current_section:
-                sections.append(current_section)
-
-            # Start new section
-            current_section = {
-                'header': line,
-                'bullets': []
-            }
-
-        # Detect bullets (lines starting with • or -)
-        elif (line.startswith('•') or line.startswith('-')) and current_section:
-            # Remove leading bullet character and whitespace
-            bullet_text = line.lstrip('•- ').strip()
-            if bullet_text:  # Only add non-empty bullets
-                current_section['bullets'].append(bullet_text)
-
-    # Add final section
-    if current_section:
-        sections.append(current_section)
-
-    return sections
-
-
-def render_structured_summary_html(sections: list) -> str:
-    """
-    Convert parsed sections into properly formatted HTML.
-
-    Returns HTML string with sections, headers, and bullet lists.
-    """
-    if not sections:
-        return ""
-
-    html_parts = []
-
-    for section in sections:
-        html_parts.append("<div class='summary-section'>")
-
-        # Render section header with emoji
-        html_parts.append(f"<div class='section-header'>{section['header']}</div>")
-
-        # Render bullets as HTML list
-        if section['bullets']:
-            html_parts.append("<ul class='section-bullets'>")
-            for bullet in section['bullets']:
-                html_parts.append(f"<li>{bullet}</li>")
-            html_parts.append("</ul>")
-
-        html_parts.append("</div>")
-
-    return ''.join(html_parts)
-
-
-# ------------------------------------------------------------------------------
-# Email Digest
-# ------------------------------------------------------------------------------
-
-# Updated email sending function with text attachment
-def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
-    """Send email with HTML body only (no attachments)."""
-    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
-        LOG.error("SMTP not fully configured")
-        return False
-
-    try:
-        recipient = to or DIGEST_TO
-
-        # multipart/alternative for text + HTML, wrapped in mixed not needed if no attachments
-        msg = MIMEMultipart('alternative')
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = recipient
-
-        # Plain-text fallback
-        text_body = "This email contains HTML content. Please view in an HTML-capable email client."
-        msg.attach(MIMEText(text_body, "plain", "utf-8"))
-
-        # HTML body
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-        LOG.info(f"Connecting to SMTP server: {SMTP_HOST}:{SMTP_PORT}")
-
-        # Add timeout to SMTP operations
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=60) as server:
-            if SMTP_STARTTLS:
-                LOG.info("Starting TLS...")
-                server.starttls()
-            LOG.info("Logging in to SMTP server...")
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            LOG.info("Sending email...")
-            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
-
-        LOG.info(f"Email sent successfully to {recipient}")
-        return True
-
-    except smtplib.SMTPTimeout as e:
-        LOG.error(f"SMTP timeout sending email: {e}")
-        return False
-    except smtplib.SMTPException as e:
-        LOG.error(f"SMTP error sending email: {e}")
-        return False
-    except Exception as e:
-        LOG.error(f"Email send failed: {e}")
-        LOG.error(f"Error details: {traceback.format_exc()}")
-        return False
-
-def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
-                              show_ai_analysis: bool = True, show_descriptions: bool = True) -> Tuple[str, str]:
-    """Enhanced digest with metadata display removed but keeping all badges/emojis
-
-    Args:
-        articles_by_ticker: Articles organized by ticker and category
-        period_days: Number of days covered in the report
-        show_ai_analysis: If True, show AI analysis boxes under articles (default True)
-        show_descriptions: If True, show article descriptions (default True)
-    """
-
-    # Generate summaries from Claude (with OpenAI fallback)
-    claude_summaries = generate_claude_final_summaries(articles_by_ticker)
-    openai_summaries = generate_ai_final_summaries(articles_by_ticker)
-
-    # Format ticker list with company names
-    ticker_display_list = []
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        company_name = config.get("company_name", ticker) if config else ticker
-        ticker_display_list.append(f"{company_name} ({ticker})")
-    ticker_list = ', '.join(ticker_display_list)
-    current_time_est = format_timestamp_est(datetime.now(timezone.utc))
-    
-    html = [
-        "<html><head><style>",
-        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
-        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
-        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
-        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
-        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
-        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
-        ".article-header { margin-bottom: 5px; }",
-        ".article-content { }",
-        ".company { border-left-color: #27ae60; }",
-        ".industry { border-left-color: #f39c12; }",
-        ".competitor { border-left-color: #e74c3c; }",
-        ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
-        ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
-        ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
-        ".summary-section { margin: 12px 0; }",
-        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 5px; padding: 4px 0; border-bottom: 2px solid #ecf0f1; }",
-        ".section-bullets { margin: 0 0 0 20px; padding: 0; list-style-type: disc; }",
-        ".section-bullets li { margin: 4px 0; line-height: 1.4; color: #34495e; }",
-        ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
-        ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
-        ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
-        ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
-        ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
-        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
-        ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
-        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
-        ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
-        ".meta { color: #95a5a6; font-size: 11px; }",
-        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
-        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
-        "a { color: #2980b9; text-decoration: none; }",
-        "a:hover { text-decoration: underline; }",
-        "</style></head><body>",
-        f"<h1>📊 Stock Intelligence Report: {ticker_list}</h1>",
-        f"<div class='summary'>",
-        f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
-        f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
-        f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>"
-    ]
-
-    # Collect all industry keywords and competitors for header (match triage email)
-    all_industry_keywords = set()
-    all_competitors = []
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        if config:
-            keywords = config.get("industry_keywords", [])
-            all_industry_keywords.update(keywords)
-            comps = config.get("competitors", [])
-            for comp in comps:
-                comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
-                if comp_display not in all_competitors:
-                    all_competitors.append(comp_display)
-
-    # Add industry keywords and competitors to header
-    if all_industry_keywords:
-        html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
-    if all_competitors:
-        html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
-
-    html.append("</div>")
-
-    for ticker, categories in articles_by_ticker.items():
-        total_articles = sum(len(articles) for articles in categories.values())
-
-        # Get company name for display
-        config = get_ticker_config(ticker)
-        company_name = config.get("name", ticker) if config else ticker
-
-        html.append(f"<div class='ticker-section'>")
-
-        # Add financial context box if data is current (only in final email)
-        today_str = datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
-        if config and config.get("financial_snapshot_date") == today_str:
-            html.append("<div style='background:#f5f5f5; padding:12px; margin:16px 0; font-size:13px; border-left:3px solid #0066cc;'>")
-            html.append(f"<div style='font-weight:bold; margin-bottom:6px;'>📊 Market Context (as of {config.get('financial_snapshot_date')})</div>")
-
-            # Line 1: Price and returns
-            price = f"${config.get('financial_last_price', 0):.2f}" if config.get('financial_last_price') else "N/A"
-            price_chg = format_financial_percent(config.get('financial_price_change_pct')) or "N/A"
-            yesterday_ret = format_financial_percent(config.get('financial_yesterday_return_pct')) or "N/A"
-            ytd_ret = format_financial_percent(config.get('financial_ytd_return_pct')) or "N/A"
-            html.append(f"<div>Last Stock Price: {price} ({price_chg}) | Yesterday: {yesterday_ret} | YTD: {ytd_ret}</div>")
-
-            # Line 2: Market cap and enterprise value
-            mcap = format_financial_number(config.get('financial_market_cap')) or "N/A"
-            ev = format_financial_number(config.get('financial_enterprise_value')) or "N/A"
-            html.append(f"<div>Market Cap: {mcap} | Enterprise Value: {ev}</div>")
-
-            # Line 3: Volume
-            vol = format_financial_volume(config.get('financial_volume')) or "N/A"
-            avg_vol = format_financial_volume(config.get('financial_avg_volume')) or "N/A"
-            html.append(f"<div>Volume: {vol} yesterday / {avg_vol} avg</div>")
-
-            # Line 4: Analyst data (if available)
-            if config.get('financial_analyst_target'):
-                target = f"${config.get('financial_analyst_target'):.2f}"
-                low = f"${config.get('financial_analyst_range_low'):.2f}" if config.get('financial_analyst_range_low') else "N/A"
-                high = f"${config.get('financial_analyst_range_high'):.2f}" if config.get('financial_analyst_range_high') else "N/A"
-                count = config.get('financial_analyst_count', 0)
-                rec = config.get('financial_analyst_recommendation', 'N/A')
-                html.append(f"<div>Analysts: {target} target (range {low}-{high}, {count} analysts, {rec})</div>")
-
-            html.append("</div>")
-
-        html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
-
-        # Display Claude summary with OpenAI fallback
-        claude_summary = claude_summaries.get(ticker, {}).get("ai_analysis_summary", "")
-        openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
-
-        # Use Claude if available, fallback to OpenAI
-        summary_to_display = claude_summary if claude_summary else openai_summary
-        summary_source = "Claude" if claude_summary else "OpenAI"
-
-        if summary_to_display:
-            html.append("<div class='company-summary'>")
-            html.append(f"<div class='summary-title'>📰 Executive Summary (Deep Analysis) - {summary_source}</div>")
-            html.append("<div class='summary-content'>")
-
-            # Parse and render summary with structured sections
-            summary_sections = parse_structured_summary(summary_to_display)
-            if summary_sections:
-                html.append(render_structured_summary_html(summary_sections))
-            else:
-                # Fallback to raw text if parsing fails
-                html.append(f"<div>{summary_to_display.replace(chr(10), '<br>')}</div>")
-
-            html.append("</div>")
-            html.append("</div>")
-        
-        # Sort articles within each category - Quality domains first, then AI analyzed, then by time
-        for category in ["company", "industry", "competitor"]:
-            if category in categories and categories[category]:
-                articles = categories[category]
-                
-                def sort_key(article):
-                    domain = normalize_domain(article.get("domain", ""))
-                    is_quality_domain = domain in QUALITY_DOMAINS
-                    is_analyzed = bool(article.get('ai_summary') or article.get('ai_triage_selected'))
-                    pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
-                    
-                    # Priority: 0 = quality domain, 1 = analyzed, 2 = other
-                    if is_quality_domain:
-                        priority = 0
-                    elif is_analyzed:
-                        priority = 1
-                    else:
-                        priority = 2
-                    
-                    return (priority, -pub_time.timestamp())
-                
-                sorted_articles = sorted(articles, key=sort_key)
-                
-                category_icons = {
-                    "company": "🎯",
-                    "industry": "🏭", 
-                    "competitor": "⚔️"
-                }
-                
-                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} News ({len(articles)} articles)</h3>")
-                for article in sorted_articles[:100]:
-                    # Use simplified ticker metadata cache (just company name)
-                    simple_cache = {ticker: {"company_name": company_name}}
-                    html.append(_format_article_html_with_ai_summary(article, category, simple_cache,
-                                                                     show_ai_analysis, show_descriptions))
-        
-        html.append("</div>")
-    
-    html.append("""
-        <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
-            <strong>🤖 Enhanced AI Features:</strong><br>
-            📊 Investment Thesis: AI synthesis of all company deep analysis<br>
-            📰 Content Analysis: Full article scraping with intelligent extraction<br>
-            💼 Hedge Fund Summaries: AI-generated analytical summaries for scraped content<br>
-            🎯 Enhanced Selection: AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill<br>
-            ✅ "Analyzed" badge indicates articles with both scraped content and AI summary<br>
-            ⭐ "Quality" badge indicates high-authority news sources
-        </div>
-        </body></html>
-    """)
-    
-    html_content = "".join(html)
-    return html_content
-
-def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
-                                               show_ai_analysis: bool = True,
-                                               show_descriptions: bool = True,
-                                               flagged_article_ids: List[int] = None) -> Dict[str, Dict[str, List[Dict]]]:
-    """Fetch categorized articles for digest with ticker-specific AI analysis
-
-    Args:
-        hours: Time window for articles
-        tickers: Specific tickers to fetch, or None for all
-        show_ai_analysis: If True, include AI analysis boxes in HTML (default True)
-        show_descriptions: If True, include article descriptions in HTML (default True)
-        flagged_article_ids: If provided, only fetch articles with these IDs (from triage)
-    """
-    start_time = time.time()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-    days = int(hours / 24) if hours >= 24 else 0
-    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
-
-    LOG.info(f"=== FETCHING DIGEST ARTICLES ===")
-    LOG.info(f"Time window: {period_label} (cutoff: {cutoff})")
-    LOG.info(f"Target tickers: {tickers or 'ALL'}")
-    LOG.info(f"Flagged article filter: {'ENABLED (' + str(len(flagged_article_ids)) + ' IDs)' if flagged_article_ids else 'DISABLED (showing all articles)'}")
-
-    with db() as conn, conn.cursor() as cur:
-        # Enhanced query to get articles from new schema - MATCHES triage query
-        # Add optional filter for flagged articles (from triage selection)
-        if tickers:
-            if flagged_article_ids:
-                cur.execute("""
-                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                        a.id, a.url, a.resolved_url, a.title, a.description,
-                        ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
-                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND ta.ticker = ANY(%s)
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
-                        AND a.id = ANY(%s)
-                    ORDER BY a.url_hash, ta.ticker,
-                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, tickers, cutoff, flagged_article_ids))
-            else:
-                cur.execute("""
-                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                        a.id, a.url, a.resolved_url, a.title, a.description,
-                        ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
-                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND ta.ticker = ANY(%s)
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
-                    ORDER BY a.url_hash, ta.ticker,
-                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, tickers, cutoff))
-        else:
-            if flagged_article_ids:
-                cur.execute("""
-                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                        a.id, a.url, a.resolved_url, a.title, a.description,
-                        ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
-                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
-                        AND a.id = ANY(%s)
-                    ORDER BY a.url_hash, ta.ticker,
-                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, cutoff, flagged_article_ids))
-            else:
-                cur.execute("""
-                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                        a.id, a.url, a.resolved_url, a.title, a.description,
-                        ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
-                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
-                    ORDER BY a.url_hash, ta.ticker,
-                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, cutoff))
-        
-        # Group articles by ticker
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            target_ticker = row["ticker"]
-
-            # Use stored category from ticker_articles table
-            category = row["category"]
-            
-            if target_ticker not in articles_by_ticker:
-                articles_by_ticker[target_ticker] = {}
-            if category not in articles_by_ticker[target_ticker]:
-                articles_by_ticker[target_ticker][category] = []
-            
-            # Convert row to dict and add to results
-            article_dict = dict(row)
-            articles_by_ticker[target_ticker][category].append(article_dict)
-            
-            # Debug logging for AI summary presence
-            if article_dict.get('ai_summary'):
-                LOG.debug(f"DIGEST QUERY: Found AI summary for {target_ticker} - {len(article_dict['ai_summary'])} chars")
-            else:
-                LOG.debug(f"DIGEST QUERY: No AI summary for {target_ticker} article: {article_dict.get('title', 'No title')[:50]}")
-        
-        # Mark articles as sent (only new ones)
-        total_to_mark = 0
-        if tickers:
-            cur.execute("""
-                SELECT COUNT(DISTINCT (a.url_hash, ta.ticker)) as count
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.found_at >= %s
-                AND ta.ticker = ANY(%s)
-                AND NOT ta.sent_in_digest
-            """, (cutoff, tickers))
-        else:
-            cur.execute("""
-                SELECT COUNT(DISTINCT (a.url_hash, ta.ticker)) as count
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.found_at >= %s
-                AND NOT ta.sent_in_digest
-            """, (cutoff,))
-        
-        result = cur.fetchone()
-        total_to_mark = result["count"] if result else 0
-        
-        if total_to_mark > 0:
-            if tickers:
-                cur.execute("""
-                    UPDATE ticker_articles
-                    SET sent_in_digest = TRUE
-                    WHERE found_at >= %s
-                    AND ticker = ANY(%s)
-                    AND NOT sent_in_digest
-                """, (cutoff, tickers))
-            else:
-                cur.execute("""
-                    UPDATE ticker_articles
-                    SET sent_in_digest = TRUE
-                    WHERE found_at >= %s
-                    AND NOT sent_in_digest
-                """, (cutoff,))
-            
-            LOG.info(f"Marked {total_to_mark} articles as sent in digest")
-        else:
-            LOG.info("No new articles to mark as sent (smart reuse mode)")
-    
-    total_articles = sum(
-        sum(len(arts) for arts in categories.values())
-        for categories in articles_by_ticker.values()
-    )
-    
-    if total_articles == 0:
-        return {
-            "status": "no_articles",
-            "message": f"No quality articles found in the last {period_label}",
-            "tickers": tickers or "all"
-        }
-    
-    # Use the enhanced digest function
-    html = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
-                                      show_ai_analysis, show_descriptions)
-
-    # Enhanced subject with ticker list (company names)
-    ticker_display_list = []
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        company_name = config.get("company_name", ticker) if config else ticker
-        ticker_display_list.append(f"{company_name} ({ticker})")
-    ticker_list = ', '.join(ticker_display_list)
-    subject = f"📊 Stock Intelligence: {ticker_list} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    # Count by category and content scraping
-    category_counts = {"company": 0, "industry": 0, "competitor": 0}
-    content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
-    
-    for ticker_cats in articles_by_ticker.values():
-        for cat, arts in ticker_cats.items():
-            category_counts[cat] = category_counts.get(cat, 0) + len(arts)
-            for art in arts:
-                if art.get('scraped_content'):
-                    content_stats['scraped'] += 1
-                elif art.get('scraping_failed'):
-                    content_stats['failed'] += 1
-                else:
-                    content_stats['skipped'] += 1
-                
-                if art.get('ai_summary'):
-                    content_stats['ai_summaries'] += 1
-    
-    LOG.info(f"DIGEST STATS: {content_stats['ai_summaries']} articles with AI summaries out of {total_articles} total")
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "by_category": category_counts,
-        "content_scraping_stats": content_stats,
-        "recipient": DIGEST_TO
-    }
-
-def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
-                                   flagged_article_ids: List[int] = None) -> Dict:
-    """
-    Send Email #3: User Intelligence Report
-    - Same flagged articles as Stock Intelligence email
-    - No AI analysis boxes
-    - No description boxes
-    - Clean presentation for end users
-    """
-    LOG.info("=== EMAIL #3: USER INTELLIGENCE REPORT ===")
-    if flagged_article_ids:
-        LOG.info(f"Filtering to {len(flagged_article_ids)} flagged articles from triage")
-
-    # Fetch articles with AI/descriptions hidden
-    result = fetch_digest_articles_with_enhanced_content(
-        hours=hours,
-        tickers=tickers,
-        show_ai_analysis=False,   # Hide AI analysis boxes
-        show_descriptions=False,  # Hide description boxes
-        flagged_article_ids=flagged_article_ids  # Filter to flagged articles only
-    )
-
-    # If fetch returns dict with status (error case), return it
-    if isinstance(result, dict) and "status" in result:
-        return result
-
-    # Get articles for sending
-    articles_by_ticker = result if isinstance(result, dict) else {}
-
-    if not articles_by_ticker:
-        return {
-            "status": "no_articles",
-            "message": "No articles to send in user report",
-            "tickers": tickers or "all"
-        }
-
-    # Build HTML (same as Stock Intelligence but without AI/descriptions)
-    days = int(hours / 24) if hours >= 24 else 0
-    html = build_enhanced_digest_html(
-        articles_by_ticker,
-        days if days > 0 else 1,
-        show_ai_analysis=False,
-        show_descriptions=False
-    )
-
-    # Create subject line for Email #3
-    ticker_display_list = []
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        company_name = config.get("company_name", ticker) if config else ticker
-        ticker_display_list.append(f"{company_name} ({ticker})")
-    ticker_list = ', '.join(ticker_display_list)
-
-    total_articles = sum(
-        sum(len(arts) for arts in categories.values())
-        for categories in articles_by_ticker.values()
-    )
-
-    subject = f"📋 User Intelligence Report: {ticker_list} - {total_articles} articles"
-    success = send_email(subject, html)
-
-    LOG.info(f"📧 Email #3 (User Intelligence Report): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
-
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "recipient": DIGEST_TO,
-        "email_type": "user_intelligence_report"
-    }
-
-# ------------------------------------------------------------------------------
-# Auth Middleware
-# ------------------------------------------------------------------------------
-def require_admin(request: Request):
-    """Verify admin token"""
-    token = request.headers.get("x-admin-token") or \
-            request.headers.get("authorization", "").replace("Bearer ", "")
-    
-    if token != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-# ------------------------------------------------------------------------------
-# Pydantic Models for Request Bodies - FIXED: Add models for endpoints
-# ------------------------------------------------------------------------------
-class CleanFeedsRequest(BaseModel):
-    tickers: Optional[List[str]] = None
-
-class ResetDigestRequest(BaseModel):
-    tickers: Optional[List[str]] = None
-
-class ForceDigestRequest(BaseModel):
-    tickers: Optional[List[str]] = None
-
-class RegenerateMetadataRequest(BaseModel):
-    ticker: str
-
-class InitRequest(BaseModel):
-    tickers: List[str]
-    force_refresh: bool = False
-
-class CLIRequest(BaseModel):
-    action: str
-    tickers: List[str]
-    minutes: int = 1440
-    triage_batch_size: int = 2
-
-class JobSubmitRequest(BaseModel):
-    tickers: List[str]
-    minutes: int = 1440
-    batch_size: int = 3
-    triage_batch_size: int = 3
-
-# ------------------------------------------------------------------------------
-# JOB QUEUE SYSTEM - PostgreSQL-Based Background Processing
-# ------------------------------------------------------------------------------
-
-# Circuit Breaker for System-Wide Failure Detection
-class CircuitBreaker:
-    """Detect and halt processing on systematic failures"""
-    def __init__(self, failure_threshold=3, reset_timeout=300):
-        self.failure_count = 0
-        self.failure_threshold = failure_threshold
-        self.reset_timeout = reset_timeout
-        self.last_failure_time = None
-        self.state = 'closed'  # closed = working, open = failing
-        self.lock = threading.Lock()
-
-    def record_failure(self, error_type: str, error_msg: str):
-        with self.lock:
-            self.failure_count += 1
-            self.last_failure_time = time.time()
-
-            if self.failure_count >= self.failure_threshold:
-                self.state = 'open'
-                LOG.critical(f"🚨 CIRCUIT BREAKER OPEN: {self.failure_count} consecutive failures")
-                LOG.critical(f"   Last error: {error_type}: {error_msg}")
-                # TODO: Send alert email in production
-
-    def record_success(self):
-        with self.lock:
-            # Reset if we've been in open state long enough
-            if self.state == 'open' and self.last_failure_time:
-                if time.time() - self.last_failure_time > self.reset_timeout:
-                    LOG.info("✅ Circuit breaker CLOSED: Resuming after timeout")
-                    self.state = 'closed'
-                    self.failure_count = 0
-            elif self.state == 'closed':
-                # Gradual recovery - reduce count on success
-                self.failure_count = max(0, self.failure_count - 1)
-
-    def is_open(self):
-        with self.lock:
-            return self.state == 'open'
-
-    def reset(self):
-        with self.lock:
-            self.state = 'closed'
-            self.failure_count = 0
-            self.last_failure_time = None
-            LOG.info("🔄 Circuit breaker manually reset")
-
-# Global circuit breaker instance
-job_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_timeout=300)
-
-# Job Queue Worker State
-_job_worker_running = False
-_job_worker_thread = None
-
-# Forward declarations - these reference functions defined later in the file
-# We use globals() to avoid circular imports
-
-async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_size: int, triage_batch_size: int):
-    """Wrapper for ingest logic with error handling and progress tracking"""
-    try:
-        # Call the actual cron_ingest function which is defined later
-        cron_ingest_func = globals().get('cron_ingest')
-        if not cron_ingest_func:
-            raise RuntimeError("cron_ingest function not yet defined")
-
-        # Create mock request
-        class MockRequest:
-            def __init__(self):
-                self.headers = {"x-admin-token": ADMIN_TOKEN}
-
-        LOG.info(f"[JOB {job_id}] Calling cron_ingest for {ticker}...")
-
-        result = await cron_ingest_func(
-            MockRequest(),
-            minutes=minutes,
-            tickers=[ticker],
-            batch_size=batch_size,
-            triage_batch_size=triage_batch_size
-        )
-
-        LOG.info(f"[JOB {job_id}] cron_ingest completed for {ticker}")
-
-        # Extract and store flagged articles in job config
-        if result and isinstance(result, dict):
-            phase2 = result.get('phase_2_triage', {})
-            flagged_articles = phase2.get('flagged_articles', [])
-
-            if flagged_articles:
-                with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        UPDATE ticker_processing_jobs
-                        SET config = jsonb_set(COALESCE(config, '{}'), '{flagged_articles}', %s::jsonb)
-                        WHERE job_id = %s
-                    """, (json.dumps(flagged_articles), job_id))
-                LOG.info(f"[JOB {job_id}] Stored {len(flagged_articles)} flagged article IDs in job config")
-            else:
-                LOG.warning(f"[JOB {job_id}] No flagged articles found in triage results")
-
-        return result
-
-    except Exception as e:
-        LOG.error(f"[JOB {job_id}] INGEST FAILED for {ticker}: {e}")
-        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
-        raise
-
-async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
-    """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary"""
-    try:
-        # CRITICAL: fetch_digest_articles_with_enhanced_content sends the Stock Intelligence Email
-        # which includes the executive summary via generate_ai_final_summaries()
-        fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')
-        if not fetch_digest_func:
-            raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
-
-        LOG.info(f"[JOB {job_id}] Calling fetch_digest (will send Stock Intelligence Email) for {ticker}...")
-        if flagged_article_ids:
-            LOG.info(f"[JOB {job_id}] Filtering to {len(flagged_article_ids)} flagged articles from triage")
-
-        result = fetch_digest_func(
-            minutes / 60,
-            [ticker],
-            show_ai_analysis=True,
-            show_descriptions=True,
-            flagged_article_ids=flagged_article_ids
-        )
-
-        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Email sent: {result.get('status') == 'sent'}")
-        return result
-
-    except Exception as e:
-        LOG.error(f"[JOB {job_id}] DIGEST FAILED for {ticker}: {e}")
-        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
-        raise
-
-async def process_commit_phase(job_id: str, ticker: str, batch_id: str = None, is_last_job: bool = False):
-    """Wrapper for commit logic with error handling - includes job_id for idempotency"""
-    try:
-        # Call the actual GitHub commit function (it's named safe_incremental_commit, not admin_safe_incremental_commit)
-        commit_func = globals().get('safe_incremental_commit')
-        if not commit_func:
-            raise RuntimeError("safe_incremental_commit not yet defined")
-
-        class MockRequest:
-            def __init__(self):
-                self.headers = {"x-admin-token": ADMIN_TOKEN}
-
-        class CommitBody(BaseModel):
-            tickers: List[str]
-            job_id: Optional[str] = None  # Pass job_id for idempotency tracking
-            skip_render: Optional[bool] = True  # Control [skip render] flag
-
-        LOG.info(f"[JOB {job_id}] Calling GitHub commit for {ticker}...")
-
-        # Skip render for all jobs EXCEPT the last one in batch
-        skip_render = not is_last_job
-        if is_last_job:
-            LOG.info(f"[JOB {job_id}] ⚠️ LAST JOB IN BATCH - Render will deploy after this commit")
-        else:
-            LOG.info(f"[JOB {job_id}] [skip render] flag enabled - no deployment")
-
-        # Convert job_id to string (PostgreSQL returns UUID objects)
-        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker], job_id=str(job_id), skip_render=skip_render))
-
-        LOG.info(f"[JOB {job_id}] GitHub commit completed for {ticker}")
-        return result
-
-    except Exception as e:
-        LOG.error(f"[JOB {job_id}] COMMIT FAILED for {ticker}: {e}")
-        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
-        raise
-
-def get_worker_id():
-    """Get unique worker ID (Render instance or hostname)"""
-    return os.getenv('RENDER_INSTANCE_ID') or os.getenv('HOSTNAME') or 'worker-local'
-
-def update_job_status(job_id: str, status: str = None, phase: str = None, progress: int = None,
-                     error_message: str = None, error_stacktrace: str = None, result: dict = None,
-                     memory_mb: float = None, duration_seconds: float = None):
-    """Update job status in database"""
-    updates = ["last_updated = NOW()"]
-    params = []
-
-    if status:
-        updates.append("status = %s")
-        params.append(status)
-
-        if status == 'processing':
-            updates.append("started_at = NOW()")
-        elif status in ('completed', 'failed', 'timeout', 'cancelled'):
-            updates.append("completed_at = NOW()")
-
-    if phase:
-        updates.append("phase = %s")
-        params.append(phase)
-
-    if progress is not None:
-        updates.append("progress = %s")
-        params.append(progress)
-
-    if error_message:
-        updates.append("error_message = %s")
-        params.append(error_message)
-
-    if error_stacktrace:
-        updates.append("error_stacktrace = %s")
-        params.append(error_stacktrace)
-
-    if result:
-        updates.append("result = %s")
-        params.append(json.dumps(result))
-
-    if memory_mb is not None:
-        updates.append("memory_mb = %s")
-        params.append(memory_mb)
-
-    if duration_seconds is not None:
-        updates.append("duration_seconds = %s")
-        params.append(duration_seconds)
-
-    params.append(job_id)
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(f"""
-            UPDATE ticker_processing_jobs
-            SET {', '.join(updates)}
-            WHERE job_id = %s
-        """, params)
-
-def get_next_queued_job():
-    """Get next queued job with atomic claim (prevents race conditions)"""
-    with db() as conn, conn.cursor() as cur:
-        try:
-            cur.execute("""
-                UPDATE ticker_processing_jobs
-                SET status = 'processing',
-                    started_at = NOW(),
-                    worker_id = %s,
-                    last_updated = NOW()
-                WHERE job_id = (
-                    SELECT job_id FROM ticker_processing_jobs
-                    WHERE status = 'queued'
-                    ORDER BY created_at
-                    LIMIT 1
-                    FOR UPDATE SKIP LOCKED
-                )
-                RETURNING *
-            """, (get_worker_id(),))
-
-            job = cur.fetchone()
-            if job:
-                LOG.info(f"📋 Claimed job {job['job_id']} for ticker {job['ticker']}")
-            return dict(job) if job else None
-
-        except Exception as e:
-            LOG.error(f"Error claiming job: {e}")
-            return None
-
-async def process_ticker_job(job: dict):
-    """Process a single ticker job (ingest + digest + commit)"""
-    job_id = job['job_id']
-    ticker = job['ticker']
-
-    # psycopg returns JSONB as dict, not string
-    config = job['config'] if isinstance(job['config'], dict) else {}
-
-    minutes = config.get('minutes', 1440)
-    batch_size = config.get('batch_size', 3)
-    triage_batch_size = config.get('triage_batch_size', 3)
-
-    start_time = time.time()
-    memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
-
-    LOG.info(f"🚀 [JOB {job_id}] Starting processing for {ticker}")
-    LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
-
-    try:
-        # NOTE: TICKER_PROCESSING_LOCK is acquired inside cron_ingest/cron_digest
-        # We don't acquire it here to avoid deadlock (lock is not reentrant)
-
-        # Check if job was cancelled before starting
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
-            current_status = cur.fetchone()
-            if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled before starting, exiting")
-                return
-
-        # PHASE 1: Ingest (already implemented in /cron/ingest)
-        update_job_status(job_id, phase='ingest_start', progress=10)
-        LOG.info(f"📥 [JOB {job_id}] Phase 1: Ingest starting...")
-
-        # Call ingest logic (will be defined later in file)
-        # We can't import it here due to circular dependency
-        # So we'll call it by name after it's defined
-        ingest_result = await process_ingest_phase(
-            job_id=job_id,
-            ticker=ticker,
-            minutes=minutes,
-            batch_size=batch_size,
-            triage_batch_size=triage_batch_size
-        )
-
-        update_job_status(job_id, phase='ingest_complete', progress=60)
-
-        # Log detailed ingest stats
-        if ingest_result:
-            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete")
-            if isinstance(ingest_result, dict):
-                phase1 = ingest_result.get('phase_1_ingest', {})
-                phase2 = ingest_result.get('phase_2_triage', {})
-                phase4 = ingest_result.get('phase_4_async_batch_scraping', {})
-
-                if phase1:
-                    LOG.info(f"   Articles: New({phase1.get('total_inserted', 0)}) Total({phase1.get('total_articles_in_timeframe', 0)})")
-
-                if phase2 and phase2.get('selections_by_ticker'):
-                    sel = phase2['selections_by_ticker'].get(ticker, {})
-                    LOG.info(f"   Triage: Company({sel.get('company', 0)}) Industry({sel.get('industry', 0)}) Competitor({sel.get('competitor', 0)})")
-
-                if phase4:
-                    LOG.info(f"   Scraping: New({phase4.get('scraped', 0)}) Reused({phase4.get('reused_existing', 0)}) Success({phase4.get('overall_success_rate', 'N/A')})")
-        else:
-            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
-
-        # Check if cancelled after Phase 1
-        # Also re-fetch config to get flagged_articles that were stored during ingest
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT status, config FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
-            job_status = cur.fetchone()
-            if job_status and job_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 1, exiting")
-                return
-
-            # Re-fetch flagged_articles that were stored during ingest phase
-            updated_config = job_status['config'] if job_status and isinstance(job_status['config'], dict) else {}
-            flagged_article_ids = updated_config.get('flagged_articles', [])
-
-            if flagged_article_ids:
-                LOG.info(f"📋 [JOB {job_id}] Retrieved {len(flagged_article_ids)} flagged article IDs from ingest phase")
-            else:
-                LOG.warning(f"⚠️ [JOB {job_id}] No flagged articles found in config after ingest")
-
-        # PHASE 2: Digest (already implemented in /cron/digest)
-        update_job_status(job_id, phase='digest_start', progress=65)
-        LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
-
-        # Call digest function (defined later in file) - pass flagged articles from triage
-        digest_result = await process_digest_phase(
-            job_id=job_id,
-            ticker=ticker,
-            minutes=minutes,
-            flagged_article_ids=flagged_article_ids
-        )
-
-        update_job_status(job_id, phase='digest_complete', progress=95)
-
-        # Log detailed digest stats
-        if digest_result:
-            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete")
-            if isinstance(digest_result, dict):
-                LOG.info(f"   Status: {digest_result.get('status', 'unknown')}")
-                LOG.info(f"   Articles: {digest_result.get('articles', 0)}")
-        else:
-            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete (no detailed stats)")
-
-        # Check if cancelled after Phase 2
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
-            current_status = cur.fetchone()
-            if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
-                return
-
-        # EMAIL #3: USER INTELLIGENCE REPORT (no AI analysis, no descriptions)
-        update_job_status(job_id, phase='user_report', progress=97)
-        LOG.info(f"📧 [JOB {job_id}] Sending Email #3: User Intelligence Report...")
-
-        try:
-            user_report_result = send_user_intelligence_report(
-                hours=int(minutes/60),
-                tickers=[ticker],
-                flagged_article_ids=flagged_article_ids  # Filter to same articles as Email #2
-            )
-            if user_report_result:
-                LOG.info(f"✅ [JOB {job_id}] Email #3 sent successfully")
-                if isinstance(user_report_result, dict):
-                    LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
-            else:
-                LOG.warning(f"⚠️ [JOB {job_id}] Email #3 returned no result")
-        except Exception as e:
-            LOG.error(f"❌ [JOB {job_id}] Email #3 failed: {e}")
-            # Continue to GitHub commit even if Email #3 fails (Option A)
-
-        # Check if cancelled after Phase 3
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
-            current_status = cur.fetchone()
-            if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Email #3, exiting")
-                return
-
-        # COMMIT METADATA TO GITHUB after all emails sent
-        # This ensures GitHub commit doesn't trigger server restart before emails are sent
-        update_job_status(job_id, phase='commit_metadata', progress=99)
-        LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
-
-        try:
-            # Check if this is the last job in the batch (to control [skip render] flag)
-            batch_id = job.get('batch_id')
-            is_last_job = False
-
-            if batch_id:
-                with db() as conn, conn.cursor() as cur:
-                    # Count remaining jobs in batch (queued + processing, excluding this one)
-                    cur.execute("""
-                        SELECT COUNT(*) as remaining
-                        FROM ticker_processing_jobs
-                        WHERE batch_id = %s
-                        AND status IN ('queued', 'processing')
-                        AND job_id != %s
-                    """, (batch_id, job_id))
-                    result = cur.fetchone()
-                    remaining_jobs = result['remaining'] if result else 0
-
-                    if remaining_jobs == 0:
-                        is_last_job = True
-                        LOG.info(f"[JOB {job_id}] 🎯 This is the LAST job in batch {batch_id}")
-
-            commit_result = await process_commit_phase(
-                job_id=job_id,
-                ticker=ticker,
-                batch_id=batch_id,
-                is_last_job=is_last_job
-            )
-            LOG.info(f"✅ [JOB {job_id}] Metadata committed to GitHub successfully")
-        except Exception as e:
-            LOG.error(f"⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
-            # Don't fail the job if commit fails - continue processing
-
-        # PHASE 3: Complete
-        update_job_status(job_id, phase='finalizing', progress=99)
-        LOG.info(f"✅ [JOB {job_id}] Finalizing job...")
-
-        # Calculate final metrics
-        duration = time.time() - start_time
-        memory_end = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
-        memory_used = max(0, memory_end - memory_start)
-
-        # Mark complete
-        result = {
-            "ticker": ticker,
-            "ingest": ingest_result,
-            "digest": digest_result,
-            "metadata_committed": True,  # Committed after Phase 1
-            "duration_seconds": duration,
-            "memory_mb": memory_used
-        }
-
-        update_job_status(
-            job_id,
-            status='completed',
-            phase='complete',
-            progress=100,
-            result=result,
-            duration_seconds=duration,
-            memory_mb=memory_used
-        )
-
-        LOG.info(f"✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
-
-        # Record success with circuit breaker
-        job_circuit_breaker.record_success()
-
-        # Update batch counters
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE ticker_processing_batches
-                SET completed_jobs = completed_jobs + 1
-                WHERE batch_id = %s
-            """, (job['batch_id'],))
-
-        return result
-
-    except Exception as e:
-        error_msg = str(e)
-        error_trace = traceback.format_exc()
-        duration = time.time() - start_time
-
-        LOG.error(f"❌ [JOB {job_id}] FAILED after {duration:.1f}s: {error_msg}")
-        LOG.error(f"   Stacktrace: {error_trace}")
-
-        # Determine if this is a system-wide failure
-        is_system_failure = any(keyword in error_msg.lower() for keyword in [
-            'database', 'connection', 'psycopg', 'timeout', 'memory'
-        ])
-
-        if is_system_failure:
-            job_circuit_breaker.record_failure(type(e).__name__, error_msg)
-        else:
-            # Ticker-specific failure, not system-wide
-            job_circuit_breaker.record_success()
-
-        update_job_status(
-            job_id,
-            status='failed',
-            error_message=error_msg[:1000],  # Limit size
-            error_stacktrace=error_trace[:5000],
-            duration_seconds=duration
-        )
-
-        # Update batch counters
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE ticker_processing_batches
-                SET failed_jobs = failed_jobs + 1
-                WHERE batch_id = %s
-            """, (job['batch_id'],))
-
-        raise
-
-def job_worker_loop():
-    """Background worker that polls database for jobs"""
-    global _job_worker_running
-
-    LOG.info(f"🔧 Job worker started (worker_id: {get_worker_id()})")
-
-    while _job_worker_running:
-        try:
-            # Check circuit breaker
-            if job_circuit_breaker.is_open():
-                LOG.warning("⚠️ Circuit breaker is OPEN, skipping job polling")
-                time.sleep(30)
-                continue
-
-            # Get next job
-            job = get_next_queued_job()
-
-            if job:
-                # Process job (blocks until complete)
-                asyncio.run(process_ticker_job(job))
-            else:
-                # No jobs available, sleep and poll again
-                time.sleep(10)
-
-        except KeyboardInterrupt:
-            LOG.info("🛑 Job worker received interrupt signal")
-            break
-
-        except Exception as e:
-            LOG.error(f"💥 Job worker error: {e}")
-            LOG.error(traceback.format_exc())
-            time.sleep(30)  # Back off on errors
-
-    LOG.info("🔚 Job worker stopped")
-
-def start_job_worker():
-    """Start the background job worker thread"""
-    global _job_worker_running, _job_worker_thread
-
-    if _job_worker_running:
-        LOG.warning("Job worker already running")
-        return
-
-    _job_worker_running = True
-    _job_worker_thread = threading.Thread(target=job_worker_loop, daemon=True, name="JobWorker")
-    _job_worker_thread.start()
-
-    LOG.info("✅ Job worker thread started")
-
-def stop_job_worker():
-    """Stop the background job worker thread"""
-    global _job_worker_running
-
-    if not _job_worker_running:
-        return
-
-    _job_worker_running = False
-    LOG.info("⏸️ Job worker stopping...")
-
-    if _job_worker_thread:
-        _job_worker_thread.join(timeout=10)
-        LOG.info("✅ Job worker stopped")
-
-def timeout_watchdog_loop():
-    """Monitor for timed-out jobs"""
-    LOG.info("⏰ Timeout watchdog started")
-
-    while _job_worker_running:
-        try:
-            time.sleep(60)  # Check every minute
-
-            with db() as conn, conn.cursor() as cur:
-                # Find jobs that exceeded timeout
-                cur.execute("""
-                    UPDATE ticker_processing_jobs
-                    SET status = 'timeout',
-                        error_message = 'Job exceeded timeout limit',
-                        completed_at = NOW()
-                    WHERE status = 'processing'
-                    AND timeout_at < NOW()
-                    RETURNING job_id, ticker, worker_id
-                """)
-
-                timed_out = cur.fetchall()
-                for job in timed_out:
-                    LOG.error(f"⏰ JOB TIMEOUT: {job['job_id']} (ticker: {job['ticker']}, worker: {job['worker_id']})")
-
-                    # Update batch counters
-                    cur.execute("""
-                        UPDATE ticker_processing_batches
-                        SET failed_jobs = failed_jobs + 1
-                        WHERE batch_id = (
-                            SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
-                        )
-                    """, (job['job_id'],))
-
-        except Exception as e:
-            LOG.error(f"Timeout watchdog error: {e}")
-            time.sleep(30)
-
-    LOG.info("⏰ Timeout watchdog stopped")
-
-# Start workers on app startup
-@APP.on_event("startup")
-async def startup_event():
-    """Initialize job queue system on startup"""
-    worker_id = get_worker_id()
-    LOG.info("=" * 80)
-    LOG.info(f"🚀 FastAPI STARTUP EVENT - Worker: {worker_id}")
-    LOG.info(f"   Python: {sys.version}")
-    LOG.info(f"   Platform: {sys.platform}")
-    LOG.info(f"   Environment: Render.com" if os.getenv('RENDER') else "   Environment: Local")
-    LOG.info(f"   Port: {os.getenv('PORT', '10000')}")
-    LOG.info(f"   Memory: {memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 'N/A'} MB")
-    LOG.info("=" * 80)
-    LOG.info("🔧 Initializing job queue system...")
-
-    # Reclaim orphaned jobs from previous worker instance (handles Render restarts)
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # First, log ALL processing jobs to understand restart impact
-            cur.execute("""
-                SELECT job_id, ticker, phase, progress, worker_id,
-                       EXTRACT(EPOCH FROM (NOW() - started_at)) / 60 AS minutes_running
-                FROM ticker_processing_jobs
-                WHERE status = 'processing'
-                ORDER BY started_at
-            """)
-            all_processing = cur.fetchall()
-
-            if all_processing:
-                LOG.warning(f"⚠️ STARTUP: Found {len(all_processing)} jobs in 'processing' state:")
-                for job in all_processing:
-                    LOG.info(f"   → {job['ticker']} ({job['phase']}, {job['progress']}%, {job['minutes_running']:.1f}min, worker: {job['worker_id']})")
-
-            # Reclaim jobs that were processing but worker died (older than 5 minutes = definitely orphaned)
-            cur.execute("""
-                UPDATE ticker_processing_jobs
-                SET status = 'queued',
-                    started_at = NULL,
-                    worker_id = NULL,
-                    phase = 'restart_recovery',
-                    progress = 0,
-                    last_updated = NOW(),
-                    error_message = COALESCE(error_message, '') || ' | Server restart detected, job reclaimed'
-                WHERE status = 'processing'
-                AND started_at < NOW() - INTERVAL '5 minutes'
-                RETURNING job_id, ticker, phase AS old_phase, progress AS old_progress
-            """)
-
-            orphaned = cur.fetchall()
-            if orphaned:
-                LOG.warning(f"🔄 RECLAIMED {len(orphaned)} orphaned jobs (>5min old, server likely restarted):")
-                for job in orphaned:
-                    LOG.info(f"   → {job['ticker']} was at {job['old_phase']} ({job['old_progress']}%), now queued for retry")
-
-            # Also check for jobs processing <5 minutes (possible crash mid-job)
-            cur.execute("""
-                SELECT COUNT(*) as recent_count
-                FROM ticker_processing_jobs
-                WHERE status = 'processing'
-                AND started_at >= NOW() - INTERVAL '5 minutes'
-            """)
-            recent_result = cur.fetchone()
-            if recent_result and recent_result['recent_count'] > 0:
-                LOG.warning(f"⚠️ {recent_result['recent_count']} jobs started <5min ago still marked 'processing'")
-                LOG.warning("   These will NOT be reclaimed yet (might still be running on old worker)")
-                LOG.warning("   Timeout watchdog will mark them as 'timeout' if they exceed 45 minutes")
-
-            if not orphaned and not all_processing:
-                LOG.info("✅ No orphaned jobs found - clean startup")
-
-    except Exception as e:
-        LOG.error(f"❌ Failed to reclaim orphaned jobs: {e}")
-        LOG.error(f"   Stacktrace: {traceback.format_exc()}")
-
-    start_job_worker()
-
-    # Start timeout watchdog in separate thread
-    timeout_thread = threading.Thread(target=timeout_watchdog_loop, daemon=True, name="TimeoutWatchdog")
-    timeout_thread.start()
-
-    LOG.info("✅ Job queue system initialized")
-
-@APP.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    worker_id = get_worker_id()
-    LOG.info("=" * 80)
-    LOG.info(f"🛑 FastAPI SHUTDOWN EVENT - Worker: {worker_id}")
-    LOG.info(f"   Reason: Unknown (check Render logs)")
-    LOG.info(f"   Memory: {memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 'N/A'} MB")
-
-    # Log any jobs currently processing (will be orphaned after shutdown)
-    try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT job_id, ticker, phase, progress,
-                       EXTRACT(EPOCH FROM (NOW() - started_at)) / 60 AS minutes_running
-                FROM ticker_processing_jobs
-                WHERE status = 'processing'
-                AND worker_id = %s
-            """, (worker_id,))
-            active_jobs = cur.fetchall()
-
-            if active_jobs:
-                LOG.warning(f"⚠️ SHUTDOWN: {len(active_jobs)} jobs were still processing:")
-                for job in active_jobs:
-                    LOG.warning(f"   → {job['ticker']} ({job['phase']}, {job['progress']}%, {job['minutes_running']:.1f}min)")
-                LOG.warning("   These jobs will be reclaimed on next startup (>5min threshold)")
-            else:
-                LOG.info("✅ No active jobs at shutdown")
-    except Exception as e:
-        LOG.error(f"Failed to check active jobs during shutdown: {e}")
-
-    LOG.info("=" * 80)
-    stop_job_worker()
-
-# ------------------------------------------------------------------------------
-# API Routes
-# ------------------------------------------------------------------------------
-@APP.get("/")
-def root():
-    return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
-
-@APP.get("/health")
-def health_check():
-    """
-    Health check endpoint for Render and monitoring services.
-
-    Returns worker status and last activity to prevent idle timeout.
-    Render pings this endpoint to verify the service is alive.
-    """
-    global _job_worker_running
-
-    # Check worker thread is alive
-    worker_alive = _job_worker_running and (_job_worker_thread is not None and _job_worker_thread.is_alive())
-
-    # Check database connectivity
-    db_healthy = False
-    db_error = None
-    try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            db_healthy = True
-    except Exception as e:
-        db_error = str(e)
-
-    # Check for active jobs
-    active_jobs = 0
-    recent_completions = 0
-    try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) as count FROM ticker_processing_jobs WHERE status = 'processing'")
-            active_jobs = cur.fetchone()['count']
-
-            cur.execute("""
-                SELECT COUNT(*) as count FROM ticker_processing_jobs
-                WHERE status = 'completed' AND completed_at > NOW() - INTERVAL '10 minutes'
-            """)
-            recent_completions = cur.fetchone()['count']
-    except:
-        pass
-
-    # Overall health status
-    is_healthy = worker_alive and db_healthy
-    status_code = 200 if is_healthy else 503
-
-    # Get memory usage
-    memory_mb = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else None
-
-    response = {
-        "status": "healthy" if is_healthy else "degraded",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "worker": {
-            "running": _job_worker_running,
-            "thread_alive": worker_alive,
-            "worker_id": get_worker_id()
-        },
-        "database": {
-            "connected": db_healthy,
-            "error": db_error
-        },
-        "jobs": {
-            "active": active_jobs,
-            "recent_completions_10min": recent_completions
-        },
-        "circuit_breaker": {
-            "state": job_circuit_breaker.state,
-            "failure_count": job_circuit_breaker.failure_count
-        },
-        "system": {
-            "memory_mb": memory_mb,
-            "platform": sys.platform,
-            "python_version": sys.version.split()[0],
-            "render_instance": os.getenv('RENDER_INSTANCE_ID', 'not_render')
-        }
-    }
-
-    return JSONResponse(content=response, status_code=status_code)
-
-@APP.get("/debug/auth")
-def debug_auth(request: Request):
-    """Debug endpoint to check authentication headers"""
-    return {
-        "x-admin-token": request.headers.get("x-admin-token"),
-        "authorization": request.headers.get("authorization"),
-        "expected_token_prefix": ADMIN_TOKEN[:10] + "..." if ADMIN_TOKEN else "None",
-        "token_length": len(ADMIN_TOKEN) if ADMIN_TOKEN else 0
-    }
-
-# ------------------------------------------------------------------------------
-# JOB QUEUE API ENDPOINTS
-# ------------------------------------------------------------------------------
-
-@APP.post("/jobs/submit")
-async def submit_job_batch(request: Request, body: JobSubmitRequest):
-    """Submit a batch of tickers for server-side processing"""
-    require_admin(request)
-
-    if not body.tickers:
-        raise HTTPException(status_code=400, detail="No tickers specified")
-
-    # Check queue capacity
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT COUNT(*) as queued_count
-            FROM ticker_processing_jobs
-            WHERE status IN ('queued', 'processing')
-        """)
-
-        queued_count = cur.fetchone()['queued_count']
-
-        if queued_count > 100:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Job queue is full ({queued_count} jobs pending). Try again later."
-            )
-
-    # Create batch
-    batch_id = None
-    job_ids = []
-
-    with db() as conn, conn.cursor() as cur:
-        # Create batch record
-        cur.execute("""
-            INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
-            VALUES (%s, %s, %s)
-            RETURNING batch_id
-        """, (len(body.tickers), 'powershell', json.dumps({
-            "minutes": body.minutes,
-            "batch_size": body.batch_size,
-            "triage_batch_size": body.triage_batch_size
-        })))
-
-        batch_id = cur.fetchone()['batch_id']
-
-        # Create individual jobs with timeout
-        timeout_minutes = 45  # 45 minutes per ticker
-        timeout_at = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
-
-        for ticker in body.tickers:
-            cur.execute("""
-                INSERT INTO ticker_processing_jobs (
-                    batch_id, ticker, config, timeout_at
-                )
-                VALUES (%s, %s, %s, %s)
-                RETURNING job_id
-            """, (batch_id, ticker, json.dumps({
-                "minutes": body.minutes,
-                "batch_size": body.batch_size,
-                "triage_batch_size": body.triage_batch_size
-            }), timeout_at))
-
-            job_ids.append(str(cur.fetchone()['job_id']))
-
-    LOG.info(f"📦 Batch {batch_id} created: {len(body.tickers)} tickers submitted")
-
-    return {
-        "status": "submitted",
-        "batch_id": str(batch_id),
-        "job_ids": job_ids,
-        "tickers": body.tickers,
-        "total_jobs": len(body.tickers),
-        "message": f"Processing started server-side for {len(body.tickers)} tickers"
-    }
-
-@APP.get("/jobs/batch/{batch_id}")
-async def get_batch_status(request: Request, batch_id: str):
-    """Get status of all jobs in a batch"""
-    require_admin(request)
-
-    with db() as conn, conn.cursor() as cur:
-        # Get batch info
-        cur.execute("""
-            SELECT * FROM ticker_processing_batches WHERE batch_id = %s
-        """, (batch_id,))
-
-        batch = cur.fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-
-        # Get all jobs in batch
-        cur.execute("""
-            SELECT job_id, ticker, status, phase, progress,
-                   error_message, started_at, completed_at,
-                   duration_seconds, memory_mb
-            FROM ticker_processing_jobs
-            WHERE batch_id = %s
-            ORDER BY created_at
-        """, (batch_id,))
-
-        jobs = [dict(row) for row in cur.fetchall()]
-
-    # Calculate overall progress
-    total_progress = sum(j['progress'] for j in jobs)
-    avg_progress = total_progress // len(jobs) if jobs else 0
-
-    completed = len([j for j in jobs if j['status'] == 'completed'])
-    failed = len([j for j in jobs if j['status'] in ('failed', 'timeout')])
-    processing = len([j for j in jobs if j['status'] == 'processing'])
-    queued = len([j for j in jobs if j['status'] == 'queued'])
-
-    # Determine batch status
-    batch_status = batch['status']
-    if completed + failed == len(jobs):
-        batch_status = 'completed'
-    elif processing > 0 or completed > 0:
-        batch_status = 'processing'
-    else:
-        batch_status = 'queued'
-
-    # Update batch status if changed
-    if batch_status != batch['status']:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE ticker_processing_batches
-                SET status = %s,
-                    completed_jobs = %s,
-                    failed_jobs = %s
-                WHERE batch_id = %s
-            """, (batch_status, completed, failed, batch_id))
-
-    return {
-        "batch_id": batch_id,
-        "status": batch_status,
-        "total_tickers": len(jobs),
-        "completed": completed,
-        "failed": failed,
-        "processing": processing,
-        "queued": queued,
-        "overall_progress": avg_progress,
-        "created_at": batch['created_at'].isoformat() if batch['created_at'] else None,
-        "jobs": [{
-            "job_id": str(j['job_id']),
-            "ticker": j['ticker'],
-            "status": j['status'],
-            "phase": j['phase'],
-            "progress": j['progress'],
-            "error_message": j['error_message'],
-            "duration_seconds": j['duration_seconds'],
-            "memory_mb": j['memory_mb']
-        } for j in jobs]
-    }
-
-@APP.get("/jobs/active-batches")
-async def get_active_batches(request: Request):
-    """Get all active batches with their job details"""
-    require_admin(request)
-
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # First get batches with active jobs
-            cur.execute("""
-                SELECT
-                    b.batch_id,
-                    b.status as batch_status,
-                    b.created_at,
-                    b.total_jobs,
-                    b.completed_jobs,
-                    b.failed_jobs
-                FROM ticker_processing_batches b
-                WHERE b.created_at > NOW() - INTERVAL '24 hours'
-                  AND EXISTS (
-                      SELECT 1 FROM ticker_processing_jobs j
-                      WHERE j.batch_id = b.batch_id
-                        AND j.status IN ('queued', 'processing')
-                  )
-                ORDER BY b.created_at DESC
-            """)
-            batches = cur.fetchall()
-
-            result = []
-            for batch in batches:
-                # Get jobs for this batch
-                cur.execute("""
-                    SELECT job_id, ticker, status, phase, progress
-                    FROM ticker_processing_jobs
-                    WHERE batch_id = %s
-                    ORDER BY created_at
-                """, (batch['batch_id'],))
-                jobs = cur.fetchall()
-
-                result.append({
-                    "batch_id": str(batch['batch_id']),
-                    "batch_status": batch['batch_status'],
-                    "created_at": batch['created_at'].isoformat() if batch['created_at'] else None,
-                    "total_jobs": batch['total_jobs'],
-                    "completed_jobs": batch['completed_jobs'],
-                    "failed_jobs": batch['failed_jobs'],
-                    "jobs": [{"job_id": str(j['job_id']), "ticker": j['ticker'], "status": j['status'], "phase": j['phase'], "progress": j['progress']} for j in jobs]
-                })
-
-            return {
-                "active_batches": len(result),
-                "batches": result
-            }
-    except Exception as e:
-        LOG.error(f"Error in /jobs/active-batches: {e}")
-        LOG.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
-
-@APP.get("/jobs/stats")
-async def get_job_stats(request: Request):
-    """Get overall job queue statistics"""
-    require_admin(request)
-
-    with db() as conn, conn.cursor() as cur:
-        # Job counts by status
-        cur.execute("""
-            SELECT status, COUNT(*) as count
-            FROM ticker_processing_jobs
-            GROUP BY status
-        """)
-        status_counts = {row['status']: row['count'] for row in cur.fetchall()}
-
-        # Recent completions (last hour)
-        cur.execute("""
-            SELECT COUNT(*) as count,
-                   AVG(duration_seconds) as avg_duration,
-                   AVG(memory_mb) as avg_memory
-            FROM ticker_processing_jobs
-            WHERE status = 'completed'
-            AND completed_at > NOW() - INTERVAL '1 hour'
-        """)
-        recent = cur.fetchone()
-
-        # Active batches
-        cur.execute("""
-            SELECT COUNT(*) as count
-            FROM ticker_processing_batches
-            WHERE status IN ('queued', 'processing')
-        """)
-        active_batches = cur.fetchone()['count']
-
-    return {
-        "status_counts": status_counts,
-        "recent_completions_1h": recent['count'] or 0,
-        "avg_duration_seconds": float(recent['avg_duration']) if recent['avg_duration'] else None,
-        "avg_memory_mb": float(recent['avg_memory']) if recent['avg_memory'] else None,
-        "active_batches": active_batches,
-        "circuit_breaker_state": job_circuit_breaker.state,
-        "circuit_breaker_failures": job_circuit_breaker.failure_count,
-        "worker_id": get_worker_id()
-    }
-
-@APP.get("/jobs/{job_id}")
-async def get_job_detail(request: Request, job_id: str):
-    """Get detailed status of a single job"""
-    require_admin(request)
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT j.*, b.batch_id
-            FROM ticker_processing_jobs j
-            JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
-            WHERE j.job_id = %s
-        """, (job_id,))
-
-        job = cur.fetchone()
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        return {
-            "job_id": str(job['job_id']),
-            "batch_id": str(job['batch_id']),
-            "ticker": job['ticker'],
-            "status": job['status'],
-            "phase": job['phase'],
-            "progress": job['progress'],
-            "result": job['result'],
-            "error_message": job['error_message'],
-            "error_stacktrace": job['error_stacktrace'],
-            "retry_count": job['retry_count'],
-            "worker_id": job['worker_id'],
-            "memory_mb": job['memory_mb'],
-            "duration_seconds": job['duration_seconds'],
-            "created_at": job['created_at'].isoformat() if job['created_at'] else None,
-            "started_at": job['started_at'].isoformat() if job['started_at'] else None,
-            "completed_at": job['completed_at'].isoformat() if job['completed_at'] else None,
-            "config": job['config']
-        }
-
-@APP.post("/jobs/{job_id}/cancel")
-async def cancel_job(request: Request, job_id: str):
-    """Cancel a specific job"""
-    require_admin(request)
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            UPDATE ticker_processing_jobs
-            SET status = 'cancelled',
-                error_message = 'Cancelled by user',
-                completed_at = NOW(),
-                last_updated = NOW()
-            WHERE job_id = %s
-            AND status IN ('queued', 'processing')
-            RETURNING ticker, status, phase
-        """, (job_id,))
-
-        result = cur.fetchone()
-        if result:
-            LOG.warning(f"🚫 Job {job_id} cancelled by user (ticker: {result['ticker']}, was in: {result['phase']})")
-
-            # Update batch counters
-            cur.execute("""
-                UPDATE ticker_processing_batches
-                SET failed_jobs = failed_jobs + 1
-                WHERE batch_id = (
-                    SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
-                )
-            """, (job_id,))
-
-            return {
-                "status": "cancelled",
-                "job_id": job_id,
-                "ticker": result['ticker'],
-                "was_in_phase": result['phase']
-            }
-        else:
-            # Check if job exists but already completed/failed
-            cur.execute("""
-                SELECT ticker, status FROM ticker_processing_jobs WHERE job_id = %s
-            """, (job_id,))
-
-            existing = cur.fetchone()
-            if existing:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Job already {existing['status']}, cannot cancel"
-                )
-            else:
-                raise HTTPException(status_code=404, detail="Job not found")
-
-@APP.post("/jobs/batch/{batch_id}/cancel")
-async def cancel_batch(request: Request, batch_id: str):
-    """Cancel all jobs in a batch"""
-    require_admin(request)
-
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # Cancel all queued/processing jobs in the batch
-            cur.execute("""
-                UPDATE ticker_processing_jobs
-                SET status = 'cancelled',
-                    error_message = 'Batch cancelled by user',
-                    completed_at = NOW(),
-                    last_updated = NOW()
-                WHERE batch_id = %s
-                AND status IN ('queued', 'processing')
-                RETURNING job_id, ticker
-            """, (batch_id,))
-
-            cancelled_jobs = cur.fetchall()
-
-            if cancelled_jobs:
-                LOG.warning(f"🚫 Batch {batch_id} cancelled by user ({len(cancelled_jobs)} jobs)")
-                for job in cancelled_jobs:
-                    LOG.info(f"   Cancelled: {job['ticker']} (job_id: {job['job_id']})")
-
-                # Update batch status
-                cur.execute("""
-                    UPDATE ticker_processing_batches
-                    SET status = 'cancelled',
-                        failed_jobs = failed_jobs + %s
-                    WHERE batch_id = %s
-                """, (len(cancelled_jobs), batch_id))
-
-                return {
-                    "status": "cancelled",
-                    "batch_id": batch_id,
-                    "jobs_cancelled": len(cancelled_jobs),
-                    "tickers": [j['ticker'] for j in cancelled_jobs]
-                }
-            else:
-                # Check if batch exists
-                cur.execute("""
-                    SELECT status, total_jobs FROM ticker_processing_batches WHERE batch_id = %s
-                """, (batch_id,))
-
-                batch = cur.fetchone()
-                if batch:
-                    return {
-                        "status": "no_jobs_to_cancel",
-                        "message": f"Batch is already {batch['status']}, no jobs to cancel",
-                        "batch_id": batch_id
-                    }
-                else:
-                    raise HTTPException(status_code=404, detail="Batch not found")
-    except Exception as e:
-        LOG.error(f"Error cancelling batch {batch_id}: {e}")
-        LOG.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
-
-@APP.post("/jobs/circuit-breaker/reset")
-async def reset_circuit_breaker(request: Request):
-    """Manually reset the circuit breaker"""
-    require_admin(request)
-
-    job_circuit_breaker.reset()
-
-    return {
-        "status": "reset",
-        "message": "Circuit breaker has been manually reset"
-    }
-
-# ------------------------------------------------------------------------------
-# ADMIN ENDPOINTS (Existing)
-# ------------------------------------------------------------------------------
-
-@APP.post("/admin/migrate-feeds")
-async def admin_migrate_feeds(request: Request):
-    """NEW ARCHITECTURE V2: Verify feeds + ticker_feeds architecture is ready"""
-    require_admin(request)
-
-    try:
-        # Step 1: Ensure schema is up to date (includes feeds + ticker_feeds tables)
-        ensure_schema()
-
-        # Step 2: Verify new architecture exists
-        with db() as conn, conn.cursor() as cur:
-            # Verify new architecture exists
-            cur.execute("SELECT COUNT(*) as feed_count FROM feeds")
-            new_feed_count = cur.fetchone()['feed_count']
-
-            cur.execute("SELECT COUNT(*) as association_count FROM ticker_feeds")
-            association_count = cur.fetchone()['association_count']
-
-            LOG.info(f"✅ NEW ARCHITECTURE V2 verified: {new_feed_count} feeds, {association_count} associations")
-
-            return {
-                "status": "success",
-                "message": "NEW ARCHITECTURE V2 (category-per-relationship) is active",
-                "feeds": new_feed_count,
-                "associations": association_count
-            }
-
-    except Exception as e:
-        LOG.error(f"❌ Migration failed: {e}")
-        return {"status": "error", "message": str(e)}
-
-@APP.post("/admin/fix-foreign-key")
-async def admin_fix_foreign_key(request: Request):
-    """Fix the found_url foreign key constraint to point to feeds table (DEPRECATED)"""
-    require_admin(request)
-
-    try:
-        # This endpoint is deprecated - foreign keys are handled in ensure_schema()
-
-        return {
-            "status": "success",
-            "message": "Foreign key constraint fixed successfully"
-        }
-
-    except Exception as e:
-        LOG.error(f"❌ Foreign key fix failed: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@APP.post("/admin/init")
-async def admin_init(request: Request, body: InitRequest):
-    async with TICKER_PROCESSING_LOCK:
-        """Initialize feeds for specified tickers using NEW ARCHITECTURE"""
-        require_admin(request)
-
-        # Global state to track if initialization already happened in this session
-        global _schema_initialized, _github_synced
-        if '_schema_initialized' not in globals():
-            _schema_initialized = False
-        if '_github_synced' not in globals():
-            _github_synced = False
-
-        # NEW ARCHITECTURE V2: Use functions directly from app.py (no import needed)
-
-        LOG.info("=== INITIALIZATION STARTING ===")
-
-        # CRITICAL: Clear any global state that might contaminate between tickers
-        LOG.info("=== CLEARING GLOBAL STATE FOR FRESH TICKER PROCESSING ===")
-        import gc
-        gc.collect()  # Force garbage collection to clear any lingering objects
-
-        # STEP 1: Ensure database schema is up to date (ONCE per session)
-        if not _schema_initialized:
-            LOG.info("=== ENSURING DATABASE SCHEMA (NEW FEED ARCHITECTURE) ===")
-            ensure_schema()
-            _schema_initialized = True
-        else:
-            LOG.info("=== SCHEMA ALREADY INITIALIZED - SKIPPING ===")
-
-        # STEP 2: Import CSV from GitHub (ONCE per session)
-        if not _github_synced:
-            LOG.info("=== INITIALIZATION: Syncing ticker reference from GitHub ===")
-            github_sync_result = sync_ticker_references_from_github()
-            _github_synced = True
-        else:
-            LOG.info("=== GITHUB SYNC ALREADY COMPLETED - SKIPPING ===")
-            github_sync_result = {"status": "skipped", "message": "Already synced in this session"}
-
-        if github_sync_result["status"] != "success":
-            LOG.warning(f"GitHub sync failed: {github_sync_result.get('message', 'Unknown error')}")
-        else:
-            LOG.info(f"GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
-
-        results = []
-
-        # CRITICAL: Process each ticker in complete isolation using NEW ARCHITECTURE
-        for ticker in body.tickers:
-            # STEP 1: Create isolated ticker variable to prevent corruption
-            isolated_ticker = str(ticker).strip()  # Force new string object
-
-            # CRITICAL: Clear any residual state between ticker processing
-            LOG.info(f"=== PROCESSING {isolated_ticker} - NEW ARCHITECTURE ===")
-            import gc
-            gc.collect()  # Force garbage collection between each ticker
-
-            LOG.info(f"=== INITIALIZING TICKER: {isolated_ticker} ===")
-
-            try:
-                # STEP 2: Get or generate metadata with enhanced ticker reference integration
-                # CRITICAL: Force refresh to ensure no cached contamination from previous tickers
-                metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker, force_refresh=True)
-
-                # CRITICAL DEBUG: Log what metadata was actually returned
-                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} metadata returned: {metadata}")
-                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} company_name in metadata: '{metadata.get('company_name', 'MISSING')}'")
-
-                # STEP 3: Create feeds using NEW MANY-TO-MANY ARCHITECTURE
-                feeds_created = create_feeds_for_ticker_new_architecture(isolated_ticker, metadata)
-
-                if not feeds_created:
-                    LOG.info(f"=== {isolated_ticker}: No new feeds created ===")
-                    results.append({
-                        "ticker": isolated_ticker,
-                        "message": "No new feeds created",
-                        "feeds_created": 0
-                    })
-                    continue
-
-                # STEP 4: Process results from new architecture
-                LOG.info(f"✅ Successfully created {len(feeds_created)} feeds for {isolated_ticker} using NEW ARCHITECTURE")
-
-                results.append({
-                    "ticker": isolated_ticker,
-                    "message": f"Successfully created feeds using new architecture",
-                    "feeds_created": len(feeds_created),
-                    "details": [{"feed_id": f["feed_id"], "category": f["config"].get("category", "unknown")} for f in feeds_created]
-                })
-
-            except Exception as e:
-                LOG.error(f"❌ Failed to create feeds for {isolated_ticker}: {e}")
-                results.append({
-                    "ticker": isolated_ticker,
-                    "message": f"Failed to create feeds: {str(e)}",
-                    "feeds_created": 0
-                })
-
-        # Return results
-        LOG.info("=== INITIALIZATION COMPLETE ===")
-        return {
-            "status": "success",
-            "message": "Feed initialization completed using NEW ARCHITECTURE",
-            "results": results,
-            "total_tickers": len(body.tickers),
-            "successful": len([r for r in results if r["feeds_created"] > 0])
-        }
-
-@APP.post("/cron/ingest")
-async def cron_ingest(
-    request: Request,
-    minutes: int = Query(default=15, description="Time window in minutes"),
-    tickers: List[str] = Query(default=None, description="Specific tickers to ingest"),
-    batch_size: int = Query(default=None, description="Batch size for concurrent processing"),
-    triage_batch_size: int = Query(default=2, description="Batch size for triage processing")
-):
-    """Enhanced ingest with comprehensive memory monitoring and async batch processing"""
-    async with TICKER_PROCESSING_LOCK:
-        # Set batch size from parameter or environment variable
-        global SCRAPE_BATCH_SIZE
-        if batch_size is not None:
-            SCRAPE_BATCH_SIZE = max(1, min(batch_size, 10))  # Limit between 1-10
-            LOG.info(f"BATCH SIZE OVERRIDE: Using batch_size={SCRAPE_BATCH_SIZE} from API parameter")
-        
-        start_time = time.time()
-        require_admin(request)
-        ensure_schema()
-        
-        # Initialize memory monitoring with error handling
-        try:
-            memory_monitor.start_monitoring()
-            memory_monitor.take_snapshot("CRON_INGEST_START")
-            LOG.info("=== CRON INGEST STARTING (WITH MEMORY MONITORING & ASYNC BATCHES) ===")
-        except Exception as e:
-            LOG.error(f"Memory monitoring failed to start: {e}")
-            LOG.info("=== CRON INGEST STARTING (WITHOUT MEMORY MONITORING) ===")
-        
-        LOG.info(f"Processing window: {minutes} minutes")
-        LOG.info(f"Target tickers: {tickers or 'ALL'}")
-        LOG.info(f"Batch size: {SCRAPE_BATCH_SIZE}")
-        
-        try:
-            # Reset statistics
-            reset_ingestion_stats()
-            reset_scraping_stats()
-            reset_enhanced_scraping_stats()
-            memory_monitor.take_snapshot("STATS_RESET")
-            
-            # Initialize async semaphores
-            init_async_semaphores()
-            
-            # Calculate dynamic scraping limits for each ticker using enhanced database
-            dynamic_limits = {}
-            if tickers:
-                for ticker in tickers:
-                    dynamic_limits[ticker] = calculate_dynamic_scraping_limits(ticker)
-                    LOG.info(f"DYNAMIC SCRAPING LIMITS for {ticker}: {dynamic_limits[ticker]}")
-            
-            memory_monitor.take_snapshot("LIMITS_CALCULATED")
-            
-            # PHASE 1: Process feeds for new articles
-            LOG.info("=== PHASE 1: PROCESSING FEEDS (NEW + EXISTING ARTICLES) ===")
-            memory_monitor.take_snapshot("PHASE1_START")
-            
-            # Get feeds using NEW ARCHITECTURE (feeds + ticker_feeds)
-            with resource_cleanup_context("database_connection"):
-                with db() as conn, conn.cursor() as cur:
-                    if tickers:
-                        cur.execute("""
-                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
-                            ORDER BY tf.ticker, tf.category, f.id
-                        """, (tickers,))
-                    else:
-                        cur.execute("""
-                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE f.active = TRUE AND tf.active = TRUE
-                            ORDER BY tf.ticker, tf.category, f.id
-                        """)
-                    feeds = list(cur.fetchall())
-            
-            if not feeds:
-                memory_monitor.take_snapshot("NO_FEEDS_FOUND")
-                return {"status": "no_feeds", "message": "No active feeds found"}
-            
-            memory_monitor.take_snapshot("FEEDS_LOADED")
-            
-            # DEBUG: Check what feeds exist before processing (NEW ARCHITECTURE)
-            with resource_cleanup_context("debug_feed_check"):
-                with db() as conn, conn.cursor() as cur:
-                    if tickers:
-                        cur.execute("""
-                            SELECT tf.ticker, tf.category, COUNT(*) as count,
-                                   STRING_AGG(f.name, ' | ') as feed_names
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE tf.ticker = ANY(%s) AND f.active = TRUE AND tf.active = TRUE
-                            GROUP BY tf.ticker, tf.category
-                            ORDER BY tf.ticker, tf.category
-                        """, (tickers,))
-                    else:
-                        cur.execute("""
-                            SELECT tf.ticker, tf.category, COUNT(*) as count,
-                                   STRING_AGG(f.name, ' | ') as feed_names
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE f.active = TRUE AND tf.active = TRUE
-                            GROUP BY tf.ticker, tf.category
-                            ORDER BY tf.ticker, tf.category
-                        """)
-                    
-                    feed_debug = list(cur.fetchall())
-                    LOG.info("=== FEED DEBUG BEFORE PROCESSING ===")
-                    for feed_row in feed_debug:
-                        LOG.info(f"  {feed_row['ticker']} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
-                    LOG.info("=== END FEED DEBUG ===")
-            
-            ingest_stats = {
-                "total_processed": 0, 
-                "total_inserted": 0,
-                "total_duplicates": 0, 
-                "total_spam_blocked": 0, 
-                "total_limit_reached": 0,
-                "total_insider_trading_blocked": 0,
-                "total_yahoo_rejected": 0
-            }
-
-            # Process feeds normally to get new articles
-            for i, feed in enumerate(feeds):
-                try:
-                    stats = ingest_feed_basic_only(feed)
-                    ingest_stats["total_processed"] += stats["processed"]
-                    ingest_stats["total_inserted"] += stats["inserted"]
-                    ingest_stats["total_duplicates"] += stats["duplicates"]
-                    ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
-                    ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
-                    ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)
-                    ingest_stats["total_yahoo_rejected"] += stats.get("yahoo_rejected", 0)
-                    
-                    # Memory monitoring every 10 feeds
-                    if i % 10 == 0:
-                        memory_monitor.take_snapshot(f"FEED_PROCESSING_{i}")
-                        current_memory = memory_monitor.get_memory_info()
-                        if current_memory["memory_mb"] > 500:  # 500MB threshold
-                            LOG.warning(f"High memory during feed processing: {current_memory['memory_mb']:.1f}MB")
-                            memory_monitor.force_garbage_collection()
-                            
-                except Exception as e:
-                    LOG.error(f"[{feed.get('ticker', 'UNKNOWN')}] Feed ingest failed for {feed['name']}: {e}")
-                    continue
-            
-            memory_monitor.take_snapshot("PHASE1_FEEDS_COMPLETE")
-            
-            # Now get ALL articles from the timeframe for ticker-specific analysis
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-            articles_by_ticker = {}
-
-            with resource_cleanup_context("database_connection"):
-                with db() as conn, conn.cursor() as cur:
-                    if tickers:
-                        cur.execute("""
-                            WITH ranked_articles AS (
-                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                       a.scraped_content, ta.ai_summary, a.url_hash,
-                                       ROW_NUMBER() OVER (
-                                           PARTITION BY ta.ticker,
-                                               CASE
-                                                   WHEN ta.category = 'company' THEN ta.category
-                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
-                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
-                                               END
-                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
-                                       ) as rn
-                                FROM articles a
-                                JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.found_at >= %s
-                                AND ta.ticker = ANY(%s)
-                                AND (a.published_at >= %s OR a.published_at IS NULL)
-                            )
-                            SELECT id, url, resolved_url, title, domain, published_at,
-                                   category, search_keyword, competitor_ticker, ticker,
-                                   scraped_content, ai_summary, url_hash
-                            FROM ranked_articles
-                            WHERE (category = 'company' AND rn <= 50)
-                               OR (category = 'industry' AND rn <= 25)
-                               OR (category = 'competitor' AND rn <= 25)
-                            ORDER BY ticker, category, rn
-                        """, (cutoff, tickers, cutoff))
-                    else:
-                        cur.execute("""
-                            WITH ranked_articles AS (
-                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                       a.scraped_content, ta.ai_summary, a.url_hash,
-                                       ROW_NUMBER() OVER (
-                                           PARTITION BY ta.ticker,
-                                               CASE
-                                                   WHEN ta.category = 'company' THEN ta.category
-                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
-                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
-                                               END
-                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
-                                       ) as rn
-                                FROM articles a
-                                JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.found_at >= %s
-                                AND (a.published_at >= %s OR a.published_at IS NULL)
-                            )
-                            SELECT id, url, resolved_url, title, domain, published_at,
-                                   category, search_keyword, competitor_ticker, ticker,
-                                   scraped_content, ai_summary, url_hash
-                            FROM ranked_articles
-                            WHERE (category = 'company' AND rn <= 50)
-                               OR (category = 'industry' AND rn <= 25)
-                               OR (category = 'competitor' AND rn <= 25)
-                            ORDER BY ticker, category, rn
-                        """, (cutoff, cutoff))
-
-                    all_articles = list(cur.fetchall())
-
-            memory_monitor.take_snapshot("ARTICLES_LOADED")
-
-            # Log filtering statistics
-            with db() as conn, conn.cursor() as cur:
-                if tickers:
-                    cur.execute("""
-                        SELECT
-                            ta.ticker,
-                            ta.category,
-                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
-                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
-                        FROM ticker_articles ta
-                        JOIN articles a ON ta.article_id = a.id
-                        WHERE ta.found_at >= %s AND ta.ticker = ANY(%s)
-                        GROUP BY ta.ticker, ta.category
-                        ORDER BY ta.ticker, ta.category
-                    """, (cutoff, cutoff, cutoff, tickers))
-                else:
-                    cur.execute("""
-                        SELECT
-                            ta.ticker,
-                            ta.category,
-                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
-                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
-                        FROM ticker_articles ta
-                        JOIN articles a ON ta.article_id = a.id
-                        WHERE ta.found_at >= %s
-                        GROUP BY ta.ticker, ta.category
-                        ORDER BY ta.ticker, ta.category
-                    """, (cutoff, cutoff, cutoff))
-
-                filter_stats = cur.fetchall()
-                for stat in filter_stats:
-                    if stat['outside_period'] > 0:
-                        LOG.info(f"📅 [{stat['ticker']}] {stat['category']}: {stat['within_period']} within report period, {stat['outside_period']} excluded (published outside {minutes}min window)")
-
-            # Organize articles by ticker and category
-            for article in all_articles:
-                ticker = article["ticker"]
-                category = article["category"] or "company"
-
-                if ticker not in articles_by_ticker:
-                    articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
-
-                articles_by_ticker[ticker][category].append(article)
-
-            total_articles = len(all_articles)
-            LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
-            memory_monitor.take_snapshot("PHASE1_COMPLETE")
-            
-            # PHASE 2: Pure AI triage
-            LOG.info("=== PHASE 2: PURE AI TRIAGE ===")
-            memory_monitor.take_snapshot("PHASE2_START")
-            triage_results = {}
-            
-            for ticker in articles_by_ticker.keys():
-                LOG.info(f"Running pure AI triage for {ticker}")
-                memory_monitor.take_snapshot(f"TRIAGE_START_{ticker}")
-                
-                with resource_cleanup_context("ai_triage"):
-                    # Use dual scoring triage (OpenAI + Claude)
-                    selected_results = await perform_ai_triage_with_dual_scoring_async(articles_by_ticker[ticker], ticker, triage_batch_size)
-                    triage_results[ticker] = selected_results
-
-                memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")
-
-                # Build flagged articles list (will be stored by process_ingest_phase)
-                flagged_articles = []
-                with resource_cleanup_context("database_connection"):
-                    for category, selected_items in selected_results.items():
-                        articles = articles_by_ticker[ticker][category]
-                        LOG.info(f"  Building flagged list for {category}: {len(selected_items)} selected from {len(articles)} articles")
-                        for item in selected_items:
-                            article_idx = item["id"]
-                            if article_idx < len(articles):
-                                article = articles[article_idx]
-                                article_id = article.get("id")
-                                if article_id:
-                                    flagged_articles.append(article_id)
-                                else:
-                                    LOG.warning(f"  Article at index {article_idx} in {category} has no ID!")
-
-                LOG.info(f"✅ Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
-                if flagged_articles:
-                    LOG.info(f"   Sample IDs: {flagged_articles[:5]}...")
-
-            memory_monitor.take_snapshot("PHASE2_COMPLETE")
-            
-            # PHASE 3: Send enhanced quick email
-            LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
-            memory_monitor.take_snapshot("PHASE3_START")
-
-            with resource_cleanup_context("email_sending"):
-                quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes)
-            
-            LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
-            memory_monitor.take_snapshot("PHASE3_COMPLETE")
-            
-            # PHASE 4: Ticker-specific content scraping and analysis (WITH ASYNC BATCH PROCESSING)
-            LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS (ASYNC BATCHES) ===")
-            memory_monitor.take_snapshot("PHASE4_START")
-            scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
-            
-            # Count total articles to be processed for heartbeat tracking
-            total_articles_to_process = 0
-            for target_ticker in articles_by_ticker.keys():
-                selected = triage_results.get(target_ticker, {})
-                for category in ["company", "industry", "competitor"]:
-                    total_articles_to_process += len(selected.get(category, []))
-            
-            processed_count = 0
-            LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process in batches of {SCRAPE_BATCH_SIZE}")
-            
-            # Track which tickers were successfully processed
-            successfully_processed_tickers = set()
-            
-            for target_ticker in articles_by_ticker.keys():
-                memory_monitor.take_snapshot(f"TICKER_START_{target_ticker}")
-                
-                config = get_ticker_config(target_ticker)
-                metadata = {
-                    "industry_keywords": config.get("industry_keywords", []) if config else [],
-                    "competitors": config.get("competitors", []) if config else []
-                }
-                
-                ticker_success_count = 0
-                selected = triage_results.get(target_ticker, {})
-                
-                # Collect all selected articles for this ticker across categories
-                all_selected_articles = []
-                for category in ["company", "industry", "competitor"]:
-                    category_selected = selected.get(category, [])
-                    
-                    for item in category_selected:
-                        article_idx = item["id"]
-                        if article_idx < len(articles_by_ticker[target_ticker][category]):
-                            article = articles_by_ticker[target_ticker][category][article_idx]
-                            all_selected_articles.append({
-                                "article": article,
-                                "category": category,
-                                "item": item
-                            })
-                
-                # Process articles in batches
-                total_batches = (len(all_selected_articles) + SCRAPE_BATCH_SIZE - 1) // SCRAPE_BATCH_SIZE
-                LOG.info(f"TICKER {target_ticker}: Processing {len(all_selected_articles)} articles in {total_batches} batches of {SCRAPE_BATCH_SIZE}")
-                
-                for batch_num in range(total_batches):
-                    start_idx = batch_num * SCRAPE_BATCH_SIZE
-                    end_idx = min(start_idx + SCRAPE_BATCH_SIZE, len(all_selected_articles))
-                    batch = all_selected_articles[start_idx:end_idx]
-                    
-                    LOG.info(f"TICKER {target_ticker}: Processing batch {batch_num + 1}/{total_batches} ({len(batch)} articles)")
-                    
-                    # Prepare batch for processing
-                    batch_articles = []
-                    batch_categories = []
-                    for selected_article in batch:
-                        batch_articles.append(selected_article["article"])
-                        batch_categories.append(selected_article["category"])
-                    
-                    # Process batch asynchronously with per-article categories
-                    # Add company_name to metadata for AI summarization
-                    metadata["company_name"] = config.get("company_name", target_ticker) if config else target_ticker
-                    try:
-                        batch_results = await process_article_batch_async(
-                            batch_articles,
-                            batch_categories,  # Pass all categories for per-article processing
-                            metadata,
-                            target_ticker
-                        )
-                        
-                        # Update statistics based on batch results
-                        for result in batch_results:
-                            processed_count += 1
-                            
-                            if result["success"]:
-                                ticker_success_count += 1
-                                if result.get("scraped_content") and result.get("ai_summary"):
-                                    scraping_final_stats["scraped"] += 1
-                                    scraping_final_stats["ai_analyzed"] += 1
-                                elif result.get("scraped_content"):
-                                    scraping_final_stats["reused_existing"] += 1
-                            else:
-                                scraping_final_stats["failed"] += 1
-                        
-                        # MEMORY MONITORING: Every batch
-                        elapsed = time.time() - start_time
-                        memory_monitor.take_snapshot(f"BATCH_{batch_num + 1}_COMPLETE")
-                        current_memory = memory_monitor.get_memory_info()
-                        
-                        LOG.info(f"BATCH COMPLETE: {batch_num + 1}/{total_batches} for {target_ticker} - {processed_count}/{total_articles_to_process} total ({elapsed:.1f}s elapsed)")
-                        LOG.info(f"BATCH STATS: Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
-                        LOG.info(f"MEMORY: {current_memory['memory_mb']:.1f}MB, CPU: {current_memory['cpu_percent']:.1f}%")
-                        
-                        # Force garbage collection if memory gets high
-                        if current_memory["memory_mb"] > 800:  # 800MB threshold
-                            LOG.warning(f"HIGH MEMORY USAGE: {current_memory['memory_mb']:.1f}MB - forcing garbage collection")
-                            gc_stats = memory_monitor.force_garbage_collection()
-                            memory_monitor.take_snapshot(f"BATCH_POST_GC_{batch_num + 1}")
-                            LOG.info(f"GC: Freed {gc_stats['objects_freed']} objects")
-                            
-                    except Exception as e:
-                        LOG.error(f"BATCH PROCESSING ERROR: Batch {batch_num + 1} for {target_ticker} failed: {e}")
-                        # Mark articles in failed batch as failed
-                        for _ in batch:
-                            processed_count += 1
-                            scraping_final_stats["failed"] += 1
-                        continue
-                
-                # Track tickers that had successful processing
-                if ticker_success_count > 0:
-                    successfully_processed_tickers.add(target_ticker)
-                
-                LOG.info(f"TICKER {target_ticker} COMPLETE: {ticker_success_count} successful articles")
-                memory_monitor.take_snapshot(f"TICKER_COMPLETE_{target_ticker}")
-            
-            # Final heartbeat before completion
-            elapsed = time.time() - start_time
-            LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in batches in {elapsed:.1f}s")
-            LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
-            memory_monitor.take_snapshot("PHASE4_COMPLETE")
-
-            # Consolidated scraping statistics
-            total_attempts = enhanced_scraping_stats["total_attempts"]
-            if total_attempts > 0:
-                total_success = (enhanced_scraping_stats["requests_success"] +
-                                enhanced_scraping_stats["playwright_success"] +
-                                enhanced_scraping_stats.get("scrapfly_success", 0))
-                overall_rate = (total_success / total_attempts) * 100
-
-                requests_attempts = enhanced_scraping_stats["by_method"]["requests"]["attempts"]
-                requests_success = enhanced_scraping_stats["by_method"]["requests"]["successes"]
-                requests_rate = (requests_success / requests_attempts * 100) if requests_attempts > 0 else 0
-
-                playwright_attempts = enhanced_scraping_stats["by_method"]["playwright"]["attempts"]
-                playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
-                playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
-
-                scrapfly_attempts = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("attempts", 0)
-                scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
-                scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
-
-                LOG.info("=" * 60)
-                LOG.info("SCRAPING SUCCESS RATES")
-                LOG.info("=" * 60)
-                LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
-                LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
-                LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
-                LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
-                if scrapfly_stats["requests_made"] > 0:
-                    LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
-                LOG.info("=" * 60)
-            
-            # CRITICAL: Final cleanup before returning response
-            LOG.info("=== PERFORMING FINAL CLEANUP ===")
-            memory_monitor.take_snapshot("BEFORE_FINAL_CLEANUP")
-            
-            try:
-                await full_resource_cleanup()  # Single call with await
-                memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
-                LOG.info("=== FINAL CLEANUP COMPLETE ===")
-            except Exception as cleanup_error:
-                LOG.error(f"Error during final cleanup: {cleanup_error}")
-                memory_monitor.take_snapshot("CLEANUP_ERROR")
-            
-            processing_time = time.time() - start_time
-            LOG.info(f"=== CRON INGEST COMPLETE - Total time: {processing_time:.1f}s ===")
-            
-            # Calculate scraping stats
-            total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
-            total_scraping_success = (enhanced_scraping_stats["requests_success"] +
-                                     enhanced_scraping_stats["playwright_success"] +
-                                     enhanced_scraping_stats.get("scrapfly_success", 0))
-            overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
-            
-            # Stop memory monitoring and get summary
-            memory_summary = memory_monitor.stop_monitoring()
-            
-            # Prepare response with monitoring data
-            response = {
-                "status": "completed",
-                "processing_time_seconds": round(processing_time, 1),
-                "workflow": "enhanced_ticker_reference_with_async_batch_processing",
-                "batch_size_used": SCRAPE_BATCH_SIZE,
-
-                "phase_1_ingest": {
-                    "total_processed": ingest_stats["total_processed"],
-                    "total_inserted": ingest_stats["total_inserted"],
-                    "total_duplicates": ingest_stats["total_duplicates"],
-                    "total_spam_blocked": ingest_stats["total_spam_blocked"],
-                    "total_limit_reached": ingest_stats["total_limit_reached"],
-                    "total_insider_trading_blocked": ingest_stats["total_insider_trading_blocked"],
-                    "total_yahoo_rejected": ingest_stats["total_yahoo_rejected"],
-                    "total_articles_in_timeframe": total_articles
-                },
-                "phase_2_triage": {
-                    "type": "pure_ai_triage_only",
-                    "tickers_processed": len(triage_results),
-                    "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()},
-                    "flagged_articles": flagged_articles  # Article IDs flagged during triage
-                },
-                "phase_3_quick_email": {"sent": quick_email_sent},
-                "phase_4_async_batch_scraping": {
-                    **scraping_final_stats,
-                    "overall_success_rate": f"{overall_scraping_rate:.1f}%",
-                    "tier_breakdown": {
-                        "requests_success": enhanced_scraping_stats["requests_success"],
-                        "playwright_success": enhanced_scraping_stats["playwright_success"],
-                        "scrapfly_success": enhanced_scraping_stats.get("scrapfly_success", 0),
-                        "total_attempts": total_scraping_attempts
-                    },
-                    "scrapfly_cost": f"${scrapfly_stats['cost_estimate']:.3f}",
-                    "dynamic_limits": dynamic_limits,
-                    "batch_processing": {
-                        "batch_size": SCRAPE_BATCH_SIZE,
-                        "total_articles": total_articles_to_process,
-                        "articles_per_batch": SCRAPE_BATCH_SIZE,
-                        "estimated_batches": total_articles_to_process // SCRAPE_BATCH_SIZE if total_articles_to_process > 0 else 0
-                    }
-                },
-                "successfully_processed_tickers": list(successfully_processed_tickers),
-                "message": f"Processing completed successfully with async batch processing (batch_size={SCRAPE_BATCH_SIZE})",
-                "github_sync_required": len(successfully_processed_tickers) > 0,
-
-                # Memory monitoring data
-                "memory_monitoring": {
-                    "enabled": True,
-                    "total_snapshots": len(memory_monitor.snapshots),
-                    "memory_summary": memory_summary,
-                    "peak_memory_mb": max([s.get("memory_mb", 0) for s in memory_monitor.snapshots]) if memory_monitor.snapshots else 0,
-                    "final_memory_mb": memory_summary.get("final_memory_mb") if memory_summary else None,
-                    "total_memory_change_mb": memory_summary.get("total_change_mb") if memory_summary else None
-                }
-            }
-            
-            return response
-            
-        except Exception as e:
-            # CRITICAL ERROR HANDLING WITH MEMORY SNAPSHOT
-            LOG.error(f"CRITICAL ERROR in cron_ingest: {str(e)}")
-            memory_monitor.take_snapshot("CRITICAL_ERROR")
-            
-            # Get detailed memory info at crash
-            current_memory = memory_monitor.get_memory_info()
-            tracemalloc_info = memory_monitor.get_tracemalloc_top(20)
-            
-            LOG.error(f"MEMORY AT CRASH: {current_memory}")
-            LOG.error(f"TOP MEMORY ALLOCATIONS AT CRASH: {tracemalloc_info}")
-            
-            # Emergency cleanup
-            try:
-                cleanup_result = await full_resource_cleanup()
-                LOG.info(f"Emergency cleanup completed: {cleanup_result}")
-            except Exception as cleanup_error:
-                LOG.error(f"Error during emergency cleanup: {cleanup_error}")
-            
-            return {
-                "status": "critical_error",
-                "message": str(e),
-                "batch_size_used": SCRAPE_BATCH_SIZE,
-                "memory_monitoring": {
-                    "snapshots_taken": len(memory_monitor.snapshots),
-                    "memory_at_crash": current_memory,
-                    "top_allocations": tracemalloc_info[:5],  # Top 5 memory allocations
-                    "error_occurred": True
-                }
-            }
-
-def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):
-    """Helper to update statistics"""
-    ticker_stats["inserted"] += stats["inserted"]
-    ticker_stats["duplicates"] += stats["duplicates"]
-    ticker_stats["blocked_spam"] += stats.get("blocked_spam", 0)
-    ticker_stats["content_scraped"] += stats.get("content_scraped", 0)
-    ticker_stats["content_failed"] += stats.get("content_failed", 0)
-    ticker_stats["scraping_skipped"] += stats.get("scraping_skipped", 0)
-    ticker_stats["ai_scored"] += stats.get("ai_scored", 0)
-    ticker_stats["basic_scored"] += stats.get("basic_scored", 0)
-    
-    total_stats["feeds_processed"] += 1
-    total_stats["total_inserted"] += stats["inserted"]
-    total_stats["total_duplicates"] += stats["duplicates"]
-    total_stats["total_blocked_spam"] += stats.get("blocked_spam", 0)
-    total_stats["total_content_scraped"] += stats.get("content_scraped", 0)
-    total_stats["total_content_failed"] += stats.get("content_failed", 0)
-    total_stats["total_scraping_skipped"] += stats.get("scraping_skipped", 0)
-    total_stats["total_ai_scored"] += stats.get("ai_scored", 0)
-    total_stats["total_basic_scored"] += stats.get("basic_scored", 0)
-    total_stats["by_category"][category] += stats["inserted"]
-
-@APP.post("/cron/digest")
-async def cron_digest(
-    request: Request,
-    minutes: int = Query(default=1440, description="Time window in minutes"),
-    tickers: List[str] = Query(default=None, description="Specific tickers for digest")
-):
-    async with TICKER_PROCESSING_LOCK:
-        """Generate and send email digest with content scraping data and AI summaries"""
-        require_admin(request)
-        ensure_schema()
-
-        try:
-            LOG.info(f"=== DIGEST GENERATION STARTING ===")
-            LOG.info(f"Time window: {minutes} minutes, Tickers: {tickers}")
-
-            # Use the existing enhanced digest function that sends emails
-            LOG.info("Calling enhanced digest function...")
-            result = fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
-
-            # The function returns a detailed result dict, let's pass it through with additional metadata
-            if isinstance(result, dict):
-                result["minutes"] = minutes
-                result["requested_tickers"] = tickers
-                LOG.info(f"Digest result: {result.get('status', 'unknown')} - {result.get('articles', 0)} articles")
-                return result
-            else:
-                LOG.error(f"Unexpected result type from digest function: {type(result)}")
-                return {
-                    "status": "error",
-                    "message": "Unexpected result from digest generation",
-                    "minutes": minutes,
-                    "tickers": tickers
-                }
-
-        except Exception as e:
-            LOG.error(f"Digest generation failed: {e}")
-            LOG.error(f"Error details: {traceback.format_exc()}")
-            return {
-                "status": "error",
-                "message": str(e),
-                "tickers": tickers,
-                "minutes": minutes
-            }
-        
-# FIXED: Updated endpoint with proper request body handling
-@APP.post("/admin/clean-feeds")
-async def clean_old_feeds(request: Request, body: CleanFeedsRequest):
-    async with TICKER_PROCESSING_LOCK:
-        """Clean old Reddit/Twitter feeds from database"""
-        require_admin(request)
-        
-        with db() as conn, conn.cursor() as cur:
-            # Check if tables exist first (safe for fresh database)
-            try:
-                cur.execute("SELECT 1 FROM ticker_feeds LIMIT 1")
-                cur.execute("SELECT 1 FROM feeds LIMIT 1")
-            except Exception as e:
-                LOG.info(f"📋 Tables don't exist yet (fresh database) - clean-feeds skipped: {e}")
-                return {"status": "skipped", "message": "Tables don't exist yet - nothing to clean", "deleted": 0}
-
-            # Delete feeds that contain Reddit, Twitter, SEC, StockTwits
-            cleanup_patterns = [
-                "Reddit", "Twitter", "SEC EDGAR", "StockTwits",
-                "r/investing", "r/stocks", "r/SecurityAnalysis",
-                "r/ValueInvesting", "r/energy", "@TalenEnergy"
-            ]
-
-            total_deleted = 0
-            if body.tickers:
-                # NEW ARCHITECTURE: Remove ticker-feed associations for specific tickers
-                for pattern in cleanup_patterns:
-                    # First, remove ticker-feed associations for feeds matching the pattern
-                    cur.execute("""
-                        DELETE FROM ticker_feeds
-                        WHERE ticker = ANY(%s) AND feed_id IN (
-                            SELECT id FROM feeds WHERE name LIKE %s
-                        )
-                    """, (body.tickers, f"%{pattern}%"))
-                    total_deleted += cur.rowcount
-
-                    # Then, delete feeds that have no more associations
-                    cur.execute("""
-                        DELETE FROM feeds
-                        WHERE name LIKE %s AND id NOT IN (
-                            SELECT DISTINCT feed_id FROM ticker_feeds WHERE active = TRUE
-                        )
-                    """, (f"%{pattern}%",))
-                    total_deleted += cur.rowcount
-            else:
-                # NEW ARCHITECTURE: Delete all feeds matching patterns (and their associations)
-                for pattern in cleanup_patterns:
-                    # First remove all ticker-feed associations for these feeds
-                    cur.execute("""
-                        DELETE FROM ticker_feeds
-                        WHERE feed_id IN (SELECT id FROM feeds WHERE name LIKE %s)
-                    """, (f"%{pattern}%",))
-
-                    # Then delete the feeds themselves
-                    cur.execute("""
-                        DELETE FROM feeds
-                        WHERE name LIKE %s
-                    """, (f"%{pattern}%",))
-                    total_deleted += cur.rowcount
-        
-        return {"status": "cleaned", "feeds_deleted": total_deleted, "tickers": body.tickers or "all"}
-
-@APP.get("/admin/ticker-metadata/{ticker}")
-def get_ticker_metadata(request: Request, ticker: str):
-    """Get AI-generated metadata for a ticker"""
-    require_admin(request)
-    
-    config = get_ticker_config(ticker)
-    if config:
-        return {
-            "ticker": ticker,
-            "ai_generated": config.get("ai_generated", False),
-            "industry_keywords": config.get("industry_keywords", []),
-            "competitors": config.get("competitors", [])
-        }
-    
-    return {"ticker": ticker, "message": "No metadata found. Use /admin/init to generate."}
-
-@APP.get("/admin/domain-names")
-def get_domain_names(request: Request, limit: int = 1000, offset: int = 0):
-    """Export domain names database (domain → formal name mappings)"""
-    require_admin(request)
-
-    try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT domain, formal_name, ai_generated, created_at, updated_at
-                FROM domain_names
-                ORDER BY domain
-                LIMIT %s OFFSET %s
-            """, (limit, offset))
-
-            domains = cur.fetchall()
-
-            # Get total count
-            cur.execute("SELECT COUNT(*) as total FROM domain_names")
-            total = cur.fetchone()['total']
-
-            return {
-                "status": "success",
-                "total": total,
-                "returned": len(domains),
-                "limit": limit,
-                "offset": offset,
-                "domains": [dict(d) for d in domains]
-            }
-    except Exception as e:
-        LOG.error(f"Failed to fetch domain names: {e}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-@APP.post("/admin/regenerate-metadata")
-async def regenerate_metadata(request: Request, body: RegenerateMetadataRequest):
-    """Force regeneration of AI metadata for a ticker"""
-    async with TICKER_PROCESSING_LOCK:
-        require_admin(request)
-
-        if not OPENAI_API_KEY:
-            return {"status": "error", "message": "OpenAI API key not configured"}
-
-        LOG.info(f"Regenerating metadata for {body.ticker}")
-        metadata = ticker_manager.get_or_create_metadata(body.ticker)
-
-        # Rebuild feeds using NEW ARCHITECTURE V2
-        feeds_created = create_feeds_for_ticker_new_architecture(body.ticker, metadata)
-
-        return {
-            "status": "regenerated",
-            "ticker": body.ticker,
-            "metadata": metadata,
-            "feeds_created": len(feeds_created)
-        }
-
-
-@APP.post("/admin/force-digest")
-def force_digest(request: Request, body: ForceDigestRequest):
-    """Force digest with existing articles (for testing) - Enhanced with AI analysis"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        if body.tickers:
-            cur.execute("""
-                SELECT
-                    a.url, a.resolved_url, a.title, a.description,
-                    ta.ticker, a.domain, a.published_at,
-                    ta.found_at, ta.category,
-                    ta.search_keyword
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.found_at >= %s
-                    AND ta.ticker = ANY(%s)
-                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
-        else:
-            cur.execute("""
-                SELECT
-                    a.url, a.resolved_url, a.title, a.description,
-                    ta.ticker, a.domain, a.published_at,
-                    ta.found_at, ta.category,
-                    ta.search_keyword
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.found_at >= %s
-                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (datetime.now(timezone.utc) - timedelta(days=7),))
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            category = row["category"] or "company"
-            
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = {}
-            if category not in articles_by_ticker[ticker]:
-                articles_by_ticker[ticker][category] = []
-            
-            articles_by_ticker[ticker][category].append(dict(row))
-    
-    total_articles = sum(
-        sum(len(arts) for arts in categories.values())
-        for categories in articles_by_ticker.values()
-    )
-    
-    if total_articles == 0:
-        return {"status": "no_articles", "message": "No articles found in database"}
-    
-    # FIXED: Extract HTML from tuple and add empty text attachment
-    html = build_enhanced_digest_html(articles_by_ticker, 7)
-    tickers_str = ', '.join(articles_by_ticker.keys())
-    subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "recipient": DIGEST_TO
-    }
-
-@APP.post("/admin/wipe-database")
-def wipe_database(request: Request):
-    """DANGER: Completely wipe all feeds, ticker configs, and articles from database"""
-    require_admin(request)
-    
-    # Extra safety check - require a confirmation header
-    confirm = request.headers.get("x-confirm-wipe", "")
-    if confirm != "YES-WIPE-EVERYTHING":
-        raise HTTPException(
-            status_code=400, 
-            detail="Safety check failed. Add header 'X-Confirm-Wipe: YES-WIPE-EVERYTHING' to confirm"
-        )
-    
-    with db() as conn, conn.cursor() as cur:
-        # Delete everything in order of dependencies
-        deleted_stats = {}
-        
-        # Delete all articles
-        cur.execute("DELETE FROM ticker_articles")
-        cur.execute("DELETE FROM articles")
-        deleted_stats["articles"] = cur.rowcount
-        
-        # Delete all feeds (NEW ARCHITECTURE)
-        cur.execute("DELETE FROM ticker_feeds")
-        deleted_stats["ticker_feeds"] = cur.rowcount
-        cur.execute("DELETE FROM feeds")
-        deleted_stats["feeds"] = cur.rowcount
-        
-        # Delete all ticker configurations (keywords, competitors, etc.)
-        cur.execute("DELETE FROM ticker_reference")  
-        deleted_stats["ticker_references"] = cur.rowcount
-        
-        LOG.warning(f"DATABASE WIPED: {deleted_stats}")
-    
-    return {
-        "status": "database_wiped",
-        "deleted": deleted_stats,
-        "warning": "All feeds, ticker configurations, and articles have been deleted"
-    }
-
-@APP.post("/admin/wipe-ticker")
-def wipe_ticker(request: Request, ticker: str = Body(..., embed=True)):
-    """Wipe all data for a specific ticker"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        # Check if tables exist first (safe for fresh database)
-        try:
-            cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
-            cur.execute("SELECT 1 FROM ticker_feeds LIMIT 1")
-            cur.execute("SELECT 1 FROM feeds LIMIT 1")
-            cur.execute("SELECT 1 FROM ticker_reference LIMIT 1")
-        except Exception as e:
-            LOG.info(f"📋 Tables don't exist yet (fresh database) - wipe-ticker skipped: {e}")
-            return {"status": "skipped", "message": "Tables don't exist yet - nothing to wipe", "ticker": ticker, "deleted": {}}
-
-        deleted_stats = {}
-
-        # Delete articles for this ticker
-        cur.execute("DELETE FROM ticker_articles WHERE ticker = %s", (ticker,))
-        deleted_stats["articles"] = cur.rowcount
-        
-        # Delete feeds for this ticker (NEW ARCHITECTURE)
-        cur.execute("DELETE FROM ticker_feeds WHERE ticker = %s", (ticker,))
-        deleted_stats["ticker_feeds"] = cur.rowcount
-
-        # Delete orphaned feeds (feeds with no ticker associations)
-        cur.execute("""
-            DELETE FROM feeds
-            WHERE id NOT IN (SELECT DISTINCT feed_id FROM ticker_feeds WHERE active = TRUE)
-        """)
-        deleted_stats["orphaned_feeds"] = cur.rowcount
-        
-        # Delete ticker configuration
-        cur.execute("DELETE FROM ticker_reference WHERE ticker = %s", (ticker,))
-        deleted_stats["ticker_reference"] = cur.rowcount
-        
-        LOG.info(f"Wiped all data for ticker {ticker}: {deleted_stats}")
-    
-    return {
-        "status": "ticker_wiped",
-        "ticker": ticker,
-        "deleted": deleted_stats
-    }
-
-@APP.post("/admin/test-email")
-def test_email(request: Request):
-    """Send test email"""
-    require_admin(request)
-    
-    test_html = """
-    <html><body>
-        <h2>Quantbrief Test Email</h2>
-        <p>Your email configuration is working correctly!</p>
-        <p>Time: {}</p>
-        <p>AI Integration: {}</p>
-        <p>Yahoo Source Extraction: Enabled</p>
-    </body></html>
-    """.format(
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "Enabled" if OPENAI_API_KEY else "Not configured"
-    )
-    
-    success = send_email("Quantbrief Test Email", test_html)
-    return {"status": "sent" if success else "failed", "recipient": DIGEST_TO}
-
-@APP.get("/admin/stats")
-async def get_stats(
-    request: Request,
-    tickers: List[str] = Query(default=None, description="Filter stats by tickers")
-):
-    async with TICKER_PROCESSING_LOCK:
-        """Get system statistics"""
-        require_admin(request)
-        ensure_schema()
-        
-        with db() as conn, conn.cursor() as cur:
-            # Build queries based on tickers
-            if tickers:
-                # Article stats
-                cur.execute("""
-                    SELECT
-                        COUNT(*) as total_articles,
-                        COUNT(DISTINCT ta.ticker) as tickers,
-                        COUNT(DISTINCT a.domain) as domains,
-                        MAX(a.published_at) as latest_article
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                        AND ta.ticker = ANY(%s)
-                """, (tickers,))
-                stats = dict(cur.fetchone())
-                
-                # Stats by category
-                cur.execute("""
-                    SELECT ta.category, COUNT(*) as count
-                    FROM ticker_articles ta
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                        AND ta.ticker = ANY(%s)
-                    GROUP BY ta.category
-                    ORDER BY ta.category
-                """, (tickers,))
-                stats["by_category"] = list(cur.fetchall())
-                
-                # Top domains
-                cur.execute("""
-                    SELECT a.domain, COUNT(*) as count
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                        AND ta.ticker = ANY(%s)
-                    GROUP BY a.domain
-                    ORDER BY count DESC
-                    LIMIT 10
-                """, (tickers,))
-                stats["top_domains"] = list(cur.fetchall())
-                
-                # Articles by ticker and category
-                cur.execute("""
-                    SELECT ta.ticker, ta.category, COUNT(*) as count
-                    FROM ticker_articles ta
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                        AND ta.ticker = ANY(%s)
-                    GROUP BY ta.ticker, ta.category
-                    ORDER BY ta.ticker, ta.category
-                """, (tickers,))
-                stats["by_ticker_category"] = list(cur.fetchall())
-            else:
-                # Article stats
-                cur.execute("""
-                    SELECT
-                        COUNT(*) as total_articles,
-                        COUNT(DISTINCT ta.ticker) as tickers,
-                        COUNT(DISTINCT a.domain) as domains,
-                        MAX(a.published_at) as latest_article
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                """)
-                stats = dict(cur.fetchone())
-                
-                # Stats by category
-                cur.execute("""
-                    SELECT ta.category, COUNT(*) as count
-                    FROM ticker_articles ta
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY ta.category
-                    ORDER BY ta.category
-                """)
-                stats["by_category"] = list(cur.fetchall())
-                
-                # Top domains
-                cur.execute("""
-                    SELECT a.domain, COUNT(*) as count
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY a.domain
-                    ORDER BY count DESC
-                    LIMIT 10
-                """)
-                stats["top_domains"] = list(cur.fetchall())
-                
-                # Articles by ticker and category
-                cur.execute("""
-                    SELECT ta.ticker, ta.category, COUNT(*) as count
-                    FROM ticker_articles ta
-                    WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY ta.ticker, ta.category
-                    ORDER BY ta.ticker, ta.category
-                """)
-                stats["by_ticker_category"] = list(cur.fetchall())
-            
-            # Check AI metadata status
-            cur.execute("""
-                SELECT COUNT(*) as total, 
-                       COUNT(CASE WHEN ai_generated THEN 1 END) as ai_generated
-                FROM ticker_reference
-                WHERE active = TRUE
-            """)
-            ai_stats = cur.fetchone()
-            stats["ai_metadata"] = ai_stats
-        
-        return stats
-
-@APP.post("/admin/reset-digest-flags")
-async def reset_digest_flags(request: Request, body: ResetDigestRequest):
-    async with TICKER_PROCESSING_LOCK:
-        """Reset sent_in_digest flags for testing"""
-        require_admin(request)
-        # Note: ensure_schema() not needed for simple UPDATE operation
-
-        with db() as conn, conn.cursor() as cur:
-            # Check if ticker_articles table exists first (safe for fresh database)
-            try:
-                cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
-            except Exception as e:
-                LOG.info(f"📋 ticker_articles table doesn't exist yet (fresh database) - reset-digest-flags skipped: {e}")
-                return {"status": "skipped", "message": "ticker_articles table doesn't exist yet - nothing to reset", "articles_reset": 0, "tickers": body.tickers or "all"}
-
-            if body.tickers:
-                cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE WHERE ticker = ANY(%s)", (body.tickers,))
-            else:
-                cur.execute("UPDATE ticker_articles SET sent_in_digest = FALSE")
-            count = cur.rowcount
-        
-        return {"status": "reset", "articles_reset": count, "tickers": body.tickers or "all"}
-
-@APP.post("/admin/cleanup-domains")
-def admin_cleanup_domains(request: Request):
-    """One-time cleanup of domain data"""
-    require_admin(request)
-    
-    updated_count = cleanup_domain_data()
-    
-    return {
-        "status": "completed",
-        "records_updated": updated_count,
-        "message": "Domain data has been cleaned up. Publication names converted to actual domains."
-    }
-
-@APP.post("/admin/reset-ai-analysis")
-def reset_ai_analysis(request: Request, tickers: List[str] = Query(default=None, description="Specific tickers to reset")):
-    """Reset AI analysis data and force re-scoring of existing articles"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        # AI analysis is no longer stored in database with new schema
-        # This operation is no longer needed
-        reset_count = 0
-        
-        LOG.info(f"Reset AI analysis for {reset_count} articles")
-    
-    return {
-        "status": "ai_analysis_reset",
-        "articles_reset": reset_count,
-        "tickers": tickers or "all",
-        "message": f"Cleared AI analysis data for {reset_count} articles. Run re-analysis to generate fresh scores."
-    }
-
-@APP.post("/admin/rerun-ai-analysis")
-def rerun_ai_analysis(
-    request: Request, 
-    tickers: List[str] = Query(default=None, description="Specific tickers to re-analyze"),
-    limit: int = Query(default=500, description="Max articles to process per run (no upper limit)")
-):
-    """Re-run AI analysis on existing articles that have NULL ai_impact - UNLIMITED PROCESSING"""
-    require_admin(request)
-    
-    if not OPENAI_API_KEY:
-        return {"status": "error", "message": "OpenAI API key not configured"}
-    
-    # Get ticker metadata for keywords
-    ticker_metadata_cache = {}
-    if tickers:
-        for ticker in tickers:
-            config = get_ticker_config(ticker)
-            if config:
-                ticker_metadata_cache[ticker] = {
-                    "industry_keywords": config.get("industry_keywords", []),
-                    "competitors": config.get("competitors", [])
-                }
-    
-    with db() as conn, conn.cursor() as cur:
-        # Get articles that need AI analysis - NO LIMIT restriction
-        if tickers:
-            cur.execute("""
-                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = ANY(%s)
-                ORDER BY ta.found_at DESC
-                LIMIT %s
-            """, (tickers, limit))
-        else:
-            cur.execute("""
-                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                ORDER BY ta.found_at DESC
-                LIMIT %s
-            """, (limit,))
-        
-        articles = list(cur.fetchall())
-    
-    if not articles:
-        return {
-            "status": "no_articles",
-            "message": "No articles found that need AI re-analysis"
-        }
-    
-    processed = 0
-    updated = 0
-    errors = 0
-    
-    LOG.info(f"Starting AI re-analysis of {len(articles)} articles (limit={limit})")
-    
-    for article in articles:
-        try:
-            processed += 1
-            
-            # Get appropriate keywords based on category
-            ticker = article["ticker"]
-            category = article["category"] or "company"
-            
-            if ticker in ticker_metadata_cache:
-                metadata = ticker_metadata_cache[ticker]
-                if category == "industry":
-                    keywords = metadata.get("industry_keywords", [])
-                elif category == "competitor":
-                    keywords = metadata.get("competitors", [])
-                else:
-                    keywords = []
-            else:
-                keywords = []
-            
-            # Run AI analysis - UPDATED to handle 4-parameter return
-            quality_score, ai_impact, ai_reasoning, components = calculate_quality_score(
-                title=article["title"],
-                domain=article["domain"],
-                ticker=ticker,
-                description=article["description"] or "",
-                category=category,
-                keywords=keywords
-            )
-            
-            # Extract components for database storage
-            source_tier = components.get('source_tier') if components else None
-            event_multiplier = components.get('event_multiplier') if components else None
-            event_multiplier_reason = components.get('event_multiplier_reason') if components else None
-            relevance_boost = components.get('relevance_boost') if components else None
-            relevance_boost_reason = components.get('relevance_boost_reason') if components else None
-            numeric_bonus = components.get('numeric_bonus') if components else None
-            penalty_multiplier = components.get('penalty_multiplier') if components else None
-            penalty_reason = components.get('penalty_reason') if components else None
-            
-            # AI analysis is no longer stored in database with new schema
-            # Analysis results are calculated on-demand
-            updated += 1
-            
-            # Progress logging every 25 articles
-            if processed % 25 == 0:
-                LOG.info(f"Progress: {processed}/{len(articles)} articles processed, {updated} updated")
-            
-            # Small delay to avoid overwhelming OpenAI API
-            time.sleep(0.1)
-            
-        except Exception as e:
-            errors += 1
-            LOG.error(f"Failed to re-analyze article {article['id']}: {e}")
-            continue
-    
-    return {
-        "status": "completed",
-        "processed": processed,
-        "updated": updated,
-        "errors": errors,
-        "limit_used": limit,
-        "tickers": tickers or "all",
-        "message": f"Re-analyzed {updated} articles with fresh AI scoring"
-    }
-
-@APP.get("/admin/test-yahoo-resolution")
-def test_yahoo_resolution(request: Request, url: str = Query(...)):
-    """Test Yahoo Finance URL resolution"""
-    require_admin(request)
-    
-    result = domain_resolver.resolve_url_and_domain(url, "Test Title")
-    return {
-        "original_url": url,
-        "resolved_url": result[0],
-        "domain": result[1],
-        "source_url": result[2]
-    }
-
-@APP.post("/admin/import-ticker-reference")
-def import_ticker_reference(request: Request, file_path: str = Body(..., embed=True)):
-    """Import ticker reference data from CSV file"""
-    require_admin(request)
-
-    file_path = r"C:\Users\14166\Desktop\QuantBrief\data\ticker_reference.csv"
-    import csv
-    import os
-    from datetime import datetime
-    
-    if not os.path.exists(file_path):
-        return {"status": "error", "message": f"File not found: {file_path}"}
-    
-    # Ensure table exists
-    create_ticker_reference_table()
-    
-    imported = 0
-    updated = 0
-    errors = []
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            
-            with db() as conn, conn.cursor() as cur:
-                for row_num, row in enumerate(reader, start=2):
-                    try:
-                        # Parse arrays from string
-                        industry_keywords = []
-                        competitors = []
-                        
-                        if row.get('industry_keywords'):
-                            industry_keywords = [kw.strip() for kw in row['industry_keywords'].split(',')]
-                        
-                        if row.get('competitors'):
-                            competitors = [comp.strip() for comp in row['competitors'].split(',')]
-                        
-                        # Convert boolean
-                        active = row.get('active', 'TRUE').upper() in ('TRUE', '1', 'YES')
-                        ai_generated = row.get('ai_generated', 'FALSE').upper() in ('TRUE', '1', 'YES')
-                        
-                        cur.execute("""
-                            INSERT INTO ticker_reference (
-                                ticker, country, company_name, industry, sector, 
-                                yahoo_ticker, exchange, active, industry_keywords, 
-                                competitors, ai_generated
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (ticker) DO UPDATE SET
-                                country = EXCLUDED.country,
-                                company_name = EXCLUDED.company_name,
-                                industry = EXCLUDED.industry,
-                                sector = EXCLUDED.sector,
-                                yahoo_ticker = EXCLUDED.yahoo_ticker,
-                                exchange = EXCLUDED.exchange,
-                                active = EXCLUDED.active,
-                                industry_keywords = EXCLUDED.industry_keywords,
-                                competitors = EXCLUDED.competitors,
-                                updated_at = NOW()
-                        """, (
-                            row['ticker'], row['country'], row['company_name'],
-                            row.get('industry'), row.get('sector'),
-                            row.get('yahoo_ticker', row['ticker']), row.get('exchange'),
-                            active, industry_keywords, competitors, ai_generated
-                        ))
-                        
-                        if cur.rowcount == 1:
-                            imported += 1
-                        else:
-                            updated += 1
-                            
-                    except Exception as e:
-                        errors.append(f"Row {row_num}: {str(e)}")
-                        
-        return {
-            "status": "completed",
-            "imported": imported,
-            "updated": updated,
-            "errors": errors[:10],  # Limit error display
-            "total_errors": len(errors)
-        }
-        
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# Pydantic models for request bodies
-class TickerReferenceRequest(BaseModel):
-    ticker: str
-    country: str
-    company_name: str
-    industry: Optional[str] = None
-    sector: Optional[str] = None
-    sub_industry: Optional[str] = None
-    exchange: Optional[str] = None
-    currency: Optional[str] = None
-    market_cap_category: Optional[str] = None
-    yahoo_ticker: Optional[str] = None
-    active: bool = True
-    is_etf: bool = False
-    industry_keyword_1: Optional[str] = None
-    industry_keyword_2: Optional[str] = None
-    industry_keyword_3: Optional[str] = None
-    competitor_1_name: Optional[str] = None
-    competitor_1_ticker: Optional[str] = None
-    competitor_2_name: Optional[str] = None
-    competitor_2_ticker: Optional[str] = None
-    competitor_3_name: Optional[str] = None
-    competitor_3_ticker: Optional[str] = None
-
-class GitHubSyncRequest(BaseModel):
-    commit_message: Optional[str] = None
-
-class UpdateTickersRequest(BaseModel):
-    tickers: List[str]
-    commit_message: Optional[str] = None
-    job_id: Optional[str] = None  # For idempotency tracking
-    skip_render: Optional[bool] = True  # Default: skip render to prevent auto-deployment
-
-# 1. GITHUB SYNC ENDPOINTS
-@APP.post("/admin/sync-ticker-reference-from-github")
-def sync_from_github(request: Request):
-    """Sync ticker reference data FROM GitHub TO database"""
-    require_admin(request)
-    
-    result = sync_ticker_references_from_github()
-    return result
-
-@APP.post("/admin/sync-ticker-reference-to-github")
-def sync_to_github(request: Request, body: GitHubSyncRequest):
-    """Sync ticker reference data FROM database TO GitHub"""
-    require_admin(request)
-    
-    result = sync_ticker_references_to_github(body.commit_message)
-    return result
-
-@APP.post("/admin/update-specific-tickers-on-github")
-def update_tickers_on_github(request: Request, body: UpdateTickersRequest):
-    """Update only specific tickers on GitHub (for post-processing sync)"""
-    require_admin(request)
-    
-    if not body.tickers:
-        return {"status": "error", "message": "No tickers specified"}
-    
-    result = update_specific_tickers_on_github(body.tickers, body.commit_message)
-    return result
-
-# 2. CSV UPLOAD ENDPOINT
-@APP.post("/admin/upload-ticker-csv")
-async def upload_ticker_csv(request: Request, file: UploadFile = File(...)):
-    """Upload CSV file and import ticker reference data"""
-    require_admin(request)
-    
-    if not file.filename or not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="File must be a CSV file")
-    
-    try:
-        content = await file.read()
-        csv_content = content.decode('utf-8')
-        
-        result = import_ticker_reference_from_csv_content(csv_content)
-        return result
-        
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="CSV file must be UTF-8 encoded")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}")
-
-# 3. INDIVIDUAL TICKER MANAGEMENT
-@APP.get("/admin/ticker-reference/{ticker}")
-async def get_ticker_reference_endpoint(request: Request, ticker: str):
-    async with TICKER_PROCESSING_LOCK:
-        """Get specific ticker reference data"""
-        require_admin(request)
-        
-        ticker_data = get_ticker_reference(ticker)
-        if ticker_data:
-            return {
-                "status": "found",
-                "ticker": ticker,
-                "data": ticker_data
-            }
-        else:
-            return {
-                "status": "not_found",
-                "ticker": ticker,
-                "message": "Ticker reference not found"
-            }
-
-@APP.post("/admin/ticker-reference")
-def add_ticker_reference_endpoint(request: Request, body: TickerReferenceRequest):
-    """Add or update a single ticker reference manually"""
-    require_admin(request)
-    
-    ticker_data = {
-        'ticker': body.ticker,
-        'country': body.country,
-        'company_name': body.company_name,
-        'industry': body.industry,
-        'sector': body.sector,
-        'sub_industry': body.sub_industry,
-        'exchange': body.exchange,
-        'currency': body.currency,
-        'market_cap_category': body.market_cap_category,
-        'yahoo_ticker': body.yahoo_ticker,
-        'active': body.active,
-        'is_etf': body.is_etf,
-        'industry_keyword_1': body.industry_keyword_1,
-        'industry_keyword_2': body.industry_keyword_2,
-        'industry_keyword_3': body.industry_keyword_3,
-        'competitor_1_name': body.competitor_1_name,
-        'competitor_1_ticker': body.competitor_1_ticker,
-        'competitor_2_name': body.competitor_2_name,
-        'competitor_2_ticker': body.competitor_2_ticker,
-        'competitor_3_name': body.competitor_3_name,
-        'competitor_3_ticker': body.competitor_3_ticker,
-        'data_source': 'manual_api'
-    }
-    
-    success = store_ticker_reference(ticker_data)
-    
-    if success:
-        return {
-            "status": "success",
-            "ticker": body.ticker,
-            "message": f"Successfully stored ticker reference for {body.ticker}"
-        }
-    else:
-        return {
-            "status": "error",
-            "ticker": body.ticker,
-            "message": "Failed to store ticker reference"
-        }
-
-@APP.delete("/admin/ticker-reference/{ticker}")
-def delete_ticker_reference_endpoint(request: Request, ticker: str):
-    """Delete (deactivate) a ticker reference"""
-    require_admin(request)
-    
-    success = delete_ticker_reference(ticker)
-    
-    if success:
-        return {
-            "status": "success",
-            "ticker": ticker,
-            "message": f"Successfully deactivated ticker reference for {ticker}"
-        }
-    else:
-        return {
-            "status": "error",
-            "ticker": ticker,
-            "message": "Ticker reference not found or already inactive"
-        }
-
-# 4. BULK TICKER OPERATIONS
-@APP.get("/admin/ticker-references")
-def list_ticker_references(
-    request: Request,
-    limit: int = Query(default=50, description="Number of records to return"),
-    offset: int = Query(default=0, description="Number of records to skip"),
-    country: Optional[str] = Query(default=None, description="Filter by country (US, CA, etc.)")
-):
-    """List ticker references with pagination and filtering"""
-    require_admin(request)
-    
-    if limit > 1000:
-        raise HTTPException(status_code=400, detail="Limit cannot exceed 1000")
-    
-    try:
-        ticker_references = get_all_ticker_references(limit, offset, country)
-        total_count = count_ticker_references(country)
-        
-        return {
-            "status": "success",
-            "data": ticker_references,
-            "pagination": {
-                "limit": limit,
-                "offset": offset,
-                "total": total_count,
-                "returned": len(ticker_references)
-            },
-            "filter": {
-                "country": country
-            }
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve ticker references: {str(e)}")
-
-@APP.get("/admin/ticker-references/stats")
-def get_ticker_reference_stats(request: Request):
-    """Get statistics about ticker reference data"""
-    require_admin(request)
-    
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # Total counts by country
-            cur.execute("""
-                SELECT country, COUNT(*) as count
-                FROM ticker_reference
-                WHERE active = TRUE
-                GROUP BY country
-                ORDER BY count DESC
-            """)
-            by_country = list(cur.fetchall())
-            
-            # AI enhancement status
-            cur.execute("""
-                SELECT 
-                    COUNT(*) as total,
-                    COUNT(CASE WHEN ai_generated THEN 1 END) as ai_enhanced,
-                    COUNT(CASE WHEN industry_keyword_1 IS NOT NULL THEN 1 END) as has_keywords,
-                    COUNT(CASE WHEN competitor_1_name IS NOT NULL THEN 1 END) as has_competitors
-                FROM ticker_reference
-                WHERE active = TRUE
-            """)
-            ai_stats = dict(cur.fetchone())
-            
-            # Recent updates
-            cur.execute("""
-                SELECT COUNT(*) as count
-                FROM ticker_reference
-                WHERE active = TRUE AND updated_at > NOW() - INTERVAL '7 days'
-            """)
-            recent_updates = cur.fetchone()["count"]
-            
-            return {
-                "status": "success",
-                "stats": {
-                    "total_active_tickers": sum(row["count"] for row in by_country),
-                    "by_country": by_country,
-                    "ai_enhancement": {
-                        "total_tickers": ai_stats["total"],
-                        "ai_enhanced": ai_stats["ai_enhanced"],
-                        "has_industry_keywords": ai_stats["has_keywords"],
-                        "has_competitors": ai_stats["has_competitors"]
-                    },
-                    "recent_updates_7_days": recent_updates
-                }
-            }
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
-
-# 5. TICKER VALIDATION AND TESTING
-@APP.post("/admin/validate-ticker-format")
-def validate_ticker_endpoint(request: Request, ticker: str = Body(..., embed=True)):
-    """Test ticker format validation"""
-    require_admin(request)
-    
-    normalized = normalize_ticker_format(ticker)
-    is_valid = validate_ticker_format(normalized)
-    exchange_info = get_ticker_exchange_info(normalized)
-    
-    return {
-        "status": "success",
-        "original_ticker": ticker,
-        "normalized_ticker": normalized,
-        "is_valid": is_valid,
-        "exchange_info": exchange_info
-    }
-
-@APP.post("/admin/test-ticker-validation")
-def test_ticker_validation_endpoint(request: Request):
-    """Run comprehensive ticker validation tests"""
-    require_admin(request)
-    
-    test_results = test_ticker_validation()
-    return {
-        "status": "success",
-        "test_results": test_results
-    }
-
-# 6. ENHANCED METADATA INTEGRATION
-@APP.post("/admin/enhance-ticker-with-ai")
-def enhance_ticker_with_ai_endpoint(request: Request, ticker: str = Body(..., embed=True)):
-    """Enhance a specific ticker with AI-generated metadata"""
-    require_admin(request)
-    
-    if not OPENAI_API_KEY:
-        return {"status": "error", "message": "OpenAI API key not configured"}
-    
-    try:
-        # Get current ticker data
-        ticker_data = get_ticker_reference(ticker)
-        if not ticker_data:
-            return {
-                "status": "error",
-                "message": f"Ticker {ticker} not found in reference database"
-            }
-        
-        # Generate enhanced metadata
-        enhanced_metadata = get_or_create_enhanced_ticker_metadata(ticker)
-        
-        return {
-            "status": "success",
-            "ticker": ticker,
-            "original_data": ticker_data,
-            "enhanced_metadata": enhanced_metadata,
-            "message": f"Successfully enhanced {ticker} with AI-generated metadata"
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "ticker": ticker,
-            "message": f"Failed to enhance ticker: {str(e)}"
-        }
-
-# 7. WORKFLOW INTEGRATION ENDPOINTS
-@APP.post("/admin/prepare-ticker-for-processing")
-def prepare_ticker_for_processing(request: Request, ticker: str = Body(..., embed=True)):
-    """Complete workflow: Sync from GitHub -> Get ticker metadata -> Ready for processing"""
-    require_admin(request)
-    
-    try:
-        # Step 1: Sync latest data from GitHub
-        LOG.info(f"Preparing {ticker} for processing - syncing from GitHub")
-        sync_result = sync_ticker_references_from_github()
-        
-        if sync_result["status"] != "success":
-            return {
-                "status": "error",
-                "message": f"GitHub sync failed: {sync_result.get('message', 'Unknown error')}"
-            }
-        
-        # Step 2: Get ticker data with enhancement
-        ticker_metadata = get_or_create_enhanced_ticker_metadata(ticker)
-        
-        # Step 3: Check if ticker has required data
-        ticker_reference = get_ticker_reference(ticker)
-        
-        return {
-            "status": "ready",
-            "ticker": ticker,
-            "github_sync": {
-                "imported": sync_result.get("database_import", {}).get("imported", 0),
-                "updated": sync_result.get("database_import", {}).get("updated", 0)
-            },
-            "ticker_reference": ticker_reference,
-            "enhanced_metadata": ticker_metadata,
-            "message": f"Ticker {ticker} is ready for processing"
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "ticker": ticker,
-            "message": f"Preparation failed: {str(e)}"
-        }
-
-@APP.post("/admin/finalize-ticker-processing")
-def finalize_ticker_processing(request: Request, body: UpdateTickersRequest):
-    """Complete workflow: Update specific processed tickers back to GitHub"""
-    require_admin(request)
-    
-    if not body.tickers:
-        return {"status": "error", "message": "No tickers specified"}
-    
-    try:
-        # Update the processed tickers back to GitHub
-        result = update_specific_tickers_on_github(body.tickers, body.commit_message)
-        
-        return {
-            "status": result["status"],
-            "processed_tickers": body.tickers,
-            "github_update": result,
-            "message": f"Finalized processing for {len(body.tickers)} tickers"
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "tickers": body.tickers,
-            "message": f"Finalization failed: {str(e)}"
-        }
-
-@APP.post("/admin/sync-processed-tickers-to-github")
-def sync_processed_tickers_to_github(request: Request, body: UpdateTickersRequest):
-    """Prepare processed ticker data for sync (no GitHub commit)"""
-    require_admin(request)
-    
-    if not body.tickers:
-        return {"status": "error", "message": "No tickers specified"}
-    
-    LOG.info(f"=== PREPARING {len(body.tickers)} PROCESSED TICKERS FOR SYNC ===")
-    
-    try:
-        # Get current successfully processed tickers that have AI enhancements
-        successfully_enhanced_tickers = []
-        
-        with db() as conn, conn.cursor() as cur:
-            # Check which tickers actually have AI enhancements
-            cur.execute("""
-                SELECT DISTINCT ticker 
-                FROM ticker_reference 
-                WHERE ticker = ANY(%s) 
-                AND ai_generated = TRUE 
-                AND (industry_keyword_1 IS NOT NULL OR competitor_1_name IS NOT NULL)
-            """, (body.tickers,))
-            
-            successfully_enhanced_tickers = [row["ticker"] for row in cur.fetchall()]
-        
-        if not successfully_enhanced_tickers:
-            return {
-                "status": "no_changes", 
-                "message": "No tickers found with AI enhancements",
-                "requested_tickers": body.tickers
-            }
-        
-        # Export the enhanced data to CSV format
-        export_result = export_ticker_references_to_csv()
-        
-        return {
-            "status": "ready_for_sync",
-            "requested_tickers": body.tickers,
-            "enhanced_tickers": successfully_enhanced_tickers,
-            "csv_content": export_result.get("csv_content", ""),
-            "message": f"Prepared {len(successfully_enhanced_tickers)} enhanced tickers for sync"
-        }
-        
-    except Exception as e:
-        LOG.error(f"Failed to prepare processed tickers: {e}")
-        return {
-            "status": "error",
-            "message": f"Preparation failed: {str(e)}",
-            "tickers": body.tickers
-        }
-
-@APP.get("/admin/memory")
-async def get_memory_info():
-    """Get current memory usage"""
-    return memory_monitor.get_memory_info()
-
-@APP.get("/admin/debug/digest-check/{ticker}")
-async def debug_digest_check(request: Request, ticker: str):
-    """Debug endpoint to check digest data for a specific ticker"""
-    require_admin(request)
-
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # Check if tables exist first (safe for fresh database)
-            try:
-                cur.execute("SELECT 1 FROM articles LIMIT 1")
-                cur.execute("SELECT 1 FROM ticker_articles LIMIT 1")
-            except Exception as e:
-                LOG.info(f"📋 Tables don't exist yet (fresh database) - digest-check skipped: {e}")
-                return {"status": "skipped", "message": "Tables don't exist yet - cannot check digest", "ticker": ticker}
-
-            # Check articles for this ticker in the last 24 hours
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-
-            cur.execute("""
-                SELECT COUNT(*) as total_articles,
-                       COUNT(CASE WHEN ta.ai_summary IS NOT NULL THEN 1 END) as with_ai_summary,
-                       COUNT(CASE WHEN a.scraped_content IS NOT NULL THEN 1 END) as with_content,
-                       COUNT(CASE WHEN ta.sent_in_digest = TRUE THEN 1 END) as already_sent
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND ta.found_at >= %s
-            """, (ticker, cutoff))
-
-            stats = dict(cur.fetchone())
-
-            # Get sample articles
-            cur.execute("""
-                SELECT a.id, a.title, ta.category,
-                       ta.ai_summary IS NOT NULL as has_ai_summary,
-                       a.scraped_content IS NOT NULL as has_content,
-                       ta.sent_in_digest
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND ta.found_at >= %s
-                ORDER BY ta.found_at DESC
-                LIMIT 5
-            """, (ticker, cutoff))
-
-            sample_articles = [dict(row) for row in cur.fetchall()]
-
-            return {
-                "ticker": ticker,
-                "time_window": "24 hours",
-                "stats": stats,
-                "sample_articles": sample_articles,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-
-    except Exception as e:
-        return {
-            "error": str(e),
-            "ticker": ticker
-        }
-
-@APP.get("/admin/memory-snapshots")
-async def get_memory_snapshots():
-    """Get all memory snapshots"""
-    return {
-        "snapshots": memory_monitor.snapshots,
-        "tracemalloc_top": memory_monitor.get_tracemalloc_top() if memory_monitor.tracemalloc_started else []
-    }
-
-@APP.post("/admin/force-cleanup")
-async def force_cleanup():
-    """Force garbage collection"""
-    cleanup_result = memory_monitor.force_garbage_collection()
-    return {
-        "status": "success", 
-        "cleanup_result": cleanup_result
-    }
-
-@APP.post("/admin/commit-csv-to-github")
-async def commit_csv_to_github_endpoint():
-    """HTTP endpoint to export DB to CSV and commit to GitHub"""
-    try:
-        # Step 1: Export database to CSV
-        export_result = export_ticker_references_to_csv()
-        if export_result["status"] != "success":
-            return export_result
-        
-        # Step 2: Commit CSV to GitHub
-        commit_result = commit_csv_to_github(export_result["csv_content"])
-        
-        return {
-            "status": commit_result["status"],
-            "export_info": {
-                "ticker_count": export_result["ticker_count"],
-                "csv_size": len(export_result["csv_content"])
-            },
-            "github_commit": commit_result,
-            "message": f"Exported {export_result['ticker_count']} tickers and committed to GitHub"
-        }
-        
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@APP.post("/admin/update-domain-names")
-async def update_domain_formal_names(request: Request):
-    """Batch update domain formal names using Claude API"""
-    require_admin(request)
-
-    try:
-        LOG.info("=== BATCH UPDATING DOMAIN FORMAL NAMES ===")
-
-        # Step 1: Fetch all domains from database
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT domain FROM domain_names ORDER BY domain;")
-            domains = [row["domain"] for row in cur.fetchall()]
-
-        if not domains:
-            return {"status": "error", "message": "No domains found in database"}
-
-        LOG.info(f"Found {len(domains)} domains to process")
-
-        # Step 2: Build Claude API prompt
-        domain_list = "\n".join([f"- {domain}" for domain in domains])
-
-        prompt = f"""You are a domain name expert. Below is a list of domain names. For EACH domain, provide ONLY the formal brand/publication name as it should appear in professional contexts.
-
-Rules:
-1. Return EXACTLY one name per domain
-2. Use proper capitalization (e.g., "The Wall Street Journal" not "wall street journal")
-3. For news outlets, include "The" if official (e.g., "The Guardian")
-4. For companies, use official brand name (e.g., "Bloomberg" not "Bloomberg LP")
-5. Do NOT include domain extensions (.com, .net, etc.) in the formal name
-6. If a domain is unknown or generic, return the domain name as-is with proper capitalization
-7. IMPORTANT: Use only basic ASCII characters (A-Z, a-z, 0-9, spaces, hyphens). Convert accented characters to their base form (é→e, ü→u, ñ→n, etc.)
-
-Format your response as a JSON object where keys are domains and values are formal names:
-{{
-  "domain1.com": "Formal Name 1",
-  "domain2.com": "Formal Name 2"
-}}
-
-Domains:
-{domain_list}
-"""
-
-        # Step 3: Call Claude API
-        LOG.info("Calling Claude API...")
-
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=8192,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = message.content[0].text
-        LOG.info("Claude API response received")
-
-        # Step 4: Extract JSON from response
-        import json
-        import re
-
-        if '```json' in response_text:
-            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
-            json_content = json_match.group(1) if json_match else response_text
-        elif '{' in response_text:
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            json_content = json_match.group(0) if json_match else response_text
-        else:
-            return {"status": "error", "message": "Could not extract JSON from Claude response"}
-
-        domain_mappings = json.loads(json_content)
-
-        # Step 5: Update database
-        LOG.info("Updating database...")
-        update_count = 0
-        error_count = 0
-
-        with db() as conn, conn.cursor() as cur:
-            for domain in domains:
-                formal_name = domain_mappings.get(domain)
-
-                if not formal_name:
-                    LOG.warning(f"Missing formal name for: {domain}")
-                    error_count += 1
-                    continue
-
-                cur.execute("""
-                    UPDATE domain_names
-                    SET formal_name = %s
-                    WHERE domain = %s
-                """, (formal_name, domain))
-
-                update_count += 1
-                LOG.info(f"✅ {domain} → {formal_name}")
-
-        LOG.info(f"Update complete: {update_count} updated, {error_count} errors")
-
-        return {
-            "status": "success",
-            "total_domains": len(domains),
-            "updated": update_count,
-            "errors": error_count
-        }
-
-    except Exception as e:
-        LOG.error(f"Domain name update failed: {e}")
-        LOG.error(f"Error details: {traceback.format_exc()}")
-        return {"status": "error", "message": str(e)}
-
-@APP.post("/admin/safe-incremental-commit")
-async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
-    """Safely commit individual tickers as they complete processing"""
-    require_admin(request)
-
-    if not body.tickers:
-        return {"status": "error", "message": "No tickers specified"}
-
-    LOG.info(f"=== SAFE INCREMENTAL COMMIT: {len(body.tickers)} TICKERS ===")
-
-    try:
-        # Step 1: Verify all tickers have AI-generated metadata
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT ticker, ai_generated, industry_keyword_1, competitor_1_name,
-                       ai_enhanced_at, updated_at
-                FROM ticker_reference
-                WHERE ticker = ANY(%s)
-                ORDER BY ticker
-            """, (body.tickers,))
-
-            ticker_status = {}
-            for row in cur.fetchall():
-                ticker = row["ticker"]
-                has_ai_data = (row["ai_generated"] and
-                             (row["industry_keyword_1"] or row["competitor_1_name"]))
-                ticker_status[ticker] = {
-                    "has_ai_metadata": has_ai_data,
-                    "ai_enhanced_at": row["ai_enhanced_at"],
-                    "updated_at": row["updated_at"]
-                }
-
-        # Step 2: Filter to only commit tickers with AI metadata
-        valid_tickers = [t for t, status in ticker_status.items() if status["has_ai_metadata"]]
-        invalid_tickers = [t for t, status in ticker_status.items() if not status["has_ai_metadata"]]
-
-        if not valid_tickers:
-            return {
-                "status": "no_changes",
-                "message": "No tickers have AI-generated metadata to commit",
-                "invalid_tickers": invalid_tickers,
-                "ticker_status": ticker_status
-            }
-
-        # Step 3: Create backup before commit (include job_id for idempotency)
-        # [skip render] controlled by skip_render flag (default: True)
-        backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        job_id_suffix = f" [job:{body.job_id[:8]}]" if body.job_id else ""
-
-        # Add [skip render] prefix only if skip_render=True
-        skip_prefix = "[skip render] " if body.skip_render else ""
-        commit_message = f"{skip_prefix}Incremental update: {', '.join(valid_tickers)} - {backup_timestamp}{job_id_suffix}"
-
-        if not body.skip_render:
-            LOG.warning(f"⚠️ RENDER DEPLOYMENT WILL BE TRIGGERED by this commit")
-            LOG.warning(f"   Commit message: {commit_message}")
-        else:
-            LOG.info(f"✅ [skip render] enabled - no deployment will be triggered")
-
-        # Step 4: Export and commit with retry logic
-        LOG.info(f"Exporting {len(valid_tickers)} enhanced tickers: {valid_tickers}")
-        export_result = export_ticker_references_to_csv()
-
-        if export_result["status"] != "success":
-            return {
-                "status": "export_failed",
-                "message": export_result["message"],
-                "valid_tickers": valid_tickers,
-                "invalid_tickers": invalid_tickers
-            }
-
-        LOG.info(f"Committing to GitHub with message: {commit_message}")
-
-        # Wrap GitHub commit in try/except to make it non-fatal
-        try:
-            commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
-
-            if commit_result["status"] == "success":
-                # Step 5: Update commit tracking in database (with column existence check)
-                try:
-                    with db() as conn, conn.cursor() as cur:
-                        # Verify column exists before attempting update (bulletproofing for schema mismatches)
-                        cur.execute("""
-                            SELECT column_name
-                            FROM information_schema.columns
-                            WHERE table_schema = 'public'
-                            AND table_name = 'ticker_reference'
-                            AND column_name = 'last_github_sync'
-                        """)
-
-                        if cur.fetchone():
-                            cur.execute("""
-                                UPDATE ticker_reference
-                                SET last_github_sync = %s
-                                WHERE ticker = ANY(%s)
-                            """, (datetime.now(timezone.utc), valid_tickers))
-
-                            LOG.info(f"✅ Updated GitHub sync timestamp for {len(valid_tickers)} tickers")
-                        else:
-                            LOG.warning("⚠️ Column 'last_github_sync' does not exist in ticker_reference table")
-                            LOG.warning("   CSV committed successfully, but sync timestamp not recorded")
-                            LOG.warning("   Run: ALTER TABLE ticker_reference ADD COLUMN last_github_sync TIMESTAMP;")
-
-                except Exception as db_error:
-                    LOG.error(f"⚠️ Failed to update last_github_sync timestamp: {db_error}")
-                    LOG.warning("   CSV was committed to GitHub successfully, but DB timestamp update failed")
-                    # Don't fail the entire operation - GitHub commit succeeded
-
-        except Exception as commit_error:
-            LOG.error(f"⚠️ GitHub commit failed (non-fatal): {commit_error}")
-            commit_result = {
-                "status": "error",
-                "message": f"GitHub commit failed: {str(commit_error)}"
-            }
-
-        return {
-            "status": commit_result["status"],
-            "message": f"Successfully committed {len(valid_tickers)} tickers",
-            "committed_tickers": valid_tickers,
-            "skipped_tickers": invalid_tickers,
-            "ticker_status": ticker_status,
-            "export_info": {
-                "total_tickers_in_csv": export_result["ticker_count"],
-                "csv_size": len(export_result["csv_content"])
-            },
-            "commit_info": commit_result
-        }
-
-    except Exception as e:
-        LOG.error(f"Safe incremental commit failed: {e}")
-        LOG.error(f"Error details: {traceback.format_exc()}")
-        return {
-            "status": "error",
-            "message": f"Incremental commit failed: {str(e)}",
-            "requested_tickers": body.tickers
-        }
-
-# ------------------------------------------------------------------------------
-# CLI Support for PowerShell Commands
-# ------------------------------------------------------------------------------
-@APP.post("/cli/run")
-def cli_run(request: Request, body: CLIRequest):
-    """CLI endpoint for PowerShell commands"""
-    require_admin(request)
-    
-    results = {}
-    
-    if body.action in ["ingest", "both"]:
-        # Initialize feeds using NEW ARCHITECTURE V2
-        ensure_schema()
-        for ticker in body.tickers:
-            metadata = ticker_manager.get_or_create_metadata(ticker)
-            create_feeds_for_ticker_new_architecture(ticker, metadata)
-        
-        # Run ingestion
-        ingest_result = cron_ingest(request, body.minutes, body.tickers)
-        results["ingest"] = ingest_result
-    
-    if body.action in ["digest", "both"]:
-        # Run digest
-        digest_result = cron_digest(request, body.minutes, body.tickers)
-        results["digest"] = digest_result
-    
-    return results
-
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "10000"))
-    uvicorn.run(APP, host="0.0.0.0", port=port)

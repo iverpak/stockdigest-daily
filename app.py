@@ -10271,3 +10271,2267 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
     return summaries
 
 
+# ------------------------------------------------------------------------------
+# 3-EMAIL SYSTEM - Article Sorting and Email Functions
+# ------------------------------------------------------------------------------
+
+def sort_articles_by_priority(articles: List[Dict], flagged_ids: List[int]) -> List[Dict]:
+    """Sort articles by priority: FLAGGED+QUALITY, FLAGGED, REMAINING (newest first within each group)"""
+    flagged_quality = []
+    flagged_only = []
+    remaining = []
+
+    for article in articles:
+        article_id = article.get('id')
+        domain = normalize_domain(article.get('domain', ''))
+        is_flagged = article_id in flagged_ids if flagged_ids else False
+        is_quality = domain in QUALITY_DOMAINS
+
+        if is_flagged and is_quality:
+            flagged_quality.append(article)
+        elif is_flagged:
+            flagged_only.append(article)
+        else:
+            remaining.append(article)
+
+    # Sort each group by published_at (newest first)
+    for group in [flagged_quality, flagged_only, remaining]:
+        group.sort(key=lambda x: x.get('published_at') or x.get('found_at') or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+    return flagged_quality + flagged_only + remaining
+
+
+def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
+    """Send email with HTML body only (no attachments)."""
+    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
+        LOG.error("SMTP not fully configured")
+        return False
+
+    try:
+        recipient = to or DIGEST_TO
+
+        # multipart/alternative for text + HTML, wrapped in mixed not needed if no attachments
+        msg = MIMEMultipart('alternative')
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = recipient
+
+        # Plain-text fallback
+        text_body = "This email contains HTML content. Please view in an HTML-capable email client."
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+
+        # HTML body
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+        LOG.info(f"Connecting to SMTP server: {SMTP_HOST}:{SMTP_PORT}")
+
+        # Add timeout to SMTP operations
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=60) as server:
+            if SMTP_STARTTLS:
+                LOG.info("Starting TLS...")
+                server.starttls()
+            LOG.info("Logging in to SMTP server...")
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            LOG.info("Sending email...")
+            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
+
+        LOG.info(f"Email sent successfully to {recipient}")
+        return True
+
+    except smtplib.SMTPTimeout as e:
+        LOG.error(f"SMTP timeout sending email: {e}")
+        return False
+    except smtplib.SMTPException as e:
+        LOG.error(f"SMTP error sending email: {e}")
+        return False
+    except Exception as e:
+        LOG.error(f"Email send failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return False
+
+
+def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440) -> bool:
+    """Email #1: Article Selection QA - Shows which articles were flagged by AI triage"""
+    try:
+        current_time_est = format_timestamp_est(datetime.now(timezone.utc))
+
+        # Calculate period display from time window
+        hours = time_window_minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        period_label = f"Last {days} days" if days > 0 else f"Last {int(hours)} hours"
+
+        # Format ticker list with company names
+        ticker_display_list = []
+        for ticker in articles_by_ticker.keys():
+            config = get_ticker_config(ticker)
+            company_name = config.get("company_name", ticker) if config else ticker
+            ticker_display_list.append(f"{company_name} ({ticker})")
+        ticker_list = ', '.join(ticker_display_list)
+
+        html = [
+            "<html><head><style>",
+            "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+            "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+            "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+            "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+            ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+            ".company { border-left-color: #27ae60; }",
+            ".industry { border-left-color: #f39c12; }",
+            ".competitor { border-left-color: #e74c3c; }",
+            ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
+            ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
+            ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
+            ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+            ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+            ".quality-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+            ".flagged-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+            ".ai-triage { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            "/* OpenAI Scoring - Blue theme */",
+            ".openai-high { background-color: #d4edff; color: #0d47a1; border: 1px solid #90caf9; }",
+            ".openai-medium { background-color: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }",
+            ".openai-low { background-color: #f1f8ff; color: #1976d2; border: 1px solid #dce9f7; }",
+            ".openai-none { background-color: #f5f5f5; color: #9e9e9e; border: 1px solid #e0e0e0; }",
+            ".qb-score { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
+            "/* Claude Scoring - Purple theme */",
+            ".claude-high { background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
+            ".claude-medium { background-color: #f8e4f8; color: #8e24aa; border: 1px solid #e1bee7; }",
+            ".claude-low { background-color: #fce4ec; color: #ab47bc; border: 1px solid #f8bbd0; }",
+            ".claude-none { background-color: #f5f5f5; color: #9e9e9e; border: 1px solid #e0e0e0; }",
+            ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
+            ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+            ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+            ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+            ".meta { color: #95a5a6; font-size: 11px; }",
+            "a { color: #2980b9; text-decoration: none; }",
+            "a:hover { text-decoration: underline; }",
+            "</style></head><body>",
+        ]
+
+        # Collect all industry keywords and competitors for header
+        all_industry_keywords = set()
+        all_competitors = []
+        for ticker in articles_by_ticker.keys():
+            config = get_ticker_config(ticker)
+            if config:
+                keywords = config.get("industry_keywords", [])
+                all_industry_keywords.update(keywords)
+                comps = config.get("competitors", [])
+                for comp in comps:
+                    comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                    if comp_display not in all_competitors:
+                        all_competitors.append(comp_display)
+
+        total_articles = 0
+        total_flagged = 0
+
+        for ticker, categories in articles_by_ticker.items():
+            ticker_count = sum(len(articles) for articles in categories.values())
+            total_articles += ticker_count
+
+            # Get company name from config for display
+            config = get_ticker_config(ticker)
+            full_company_name = config.get("name", ticker) if config else ticker
+
+            # Count ONLY flagged articles (not quality domains)
+            ticker_flagged = 0
+            triage_data = triage_results.get(ticker, {})
+            for category in ["company", "industry", "competitor"]:
+                ticker_flagged += len(triage_data.get(category, []))
+
+            total_flagged += ticker_flagged
+
+        # Updated header with flagged count
+        html.append(f"<h1>🔍 Article Selection QA: {ticker_list} - {total_flagged} flagged from {total_articles} articles</h1>")
+        html.append(f"<div class='summary'>")
+        html.append(f"<strong>📅 Report Period:</strong> {period_label}<br>")
+        html.append(f"<strong>⏰ Generated:</strong> {current_time_est}<br>")
+        html.append(f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>")
+
+        # Add industry keywords and competitors to header
+        if all_industry_keywords:
+            html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
+        if all_competitors:
+            html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
+
+        html.append("</div>")
+
+        for ticker, categories in articles_by_ticker.items():
+            ticker_count = sum(len(articles) for articles in categories.values())
+
+            # Get company name from config for display
+            config = get_ticker_config(ticker)
+            full_company_name = config.get("name", ticker) if config else ticker
+
+            # Count ONLY flagged articles
+            ticker_flagged = 0
+            triage_data = triage_results.get(ticker, {})
+            for category in ["company", "industry", "competitor"]:
+                ticker_flagged += len(triage_data.get(category, []))
+
+            html.append(f"<div class='ticker-section'>")
+            html.append(f"<h2>🎯 Target Company: {full_company_name} ({ticker})</h2>")
+
+            html.append(f"<p><strong>✅ Flagged for Analysis:</strong> {ticker_flagged} articles</p>")
+
+            # Process each category independently with proper sorting
+            category_icons = {
+                "company": "🎯",
+                "industry": "🏭",
+                "competitor": "⚔️"
+            }
+
+            for category in ["company", "industry", "competitor"]:
+                articles = categories.get(category, [])
+                if not articles:
+                    continue
+
+                category_triage = triage_data.get(category, [])
+                selected_article_data = {item["id"]: item for item in category_triage}
+
+                # Enhanced article sorting - Quality+Flagged first, then Flagged, then Non-Flagged
+                # Within each group, sort by time (newest first)
+                enhanced_articles = []
+                for idx, article in enumerate(articles):
+                    domain = normalize_domain(article.get("domain", ""))
+                    is_ai_selected = idx in selected_article_data
+                    is_quality_domain = domain in QUALITY_DOMAINS
+                    is_problematic = domain in PROBLEMATIC_SCRAPE_DOMAINS
+
+                    priority = 999
+                    triage_reason = ""
+                    ai_priority = "Low"
+
+                    # Determine priority tier
+                    if is_quality_domain and is_ai_selected and not is_problematic:
+                        priority = 0  # Quality + Flagged = TOP priority
+                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
+                        triage_reason = f"Quality domain + AI flagged ({ai_priority})"
+                    elif is_ai_selected:
+                        # All flagged articles get priority 1 (sorted by time within this tier)
+                        priority = 1
+                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
+                        triage_reason = selected_article_data[idx].get("why", "")
+                    elif is_quality_domain and not is_problematic:
+                        priority = 999  # Quality but NOT flagged = bottom
+                        triage_reason = "Quality domain (not flagged)"
+
+                    # Extract OpenAI and Claude scores from triage data
+                    openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
+                    claude_score = selected_article_data[idx].get("claude_score", 0) if is_ai_selected else 0
+
+                    enhanced_articles.append({
+                        "article": article,
+                        "idx": idx,
+                        "priority": priority,
+                        "is_ai_selected": is_ai_selected,
+                        "is_quality_domain": is_quality_domain,
+                        "is_problematic": is_problematic,
+                        "triage_reason": triage_reason,
+                        "ai_priority": ai_priority,
+                        "openai_score": openai_score,
+                        "claude_score": claude_score,
+                        "published_at": article.get("published_at")
+                    })
+
+                # Sort by priority tier, then by time (newest first)
+                enhanced_articles.sort(key=lambda x: (
+                    x["priority"],
+                    -(x["published_at"].timestamp() if x["published_at"] else 0)
+                ))
+
+                selected_count = len([a for a in enhanced_articles if a["is_ai_selected"]])
+
+                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} ({len(articles)} articles, {selected_count} flagged)</h3>")
+
+                for enhanced_article in enhanced_articles[:50]:
+                    article = enhanced_article["article"]
+                    domain = article.get("domain", "unknown")
+                    title = article.get("title", "No Title")
+
+                    header_badges = []
+
+                    # 1. First badge depends on category
+                    if category == "company":
+                        header_badges.append(f'<span class="company-name-badge">🎯 {full_company_name}</span>')
+                    elif category == "competitor":
+                        comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
+                        header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
+                    elif category == "industry" and article.get('search_keyword'):
+                        header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
+
+                    # 2. Domain name second
+                    header_badges.append(f'<span class="source-badge">📰 {get_or_create_formal_domain_name(domain)}</span>')
+
+                    # 3. Quality badge third
+                    if enhanced_article["is_quality_domain"]:
+                        header_badges.append('<span class="quality-badge">⭐ Quality</span>')
+
+                    # 4. Flagged badge ONLY if dual AI selected it
+                    if enhanced_article["is_ai_selected"]:
+                        header_badges.append('<span class="flagged-badge">🚩 Flagged</span>')
+
+                    # 5. OpenAI Score - 0-3 scoring
+                    openai_score = enhanced_article.get("openai_score", 0)
+                    if openai_score >= 3:
+                        openai_class = "openai-high"
+                        openai_level = "OpenAI: High"
+                        openai_emoji = "🔥"
+                    elif openai_score >= 2:
+                        openai_class = "openai-medium"
+                        openai_level = "OpenAI: Medium"
+                        openai_emoji = "⚡"
+                    elif openai_score >= 1:
+                        openai_class = "openai-low"
+                        openai_level = "OpenAI: Low"
+                        openai_emoji = "🔋"
+                    else:
+                        openai_class = "openai-none"
+                        openai_level = "OpenAI: None"
+                        openai_emoji = "○"
+                    header_badges.append(f'<span class="ai-triage {openai_class}">{openai_emoji} {openai_level}</span>')
+
+                    # 6. Claude Score - 0-3 scoring
+                    claude_score = enhanced_article.get("claude_score", 0)
+                    if claude_score >= 3:
+                        claude_class = "claude-high"
+                        claude_level = "Claude: High"
+                        claude_emoji = "🏆"
+                    elif claude_score >= 2:
+                        claude_class = "claude-medium"
+                        claude_level = "Claude: Medium"
+                        claude_emoji = "💎"
+                    elif claude_score >= 1:
+                        claude_class = "claude-low"
+                        claude_level = "Claude: Low"
+                        claude_emoji = "💡"
+                    else:
+                        claude_class = "claude-none"
+                        claude_level = "Claude: None"
+                        claude_emoji = "○"
+                    header_badges.append(f'<span class="qb-score {claude_class}">{claude_emoji} {claude_level}</span>')
+
+                    # Publication time
+                    pub_time = ""
+                    if article.get("published_at"):
+                        pub_time = format_timestamp_est(article["published_at"])
+
+                    html.append(f"""
+                    <div class='article {category}'>
+                        <div class='article-header'>
+                            {' '.join(header_badges)}
+                        </div>
+                        <div class='article-content'>
+                            <a href='{article.get("resolved_url") or article.get("url", "")}'>{title}</a>
+                            <span class='meta'> | {pub_time}</span>
+                        </div>
+                    </div>
+                    """)
+
+            html.append("</div>")
+
+        html.append(f"<div class='summary'>")
+        html.append(f"<strong>📊 Total Articles:</strong> {total_articles}<br>")
+        html.append(f"<strong>✅ Flagged for Analysis:</strong> {total_flagged}<br>")
+        html.append(f"<strong>📄 Next:</strong> Full content analysis and hedge fund summaries in progress...")
+        html.append("</div>")
+        html.append("</body></html>")
+
+        html_content = "".join(html)
+        subject = f"🔍 Article Selection QA: {ticker_list} - {total_flagged} flagged from {total_articles} articles"
+
+        return send_email(subject, html_content)
+
+    except Exception as e:
+        LOG.error(f"Enhanced quick intelligence email failed: {e}")
+        return False
+
+
+def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
+                              show_ai_analysis: bool = True, show_descriptions: bool = True,
+                              flagged_article_ids: List[int] = None) -> str:
+    """Enhanced digest with metadata display removed but keeping all badges/emojis
+
+    Args:
+        articles_by_ticker: Articles organized by ticker and category
+        period_days: Number of days covered in the report
+        show_ai_analysis: If True, show AI analysis boxes under articles (default True)
+        show_descriptions: If True, show article descriptions (default True)
+        flagged_article_ids: Optional list of flagged article IDs for sorting priority
+    """
+
+    # Generate summaries using OpenAI (Claude fallback removed in current version)
+    openai_summaries = generate_ai_final_summaries(articles_by_ticker)
+
+    # Format ticker list with company names
+    ticker_display_list = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+        ticker_display_list.append(f"{company_name} ({ticker})")
+    ticker_list = ', '.join(ticker_display_list)
+    current_time_est = format_timestamp_est(datetime.now(timezone.utc))
+
+    html = [
+        "<html><head><style>",
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }",
+        "h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }",
+        "h2 { color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }",
+        "h3 { color: #7f8c8d; margin-top: 15px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }",
+        ".article { margin: 8px 0; padding: 8px; border-left: 3px solid transparent; transition: all 0.3s; background-color: #fafafa; border-radius: 4px; }",
+        ".article:hover { background-color: #f0f8ff; border-left-color: #3498db; }",
+        ".article-header { margin-bottom: 5px; }",
+        ".article-content { }",
+        ".company { border-left-color: #27ae60; }",
+        ".industry { border-left-color: #f39c12; }",
+        ".competitor { border-left-color: #e74c3c; }",
+        ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
+        ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
+        ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
+        ".summary-section { margin: 12px 0; }",
+        ".section-header { font-weight: bold; font-size: 15px; color: #2c3e50; margin-bottom: 5px; padding: 4px 0; border-bottom: 2px solid #ecf0f1; }",
+        ".section-bullets { margin: 0 0 0 20px; padding: 0; list-style-type: disc; }",
+        ".section-bullets li { margin: 4px 0; line-height: 1.4; color: #34495e; }",
+        ".company-name-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 5px; font-weight: bold; font-size: 10px; background-color: #e8f5e8; color: #2e7d32; border: 1px solid #a5d6a7; }",
+        ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
+        ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
+        ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+        ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
+        ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
+        ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+        ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
+        ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
+        ".meta { color: #95a5a6; font-size: 11px; }",
+        ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
+        ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
+        "a { color: #2980b9; text-decoration: none; }",
+        "a:hover { text-decoration: underline; }",
+        "</style></head><body>",
+        f"<h1>📊 Stock Intelligence Report: {ticker_list}</h1>",
+        f"<div class='summary'>",
+        f"<strong>📅 Report Period:</strong> Last {period_days} days<br>",
+        f"<strong>⏰ Generated:</strong> {current_time_est}<br>",
+        f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>"
+    ]
+
+    # Collect all industry keywords and competitors for header (match triage email)
+    all_industry_keywords = set()
+    all_competitors = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        if config:
+            keywords = config.get("industry_keywords", [])
+            all_industry_keywords.update(keywords)
+            comps = config.get("competitors", [])
+            for comp in comps:
+                comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                if comp_display not in all_competitors:
+                    all_competitors.append(comp_display)
+
+    # Add industry keywords and competitors to header
+    if all_industry_keywords:
+        html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
+    if all_competitors:
+        html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
+
+    html.append("</div>")
+
+    for ticker, categories in articles_by_ticker.items():
+        # Get company name for display
+        config = get_ticker_config(ticker)
+        company_name = config.get("name", ticker) if config else ticker
+
+        html.append(f"<div class='ticker-section'>")
+
+        # Add financial context box if data is current (only in final email)
+        today_str = datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
+        if config and config.get("financial_snapshot_date") == today_str:
+            html.append("<div style='background:#f5f5f5; padding:12px; margin:16px 0; font-size:13px; border-left:3px solid #0066cc;'>")
+            html.append(f"<div style='font-weight:bold; margin-bottom:6px;'>📊 Market Context (as of {config.get('financial_snapshot_date')})</div>")
+
+            # Line 1: Price and returns
+            price = f"${config.get('financial_last_price', 0):.2f}" if config.get('financial_last_price') else "N/A"
+            price_chg = format_financial_percent(config.get('financial_price_change_pct')) or "N/A"
+            yesterday_ret = format_financial_percent(config.get('financial_yesterday_return_pct')) or "N/A"
+            ytd_ret = format_financial_percent(config.get('financial_ytd_return_pct')) or "N/A"
+            html.append(f"<div>Last Stock Price: {price} ({price_chg}) | Yesterday: {yesterday_ret} | YTD: {ytd_ret}</div>")
+
+            # Line 2: Market cap and enterprise value
+            mcap = format_financial_number(config.get('financial_market_cap')) or "N/A"
+            ev = format_financial_number(config.get('financial_enterprise_value')) or "N/A"
+            html.append(f"<div>Market Cap: {mcap} | Enterprise Value: {ev}</div>")
+
+            # Line 3: Volume
+            vol = format_financial_volume(config.get('financial_volume')) or "N/A"
+            avg_vol = format_financial_volume(config.get('financial_avg_volume')) or "N/A"
+            html.append(f"<div>Volume: {vol} yesterday / {avg_vol} avg</div>")
+
+            # Line 4: Analyst data (if available)
+            if config.get('financial_analyst_target'):
+                target = f"${config.get('financial_analyst_target'):.2f}"
+                low = f"${config.get('financial_analyst_range_low'):.2f}" if config.get('financial_analyst_range_low') else "N/A"
+                high = f"${config.get('financial_analyst_range_high'):.2f}" if config.get('financial_analyst_range_high') else "N/A"
+                count = config.get('financial_analyst_count', 0)
+                rec = config.get('financial_analyst_recommendation', 'N/A')
+                html.append(f"<div>Analysts: {target} target (range {low}-{high}, {count} analysts, {rec})</div>")
+
+            html.append("</div>")
+
+        html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
+
+        # Display OpenAI summary
+        openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
+
+        if openai_summary:
+            html.append("<div class='company-summary'>")
+            html.append(f"<div class='summary-title'>📰 Executive Summary (Deep Analysis) - OpenAI</div>")
+            html.append("<div class='summary-content'>")
+
+            # Parse and render summary with structured sections
+            summary_sections = parse_structured_summary(openai_summary)
+            if summary_sections:
+                html.append(render_structured_summary_html(summary_sections))
+            else:
+                # Fallback to raw text if parsing fails
+                html.append(f"<div>{openai_summary.replace(chr(10), '<br>')}</div>")
+
+            html.append("</div>")
+            html.append("</div>")
+
+        # Sort articles within each category using priority sorting if flagged_ids provided
+        for category in ["company", "industry", "competitor"]:
+            if category in categories and categories[category]:
+                articles = categories[category]
+
+                # Apply priority sorting if flagged article IDs are provided
+                if flagged_article_ids:
+                    articles = sort_articles_by_priority(articles, flagged_article_ids)
+                else:
+                    # Original sorting: Quality domains first, then AI analyzed, then by time
+                    def sort_key(article):
+                        domain = normalize_domain(article.get("domain", ""))
+                        is_quality_domain = domain in QUALITY_DOMAINS
+                        is_analyzed = bool(article.get('ai_summary') or article.get('ai_triage_selected'))
+                        pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
+
+                        # Priority: 0 = quality domain, 1 = analyzed, 2 = other
+                        if is_quality_domain:
+                            priority = 0
+                        elif is_analyzed:
+                            priority = 1
+                        else:
+                            priority = 2
+
+                        return (priority, -pub_time.timestamp())
+
+                    articles = sorted(articles, key=sort_key)
+
+                category_icons = {
+                    "company": "🎯",
+                    "industry": "🏭",
+                    "competitor": "⚔️"
+                }
+
+                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} News ({len(articles)} articles)</h3>")
+                for article in articles[:100]:
+                    # Use simplified ticker metadata cache (just company name)
+                    simple_cache = {ticker: {"company_name": company_name}}
+                    html.append(_format_article_html_with_ai_summary(article, category, simple_cache,
+                                                                     show_ai_analysis, show_descriptions))
+
+        html.append("</div>")
+
+    html.append("""
+        <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
+            <strong>🤖 Enhanced AI Features:</strong><br>
+            📊 Investment Thesis: AI synthesis of all company deep analysis<br>
+            📰 Content Analysis: Full article scraping with intelligent extraction<br>
+            💼 Hedge Fund Summaries: AI-generated analytical summaries for scraped content<br>
+            🎯 Enhanced Selection: AI Triage → Quality Domains → Exclude Problematic → QB Score Backfill<br>
+            ✅ "Analyzed" badge indicates articles with both scraped content and AI summary<br>
+            ⭐ "Quality" badge indicates high-authority news sources
+        </div>
+        </body></html>
+    """)
+
+    html_content = "".join(html)
+    return html_content
+
+
+# ------------------------------------------------------------------------------
+# Structured Summary Parsing for Emails
+# ------------------------------------------------------------------------------
+
+def parse_structured_summary(summary_text: str) -> list:
+    """
+    Parse AI-generated structured summary into sections with headers and bullets.
+
+    Expected format:
+    🔴 MAJOR DEVELOPMENTS
+    • Bullet point 1
+    • Bullet point 2
+
+    📊 FINANCIAL/OPERATIONAL PERFORMANCE
+    • Bullet point 1
+    """
+    if not summary_text:
+        return []
+
+    sections = []
+    current_section = None
+
+    # Known section emojis to detect headers
+    section_emojis = ['🔴', '📊', '⚠️', '📈', '⚡', '📅']
+
+    for line in summary_text.split('\n'):
+        line = line.strip()
+
+        # Skip empty lines
+        if not line:
+            continue
+
+        # Detect section headers (lines with section emojis, not starting with bullet)
+        is_header = False
+        if not line.startswith('•') and not line.startswith('-'):
+            # Check if line contains any section emoji
+            for emoji in section_emojis:
+                if emoji in line:
+                    is_header = True
+                    break
+
+        if is_header:
+            # Save previous section if exists
+            if current_section:
+                sections.append(current_section)
+
+            # Start new section
+            current_section = {
+                'header': line,
+                'bullets': []
+            }
+
+        # Detect bullets (lines starting with • or -)
+        elif (line.startswith('•') or line.startswith('-')) and current_section:
+            # Remove leading bullet character and whitespace
+            bullet_text = line.lstrip('•- ').strip()
+            if bullet_text:  # Only add non-empty bullets
+                current_section['bullets'].append(bullet_text)
+
+    # Add final section
+    if current_section:
+        sections.append(current_section)
+
+    return sections
+
+
+def render_structured_summary_html(sections: list) -> str:
+    """
+    Convert parsed sections into properly formatted HTML.
+
+    Returns HTML string with sections, headers, and bullet lists.
+    """
+    if not sections:
+        return ""
+
+    html_parts = []
+
+    for section in sections:
+        html_parts.append("<div class='summary-section'>")
+
+        # Render section header with emoji
+        html_parts.append(f"<div class='section-header'>{section['header']}</div>")
+
+        # Render bullets as HTML list
+        if section['bullets']:
+            html_parts.append("<ul class='section-bullets'>")
+            for bullet in section['bullets']:
+                html_parts.append(f"<li>{bullet}</li>")
+            html_parts.append("</ul>")
+
+        html_parts.append("</div>")
+
+    return ''.join(html_parts)
+
+
+def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
+                                               show_ai_analysis: bool = True,
+                                               show_descriptions: bool = True,
+                                               flagged_article_ids: List[int] = None) -> Dict[str, Dict[str, List[Dict]]]:
+    """Email #2: Content QA - Fetch categorized articles for digest with ticker-specific AI analysis
+
+    Args:
+        hours: Time window for articles
+        tickers: Specific tickers to fetch, or None for all
+        show_ai_analysis: If True, include AI analysis boxes in HTML (default True)
+        show_descriptions: If True, include article descriptions in HTML (default True)
+        flagged_article_ids: If provided, only fetch articles with these IDs (from triage)
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    days = int(hours / 24) if hours >= 24 else 0
+    period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
+
+    LOG.info(f"=== FETCHING DIGEST ARTICLES (EMAIL #2: CONTENT QA) ===")
+    LOG.info(f"Time window: {period_label} (cutoff: {cutoff})")
+    LOG.info(f"Target tickers: {tickers or 'ALL'}")
+    LOG.info(f"Flagged article filter: {'ENABLED (' + str(len(flagged_article_ids)) + ' IDs)' if flagged_article_ids else 'DISABLED (showing all articles)'}")
+
+    with db() as conn, conn.cursor() as cur:
+        # Enhanced query to get articles from new schema - MATCHES triage query
+        # Add optional filter for flagged articles (from triage selection)
+        if tickers:
+            if flagged_article_ids:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND ta.ticker = ANY(%s)
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                        AND a.id = ANY(%s)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, tickers, cutoff, flagged_article_ids))
+            else:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND ta.ticker = ANY(%s)
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, tickers, cutoff))
+        else:
+            if flagged_article_ids:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                        AND a.id = ANY(%s)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, cutoff, flagged_article_ids))
+            else:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
+                        a.id, a.url, a.resolved_url, a.title, a.description,
+                        ta.ticker, a.domain, a.published_at,
+                        ta.found_at, ta.category,
+                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.found_at >= %s
+                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                    ORDER BY a.url_hash, ta.ticker,
+                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                """, (cutoff, cutoff))
+
+        # Group articles by ticker
+        articles_by_ticker = {}
+        for row in cur.fetchall():
+            target_ticker = row["ticker"]
+
+            # Use stored category from ticker_articles table
+            category = row["category"]
+
+            if target_ticker not in articles_by_ticker:
+                articles_by_ticker[target_ticker] = {}
+            if category not in articles_by_ticker[target_ticker]:
+                articles_by_ticker[target_ticker][category] = []
+
+            # Convert row to dict and add to results
+            article_dict = dict(row)
+            articles_by_ticker[target_ticker][category].append(article_dict)
+
+            # Debug logging for AI summary presence
+            if article_dict.get('ai_summary'):
+                LOG.debug(f"DIGEST QUERY: Found AI summary for {target_ticker} - {len(article_dict['ai_summary'])} chars")
+            else:
+                LOG.debug(f"DIGEST QUERY: No AI summary for {target_ticker} article: {article_dict.get('title', 'No title')[:50]}")
+
+        # Mark articles as sent (only new ones)
+        total_to_mark = 0
+        if tickers:
+            cur.execute("""
+                SELECT COUNT(DISTINCT (a.url_hash, ta.ticker)) as count
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                AND ta.ticker = ANY(%s)
+                AND NOT ta.sent_in_digest
+            """, (cutoff, tickers))
+        else:
+            cur.execute("""
+                SELECT COUNT(DISTINCT (a.url_hash, ta.ticker)) as count
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.found_at >= %s
+                AND NOT ta.sent_in_digest
+            """, (cutoff,))
+
+        result = cur.fetchone()
+        total_to_mark = result["count"] if result else 0
+
+        if total_to_mark > 0:
+            if tickers:
+                cur.execute("""
+                    UPDATE ticker_articles
+                    SET sent_in_digest = TRUE
+                    WHERE found_at >= %s
+                    AND ticker = ANY(%s)
+                    AND NOT sent_in_digest
+                """, (cutoff, tickers))
+            else:
+                cur.execute("""
+                    UPDATE ticker_articles
+                    SET sent_in_digest = TRUE
+                    WHERE found_at >= %s
+                    AND NOT sent_in_digest
+                """, (cutoff,))
+
+            LOG.info(f"Marked {total_to_mark} articles as sent in digest")
+        else:
+            LOG.info("No new articles to mark as sent (smart reuse mode)")
+
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles_by_ticker.values()
+    )
+
+    if total_articles == 0:
+        return {
+            "status": "no_articles",
+            "message": f"No quality articles found in the last {period_label}",
+            "tickers": tickers or "all"
+        }
+
+    # Use the enhanced digest function with flagged article IDs for sorting
+    html = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
+                                      show_ai_analysis, show_descriptions, flagged_article_ids)
+
+    # Enhanced subject with ticker list (company names) - UPDATED HEADER
+    ticker_display_list = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+        ticker_display_list.append(f"{company_name} ({ticker})")
+    ticker_list = ', '.join(ticker_display_list)
+    subject = f"📝 Content QA: {ticker_list} - {total_articles} articles analyzed"
+    success = send_email(subject, html)
+
+    # Count by category and content scraping
+    category_counts = {"company": 0, "industry": 0, "competitor": 0}
+    content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
+
+    for ticker_cats in articles_by_ticker.values():
+        for cat, arts in ticker_cats.items():
+            category_counts[cat] = category_counts.get(cat, 0) + len(arts)
+            for art in arts:
+                if art.get('scraped_content'):
+                    content_stats['scraped'] += 1
+                elif art.get('scraping_failed'):
+                    content_stats['failed'] += 1
+                else:
+                    content_stats['skipped'] += 1
+
+                if art.get('ai_summary'):
+                    content_stats['ai_summaries'] += 1
+
+    LOG.info(f"DIGEST STATS: {content_stats['ai_summaries']} articles with AI summaries out of {total_articles} total")
+
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "by_category": category_counts,
+        "content_scraping_stats": content_stats,
+        "recipient": DIGEST_TO
+    }
+
+
+def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
+                                   flagged_article_ids: List[int] = None) -> Dict:
+    """
+    Email #3: Stock Intelligence - Final user-facing report
+    - Same flagged articles as Content QA email
+    - No AI analysis boxes
+    - No description boxes
+    - Clean presentation for end users
+    - Uses executive summary from database
+    """
+    LOG.info("=== EMAIL #3: STOCK INTELLIGENCE (USER REPORT) ===")
+    if flagged_article_ids:
+        LOG.info(f"Filtering to {len(flagged_article_ids)} flagged articles from triage")
+
+    # Fetch executive summaries from database for each ticker
+    executive_summaries = {}
+    if tickers:
+        with db() as conn, conn.cursor() as cur:
+            for ticker in tickers:
+                cur.execute("""
+                    SELECT summary_text FROM executive_summaries
+                    WHERE ticker = %s AND summary_date = CURRENT_DATE
+                    ORDER BY generated_at DESC LIMIT 1
+                """, (ticker,))
+                result = cur.fetchone()
+                if result:
+                    executive_summaries[ticker] = result['summary_text']
+                    LOG.info(f"Retrieved executive summary for {ticker} from database ({len(result['summary_text'])} chars)")
+                else:
+                    LOG.warning(f"No executive summary found in database for {ticker}")
+
+    # Fetch articles with AI/descriptions hidden
+    result = fetch_digest_articles_with_enhanced_content(
+        hours=hours,
+        tickers=tickers,
+        show_ai_analysis=False,   # Hide AI analysis boxes
+        show_descriptions=False,  # Hide description boxes
+        flagged_article_ids=flagged_article_ids  # Filter to flagged articles only
+    )
+
+    # If fetch returns dict with status (error case), return it
+    if isinstance(result, dict) and "status" in result:
+        return result
+
+    # Get articles for sending
+    articles_by_ticker = result if isinstance(result, dict) else {}
+
+    if not articles_by_ticker:
+        return {
+            "status": "no_articles",
+            "message": "No articles to send in user report",
+            "tickers": tickers or "all"
+        }
+
+    # Build HTML (same as Content QA but without AI/descriptions)
+    days = int(hours / 24) if hours >= 24 else 0
+    html = build_enhanced_digest_html(
+        articles_by_ticker,
+        days if days > 0 else 1,
+        show_ai_analysis=False,
+        show_descriptions=False,
+        flagged_article_ids=flagged_article_ids
+    )
+
+    # Create subject line for Email #3 - UPDATED HEADER
+    ticker_display_list = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+        ticker_display_list.append(f"{company_name} ({ticker})")
+    ticker_list = ', '.join(ticker_display_list)
+
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles_by_ticker.values()
+    )
+
+    subject = f"📊 Stock Intelligence: {ticker_list} - {total_articles} articles"
+    success = send_email(subject, html)
+
+    LOG.info(f"📧 Email #3 (Stock Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
+
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "recipient": DIGEST_TO,
+        "email_type": "stock_intelligence_report"
+    }
+
+# ------------------------------------------------------------------------------
+# Auth Middleware
+# ------------------------------------------------------------------------------
+def require_admin(request: Request):
+    """Verify admin token"""
+    token = request.headers.get("x-admin-token") or \
+            request.headers.get("authorization", "").replace("Bearer ", "")
+
+    if token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+# ------------------------------------------------------------------------------
+# JOB QUEUE MODELS & INFRASTRUCTURE
+# ------------------------------------------------------------------------------
+
+class JobSubmitRequest(BaseModel):
+    tickers: List[str]
+    minutes: int = 1440
+    batch_size: int = 3
+    triage_batch_size: int = 3
+
+# ------------------------------------------------------------------------------
+# JOB QUEUE SYSTEM - PostgreSQL-Based Background Processing
+# ------------------------------------------------------------------------------
+
+# Circuit Breaker for System-Wide Failure Detection
+class CircuitBreaker:
+    """Detect and halt processing on systematic failures"""
+    def __init__(self, failure_threshold=3, reset_timeout=300):
+        self.failure_count = 0
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.last_failure_time = None
+        self.state = 'closed'  # closed = working, open = failing
+        self.lock = threading.Lock()
+
+    def record_failure(self, error_type: str, error_msg: str):
+        with self.lock:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+
+            if self.failure_count >= self.failure_threshold:
+                self.state = 'open'
+                LOG.critical(f"🚨 CIRCUIT BREAKER OPEN: {self.failure_count} consecutive failures")
+                LOG.critical(f"   Last error: {error_type}: {error_msg}")
+                # TODO: Send alert email in production
+
+    def record_success(self):
+        with self.lock:
+            # Reset if we've been in open state long enough
+            if self.state == 'open' and self.last_failure_time:
+                if time.time() - self.last_failure_time > self.reset_timeout:
+                    LOG.info("✅ Circuit breaker CLOSED: Resuming after timeout")
+                    self.state = 'closed'
+                    self.failure_count = 0
+            elif self.state == 'closed':
+                # Gradual recovery - reduce count on success
+                self.failure_count = max(0, self.failure_count - 1)
+
+    def is_open(self):
+        with self.lock:
+            return self.state == 'open'
+
+    def reset(self):
+        with self.lock:
+            self.state = 'closed'
+            self.failure_count = 0
+            self.last_failure_time = None
+            LOG.info("🔄 Circuit breaker manually reset")
+
+# Global circuit breaker instance
+job_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_timeout=300)
+
+# Job Queue Worker State
+_job_worker_running = False
+_job_worker_thread = None
+
+# Forward declarations - these reference functions defined later in the file
+# We use globals() to avoid circular imports
+
+async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_size: int, triage_batch_size: int):
+    """Wrapper for ingest logic with error handling and progress tracking"""
+    try:
+        # Call the actual cron_ingest function which is defined later
+        cron_ingest_func = globals().get('cron_ingest')
+        if not cron_ingest_func:
+            raise RuntimeError("cron_ingest function not yet defined")
+
+        # Create mock request
+        class MockRequest:
+            def __init__(self):
+                self.headers = {"x-admin-token": ADMIN_TOKEN}
+
+        LOG.info(f"[JOB {job_id}] Calling cron_ingest for {ticker}...")
+
+        result = await cron_ingest_func(
+            MockRequest(),
+            minutes=minutes,
+            tickers=[ticker],
+            batch_size=batch_size,
+            triage_batch_size=triage_batch_size
+        )
+
+        LOG.info(f"[JOB {job_id}] cron_ingest completed for {ticker}")
+
+        # Extract and store flagged articles in job config
+        if result and isinstance(result, dict):
+            phase2 = result.get('phase_2_triage', {})
+            flagged_articles = phase2.get('flagged_articles', [])
+
+            if flagged_articles:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE ticker_processing_jobs
+                        SET config = jsonb_set(COALESCE(config, '{}'), '{flagged_articles}', %s::jsonb)
+                        WHERE job_id = %s
+                    """, (json.dumps(flagged_articles), job_id))
+                LOG.info(f"[JOB {job_id}] Stored {len(flagged_articles)} flagged article IDs in job config")
+            else:
+                LOG.warning(f"[JOB {job_id}] No flagged articles found in triage results")
+
+        return result
+
+    except Exception as e:
+        LOG.error(f"[JOB {job_id}] INGEST FAILED for {ticker}: {e}")
+        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
+        raise
+
+async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
+    """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary"""
+    try:
+        # CRITICAL: fetch_digest_articles_with_enhanced_content sends the Stock Intelligence Email
+        # which includes the executive summary via generate_ai_final_summaries()
+        fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')
+        if not fetch_digest_func:
+            raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
+
+        LOG.info(f"[JOB {job_id}] Calling fetch_digest (will send Stock Intelligence Email) for {ticker}...")
+        if flagged_article_ids:
+            LOG.info(f"[JOB {job_id}] Filtering to {len(flagged_article_ids)} flagged articles from triage")
+
+        result = fetch_digest_func(
+            minutes / 60,
+            [ticker],
+            show_ai_analysis=True,
+            show_descriptions=True,
+            flagged_article_ids=flagged_article_ids
+        )
+
+        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Email sent: {result.get('status') == 'sent'}")
+        return result
+
+    except Exception as e:
+        LOG.error(f"[JOB {job_id}] DIGEST FAILED for {ticker}: {e}")
+        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
+        raise
+
+async def process_commit_phase(job_id: str, ticker: str, batch_id: str = None, is_last_job: bool = False):
+    """Wrapper for commit logic with error handling - includes job_id for idempotency"""
+    try:
+        # Call the actual GitHub commit function (it's named safe_incremental_commit, not admin_safe_incremental_commit)
+        commit_func = globals().get('safe_incremental_commit')
+        if not commit_func:
+            raise RuntimeError("safe_incremental_commit not yet defined")
+
+        class MockRequest:
+            def __init__(self):
+                self.headers = {"x-admin-token": ADMIN_TOKEN}
+
+        class CommitBody(BaseModel):
+            tickers: List[str]
+            job_id: Optional[str] = None  # Pass job_id for idempotency tracking
+            skip_render: Optional[bool] = True  # Control [skip render] flag
+
+        LOG.info(f"[JOB {job_id}] Calling GitHub commit for {ticker}...")
+
+        # Skip render for all jobs EXCEPT the last one in batch
+        skip_render = not is_last_job
+        if is_last_job:
+            LOG.info(f"[JOB {job_id}] ⚠️ LAST JOB IN BATCH - Render will deploy after this commit")
+        else:
+            LOG.info(f"[JOB {job_id}] [skip render] flag enabled - no deployment")
+
+        # Convert job_id to string (PostgreSQL returns UUID objects)
+        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker], job_id=str(job_id), skip_render=skip_render))
+
+        LOG.info(f"[JOB {job_id}] GitHub commit completed for {ticker}")
+        return result
+
+    except Exception as e:
+        LOG.error(f"[JOB {job_id}] COMMIT FAILED for {ticker}: {e}")
+        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
+        raise
+
+def get_worker_id():
+    """Get unique worker ID (Render instance or hostname)"""
+    return os.getenv('RENDER_INSTANCE_ID') or os.getenv('HOSTNAME') or 'worker-local'
+
+def update_job_status(job_id: str, status: str = None, phase: str = None, progress: int = None,
+                     error_message: str = None, error_stacktrace: str = None, result: dict = None,
+                     memory_mb: float = None, duration_seconds: float = None):
+    """Update job status in database"""
+    updates = ["last_updated = NOW()"]
+    params = []
+
+    if status:
+        updates.append("status = %s")
+        params.append(status)
+
+        if status == 'processing':
+            updates.append("started_at = NOW()")
+        elif status in ('completed', 'failed', 'timeout', 'cancelled'):
+            updates.append("completed_at = NOW()")
+
+    if phase:
+        updates.append("phase = %s")
+        params.append(phase)
+
+    if progress is not None:
+        updates.append("progress = %s")
+        params.append(progress)
+
+    if error_message:
+        updates.append("error_message = %s")
+        params.append(error_message)
+
+    if error_stacktrace:
+        updates.append("error_stacktrace = %s")
+        params.append(error_stacktrace)
+
+    if result:
+        updates.append("result = %s")
+        params.append(json.dumps(result))
+
+    if memory_mb is not None:
+        updates.append("memory_mb = %s")
+        params.append(memory_mb)
+
+    if duration_seconds is not None:
+        updates.append("duration_seconds = %s")
+        params.append(duration_seconds)
+
+    params.append(job_id)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            UPDATE ticker_processing_jobs
+            SET {', '.join(updates)}
+            WHERE job_id = %s
+        """, params)
+
+def get_next_queued_job():
+    """Get next queued job with atomic claim (prevents race conditions)"""
+    with db() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("""
+                UPDATE ticker_processing_jobs
+                SET status = 'processing',
+                    started_at = NOW(),
+                    worker_id = %s,
+                    last_updated = NOW()
+                WHERE job_id = (
+                    SELECT job_id FROM ticker_processing_jobs
+                    WHERE status = 'queued'
+                    ORDER BY created_at
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING *
+            """, (get_worker_id(),))
+
+            job = cur.fetchone()
+            if job:
+                LOG.info(f"📋 Claimed job {job['job_id']} for ticker {job['ticker']}")
+            return dict(job) if job else None
+
+        except Exception as e:
+            LOG.error(f"Error claiming job: {e}")
+            return None
+
+async def process_ticker_job(job: dict):
+    """Process a single ticker job (ingest + digest + commit)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+
+    # psycopg returns JSONB as dict, not string
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    minutes = config.get('minutes', 1440)
+    batch_size = config.get('batch_size', 3)
+    triage_batch_size = config.get('triage_batch_size', 3)
+
+    start_time = time.time()
+    memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
+
+    LOG.info(f"🚀 [JOB {job_id}] Starting processing for {ticker}")
+    LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
+
+    try:
+        # NOTE: TICKER_PROCESSING_LOCK is acquired inside cron_ingest/cron_digest
+        # We don't acquire it here to avoid deadlock (lock is not reentrant)
+
+        # Check if job was cancelled before starting
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            current_status = cur.fetchone()
+            if current_status and current_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled before starting, exiting")
+                return
+
+        # PHASE 1: Ingest (already implemented in /cron/ingest)
+        update_job_status(job_id, phase='ingest_start', progress=10)
+        LOG.info(f"📥 [JOB {job_id}] Phase 1: Ingest starting...")
+
+        # Call ingest logic (will be defined later in file)
+        # We can't import it here due to circular dependency
+        # So we'll call it by name after it's defined
+        ingest_result = await process_ingest_phase(
+            job_id=job_id,
+            ticker=ticker,
+            minutes=minutes,
+            batch_size=batch_size,
+            triage_batch_size=triage_batch_size
+        )
+
+        update_job_status(job_id, phase='ingest_complete', progress=60)
+
+        # Log detailed ingest stats
+        if ingest_result:
+            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete")
+            if isinstance(ingest_result, dict):
+                phase1 = ingest_result.get('phase_1_ingest', {})
+                phase2 = ingest_result.get('phase_2_triage', {})
+                phase4 = ingest_result.get('phase_4_async_batch_scraping', {})
+
+                if phase1:
+                    LOG.info(f"   Articles: New({phase1.get('total_inserted', 0)}) Total({phase1.get('total_articles_in_timeframe', 0)})")
+
+                if phase2 and phase2.get('selections_by_ticker'):
+                    sel = phase2['selections_by_ticker'].get(ticker, {})
+                    LOG.info(f"   Triage: Company({sel.get('company', 0)}) Industry({sel.get('industry', 0)}) Competitor({sel.get('competitor', 0)})")
+
+                if phase4:
+                    LOG.info(f"   Scraping: New({phase4.get('scraped', 0)}) Reused({phase4.get('reused_existing', 0)}) Success({phase4.get('overall_success_rate', 'N/A')})")
+        else:
+            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
+
+        # Check if cancelled after Phase 1
+        # Also re-fetch config to get flagged_articles that were stored during ingest
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status, config FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            job_status = cur.fetchone()
+            if job_status and job_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 1, exiting")
+                return
+
+            # Re-fetch flagged_articles that were stored during ingest phase
+            updated_config = job_status['config'] if job_status and isinstance(job_status['config'], dict) else {}
+            flagged_article_ids = updated_config.get('flagged_articles', [])
+
+            if flagged_article_ids:
+                LOG.info(f"📋 [JOB {job_id}] Retrieved {len(flagged_article_ids)} flagged article IDs from ingest phase")
+            else:
+                LOG.warning(f"⚠️ [JOB {job_id}] No flagged articles found in config after ingest")
+
+        # PHASE 2: Digest (already implemented in /cron/digest)
+        update_job_status(job_id, phase='digest_start', progress=65)
+        LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
+
+        # Call digest function (defined later in file) - pass flagged articles from triage
+        digest_result = await process_digest_phase(
+            job_id=job_id,
+            ticker=ticker,
+            minutes=minutes,
+            flagged_article_ids=flagged_article_ids
+        )
+
+        update_job_status(job_id, phase='digest_complete', progress=95)
+
+        # Log detailed digest stats
+        if digest_result:
+            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete")
+            if isinstance(digest_result, dict):
+                LOG.info(f"   Status: {digest_result.get('status', 'unknown')}")
+                LOG.info(f"   Articles: {digest_result.get('articles', 0)}")
+        else:
+            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete (no detailed stats)")
+
+        # Check if cancelled after Phase 2
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            current_status = cur.fetchone()
+            if current_status and current_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
+                return
+
+        # EMAIL #3: USER INTELLIGENCE REPORT (no AI analysis, no descriptions)
+        update_job_status(job_id, phase='user_report', progress=97)
+        LOG.info(f"📧 [JOB {job_id}] Sending Email #3: User Intelligence Report...")
+
+        try:
+            user_report_result = send_user_intelligence_report(
+                hours=int(minutes/60),
+                tickers=[ticker],
+                flagged_article_ids=flagged_article_ids  # Filter to same articles as Email #2
+            )
+            if user_report_result:
+                LOG.info(f"✅ [JOB {job_id}] Email #3 sent successfully")
+                if isinstance(user_report_result, dict):
+                    LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
+            else:
+                LOG.warning(f"⚠️ [JOB {job_id}] Email #3 returned no result")
+        except Exception as e:
+            LOG.error(f"❌ [JOB {job_id}] Email #3 failed: {e}")
+            # Continue to GitHub commit even if Email #3 fails (Option A)
+
+        # Check if cancelled after Phase 3
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            current_status = cur.fetchone()
+            if current_status and current_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Email #3, exiting")
+                return
+
+        # COMMIT METADATA TO GITHUB after all emails sent
+        # This ensures GitHub commit doesn't trigger server restart before emails are sent
+        update_job_status(job_id, phase='commit_metadata', progress=99)
+        LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
+
+        try:
+            # Check if this is the last job in the batch (to control [skip render] flag)
+            batch_id = job.get('batch_id')
+            is_last_job = False
+
+            if batch_id:
+                with db() as conn, conn.cursor() as cur:
+                    # Count remaining jobs in batch (queued + processing, excluding this one)
+                    cur.execute("""
+                        SELECT COUNT(*) as remaining
+                        FROM ticker_processing_jobs
+                        WHERE batch_id = %s
+                        AND status IN ('queued', 'processing')
+                        AND job_id != %s
+                    """, (batch_id, job_id))
+                    result = cur.fetchone()
+                    remaining_jobs = result['remaining'] if result else 0
+
+                    if remaining_jobs == 0:
+                        is_last_job = True
+                        LOG.info(f"[JOB {job_id}] 🎯 This is the LAST job in batch {batch_id}")
+
+            await process_commit_phase(
+                job_id=job_id,
+                ticker=ticker,
+                batch_id=batch_id,
+                is_last_job=is_last_job
+            )
+            LOG.info(f"✅ [JOB {job_id}] Metadata committed to GitHub successfully")
+        except Exception as e:
+            LOG.error(f"⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
+            # Don't fail the job if commit fails - continue processing
+
+        # PHASE 3: Complete
+        update_job_status(job_id, phase='finalizing', progress=99)
+        LOG.info(f"✅ [JOB {job_id}] Finalizing job...")
+
+        # Calculate final metrics
+        duration = time.time() - start_time
+        memory_end = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
+        memory_used = max(0, memory_end - memory_start)
+
+        # Mark complete
+        result = {
+            "ticker": ticker,
+            "ingest": ingest_result,
+            "digest": digest_result,
+            "metadata_committed": True,  # Committed after Phase 1
+            "duration_seconds": duration,
+            "memory_mb": memory_used
+        }
+
+        update_job_status(
+            job_id,
+            status='completed',
+            phase='complete',
+            progress=100,
+            result=result,
+            duration_seconds=duration,
+            memory_mb=memory_used
+        )
+
+        LOG.info(f"✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
+
+        # Record success with circuit breaker
+        job_circuit_breaker.record_success()
+
+        # Update batch counters
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET completed_jobs = completed_jobs + 1
+                WHERE batch_id = %s
+            """, (job['batch_id'],))
+
+        return result
+
+    except Exception as e:
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        duration = time.time() - start_time
+
+        LOG.error(f"❌ [JOB {job_id}] FAILED after {duration:.1f}s: {error_msg}")
+        LOG.error(f"   Stacktrace: {error_trace}")
+
+        # Determine if this is a system-wide failure
+        is_system_failure = any(keyword in error_msg.lower() for keyword in [
+            'database', 'connection', 'psycopg', 'timeout', 'memory'
+        ])
+
+        if is_system_failure:
+            job_circuit_breaker.record_failure(type(e).__name__, error_msg)
+        else:
+            # Ticker-specific failure, not system-wide
+            job_circuit_breaker.record_success()
+
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=error_msg[:1000],  # Limit size
+            error_stacktrace=error_trace[:5000],
+            duration_seconds=duration
+        )
+
+        # Update batch counters
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET failed_jobs = failed_jobs + 1
+                WHERE batch_id = %s
+            """, (job['batch_id'],))
+
+        raise
+
+def job_worker_loop():
+    """Background worker that polls database for jobs"""
+    global _job_worker_running
+
+    LOG.info(f"🔧 Job worker started (worker_id: {get_worker_id()})")
+
+    while _job_worker_running:
+        try:
+            # Check circuit breaker
+            if job_circuit_breaker.is_open():
+                LOG.warning("⚠️ Circuit breaker is OPEN, skipping job polling")
+                time.sleep(30)
+                continue
+
+            # Get next job
+            job = get_next_queued_job()
+
+            if job:
+                # Process job (blocks until complete)
+                asyncio.run(process_ticker_job(job))
+            else:
+                # No jobs available, sleep and poll again
+                time.sleep(10)
+
+        except KeyboardInterrupt:
+            LOG.info("🛑 Job worker received interrupt signal")
+            break
+
+        except Exception as e:
+            LOG.error(f"💥 Job worker error: {e}")
+            LOG.error(traceback.format_exc())
+            time.sleep(30)  # Back off on errors
+
+    LOG.info("🔚 Job worker stopped")
+
+def start_job_worker():
+    """Start the background job worker thread"""
+    global _job_worker_running, _job_worker_thread
+
+    if _job_worker_running:
+        LOG.warning("Job worker already running")
+        return
+
+    _job_worker_running = True
+    _job_worker_thread = threading.Thread(target=job_worker_loop, daemon=True, name="JobWorker")
+    _job_worker_thread.start()
+
+    LOG.info("✅ Job worker thread started")
+
+def stop_job_worker():
+    """Stop the background job worker thread"""
+    global _job_worker_running
+
+    if not _job_worker_running:
+        return
+
+    _job_worker_running = False
+    LOG.info("⏸️ Job worker stopping...")
+
+    if _job_worker_thread:
+        _job_worker_thread.join(timeout=10)
+        LOG.info("✅ Job worker stopped")
+
+def timeout_watchdog_loop():
+    """Monitor for timed-out jobs"""
+    LOG.info("⏰ Timeout watchdog started")
+
+    while _job_worker_running:
+        try:
+            time.sleep(60)  # Check every minute
+
+            with db() as conn, conn.cursor() as cur:
+                # Find jobs that exceeded timeout
+                cur.execute("""
+                    UPDATE ticker_processing_jobs
+                    SET status = 'timeout',
+                        error_message = 'Job exceeded timeout limit',
+                        completed_at = NOW()
+                    WHERE status = 'processing'
+                    AND timeout_at < NOW()
+                    RETURNING job_id, ticker, worker_id
+                """)
+
+                timed_out = cur.fetchall()
+                for job in timed_out:
+                    LOG.error(f"⏰ JOB TIMEOUT: {job['job_id']} (ticker: {job['ticker']}, worker: {job['worker_id']})")
+
+                    # Update batch counters
+                    cur.execute("""
+                        UPDATE ticker_processing_batches
+                        SET failed_jobs = failed_jobs + 1
+                        WHERE batch_id = (
+                            SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
+                        )
+                    """, (job['job_id'],))
+
+        except Exception as e:
+            LOG.error(f"Timeout watchdog error: {e}")
+            time.sleep(30)
+
+    LOG.info("⏰ Timeout watchdog stopped")
+
+# Start workers on app startup
+@APP.on_event("startup")
+async def startup_event():
+    """Initialize job queue system on startup"""
+    worker_id = get_worker_id()
+    LOG.info("=" * 80)
+    LOG.info(f"🚀 FastAPI STARTUP EVENT - Worker: {worker_id}")
+    LOG.info(f"   Python: {sys.version}")
+    LOG.info(f"   Platform: {sys.platform}")
+    LOG.info(f"   Environment: Render.com" if os.getenv('RENDER') else "   Environment: Local")
+    LOG.info(f"   Port: {os.getenv('PORT', '10000')}")
+    LOG.info(f"   Memory: {memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 'N/A'} MB")
+    LOG.info("=" * 80)
+    LOG.info("🔧 Initializing job queue system...")
+
+    # Reclaim orphaned jobs from previous worker instance (handles Render restarts)
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # First, log ALL processing jobs to understand restart impact
+            cur.execute("""
+                SELECT job_id, ticker, phase, progress, worker_id,
+                       EXTRACT(EPOCH FROM (NOW() - started_at)) / 60 AS minutes_running
+                FROM ticker_processing_jobs
+                WHERE status = 'processing'
+                ORDER BY started_at
+            """)
+            all_processing = cur.fetchall()
+
+            if all_processing:
+                LOG.warning(f"⚠️ STARTUP: Found {len(all_processing)} jobs in 'processing' state:")
+                for job in all_processing:
+                    LOG.info(f"   → {job['ticker']} ({job['phase']}, {job['progress']}%, {job['minutes_running']:.1f}min, worker: {job['worker_id']})")
+
+            # Reclaim jobs that were processing but worker died (older than 5 minutes = definitely orphaned)
+            cur.execute("""
+                UPDATE ticker_processing_jobs
+                SET status = 'queued',
+                    started_at = NULL,
+                    worker_id = NULL,
+                    phase = 'restart_recovery',
+                    progress = 0,
+                    last_updated = NOW(),
+                    error_message = COALESCE(error_message, '') || ' | Server restart detected, job reclaimed'
+                WHERE status = 'processing'
+                AND started_at < NOW() - INTERVAL '5 minutes'
+                RETURNING job_id, ticker, phase AS old_phase, progress AS old_progress
+            """)
+
+            orphaned = cur.fetchall()
+            if orphaned:
+                LOG.warning(f"🔄 RECLAIMED {len(orphaned)} orphaned jobs (>5min old, server likely restarted):")
+                for job in orphaned:
+                    LOG.info(f"   → {job['ticker']} was at {job['old_phase']} ({job['old_progress']}%), now queued for retry")
+
+            # Also check for jobs processing <5 minutes (possible crash mid-job)
+            cur.execute("""
+                SELECT COUNT(*) as recent_count
+                FROM ticker_processing_jobs
+                WHERE status = 'processing'
+                AND started_at >= NOW() - INTERVAL '5 minutes'
+            """)
+            recent_result = cur.fetchone()
+            if recent_result and recent_result['recent_count'] > 0:
+                LOG.warning(f"⚠️ {recent_result['recent_count']} jobs started <5min ago still marked 'processing'")
+                LOG.warning("   These will NOT be reclaimed yet (might still be running on old worker)")
+                LOG.warning("   Timeout watchdog will mark them as 'timeout' if they exceed 45 minutes")
+
+            if not orphaned and not all_processing:
+                LOG.info("✅ No orphaned jobs found - clean startup")
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to reclaim orphaned jobs: {e}")
+        LOG.error(f"   Stacktrace: {traceback.format_exc()}")
+
+    start_job_worker()
+
+    # Start timeout watchdog in separate thread
+    timeout_thread = threading.Thread(target=timeout_watchdog_loop, daemon=True, name="TimeoutWatchdog")
+    timeout_thread.start()
+
+    LOG.info("✅ Job queue system initialized")
+
+@APP.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    worker_id = get_worker_id()
+    LOG.info("=" * 80)
+    LOG.info(f"🛑 FastAPI SHUTDOWN EVENT - Worker: {worker_id}")
+    LOG.info(f"   Reason: Unknown (check Render logs)")
+    LOG.info(f"   Memory: {memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 'N/A'} MB")
+
+    # Log any jobs currently processing (will be orphaned after shutdown)
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT job_id, ticker, phase, progress,
+                       EXTRACT(EPOCH FROM (NOW() - started_at)) / 60 AS minutes_running
+                FROM ticker_processing_jobs
+                WHERE status = 'processing'
+                AND worker_id = %s
+            """, (worker_id,))
+            active_jobs = cur.fetchall()
+
+            if active_jobs:
+                LOG.warning(f"⚠️ SHUTDOWN: {len(active_jobs)} jobs were still processing:")
+                for job in active_jobs:
+                    LOG.warning(f"   → {job['ticker']} ({job['phase']}, {job['progress']}%, {job['minutes_running']:.1f}min)")
+                LOG.warning("   These jobs will be reclaimed on next startup (>5min threshold)")
+            else:
+                LOG.info("✅ No active jobs at shutdown")
+    except Exception as e:
+        LOG.error(f"Failed to check active jobs during shutdown: {e}")
+
+    LOG.info("=" * 80)
+    stop_job_worker()
+
+# ------------------------------------------------------------------------------
+# API Routes
+# ------------------------------------------------------------------------------
+@APP.get("/")
+def root():
+    return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
+
+@APP.get("/health")
+def health_check():
+    """
+    Health check endpoint for Render and monitoring services.
+
+    Returns worker status and last activity to prevent idle timeout.
+    Render pings this endpoint to verify the service is alive.
+    """
+    global _job_worker_running
+
+    # Check worker thread is alive
+    worker_alive = _job_worker_running and (_job_worker_thread is not None and _job_worker_thread.is_alive())
+
+    # Check database connectivity
+    db_healthy = False
+    db_error = None
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            db_healthy = True
+    except Exception as e:
+        db_error = str(e)
+
+    # Check for active jobs
+    active_jobs = 0
+    recent_completions = 0
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as count FROM ticker_processing_jobs WHERE status = 'processing'")
+            active_jobs = cur.fetchone()['count']
+
+            cur.execute("""
+                SELECT COUNT(*) as count FROM ticker_processing_jobs
+                WHERE status = 'completed' AND completed_at > NOW() - INTERVAL '10 minutes'
+            """)
+            recent_completions = cur.fetchone()['count']
+    except:
+        pass
+
+    # Overall health status
+    is_healthy = worker_alive and db_healthy
+    status_code = 200 if is_healthy else 503
+
+    # Get memory usage
+    memory_mb = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else None
+
+    response = {
+        "status": "healthy" if is_healthy else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "worker": {
+            "running": _job_worker_running,
+            "thread_alive": worker_alive,
+            "worker_id": get_worker_id()
+        },
+        "database": {
+            "connected": db_healthy,
+            "error": db_error
+        },
+        "jobs": {
+            "active": active_jobs,
+            "recent_completions_10min": recent_completions
+        },
+        "circuit_breaker": {
+            "state": job_circuit_breaker.state,
+            "failure_count": job_circuit_breaker.failure_count
+        },
+        "system": {
+            "memory_mb": memory_mb,
+            "platform": sys.platform,
+            "python_version": sys.version.split()[0],
+            "render_instance": os.getenv('RENDER_INSTANCE_ID', 'not_render')
+        }
+    }
+
+    return JSONResponse(content=response, status_code=status_code)
+
+@APP.get("/debug/auth")
+def debug_auth(request: Request):
+    """Debug endpoint to check authentication headers"""
+    return {
+        "x-admin-token": request.headers.get("x-admin-token"),
+        "authorization": request.headers.get("authorization"),
+        "expected_token_prefix": ADMIN_TOKEN[:10] + "..." if ADMIN_TOKEN else "None",
+        "token_length": len(ADMIN_TOKEN) if ADMIN_TOKEN else 0
+    }
+
+# ------------------------------------------------------------------------------
+# JOB QUEUE API ENDPOINTS
+# ------------------------------------------------------------------------------
+
+@APP.post("/jobs/submit")
+async def submit_job_batch(request: Request, body: JobSubmitRequest):
+    """Submit a batch of tickers for server-side processing"""
+    require_admin(request)
+
+    if not body.tickers:
+        raise HTTPException(status_code=400, detail="No tickers specified")
+
+    # Check queue capacity
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT COUNT(*) as queued_count
+            FROM ticker_processing_jobs
+            WHERE status IN ('queued', 'processing')
+        """)
+
+        queued_count = cur.fetchone()['queued_count']
+
+        if queued_count > 100:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Job queue is full ({queued_count} jobs pending). Try again later."
+            )
+
+    # Create batch
+    batch_id = None
+    job_ids = []
+
+    with db() as conn, conn.cursor() as cur:
+        # Create batch record
+        cur.execute("""
+            INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+            VALUES (%s, %s, %s)
+            RETURNING batch_id
+        """, (len(body.tickers), 'powershell', json.dumps({
+            "minutes": body.minutes,
+            "batch_size": body.batch_size,
+            "triage_batch_size": body.triage_batch_size
+        })))
+
+        batch_id = cur.fetchone()['batch_id']
+
+        # Create individual jobs with timeout
+        timeout_minutes = 45  # 45 minutes per ticker
+        timeout_at = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
+
+        for ticker in body.tickers:
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, ticker, config, timeout_at
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING job_id
+            """, (batch_id, ticker, json.dumps({
+                "minutes": body.minutes,
+                "batch_size": body.batch_size,
+                "triage_batch_size": body.triage_batch_size
+            }), timeout_at))
+
+            job_ids.append(str(cur.fetchone()['job_id']))
+
+    LOG.info(f"📦 Batch {batch_id} created: {len(body.tickers)} tickers submitted")
+
+    return {
+        "status": "submitted",
+        "batch_id": str(batch_id),
+        "job_ids": job_ids,
+        "tickers": body.tickers,
+        "total_jobs": len(body.tickers),
+        "message": f"Processing started server-side for {len(body.tickers)} tickers"
+    }
+
+@APP.get("/jobs/batch/{batch_id}")
+async def get_batch_status(request: Request, batch_id: str):
+    """Get status of all jobs in a batch"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        # Get batch info
+        cur.execute("""
+            SELECT * FROM ticker_processing_batches WHERE batch_id = %s
+        """, (batch_id,))
+
+        batch = cur.fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        # Get all jobs in batch
+        cur.execute("""
+            SELECT job_id, ticker, status, phase, progress,
+                   error_message, started_at, completed_at,
+                   duration_seconds, memory_mb
+            FROM ticker_processing_jobs
+            WHERE batch_id = %s
+            ORDER BY created_at
+        """, (batch_id,))
+
+        jobs = [dict(row) for row in cur.fetchall()]
+
+    # Calculate overall progress
+    total_progress = sum(j['progress'] for j in jobs)
+    avg_progress = total_progress // len(jobs) if jobs else 0
+
+    completed = len([j for j in jobs if j['status'] == 'completed'])
+    failed = len([j for j in jobs if j['status'] in ('failed', 'timeout')])
+    processing = len([j for j in jobs if j['status'] == 'processing'])
+    queued = len([j for j in jobs if j['status'] == 'queued'])
+
+    # Determine batch status
+    batch_status = batch['status']
+    if completed + failed == len(jobs):
+        batch_status = 'completed'
+    elif processing > 0 or completed > 0:
+        batch_status = 'processing'
+    else:
+        batch_status = 'queued'
+
+    # Update batch status if changed
+    if batch_status != batch['status']:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET status = %s,
+                    completed_jobs = %s,
+                    failed_jobs = %s
+                WHERE batch_id = %s
+            """, (batch_status, completed, failed, batch_id))
+
+    return {
+        "batch_id": batch_id,
+        "status": batch_status,
+        "total_tickers": len(jobs),
+        "completed": completed,
+        "failed": failed,
+        "processing": processing,
+        "queued": queued,
+        "overall_progress": avg_progress,
+        "created_at": batch['created_at'].isoformat() if batch['created_at'] else None,
+        "jobs": [{
+            "job_id": str(j['job_id']),
+            "ticker": j['ticker'],
+            "status": j['status'],
+            "phase": j['phase'],
+            "progress": j['progress'],
+            "error_message": j['error_message'],
+            "duration_seconds": j['duration_seconds'],
+            "memory_mb": j['memory_mb']
+        } for j in jobs]
+    }
+
+@APP.get("/jobs/active-batches")
+async def get_active_batches(request: Request):
+    """Get all active batches with their job details"""
+    require_admin(request)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # First get batches with active jobs
+            cur.execute("""
+                SELECT
+                    b.batch_id,
+                    b.status as batch_status,
+                    b.created_at,
+                    b.total_jobs,
+                    b.completed_jobs,
+                    b.failed_jobs
+                FROM ticker_processing_batches b
+                WHERE b.created_at > NOW() - INTERVAL '24 hours'
+                  AND EXISTS (
+                      SELECT 1 FROM ticker_processing_jobs j
+                      WHERE j.batch_id = b.batch_id
+                        AND j.status IN ('queued', 'processing')
+                  )
+                ORDER BY b.created_at DESC
+            """)
+            batches = cur.fetchall()
+
+            result = []
+            for batch in batches:
+                # Get jobs for this batch
+                cur.execute("""
+                    SELECT job_id, ticker, status, phase, progress
+                    FROM ticker_processing_jobs
+                    WHERE batch_id = %s
+                    ORDER BY created_at
+                """, (batch['batch_id'],))
+                jobs = cur.fetchall()
+
+                result.append({
+                    "batch_id": str(batch['batch_id']),
+                    "batch_status": batch['batch_status'],
+                    "created_at": batch['created_at'].isoformat() if batch['created_at'] else None,
+                    "total_jobs": batch['total_jobs'],
+                    "completed_jobs": batch['completed_jobs'],
+                    "failed_jobs": batch['failed_jobs'],
+                    "jobs": [{"job_id": str(j['job_id']), "ticker": j['ticker'], "status": j['status'], "phase": j['phase'], "progress": j['progress']} for j in jobs]
+                })
+
+            return {
+                "active_batches": len(result),
+                "batches": result
+            }
+    except Exception as e:
+        LOG.error(f"Error in /jobs/active-batches: {e}")
+        LOG.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@APP.get("/jobs/stats")
+async def get_job_stats(request: Request):
+    """Get overall job queue statistics"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        # Job counts by status
+        cur.execute("""
+            SELECT status, COUNT(*) as count
+            FROM ticker_processing_jobs
+            GROUP BY status
+        """)
+        status_counts = {row['status']: row['count'] for row in cur.fetchall()}
+
+        # Recent completions (last hour)
+        cur.execute("""
+            SELECT COUNT(*) as count,
+                   AVG(duration_seconds) as avg_duration,
+                   AVG(memory_mb) as avg_memory
+            FROM ticker_processing_jobs
+            WHERE status = 'completed'
+            AND completed_at > NOW() - INTERVAL '1 hour'
+        """)
+        recent = cur.fetchone()
+
+        # Active batches
+        cur.execute("""
+            SELECT COUNT(*) as count
+            FROM ticker_processing_batches
+            WHERE status IN ('queued', 'processing')
+        """)
+        active_batches = cur.fetchone()['count']
+
+    return {
+        "status_counts": status_counts,
+        "recent_completions_1h": recent['count'] or 0,
+        "avg_duration_seconds": float(recent['avg_duration']) if recent['avg_duration'] else None,
+        "avg_memory_mb": float(recent['avg_memory']) if recent['avg_memory'] else None,
+        "active_batches": active_batches,
+        "circuit_breaker_state": job_circuit_breaker.state,
+        "circuit_breaker_failures": job_circuit_breaker.failure_count,
+        "worker_id": get_worker_id()
+    }
+
+@APP.get("/jobs/{job_id}")
+async def get_job_detail(request: Request, job_id: str):
+    """Get detailed status of a single job"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT j.*, b.batch_id
+            FROM ticker_processing_jobs j
+            JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
+            WHERE j.job_id = %s
+        """, (job_id,))
+
+        job = cur.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        return {
+            "job_id": str(job['job_id']),
+            "batch_id": str(job['batch_id']),
+            "ticker": job['ticker'],
+            "status": job['status'],
+            "phase": job['phase'],
+            "progress": job['progress'],
+            "result": job['result'],
+            "error_message": job['error_message'],
+            "error_stacktrace": job['error_stacktrace'],
+            "retry_count": job['retry_count'],
+            "worker_id": job['worker_id'],
+            "memory_mb": job['memory_mb'],
+            "duration_seconds": job['duration_seconds'],
+            "created_at": job['created_at'].isoformat() if job['created_at'] else None,
+            "started_at": job['started_at'].isoformat() if job['started_at'] else None,
+            "completed_at": job['completed_at'].isoformat() if job['completed_at'] else None,
+            "config": job['config']
+        }
+
+@APP.post("/jobs/{job_id}/cancel")
+async def cancel_job(request: Request, job_id: str):
+    """Cancel a specific job"""
+    require_admin(request)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            UPDATE ticker_processing_jobs
+            SET status = 'cancelled',
+                error_message = 'Cancelled by user',
+                completed_at = NOW(),
+                last_updated = NOW()
+            WHERE job_id = %s
+            AND status IN ('queued', 'processing')
+            RETURNING ticker, status, phase
+        """, (job_id,))
+
+        result = cur.fetchone()
+        if result:
+            LOG.warning(f"🚫 Job {job_id} cancelled by user (ticker: {result['ticker']}, was in: {result['phase']})")
+
+            # Update batch counters
+            cur.execute("""
+                UPDATE ticker_processing_batches
+                SET failed_jobs = failed_jobs + 1
+                WHERE batch_id = (
+                    SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
+                )
+            """, (job_id,))
+
+            return {
+                "status": "cancelled",
+                "job_id": job_id,
+                "ticker": result['ticker'],
+                "was_in_phase": result['phase']
+            }
+        else:
+            # Check if job exists but already completed/failed
+            cur.execute("""
+                SELECT ticker, status FROM ticker_processing_jobs WHERE job_id = %s
+            """, (job_id,))
+
+            existing = cur.fetchone()
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Job already {existing['status']}, cannot cancel"
+                )
+            else:
+                raise HTTPException(status_code=404, detail="Job not found")
+
+@APP.post("/jobs/batch/{batch_id}/cancel")
+async def cancel_batch(request: Request, batch_id: str):
+    """Cancel all jobs in a batch"""
+    require_admin(request)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Cancel all queued/processing jobs in the batch
+            cur.execute("""
+                UPDATE ticker_processing_jobs
+                SET status = 'cancelled',
+                    error_message = 'Batch cancelled by user',
+                    completed_at = NOW(),
+                    last_updated = NOW()
+                WHERE batch_id = %s
+                AND status IN ('queued', 'processing')
+                RETURNING job_id, ticker
+            """, (batch_id,))
+
+            cancelled_jobs = cur.fetchall()
+
+            if cancelled_jobs:
+                LOG.warning(f"🚫 Batch {batch_id} cancelled by user ({len(cancelled_jobs)} jobs)")
+                for job in cancelled_jobs:
+                    LOG.info(f"   Cancelled: {job['ticker']} (job_id: {job['job_id']})")
+
+                # Update batch status
+                cur.execute("""
+                    UPDATE ticker_processing_batches
+                    SET status = 'cancelled',
+                        failed_jobs = failed_jobs + %s
+                    WHERE batch_id = %s
+                """, (len(cancelled_jobs), batch_id))
+
+                return {
+                    "status": "cancelled",
+                    "batch_id": batch_id,
+                    "jobs_cancelled": len(cancelled_jobs),
+                    "tickers": [j['ticker'] for j in cancelled_jobs]
+                }
+            else:
+                # Check if batch exists
+                cur.execute("""
+                    SELECT status, total_jobs FROM ticker_processing_batches WHERE batch_id = %s
+                """, (batch_id,))
+
+                batch = cur.fetchone()
+                if batch:
+                    return {
+                        "status": "no_jobs_to_cancel",
+                        "message": f"Batch is already {batch['status']}, no jobs to cancel",
+                        "batch_id": batch_id
+                    }
+                else:
+                    raise HTTPException(status_code=404, detail="Batch not found")
+    except Exception as e:
+        LOG.error(f"Error cancelling batch {batch_id}: {e}")
+        LOG.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@APP.post("/jobs/circuit-breaker/reset")
+async def reset_circuit_breaker(request: Request):
+    """Manually reset the circuit breaker"""
+    require_admin(request)
+
+    job_circuit_breaker.reset()
+
+    return {
+        "status": "reset",
+        "message": "Circuit breaker has been manually reset"
+    }
+
+# ------------------------------------------------------------------------------
+# ADMIN ENDPOINTS (Existing)
+# ------------------------------------------------------------------------------
+

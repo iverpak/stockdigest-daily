@@ -11459,6 +11459,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     LOG.info(f"=== FETCHING DIGEST ARTICLES ===")
     LOG.info(f"Time window: {period_label} (cutoff: {cutoff})")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
+    LOG.info(f"Flagged article filter: {'ENABLED (' + str(len(flagged_article_ids)) + ' IDs)' if flagged_article_ids else 'DISABLED (showing all articles)'}")
 
     with db() as conn, conn.cursor() as cur:
         # Enhanced query to get articles from new schema - MATCHES triage query
@@ -12039,15 +12040,12 @@ async def process_ticker_job(job: dict):
     minutes = config.get('minutes', 1440)
     batch_size = config.get('batch_size', 3)
     triage_batch_size = config.get('triage_batch_size', 3)
-    flagged_article_ids = config.get('flagged_articles', [])  # Get flagged articles from triage
 
     start_time = time.time()
     memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
 
     LOG.info(f"🚀 [JOB {job_id}] Starting processing for {ticker}")
     LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
-    if flagged_article_ids:
-        LOG.info(f"   Flagged articles from triage: {len(flagged_article_ids)}")
 
     try:
         # NOTE: TICKER_PROCESSING_LOCK is acquired inside cron_ingest/cron_digest
@@ -12099,12 +12097,22 @@ async def process_ticker_job(job: dict):
             LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
 
         # Check if cancelled after Phase 1
+        # Also re-fetch config to get flagged_articles that were stored during ingest
         with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
-            current_status = cur.fetchone()
-            if current_status and current_status['status'] == 'cancelled':
+            cur.execute("SELECT status, config FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            job_status = cur.fetchone()
+            if job_status and job_status['status'] == 'cancelled':
                 LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 1, exiting")
                 return
+
+            # Re-fetch flagged_articles that were stored during ingest phase
+            updated_config = job_status['config'] if job_status and isinstance(job_status['config'], dict) else {}
+            flagged_article_ids = updated_config.get('flagged_articles', [])
+
+            if flagged_article_ids:
+                LOG.info(f"📋 [JOB {job_id}] Retrieved {len(flagged_article_ids)} flagged article IDs from ingest phase")
+            else:
+                LOG.warning(f"⚠️ [JOB {job_id}] No flagged articles found in config after ingest")
 
         # PHASE 2: Digest (already implemented in /cron/digest)
         update_job_status(job_id, phase='digest_start', progress=65)
@@ -13458,6 +13466,7 @@ async def cron_ingest(
                 with resource_cleanup_context("database_connection"):
                     for category, selected_items in selected_results.items():
                         articles = articles_by_ticker[ticker][category]
+                        LOG.info(f"  Building flagged list for {category}: {len(selected_items)} selected from {len(articles)} articles")
                         for item in selected_items:
                             article_idx = item["id"]
                             if article_idx < len(articles):
@@ -13465,8 +13474,12 @@ async def cron_ingest(
                                 article_id = article.get("id")
                                 if article_id:
                                     flagged_articles.append(article_id)
+                                else:
+                                    LOG.warning(f"  Article at index {article_idx} in {category} has no ID!")
 
-                LOG.info(f"Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
+                LOG.info(f"✅ Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
+                if flagged_articles:
+                    LOG.info(f"   Sample IDs: {flagged_articles[:5]}...")
 
             memory_monitor.take_snapshot("PHASE2_COMPLETE")
             

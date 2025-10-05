@@ -4681,9 +4681,17 @@ def update_schema_for_ai_summary():
     pass
 
 # Updated article formatting function
-def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None) -> str:
+def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None,
+                                         show_ai_analysis: bool = True, show_descriptions: bool = True) -> str:
     """
     Enhanced article HTML formatting with AI summaries and proper left-side headers
+
+    Args:
+        article: Article dictionary
+        category: Article category (company/industry/competitor)
+        ticker_metadata_cache: Cache of ticker metadata
+        show_ai_analysis: If True, show AI analysis boxes (default True)
+        show_descriptions: If True, show article descriptions (default True)
     """
     import html
     
@@ -4757,23 +4765,23 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
         header_badges.append(analyzed_html)
     
-    # AI Summary section - check for ai_summary field
+    # AI Summary section - check for ai_summary field (conditional based on show_ai_analysis)
     ai_summary_html = ""
-    if article.get("ai_summary"):
+    if show_ai_analysis and article.get("ai_summary"):
         clean_summary = html.escape(article["ai_summary"].strip())
         ai_summary_html = f"<br><div class='ai-summary'><strong>📊 Analysis:</strong> {clean_summary}</div>"
-    
-    # Get description and format it (only if no AI summary)
+
+    # Get description and format it (only if no AI summary shown, conditional based on show_descriptions)
     description_html = ""
-    if not article.get("ai_summary") and article.get("description"):
+    if show_descriptions and not article.get("ai_summary") and article.get("description"):
         description = article["description"].strip()
         description = html.unescape(description)
         description = re.sub(r'<[^>]+>', '', description)
         description = re.sub(r'\s+', ' ', description).strip()
-        
+
         if len(description) > 500:
             description = description[:500] + "..."
-        
+
         description = html.escape(description)
         description_html = f"<br><div class='description'>{description}</div>"
     
@@ -11217,8 +11225,16 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
         LOG.error(f"Error details: {traceback.format_exc()}")
         return False
 
-def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int) -> Tuple[str, str]:
-    """Enhanced digest with metadata display removed but keeping all badges/emojis"""
+def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
+                              show_ai_analysis: bool = True, show_descriptions: bool = True) -> Tuple[str, str]:
+    """Enhanced digest with metadata display removed but keeping all badges/emojis
+
+    Args:
+        articles_by_ticker: Articles organized by ticker and category
+        period_days: Number of days covered in the report
+        show_ai_analysis: If True, show AI analysis boxes under articles (default True)
+        show_descriptions: If True, show article descriptions (default True)
+    """
 
     # Generate summaries from Claude (with OpenAI fallback)
     claude_summaries = generate_claude_final_summaries(articles_by_ticker)
@@ -11399,7 +11415,8 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
                 for article in sorted_articles[:100]:
                     # Use simplified ticker metadata cache (just company name)
                     simple_cache = {ticker: {"company_name": company_name}}
-                    html.append(_format_article_html_with_ai_summary(article, category, simple_cache))
+                    html.append(_format_article_html_with_ai_summary(article, category, simple_cache,
+                                                                     show_ai_analysis, show_descriptions))
         
         html.append("</div>")
     
@@ -11419,8 +11436,17 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
     html_content = "".join(html)
     return html_content
 
-def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None) -> Dict[str, Dict[str, List[Dict]]]:
-    """Fetch categorized articles for digest with ticker-specific AI analysis"""
+def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
+                                               show_ai_analysis: bool = True,
+                                               show_descriptions: bool = True) -> Dict[str, Dict[str, List[Dict]]]:
+    """Fetch categorized articles for digest with ticker-specific AI analysis
+
+    Args:
+        hours: Time window for articles
+        tickers: Specific tickers to fetch, or None for all
+        show_ai_analysis: If True, include AI analysis boxes in HTML (default True)
+        show_descriptions: If True, include article descriptions in HTML (default True)
+    """
     start_time = time.time()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -11547,7 +11573,8 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         }
     
     # Use the enhanced digest function
-    html = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1)
+    html = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
+                                      show_ai_analysis, show_descriptions)
 
     # Enhanced subject with ticker list (company names)
     ticker_display_list = []
@@ -11586,6 +11613,73 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         "by_category": category_counts,
         "content_scraping_stats": content_stats,
         "recipient": DIGEST_TO
+    }
+
+def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None) -> Dict:
+    """
+    Send Email #3: User Intelligence Report
+    - Same flagged articles as Stock Intelligence email
+    - No AI analysis boxes
+    - No description boxes
+    - Clean presentation for end users
+    """
+    LOG.info("=== EMAIL #3: USER INTELLIGENCE REPORT ===")
+
+    # Fetch articles with AI/descriptions hidden
+    result = fetch_digest_articles_with_enhanced_content(
+        hours=hours,
+        tickers=tickers,
+        show_ai_analysis=False,   # Hide AI analysis boxes
+        show_descriptions=False   # Hide description boxes
+    )
+
+    # If fetch returns dict with status (error case), return it
+    if isinstance(result, dict) and "status" in result:
+        return result
+
+    # Get articles for sending
+    articles_by_ticker = result if isinstance(result, dict) else {}
+
+    if not articles_by_ticker:
+        return {
+            "status": "no_articles",
+            "message": "No articles to send in user report",
+            "tickers": tickers or "all"
+        }
+
+    # Build HTML (same as Stock Intelligence but without AI/descriptions)
+    days = int(hours / 24) if hours >= 24 else 0
+    html = build_enhanced_digest_html(
+        articles_by_ticker,
+        days if days > 0 else 1,
+        show_ai_analysis=False,
+        show_descriptions=False
+    )
+
+    # Create subject line for Email #3
+    ticker_display_list = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+        ticker_display_list.append(f"{company_name} ({ticker})")
+    ticker_list = ', '.join(ticker_display_list)
+
+    total_articles = sum(
+        sum(len(arts) for arts in categories.values())
+        for categories in articles_by_ticker.values()
+    )
+
+    subject = f"📋 User Intelligence Report: {ticker_list} - {total_articles} articles"
+    success = send_email(subject, html)
+
+    LOG.info(f"📧 Email #3 (User Intelligence Report): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
+
+    return {
+        "status": "sent" if success else "failed",
+        "articles": total_articles,
+        "tickers": list(articles_by_ticker.keys()),
+        "recipient": DIGEST_TO,
+        "email_type": "user_intelligence_report"
     }
 
 # ------------------------------------------------------------------------------
@@ -11965,9 +12059,33 @@ async def process_ticker_job(job: dict):
                 LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
                 return
 
-        # COMMIT METADATA TO GITHUB after Phase 2 (final email sent)
-        # This ensures GitHub commit doesn't trigger server restart before final email is sent
-        update_job_status(job_id, phase='commit_metadata', progress=97)
+        # EMAIL #3: USER INTELLIGENCE REPORT (no AI analysis, no descriptions)
+        update_job_status(job_id, phase='user_report', progress=97)
+        LOG.info(f"📧 [JOB {job_id}] Sending Email #3: User Intelligence Report...")
+
+        try:
+            user_report_result = send_user_intelligence_report(hours=int(minutes/60), tickers=[ticker])
+            if user_report_result:
+                LOG.info(f"✅ [JOB {job_id}] Email #3 sent successfully")
+                if isinstance(user_report_result, dict):
+                    LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
+            else:
+                LOG.warning(f"⚠️ [JOB {job_id}] Email #3 returned no result")
+        except Exception as e:
+            LOG.error(f"❌ [JOB {job_id}] Email #3 failed: {e}")
+            # Continue to GitHub commit even if Email #3 fails (Option A)
+
+        # Check if cancelled after Phase 3
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+            current_status = cur.fetchone()
+            if current_status and current_status['status'] == 'cancelled':
+                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Email #3, exiting")
+                return
+
+        # COMMIT METADATA TO GITHUB after all emails sent
+        # This ensures GitHub commit doesn't trigger server restart before emails are sent
+        update_job_status(job_id, phase='commit_metadata', progress=99)
         LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
 
         try:

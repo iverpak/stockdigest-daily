@@ -6869,7 +6869,7 @@ CONSERVATIVE STANDARD: If you're unsure whether an article is relevant to {compa
         LOG.error(f"Async triage request failed: {str(e)}")
         return []
 
-async def triage_competitor_articles_full(articles: List[Dict], competitor_name: str, competitor_ticker: str) -> List[Dict]:
+async def triage_competitor_articles_full(articles: List[Dict], ticker: str, competitor_name: str, competitor_ticker: str) -> List[Dict]:
     """Enhanced competitor triage with explicit selection constraints and embedded HTTP logic (ASYNC)"""
     if not OPENAI_API_KEY or not articles:
         LOG.warning("No OpenAI API key or no articles to triage")
@@ -6893,6 +6893,7 @@ async def triage_competitor_articles_full(articles: List[Dict], competitor_name:
     payload = {
         "bucket": "competitor",
         "target_cap": target_cap,
+        "ticker": ticker,
         "competitor_name": competitor_name,
         "competitor_ticker": competitor_ticker,
         "items": items
@@ -6947,7 +6948,7 @@ async def triage_competitor_articles_full(articles: List[Dict], competitor_name:
         "additionalProperties": False
     }
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} ({competitor_ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
+    system_prompt = f"""You are a financial analyst for {ticker} investors selecting the {target_cap} most important articles about competitor {competitor_name} ({competitor_ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
 CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
@@ -7368,7 +7369,7 @@ Articles: {json.dumps(items, separators=(',', ':'))}"""
         LOG.error(f"Claude industry triage failed: {str(e)}")
         return []
 
-async def triage_competitor_articles_claude(articles: List[Dict], competitor_name: str, competitor_ticker: str) -> List[Dict]:
+async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, competitor_name: str, competitor_ticker: str) -> List[Dict]:
     """Claude-based competitor triage"""
     if not ANTHROPIC_API_KEY or not articles:
         return []
@@ -7387,7 +7388,7 @@ async def triage_competitor_articles_claude(articles: List[Dict], competitor_nam
 
     target_cap = min(5, len(articles))
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {competitor_name} ({competitor_ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
+    system_prompt = f"""You are a financial analyst for {ticker} investors selecting the {target_cap} most important articles about competitor {competitor_name} ({competitor_ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
 
 CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
@@ -7704,9 +7705,9 @@ async def perform_ai_triage_with_dual_scoring_async(
                 "articles": triage_articles,
                 "target_cap": min(5, len(triage_articles)),
                 "openai_func": triage_competitor_articles_full,
-                "openai_args": (triage_articles, competitor_name, competitor_ticker),
+                "openai_args": (triage_articles, ticker, competitor_name, competitor_ticker),
                 "claude_func": triage_competitor_articles_claude,
-                "claude_args": (triage_articles, competitor_name, competitor_ticker),
+                "claude_args": (triage_articles, ticker, competitor_name, competitor_ticker),
                 "index_mapping": entity_articles
             })
 
@@ -11851,6 +11852,23 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
         )
 
         LOG.info(f"[JOB {job_id}] cron_ingest completed for {ticker}")
+
+        # Extract and store flagged articles in job config
+        if result and isinstance(result, dict):
+            phase2 = result.get('phase_2_triage', {})
+            flagged_articles = phase2.get('flagged_articles', [])
+
+            if flagged_articles:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE ticker_processing_jobs
+                        SET config = jsonb_set(COALESCE(config, '{}'), '{flagged_articles}', %s::jsonb)
+                        WHERE job_id = %s
+                    """, (json.dumps(flagged_articles), job_id))
+                LOG.info(f"[JOB {job_id}] Stored {len(flagged_articles)} flagged article IDs in job config")
+            else:
+                LOG.warning(f"[JOB {job_id}] No flagged articles found in triage results")
+
         return result
 
     except Exception as e:
@@ -13435,38 +13453,21 @@ async def cron_ingest(
 
                 memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")
 
-                # Store flagged articles in job config - DISABLED (job_id not accessible in this scope)
-                # TODO: Pass job_id through cron_ingest call chain to enable this feature
-                # with resource_cleanup_context("database_connection"):
-                #     flagged_articles = []
-                #     for category, selected_items in selected_results.items():
-                #         articles = articles_by_ticker[ticker][category]
-                #         for item in selected_items:
-                #             article_idx = item["id"]
-                #             if article_idx < len(articles):
-                #                 article = articles[article_idx]
-                #                 flagged_articles.append({
-                #                     "article_id": article.get("id"),
-                #                     "url": article.get("url"),
-                #                     "title": article.get("title"),
-                #                     "description": article.get("description", ""),
-                #                     "domain": article.get("domain", ""),
-                #                     "published": article.get("published", ""),
-                #                     "category": category,
-                #                     "openai_score": item.get("openai_score", 0),
-                #                     "claude_score": item.get("claude_score", 0),
-                #                     "combined_score": item.get("combined_score", 0),
-                #                     "scrape_priority": item.get("scrape_priority", 2)
-                #                 })
-                #     # Store in job config JSONB
-                #     with db() as conn, conn.cursor() as cur:
-                #         cur.execute("""
-                #             UPDATE ticker_processing_jobs
-                #             SET config = jsonb_set(COALESCE(config, '{}'), '{flagged_articles}', %s::jsonb)
-                #             WHERE job_id = %s
-                #         """, (json.dumps(flagged_articles), job_id))
-                #     LOG.info(f"Stored {len(flagged_articles)} flagged articles in job config for {ticker}")
-            
+                # Build flagged articles list (will be stored by process_ingest_phase)
+                flagged_articles = []
+                with resource_cleanup_context("database_connection"):
+                    for category, selected_items in selected_results.items():
+                        articles = articles_by_ticker[ticker][category]
+                        for item in selected_items:
+                            article_idx = item["id"]
+                            if article_idx < len(articles):
+                                article = articles[article_idx]
+                                article_id = article.get("id")
+                                if article_id:
+                                    flagged_articles.append(article_id)
+
+                LOG.info(f"Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
+
             memory_monitor.take_snapshot("PHASE2_COMPLETE")
             
             # PHASE 3: Send enhanced quick email
@@ -13666,7 +13667,7 @@ async def cron_ingest(
                 "processing_time_seconds": round(processing_time, 1),
                 "workflow": "enhanced_ticker_reference_with_async_batch_processing",
                 "batch_size_used": SCRAPE_BATCH_SIZE,
-                
+
                 "phase_1_ingest": {
                     "total_processed": ingest_stats["total_processed"],
                     "total_inserted": ingest_stats["total_inserted"],
@@ -13680,7 +13681,8 @@ async def cron_ingest(
                 "phase_2_triage": {
                     "type": "pure_ai_triage_only",
                     "tickers_processed": len(triage_results),
-                    "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()}
+                    "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()},
+                    "flagged_articles": flagged_articles  # Article IDs flagged during triage
                 },
                 "phase_3_quick_email": {"sent": quick_email_sent},
                 "phase_4_async_batch_scraping": {
@@ -13704,7 +13706,7 @@ async def cron_ingest(
                 "successfully_processed_tickers": list(successfully_processed_tickers),
                 "message": f"Processing completed successfully with async batch processing (batch_size={SCRAPE_BATCH_SIZE})",
                 "github_sync_required": len(successfully_processed_tickers) > 0,
-                
+
                 # Memory monitoring data
                 "memory_monitoring": {
                     "enabled": True,

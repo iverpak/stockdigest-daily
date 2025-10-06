@@ -9996,12 +9996,8 @@ def is_description_valuable(title: str, description: str) -> bool:
     
     return True
 
-def generate_openai_executive_summary(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[str]:
-    """Generate unified executive summary using single comprehensive Claude prompt"""
-
-    if not OPENAI_API_KEY:
-        return None
-
+def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[tuple[str, str]]:
+    """Helper: Build executive summary prompt and extract company name. Returns (prompt, company_name) or None."""
     company_name = config.get("name", ticker)
 
     # Extract articles by category
@@ -10202,43 +10198,153 @@ ALL ARTICLE SUMMARIES (already {ticker}-focused):
 
 Generate structured summary. Omit empty sections."""
 
+    return (prompt, company_name)
+
+
+def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[str]:
+    """Generate executive summary using Claude API (primary method)"""
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    # Build prompt using shared helper
+    result = _build_executive_summary_prompt(ticker, categories, config)
+    if not result:
+        return None
+
+    prompt, company_name = result
+
     try:
         headers = {
-            "x-api-key": OPENAI_API_KEY,
-            
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
             "content-type": "application/json"
         }
 
         data = {
-            "model": OPENAI_MODEL,
-            "input": prompt, "max_output_tokens": 10000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto",
-            "messages": [prompt]
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 10000,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         }
 
-        LOG.info(f"[{ticker}] Calling Claude for unified executive summary")
+        LOG.info(f"[{ticker}] Calling Claude for executive summary")
+        response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=180)
+
+        if response.status_code == 200:
+            result = response.json()
+            summary = result.get("content", [{}])[0].get("text", "")
+            if summary and len(summary.strip()) > 10:
+                LOG.info(f"✅ [{ticker}] Claude generated executive summary ({len(summary)} chars)")
+                return summary.strip()
+            else:
+                LOG.warning(f"[{ticker}] Claude returned empty summary")
+                return None
+        else:
+            error_text = response.text[:500] if response.text else "No error details"
+            LOG.error(f"❌ [{ticker}] Claude API error {response.status_code}: {error_text}")
+            return None
+
+    except Exception as e:
+        LOG.error(f"❌ [{ticker}] Exception calling Claude for executive summary: {e}")
+        return None
+
+
+def generate_openai_executive_summary(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[str]:
+    """Generate executive summary using OpenAI API (fallback method)"""
+    if not OPENAI_API_KEY:
+        return None
+
+    # Build prompt using shared helper
+    result = _build_executive_summary_prompt(ticker, categories, config)
+    if not result:
+        return None
+
+    prompt, company_name = result
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": OPENAI_MODEL,
+            "input": prompt,
+            "max_output_tokens": 10000,
+            "reasoning": {"effort": "medium"},
+            "text": {"verbosity": "low"},
+            "truncation": "auto"
+        }
+
+        LOG.info(f"[{ticker}] Calling OpenAI for executive summary")
         response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=180)
 
         if response.status_code == 200:
             result = response.json()
             summary = extract_text_from_responses(result)
-            LOG.info(f"✅ [{ticker}] Generated unified summary ({len(summary)} chars)")
-            return summary
+            if summary and len(summary.strip()) > 10:
+                LOG.info(f"✅ [{ticker}] OpenAI generated executive summary ({len(summary)} chars)")
+                return summary.strip()
+            else:
+                LOG.warning(f"[{ticker}] OpenAI returned empty summary")
+                return None
         else:
-            LOG.error(f"❌ [{ticker}] Claude API error {response.status_code}: {response.text[:200]}")
+            error_text = response.text[:500] if response.text else "No error details"
+            LOG.error(f"❌ [{ticker}] OpenAI API error {response.status_code}: {error_text}")
             return None
 
     except Exception as e:
-        LOG.error(f"❌ [{ticker}] Exception generating summary: {e}")
+        LOG.error(f"❌ [{ticker}] Exception calling OpenAI for executive summary: {e}")
         return None
 
 
+def generate_executive_summary_with_fallback(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> tuple[Optional[str], str]:
+    """
+    Generate executive summary with Claude (primary) → OpenAI (fallback).
+    Returns (summary, model_used) where model_used is "Claude", "OpenAI", or "none".
+    """
+    model_used = "none"
+    summary = None
+
+    # Try Claude first (if enabled and API key available)
+    if USE_CLAUDE_FOR_SUMMARIES and ANTHROPIC_API_KEY:
+        try:
+            summary = generate_claude_executive_summary(ticker, categories, config)
+            if summary:
+                model_used = "Claude"
+                return summary, model_used
+            else:
+                LOG.warning(f"[{ticker}] Claude returned no executive summary, falling back to OpenAI")
+        except Exception as e:
+            LOG.warning(f"[{ticker}] Claude executive summary failed, falling back to OpenAI: {e}")
+
+    # Fallback to OpenAI
+    if OPENAI_API_KEY:
+        try:
+            summary = generate_openai_executive_summary(ticker, categories, config)
+            if summary:
+                model_used = "OpenAI"
+                return summary, model_used
+            else:
+                LOG.error(f"[{ticker}] OpenAI also returned no executive summary")
+        except Exception as e:
+            LOG.error(f"[{ticker}] OpenAI executive summary also failed: {e}")
+
+    LOG.error(f"[{ticker}] Both Claude and OpenAI failed to generate executive summary")
+    return None, "none"
+
+
 def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
-    """Generate OpenAI final summaries using UNIFIED prompt architecture (fallback to Claude)"""
-    if not OPENAI_API_KEY:
-        LOG.warning("⚠️ EXECUTIVE SUMMARY (OpenAI): API key not configured - skipping")
+    """Generate executive summaries using Claude (primary) with OpenAI fallback"""
+    if not ANTHROPIC_API_KEY and not OPENAI_API_KEY:
+        LOG.warning("⚠️ EXECUTIVE SUMMARY: No API keys configured - skipping")
         return {}
 
-    LOG.info(f"🎯 EXECUTIVE SUMMARY (OpenAI UNIFIED): Starting generation for {len(articles_by_ticker)} tickers")
+    LOG.info(f"🎯 EXECUTIVE SUMMARY: Starting generation for {len(articles_by_ticker)} tickers")
     summaries = {}
 
     for ticker, categories in articles_by_ticker.items():
@@ -10249,8 +10355,8 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
 
         company_name = config.get("name", ticker)
 
-        # Use unified prompt
-        ai_analysis_summary = generate_openai_executive_summary(ticker, categories, config)
+        # Use Claude with OpenAI fallback
+        ai_analysis_summary, model_used = generate_executive_summary_with_fallback(ticker, categories, config)
 
         if ai_analysis_summary:
             # Add NEW badges for articles within 24 hours
@@ -10260,17 +10366,17 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
                 [a for a in categories.get("competitor", []) if a.get("ai_summary")]
             )
             ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
-            LOG.info(f"✅ EXECUTIVE SUMMARY (OpenAI) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
+            LOG.info(f"✅ EXECUTIVE SUMMARY ({model_used}) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
 
-            # Save to database
+            # Save to database with model tracking
             article_ids = [a.get("id") for a in all_articles if a.get("id")]
             company_count = len([a for a in categories.get("company", []) if a.get("ai_summary")])
             industry_count = len([a for a in categories.get("industry", []) if a.get("ai_summary")])
             competitor_count = len([a for a in categories.get("competitor", []) if a.get("ai_summary")])
-            save_executive_summary(ticker, ai_analysis_summary, "openai", article_ids,
+            save_executive_summary(ticker, ai_analysis_summary, model_used.lower(), article_ids,
                                  company_count, industry_count, competitor_count)
         else:
-            LOG.warning(f"⚠️ EXECUTIVE SUMMARY (OpenAI) [{ticker}]: No summary generated")
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: No summary generated (both APIs failed)")
 
         summaries[ticker] = {
             "ai_analysis_summary": ai_analysis_summary or "",
@@ -10278,7 +10384,7 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
             "industry_articles_analyzed": len([a for a in categories.get("industry", []) if a.get("ai_summary")])
         }
 
-    LOG.info(f"🎯 EXECUTIVE SUMMARY (OpenAI UNIFIED): Completed - generated summaries for {len(summaries)} tickers")
+    LOG.info(f"🎯 EXECUTIVE SUMMARY: Completed - generated summaries for {len(summaries)} tickers")
     return summaries
 
 

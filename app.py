@@ -12035,6 +12035,31 @@ async def shutdown_event():
     stop_job_worker()
 
 # ------------------------------------------------------------------------------
+# Pydantic Request Models
+# ------------------------------------------------------------------------------
+class CleanFeedsRequest(BaseModel):
+    tickers: Optional[List[str]] = None
+
+class ResetDigestRequest(BaseModel):
+    tickers: Optional[List[str]] = None
+
+class ForceDigestRequest(BaseModel):
+    tickers: Optional[List[str]] = None
+
+class RegenerateMetadataRequest(BaseModel):
+    ticker: str
+
+class InitRequest(BaseModel):
+    tickers: List[str]
+    force_refresh: bool = False
+
+class CLIRequest(BaseModel):
+    action: str
+    tickers: List[str]
+    minutes: int = 1440
+    triage_batch_size: int = 2
+
+# ------------------------------------------------------------------------------
 # API Routes
 # ------------------------------------------------------------------------------
 @APP.get("/")

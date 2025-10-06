@@ -50,6 +50,7 @@ import tracemalloc
 from functools import wraps
 import threading
 from threading import BoundedSemaphore
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import aiohttp
 
@@ -13120,6 +13121,37 @@ async def admin_init(request: Request, body: InitRequest):
             "successful": len([r for r in results if r["feeds_created"] > 0])
         }
 
+def process_feeds_sequentially(feeds: List[Dict]) -> Dict[str, int]:
+    """
+    Process a list of feeds sequentially (used for Google→Yahoo pairs).
+    Returns aggregated stats from all feeds.
+    """
+    aggregated_stats = {
+        "processed": 0,
+        "inserted": 0,
+        "duplicates": 0,
+        "blocked_spam": 0,
+        "limit_reached": 0,
+        "blocked_insider_trading": 0,
+        "yahoo_rejected": 0
+    }
+
+    for feed in feeds:
+        try:
+            stats = ingest_feed_basic_only(feed)
+            aggregated_stats["processed"] += stats["processed"]
+            aggregated_stats["inserted"] += stats["inserted"]
+            aggregated_stats["duplicates"] += stats["duplicates"]
+            aggregated_stats["blocked_spam"] += stats.get("blocked_spam", 0)
+            aggregated_stats["limit_reached"] += stats.get("limit_reached", 0)
+            aggregated_stats["blocked_insider_trading"] += stats.get("blocked_insider_trading", 0)
+            aggregated_stats["yahoo_rejected"] += stats.get("yahoo_rejected", 0)
+        except Exception as e:
+            LOG.error(f"[{feed.get('ticker', 'UNKNOWN')}] Sequential feed processing failed for {feed['name']}: {e}")
+            continue
+
+    return aggregated_stats
+
 @APP.post("/cron/ingest")
 async def cron_ingest(
     request: Request,
@@ -13234,38 +13266,115 @@ async def cron_ingest(
                     LOG.info("=== END FEED DEBUG ===")
             
             ingest_stats = {
-                "total_processed": 0, 
+                "total_processed": 0,
                 "total_inserted": 0,
-                "total_duplicates": 0, 
-                "total_spam_blocked": 0, 
+                "total_duplicates": 0,
+                "total_spam_blocked": 0,
                 "total_limit_reached": 0,
                 "total_insider_trading_blocked": 0,
                 "total_yahoo_rejected": 0
             }
 
-            # Process feeds normally to get new articles
-            for i, feed in enumerate(feeds):
-                try:
-                    stats = ingest_feed_basic_only(feed)
-                    ingest_stats["total_processed"] += stats["processed"]
-                    ingest_stats["total_inserted"] += stats["inserted"]
-                    ingest_stats["total_duplicates"] += stats["duplicates"]
-                    ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
-                    ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
-                    ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)
-                    ingest_stats["total_yahoo_rejected"] += stats.get("yahoo_rejected", 0)
-                    
-                    # Memory monitoring every 10 feeds
-                    if i % 10 == 0:
-                        memory_monitor.take_snapshot(f"FEED_PROCESSING_{i}")
-                        current_memory = memory_monitor.get_memory_info()
-                        if current_memory["memory_mb"] > 500:  # 500MB threshold
-                            LOG.warning(f"High memory during feed processing: {current_memory['memory_mb']:.1f}MB")
-                            memory_monitor.force_garbage_collection()
-                            
-                except Exception as e:
-                    LOG.error(f"[{feed.get('ticker', 'UNKNOWN')}] Feed ingest failed for {feed['name']}: {e}")
-                    continue
+            # ASYNC FEED PROCESSING: Group feeds by strategy
+            LOG.info("=== ASYNC FEED PROCESSING: Grouping feeds by strategy ===")
+
+            # Group feeds by ticker and category
+            company_feeds = []       # Will be processed: Google→Yahoo sequentially per ticker
+            industry_feeds = []      # Will be processed: All in parallel (Google only)
+            competitor_feeds = []    # Will be processed: Google→Yahoo sequentially per competitor
+
+            for feed in feeds:
+                category = feed.get('category', 'company')
+                if category == 'company':
+                    company_feeds.append(feed)
+                elif category == 'industry':
+                    industry_feeds.append(feed)
+                elif category == 'competitor':
+                    competitor_feeds.append(feed)
+
+            LOG.info(f"Feed groups - Company: {len(company_feeds)}, Industry: {len(industry_feeds)}, Competitor: {len(competitor_feeds)}")
+
+            # Further group company and competitor feeds by ticker for sequential Google→Yahoo processing
+            company_by_ticker = {}  # {ticker: [google_feed, yahoo_feed]}
+            for feed in company_feeds:
+                ticker = feed.get('ticker')
+                if ticker not in company_by_ticker:
+                    company_by_ticker[ticker] = []
+                company_by_ticker[ticker].append(feed)
+
+            # Sort each ticker's feeds: Google first, then Yahoo
+            for ticker in company_by_ticker:
+                company_by_ticker[ticker].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+
+            # Group competitor feeds by (ticker, competitor_ticker) for sequential processing
+            competitor_by_key = {}  # {(ticker, competitor_ticker): [google_feed, yahoo_feed]}
+            for feed in competitor_feeds:
+                ticker = feed.get('ticker')
+                comp_ticker = feed.get('competitor_ticker', 'unknown')
+                key = (ticker, comp_ticker)
+                if key not in competitor_by_key:
+                    competitor_by_key[key] = []
+                competitor_by_key[key].append(feed)
+
+            # Sort each competitor's feeds: Google first, then Yahoo
+            for key in competitor_by_key:
+                competitor_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+
+            # Process all groups in parallel using ThreadPoolExecutor
+            LOG.info("=== Starting parallel feed processing with grouped strategy ===")
+            processing_start_time = time.time()
+
+            with ThreadPoolExecutor(max_workers=15) as executor:
+                futures = []
+
+                # Submit company feed groups (sequential Google→Yahoo within each ticker)
+                for ticker, ticker_feeds in company_by_ticker.items():
+                    future = executor.submit(process_feeds_sequentially, ticker_feeds)
+                    futures.append(("company", ticker, future))
+                    LOG.info(f"Submitted company feeds for {ticker}: {len(ticker_feeds)} feeds (Google→Yahoo sequential)")
+
+                # Submit industry feeds (all parallel, Google only)
+                for feed in industry_feeds:
+                    future = executor.submit(ingest_feed_basic_only, feed)
+                    futures.append(("industry", feed.get('search_keyword', 'unknown'), future))
+                LOG.info(f"Submitted {len(industry_feeds)} industry feeds (all parallel)")
+
+                # Submit competitor feed groups (sequential Google→Yahoo within each competitor)
+                for (ticker, comp_ticker), comp_feeds in competitor_by_key.items():
+                    future = executor.submit(process_feeds_sequentially, comp_feeds)
+                    futures.append(("competitor", f"{ticker}/{comp_ticker}", future))
+                    LOG.info(f"Submitted competitor feeds for {ticker}/{comp_ticker}: {len(comp_feeds)} feeds (Google→Yahoo sequential)")
+
+                # Collect results as they complete
+                completed_count = 0
+                for future_type, identifier, future in futures:
+                    try:
+                        stats = future.result()
+                        ingest_stats["total_processed"] += stats["processed"]
+                        ingest_stats["total_inserted"] += stats["inserted"]
+                        ingest_stats["total_duplicates"] += stats["duplicates"]
+                        ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
+                        ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
+                        ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)
+                        ingest_stats["total_yahoo_rejected"] += stats.get("yahoo_rejected", 0)
+
+                        completed_count += 1
+                        LOG.info(f"✅ Completed {future_type} feed group: {identifier} ({completed_count}/{len(futures)})")
+
+                        # Memory monitoring every 5 completions
+                        if completed_count % 5 == 0:
+                            memory_monitor.take_snapshot(f"FEED_PROCESSING_{completed_count}")
+                            current_memory = memory_monitor.get_memory_info()
+                            if current_memory["memory_mb"] > 500:  # 500MB threshold
+                                LOG.warning(f"High memory during feed processing: {current_memory['memory_mb']:.1f}MB")
+                                memory_monitor.force_garbage_collection()
+
+                    except Exception as e:
+                        LOG.error(f"❌ Failed {future_type} feed group: {identifier} - {e}")
+                        continue
+
+            processing_duration = time.time() - processing_start_time
+            LOG.info(f"=== ASYNC FEED PROCESSING COMPLETE: {processing_duration:.2f} seconds ({len(futures)} groups processed) ===")
             
             memory_monitor.take_snapshot("PHASE1_FEEDS_COMPLETE")
             

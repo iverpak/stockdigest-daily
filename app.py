@@ -10092,78 +10092,89 @@ REPORTING PHILOSOPHY:
 
 ---
 
-🔴 MAJOR DEVELOPMENTS (2-5 bullets, 100-150 words)
+🔴 MAJOR DEVELOPMENTS (3-6 bullets)
 Source: Company articles primarily, plus relevant competitor/industry moves
 
-Include: M&A, partnerships, regulatory actions, executive changes, major contracts, rumors
+Lead with most material developments. Each bullet = one discrete event with full context.
+
+Include:
 - {ticker} M&A activity: ALL deals regardless of size (include rumors, undisclosed amounts)
 - {ticker} partnerships: Named companies (even without dollar values)
 - {ticker} leadership: VP level and above
-- {ticker} regulatory: Actions, investigations, litigation
+- {ticker} regulatory: Investigations, litigation, approvals
+- {ticker} major contracts: With dollar amounts or strategic significance
 - Competitor moves WITH competitive implications for {ticker}
 
-Provide available details: Deal size, timeline, strategic rationale
-Combine related facts into single bullets
+Provide available details: Deal size, timeline, strategic rationale.
+Combine related facts into single bullets when they tell one story.
 
 ---
 
-📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets, 80-120 words)
+📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets)
 Source: Company articles only
 
-Include: Earnings, revenue, guidance, margins, production, capex, debt, buybacks, dividends
-- Report exact figures with vs consensus if mentioned
+Quantified metrics only. Include:
+- Earnings, revenue, guidance, margins with exact figures
+- Report vs. consensus when mentioned
 - Production metrics, capacity changes, operational KPIs
-- Include dollar amounts for major transactions when disclosed
+- Capex, debt, buybacks, dividends with amounts
+- Transaction sizes when disclosed
 
 ---
 
-⚠️ RISK FACTORS (2-4 bullets, 80-120 words)
+⚠️ RISK FACTORS (2-4 bullets)
 Source: Company, industry, and competitor articles
 
-Include: Regulatory issues, litigation, production problems, competitive threats, insider selling
+Include threats with impact/timeline when available:
 - {ticker} operational risks: Production issues, supply chain, quality problems
-- {ticker} regulatory/legal: Investigations, lawsuits, compliance issues with financial impact
-- Competitive threats: Competitor actions that directly threaten {ticker} position
+- {ticker} regulatory/legal: Investigations, lawsuits, compliance with financial impact
+- Competitive threats: Competitor actions directly threatening {ticker} position
 - Industry headwinds: Sector trends creating risks for {ticker}
 - Insider activity: C-suite selling with amounts/context
 
 ---
 
-📈 WALL STREET SENTIMENT (1-3 bullets, 40-80 words)
+📈 WALL STREET SENTIMENT (1-4 bullets)
 Source: Company articles only
 
-Include: Rating changes, price target changes, notable research on {ticker}
+Analyst actions on {ticker} only.
+
 Format: "[Firm] [action] to [new rating/target], [rationale if given] (date)"
-Summarize if multiple analysts moved in same week
+
+If 3+ analysts moved same direction in same week:
+"Multiple firms upgraded this week: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z (Oct 1-3)"
 
 ---
 
-⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-4 bullets, 80-120 words)
+⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-5 bullets)
 Source: Industry and competitor articles (already written with {ticker} impact framing)
 
-Include ONLY developments that affect {ticker}'s competitive position:
+Include ONLY developments affecting {ticker}'s competitive position:
 - Competitor M&A: Strategic deals affecting market structure in {ticker}'s segments
 - Industry regulation: Directly impacts {ticker}'s operations or competitive advantages
 - Technology shifts: Threaten or enhance {ticker}'s product positioning
 - Pricing/capacity: Industry-wide moves affecting {ticker}'s pricing power or margins
 - Market dynamics: Supply/demand shifts impacting {ticker}'s market share
 
-CRITICAL: Every bullet must connect to {ticker}'s competitive environment. The article summaries already explain impact on {ticker} - synthesize those insights.
+CRITICAL: Every bullet must connect to {ticker}'s competitive environment.
+The article summaries already explain impact on {ticker} - synthesize those insights.
 
 Examples:
-✓ "Competitor acquired AI startup for $2B to expand enterprise capabilities, entering {ticker}'s core market segment (Oct 1)"
-✓ "Industry consolidation accelerating with two major acquisitions totaling $5B, reducing supplier options and potentially pressuring {ticker}'s margins (Oct 1-2)"
-✓ "New semiconductor tariffs impose 25% levy on imports, increasing {ticker}'s production costs while domestic competitors gain pricing advantage (Sep 30)"
+✓ "Competitor acquired startup for $2B to expand capabilities, entering {ticker}'s core market segment (Oct 1)"
+✓ "Industry consolidation with two major acquisitions totaling $5B, reducing supplier options and potentially pressuring {ticker}'s margins (Oct 1-2)"
+✓ "New tariffs impose 25% levy on imports, increasing {ticker}'s costs while domestic competitors gain pricing advantage (Sep 30)"
 
 Omit this section entirely if no material competitive/industry developments affect {ticker}.
 
 ---
 
-📅 UPCOMING CATALYSTS (1-3 bullets, 30-60 words)
+📅 UPCOMING CATALYSTS (1-3 bullets)
 Source: Company articles only
 
-Include: Earnings dates, investor days, regulatory deadlines, product launches
-Provide SPECIFIC DATES when available
+Events with specific dates only:
+- Earnings dates, investor days, regulatory deadlines, product launches
+- Provide exact dates when available
+- Omit if no scheduled events mentioned
 
 ---
 
@@ -12863,8 +12874,7 @@ async def cron_ingest(
                                        ) as rn
                                 FROM articles a
                                 JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.found_at >= %s
-                                AND ta.ticker = ANY(%s)
+                                WHERE ta.ticker = ANY(%s)
                                 AND (a.published_at >= %s OR a.published_at IS NULL)
                             )
                             SELECT id, url, resolved_url, title, domain, published_at,
@@ -12875,7 +12885,7 @@ async def cron_ingest(
                                OR (category = 'industry' AND rn <= 25)
                                OR (category = 'competitor' AND rn <= 25)
                             ORDER BY ticker, category, rn
-                        """, (cutoff, tickers, cutoff))
+                        """, (tickers, cutoff))
                     else:
                         cur.execute("""
                             WITH ranked_articles AS (
@@ -12893,8 +12903,7 @@ async def cron_ingest(
                                        ) as rn
                                 FROM articles a
                                 JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.found_at >= %s
-                                AND (a.published_at >= %s OR a.published_at IS NULL)
+                                WHERE (a.published_at >= %s OR a.published_at IS NULL)
                             )
                             SELECT id, url, resolved_url, title, domain, published_at,
                                    category, search_keyword, competitor_ticker, ticker,
@@ -12904,7 +12913,7 @@ async def cron_ingest(
                                OR (category = 'industry' AND rn <= 25)
                                OR (category = 'competitor' AND rn <= 25)
                             ORDER BY ticker, category, rn
-                        """, (cutoff, cutoff))
+                        """, (cutoff,))
 
                     all_articles = list(cur.fetchall())
 
@@ -12921,10 +12930,10 @@ async def cron_ingest(
                             COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
                         FROM ticker_articles ta
                         JOIN articles a ON ta.article_id = a.id
-                        WHERE ta.found_at >= %s AND ta.ticker = ANY(%s)
+                        WHERE ta.ticker = ANY(%s)
                         GROUP BY ta.ticker, ta.category
                         ORDER BY ta.ticker, ta.category
-                    """, (cutoff, cutoff, cutoff, tickers))
+                    """, (cutoff, cutoff, tickers))
                 else:
                     cur.execute("""
                         SELECT
@@ -12934,10 +12943,9 @@ async def cron_ingest(
                             COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
                         FROM ticker_articles ta
                         JOIN articles a ON ta.article_id = a.id
-                        WHERE ta.found_at >= %s
                         GROUP BY ta.ticker, ta.category
                         ORDER BY ta.ticker, ta.category
-                    """, (cutoff, cutoff, cutoff))
+                    """, (cutoff, cutoff))
 
                 filter_stats = cur.fetchall()
                 for stat in filter_stats:

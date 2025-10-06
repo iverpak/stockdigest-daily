@@ -7536,69 +7536,88 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
     target_cap = min(5, len(articles))
     peers_display = ', '.join(peers[:5]) if peers else 'None'
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates that have demonstrable impact on {company_name} ({ticker}).
+    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
 
 TARGET COMPANY: {company_name} ({ticker})
 SECTOR: {sector}
 KNOWN PEERS: {peers_display}
 
-CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain. ONLY select articles where {ticker}-specific impact is clear and material.
+INDUSTRY CONTEXT: Select articles about sector-wide trends, regulatory changes, supply/demand shifts, and competitive dynamics that affect {company_name}'s business environment. These should provide competitive intelligence, not just mention the sector in passing.
+
+CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
+
+PRIMARY CRITERION: Does this article reveal information about {company_name}'s competitive landscape, regulatory environment, or market opportunity?
 
 SELECT (choose up to {target_cap}):
 
-TIER 1 - Direct operational impact on {ticker}:
-- Regulatory/Policy affecting {ticker}'s operations: New laws, rules, tariffs, bans WITH specific rates/dates/costs that apply to {ticker}
-- Input costs for {ticker}: Commodity/component prices, labor rates WITH figures affecting {ticker}'s cost structure
-- Supply disruptions affecting {ticker}: Production stoppages, capacity constraints WITH volume impacts on {ticker}'s supply chain
-- Demand drivers for {ticker}: End-market trends, customer budget changes WITH implications for {ticker}'s revenue
-- Compliance requirements for {ticker}: New standards, certifications WITH deadlines/costs {ticker} must meet
-- Trade impacts on {ticker}: Tariffs, quotas, sanctions WITH specific effect on {ticker}'s markets or costs
+TIER 1 - Hard industry events with quantified impact (scrape_priority=1):
+- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting {sector}
+- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting {company_name} sector
+- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting {sector}
+- Standards: New requirements, certifications, compliance rules WITH deadlines/costs for {sector}
+- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines for {sector}
+- Financial: Interest rates, capital requirements, reserve rules affecting {sector}
+- Technology shifts: Standards changes, platform migrations, protocol updates affecting {sector}
 
-TIER 2 - Competitive positioning impact on {ticker}:
-- Capacity changes affecting {ticker}: Major additions/closures WITH impact on {ticker}'s market share or pricing power
-- Technology adoption revealing {ticker}'s position: Industry shifts WITH data showing {ticker} ahead/behind
-- Industry consolidation affecting {ticker}: M&A changing competitive landscape for {ticker}
-- Standards evolution affecting {ticker}: Protocol/spec changes WITH {ticker}'s compliance position or advantage
-- Infrastructure investment affecting {ticker}: Government/private buildouts WITH impact on {ticker}'s business
-- Sector financial trends revealing {ticker}'s performance: Industry margins, growth rates WITH {ticker} comparison context
+TIER 2 - Strategic sector developments (scrape_priority=2):
+- Major capacity additions/closures WITH impact metrics (e.g., "500MW," "1M units/year") in {sector}
+- Industry consolidation WITH transaction values and market share implications
+- Technology adoption WITH implementation timelines and cost/efficiency impacts
+- Labor agreements WITH wage/benefit details affecting {sector} economics
+- Infrastructure investments WITH budgets and completion dates for {sector}
+- Patent expirations, generic approvals, licensing changes WITH market impact
+- Major peer announcements revealing sector trends (from peers: {peers_display})
+- Geographic expansion patterns: Multiple companies entering/exiting same markets
+- Competitive dynamics: Pricing wars, margin pressure, customer switching patterns
 
-TIER 3 - Material sector context for {ticker} (ONLY if quota unfilled):
-- Economic indicators directly affecting {ticker}'s end markets WITH quantified demand/pricing impact
-- Government initiatives WITH budgets that create opportunities/risks for {ticker}
-- Research findings WITH specific implications for {ticker}'s technology or market position
+TIER 3 - Market intelligence and context (scrape_priority=3):
+- Market opportunity sizing WITH credible TAM/SAM figures for {company_name}'s addressable market
+- Economic indicators directly affecting {sector} WITH specific data points
+- Government funding/initiatives WITH allocated budgets (not vague "plans")
+- Research findings WITH quantified sector implications
+- Adoption metrics: Customer/user growth rates, penetration figures for {sector}
+- Cost structure changes: Input prices, labor costs, logistics affecting {sector}
+- Analyst sector reports WITH specific company mentions or competitive comparisons
+
+ANALYTICAL CONTENT - Include sector analysis:
+✓ "Why [sector] companies are [performing/struggling]..." (explaining macro trends)
+✓ "[Sector] industry faces [challenge/opportunity]..." (structural shifts)
+✓ "Major players in [sector] [taking action]..." (coordinated industry moves)
+✓ "[Peer company] success/failure signals [trend]..." (competitive intelligence)
+✓ "Can [sector] sustain [growth/margins/demand]..." (industry viability questions)
 
 REJECT COMPLETELY - Never select:
-- Market research reports: "Market to reach," "CAGR," "Forecast 20XX-20YY," "TAM" (unless {ticker} explicitly discussed)
-- Generic trends: "Top Trends," "Future of," "Outlook" (no {ticker} connection)
-- Pure competitor news: Single-company earnings, appointments WITHOUT {ticker} competitive context
-- Listicles: "X Best," "How to," "Why You Should" (not actionable for {ticker})
-- Opinion pieces: "Analysis," "Commentary" WITHOUT hard data affecting {ticker}
-- Routine announcements: Small company moves with no {ticker} relevance
+- Generic market research: "Industry to reach $XB by 20YY" WITHOUT {company_name} positioning
+- Pure trend pieces: "Top 5 trends in [sector]," "Future of [industry]" WITHOUT specifics
+- Single company news: Peer earnings, appointments WITHOUT broader sector implications
+- Unrelated companies: Articles about non-peer companies outside {company_name}'s competitive set
+- Distant forecasts: "20XX outlook," "Next decade in [sector]" WITHOUT near-term catalysts
+- Pure opinion: "Analysis," "Commentary" WITHOUT hard data or specific sector insights
+- Small company routine news: Junior partnerships, minor financing rounds
+- Attribution confusion: Industry trade group reports where {sector} is just mentioned
 
-VALIDATION - Article must pass this test:
-✓ Can you explain in ONE sentence how this affects {ticker}'s operations, costs, revenues, or competitive position?
-✗ If NO clear {ticker} connection → REJECT
-
-Examples of GOOD selections:
-✓ "EU mandates 30% recycled content by 2026" → {ticker} must adjust supply chain, compliance costs quantified
-✓ "Semiconductor equipment lead times extend to 18 months" → {ticker} capacity expansion delayed, competitive impact
-✓ "Copper prices hit $12,000/ton" → {ticker} input costs rise X%, margin pressure
-✓ "FDA approves competitor drug" → {ticker} market share threatened in $XXB segment
-
-Examples of BAD selections (REJECT these):
-✗ "Sector employment rises 5%" → No specific {ticker} operational impact
-✗ "Industry to grow 12% CAGR through 2030" → Generic forecast, no {ticker} positioning
-✗ "Small biotech raises $50M Series B" → Irrelevant to {ticker}
-✗ "Expert predicts AI transformation" → Opinion, no actionable {ticker} impact
+COMPETITIVE INTELLIGENCE - Include when:
+✓ Peer company action indicates sector direction (new product categories, pricing changes, geographic priorities)
+✓ Regulatory action against competitor reveals industry-wide risks
+✓ Supply chain disruption at major player affects {sector} availability/pricing
+✓ Technology deployment shows sector-wide adoption affecting {company_name}
+✓ Financial performance reveals {sector} cost/margin/demand trends
+✓ Multiple peers make similar strategic moves (consolidation wave, geographic expansion)
 
 SCRAPE PRIORITY (assign integer 1-3):
-1 = Tier 1 (direct operational impact on {ticker} WITH numbers)
-2 = Tier 2 (competitive positioning impact on {ticker} WITH data)
-3 = Tier 3 (material sector context for {ticker})
+1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
+2 = Tier 2 (capacity, consolidation, policy WITH budgets, peer moves with sector implications)
+3 = Tier 3 (TAM sizing, economic indicators, adoption metrics, sector reports)
 
-Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "Explain {ticker} impact in 10 words"}}]
+SELECTION STANDARD:
+- Prioritize sector-specific insights over general business news
+- A trade publication covering {sector} specifically > major outlet with tangential mention
+- Include if article reveals something material about {company_name}'s operating environment
+- Skip if industry mention is generic or doesn't connect to {company_name}'s business
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Every selection must have clear {ticker} relevance. If uncertain, DO NOT SELECT.
+Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
+
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about sector relevance to {company_name}.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 
@@ -7679,9 +7698,11 @@ async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, c
 
 CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
 
+PRIMARY CRITERION: Is this article SPECIFICALLY about {competitor_name}? If unclear, skip it.
+
 SELECT (choose up to {target_cap}):
 
-TIER 1 - Hard corporate events:
+TIER 1 - Hard corporate events (scrape_priority=1):
 - Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
 - Capital: "buyback," "dividend," "debt," "bond," "offering," "raises," "refinance," "converts"
 - M&A: "acquires," "buys," "sells," "divests," "stake," "merger," "spin-off," "joint venture"
@@ -7690,44 +7711,62 @@ TIER 1 - Hard corporate events:
 - Products: "approval," "launch," "recall," "trial results," "patent" WITH specific product/drug names
 - Contracts: Dollar amounts in title (e.g., "$500M contract," "£2B deal")
 - Ratings: "upgrade," "downgrade" WITH analyst firm name (e.g., "BofA upgrades," "Moody's cuts")
+- Price movements: "surges," "jumps," "plunges," "drops" WITH percentage or specific levels
 
-TIER 2 - Strategic developments:
-- Leadership: CEO, CFO, President, CTO WITH "appoints," "names," "resigns," "retires," "replaces"
-- Partnerships: Named partner companies (e.g., "{competitor_name} partners with [Other Company]")
-- Technology: Specific tech/platform names WITH "launches," "announces," "deploys"
-- Facilities: Plant/office/branch/store openings, closures WITH locations and capacity/headcount numbers
-- Clinical: Trial phases, enrollment milestones, data releases (pharma/biotech)
-- Spectrum/Licenses: Acquisitions, renewals WITH specific bands/regions (telecom)
-- Geographic: Market entry/exit WITH investment levels or unit counts
+TIER 2 - Strategic competitive intelligence (scrape_priority=2):
+- Leadership: CEO, CFO, President WITH "appoints," "names," "resigns," "retires," "replaces"
+- Partnerships: Named partners (competitive threats or ecosystem plays)
+- Technology: New products/platforms WITH "launches," "announces," "deploys"
+- Facilities: Capacity expansions/closures WITH locations and scale
+- Geographic: Market entry/exit WITH investment levels (competitive overlap with {ticker})
+- Pricing: Price changes, discounting, bundling affecting competitive position
+- Customer wins/losses: Major accounts, market share shifts
+- Executive interviews: Strategy, roadmap, competitive positioning statements
 
-TIER 3 - Context (ONLY if quota unfilled):
-- Analyst coverage WITH price targets visible in title
-- Industry awards, certifications if indicative of competitive position
-- Routine announcements WITH material operational details
+TIER 3 - Competitive context (scrape_priority=3):
+- Analyst coverage WITH price targets or competitive comparisons to {ticker}
+- Performance analysis: "Why {competitor_name} [outperformed/underperformed]..."
+- Strategic questions: "Can {competitor_name} compete with..." "Will {competitor_name} disrupt..."
+- Awards, certifications affecting competitive positioning
+- Technical analysis WITH specific price levels
+
+ANALYTICAL CONTENT - Include competitor analysis:
+✓ "Why {competitor_name} stock [moved]..." (understanding competitive threats/opportunities)
+✓ "{competitor_name} vs {ticker}" or competitive comparisons
+✓ "Can {competitor_name} [challenge/overtake/sustain]..." (competitive capability)
+✓ "{competitor_name} strategy in [market/product]..." (strategic intelligence)
+✓ "What {competitor_name}'s [move] means for..." (competitive implications)
 
 REJECT COMPLETELY - Never select:
-- Generic lists: "Top," "Best," "Should You Buy," "Stocks to Watch," "X Stocks to"
-- Roundups: "Sector Update," "Stock Movers," "Trending Stocks," "Biggest Analyst Calls"
-- Clickbait: "This Could," "Why," "What Investors Need to Know," "How to"
-- Future speculation: "Heading to," "Could reach $X," "Price Prediction 20XX"
-- Historical: "If you'd invested," "20 years ago," "Where would $1000 be"
-- Market reports: "Market to reach," "CAGR," "Forecast 20XX-20YY"
-- Quote pages: "Stock Price | Live Quotes & Charts | [Exchange]"
-- Other companies: If title clearly focuses on different company, reject
+- Generic lists: "Top dividend stocks," "Best performers," "Stocks to watch"
+- Sector roundups: "Tech movers," "Healthcare rally" (unless {competitor_name} is primary focus)
+- Unrelated mentions: {competitor_name} listed among many tickers without focus
+- Pure speculation: "Could 10x" WITHOUT specific competitive thesis
+- Historical: "If you'd invested," "20 years of returns"
+- Distant predictions: "2035 price prediction" WITHOUT near-term catalysts
+- Market research: "Industry forecast" (unless specifically about {competitor_name})
+- Quote pages: "Stock Price | Charts | [Exchange]"
 
-DISAMBIGUATION - Avoid confusion:
-- If title leads with different company name, likely not about {competitor_name}
-- If {competitor_name} only appears as news source attribution, not subject
-- For common words (Oracle, Amazon, Apple), verify context matches your company
+DISAMBIGUATION - Critical accuracy:
+- If title leads with different company, likely not about {competitor_name}
+- If {competitor_name} is just news source attribution, reject
+- For common names, verify context matches YOUR competitor
+- Multi-company: Only select if {competitor_name} is ≥50% of focus
 
 SCRAPE PRIORITY (assign integer 1-3):
-1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts)
-2 = Tier 2 (leadership, partnerships, product launches, facilities)
-3 = Tier 3 (analyst coverage, awards, routine announcements)
+1 = Tier 1 (financials, M&A, regulatory, disasters, contracts, price moves)
+2 = Tier 2 (leadership, launches, partnerships, pricing, customer wins, interviews)
+3 = Tier 3 (analyst coverage, performance analysis, competitive questions)
 
-Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "reason text"}}]
+SELECTION STANDARD:
+- When uncertain if about {competitor_name}, skip it
+- Prioritize competitive intelligence relevance to {ticker}
+- Niche source covering {competitor_name} specifically > major outlet tangential mention
+- Only select if provides actionable intelligence about {competitor_name}
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if you're uncertain about relevance.
+Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
+
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about relevance.
 
 Articles: {json.dumps(items, separators=(',', ':'))}"""
 

@@ -11655,10 +11655,19 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     total_articles = sum(len(arts) for arts in articles_by_category.values())
 
     html = f'''<!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <!--[if mso]>
+    <xml>
+        <o:OfficeDocumentSettings>
+            <o:AllowPNG/>
+            <o:PixelsPerInch>96</o:PixelsPerInch>
+        </o:OfficeDocumentSettings>
+    </xml>
+    <![endif]-->
     <title>{ticker} Intelligence Report</title>
     <style>
         @media only screen and (max-width: 600px) {{
@@ -11669,33 +11678,49 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
         }}
     </style>
 </head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+<body style="margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; background-color: #f8f9fa; color: #212529;">
 
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+    <!-- Outlook-friendly wrapper -->
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width: 100%; border-collapse: collapse; background-color: #f8f9fa;">
         <tr>
             <td align="center" style="padding: 40px 20px;">
 
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: hidden;">
+                <!-- Main container -->
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="max-width: 700px; width: 100%; background-color: #ffffff; border-collapse: collapse; border: 1px solid #e5e7eb;">
 
-                    <!-- Header -->
+                    <!-- Header with gradient background -->
                     <tr>
-                        <td class="header-padding" style="padding: 20px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                        <td class="header-padding" style="padding: 20px 24px; background-color: #1e40af; color: #ffffff;">
+                            <!--[if gte mso 9]>
+                            <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:700px;height:100px;">
+                            <v:fill type="gradient" color="#1e40af" color2="#1e3a8a" angle="135"/>
+                            <v:textbox inset="20px,24px,20px,24px">
+                            <![endif]-->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width: 100%; border-collapse: collapse;">
                                 <tr>
-                                    <td style="width: 65%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
-                                        <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
-                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
+                                    <td style="width: 65%; vertical-align: top;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; font-weight: 600; color: #b3d1ff;">STOCK INTELLIGENCE</div>
+                                        <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; color: #ffffff;">{company_name}</h1>
+                                        <div style="margin-top: 6px; font-size: 13px; font-weight: 500; color: #e0ebff;">{ticker} • {sector}</div>
                                     </td>
                                     <td align="right" style="vertical-align: top; width: 35%;">
-                                        <div class="price-box" style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">
-                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75;">{current_date}</div>
-                                            <div style="font-size: 20px; font-weight: 700; line-height: 1;">{stock_price}</div>
-                                            <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct}</div>
-                                        </div>
+                                        <!-- Price box as table for Outlook compatibility -->
+                                        <table role="presentation" cellspacing="0" cellpadding="10" border="0" class="price-box" style="background-color: #5577cc; border: 1px solid #7799dd; border-collapse: collapse;">
+                                            <tr>
+                                                <td align="center" style="padding: 10px 14px;">
+                                                    <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; color: #b3d1ff;">{current_date}</div>
+                                                    <div style="font-size: 20px; font-weight: 700; line-height: 1; color: #ffffff;">{stock_price}</div>
+                                                    <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct}</div>
+                                                </td>
+                                            </tr>
+                                        </table>
                                     </td>
                                 </tr>
                             </table>
+                            <!--[if gte mso 9]>
+                            </v:textbox>
+                            </v:rect>
+                            <![endif]-->
                         </td>
                     </tr>
 
@@ -11707,14 +11732,22 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                             {summary_html}
 
                             <!-- Transition to Sources -->
-                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    {analysis_message}
-                                </p>
-                            </div>
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width: 100%; margin: 32px 0 20px 0; background-color: #eff6ff; border-left: 4px solid #1e40af; border-collapse: collapse;">
+                                <tr>
+                                    <td style="padding: 12px 16px;">
+                                        <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+                                            {analysis_message}
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
 
                             <!-- Divider -->
-                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width: 100%; margin-bottom: 20px;">
+                                <tr>
+                                    <td style="height: 2px; background-color: #1e40af; line-height: 0; font-size: 0;">&nbsp;</td>
+                                </tr>
+                            </table>
 
                             <!-- Source Articles -->
                             <div style="margin-bottom: 0;">
@@ -11727,18 +11760,27 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Footer -->
                     <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                        <td style="background-color: #1e40af; padding: 16px 24px; color: #e0ebff;">
+                            <!--[if gte mso 9]>
+                            <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:700px;">
+                            <v:fill type="gradient" color="#1e40af" color2="#1e3a8a" angle="135"/>
+                            <v:textbox inset="16px,24px,16px,24px">
+                            <![endif]-->
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td>
                                         <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">QuantBrief</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px;">Stock Intelligence Delivered Daily</div>
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                        <div style="font-size: 12px; color: #b3d1ff; margin-bottom: 8px;">Stock Intelligence Delivered Daily</div>
+                                        <div style="font-size: 10px; color: #99bbee; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid #5577cc;">
                                             This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
                                         </div>
                                     </td>
                                 </tr>
                             </table>
+                            <!--[if gte mso 9]>
+                            </v:textbox>
+                            </v:rect>
+                            <![endif]-->
                         </td>
                     </tr>
 

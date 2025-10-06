@@ -175,6 +175,26 @@ Within each category (company/industry/competitor), articles are sorted by prior
 This sorting is applied to all 3 email reports to ensure the most important content appears first.
 Function: `sort_articles_by_priority()` - Line 10278
 
+#### Database-First Triage Selection (v3.1)
+**IMPORTANT:** Triage selection uses the database as source of truth, NOT RSS feed results.
+
+**How it works:**
+1. RSS feeds run to discover and ingest NEW articles (up to 50/25/25 per category)
+2. Spam filtering happens during ingestion (before database insertion)
+3. Triage queries database for latest 50/25/25 articles by `published_at` (not `found_at`)
+4. Articles persist in database indefinitely (no automatic cleanup)
+
+**Benefits:**
+- RSS feed gaps don't affect triage (database has complete history)
+- Slow-moving tickers fill limits with older quality articles
+- Fast-moving tickers (NVDA) get latest news only
+- Lookback window (1 day, 7 days, 1 month) determines publication date filter
+
+**Query Logic:** Lines 12862-12916 in `cron_ingest()`
+- Filters: `WHERE ta.ticker = %s AND (a.published_at >= cutoff OR NULL)`
+- NO `found_at` filter - all articles in DB are considered
+- Ranks by `published_at DESC` within each category/keyword partition
+
 ### Email Template System
 
 Uses Jinja2 templating (`email_template.html`) with:
@@ -218,18 +238,31 @@ QuantBrief generates 3 distinct emails per ticker during the digest phase, formi
 **Timing:** Sent at ~95% progress (end of digest phase)
 **Key Behavior:** Generates and SAVES executive summary to database via `save_executive_summary()` (Line 1050)
 
-#### Email #3: Stock Intelligence Report (Line 11175)
+#### Email #3: Premium Stock Intelligence Report (Line 11233)
 **Function:** `send_user_intelligence_report()`
-**Subject:** `📊 Stock Intelligence: [Company Names] ([Tickers]) - [X] articles`
-**Purpose:** Clean, user-facing intelligence report
+**Subject:** `📊 Stock Intelligence: [Company Name] ([Ticker]) - [X] articles`
+**Purpose:** Premium user-facing intelligence report with modern HTML design
 **Content:**
+- **Modern HTML template** with gradient header and inline styles
+- **Stock price card** in header (price, % change, date from `ticker_reference` cache)
+- **Executive summary sections** parsed into 6 visual cards:
+  1. 🔴 Major Developments (3-6 bullets)
+  2. 📊 Financial/Operational Performance (2-4 bullets)
+  3. ⚠️ Risk Factors (2-4 bullets)
+  4. 📈 Wall Street Sentiment (1-4 bullets)
+  5. ⚡ Competitive/Industry Dynamics (2-5 bullets)
+  6. 📅 Upcoming Catalysts (1-3 bullets)
+- **Compressed article links** at bottom (Company/Industry/Competitors)
+- **Star indicators** (★) for FLAGGED + QUALITY articles only
 - Shows ONLY flagged articles (same filtering as Email #1 and #2)
-- Article titles, descriptions, timestamps, publishers
-- NO AI analysis boxes (clean presentation)
-- Executive Summary section - **FETCHED FROM DATABASE** (does NOT regenerate)
-- Sorted by priority (same algorithm as Email #1 and #2)
+- NO AI analysis boxes, NO descriptions (clean presentation)
 **Timing:** Sent at ~97% progress (after Email #2, before GitHub commit)
-**Key Behavior:** Retrieves pre-generated executive summary from `executive_summaries` table
+**Key Behavior:**
+- Retrieves executive summary from `executive_summaries` table
+- Parses text by emoji headers via `parse_executive_summary_sections()` (Line 11186)
+- Uses `resolved_url` for all article links
+- Hides empty sections automatically
+- Single-ticker design only (no multi-ticker support)
 
 #### Flagged Article Filtering
 **CRITICAL:** Email #2 and #3 show ONLY flagged articles (those with high AI relevance scores).
@@ -393,14 +426,47 @@ SELECT COUNT(*) FROM ticker_processing_jobs WHERE status = 'queued';
 **3-Email System:**
 - `send_enhanced_quick_intelligence_email()` - Line 10353 (Email #1: Article Selection QA)
 - `fetch_digest_articles_with_enhanced_content()` - Line 10955 (Email #2: Content QA)
-- `send_user_intelligence_report()` - Line 11175 (Email #3: Stock Intelligence)
+- `send_user_intelligence_report()` - Line 11233 (Email #3: Premium Stock Intelligence)
+- `parse_executive_summary_sections()` - Line 11186 (Parse AI summary into 6 sections)
 - `sort_articles_by_priority()` - Line 10278 (Article priority sorting)
 - `save_executive_summary()` - Line 1050 (Executive summary database storage)
+- `generate_openai_executive_summary()` - Line 10069 (Executive summary AI prompt)
 
 **Job Queue System:**
-- `process_digest_phase()` - Line 11393 (Main digest phase orchestrator)
+- `process_digest_phase()` - Line 11626 (Main digest phase orchestrator)
+
+**Triage & Ingestion:**
+- `cron_ingest()` - Line 12730 (RSS feed processing & database-first triage)
+- Database-first triage query - Lines 12862-12916 (Pulls from DB, not RSS)
 
 **Legacy Endpoints:**
-- `cron_ingest()` - Line 12695 (RSS feed processing)
-- `cron_digest()` - Line 13303 (Digest generation)
-- `safe_incremental_commit()` - Line 14707 (GitHub commit)
+- `cron_digest()` - Line 13335 (Digest generation)
+- `safe_incremental_commit()` - Line 14732 (GitHub commit)
+
+## Executive Summary AI Prompt (v3.1)
+
+The executive summary prompt has been optimized for flexibility and quality:
+
+**Removed:**
+- ❌ Word count targets (100-150w, 80-120w, etc.)
+- ❌ Prescriptive bullet limits that force combining unrelated facts
+
+**Added:**
+- ✅ Flexible bullet count ranges (3-6, 2-4, 1-4, 2-5)
+- ✅ "Cast a WIDE net" philosophy - include rumors, undisclosed deals
+- ✅ Enhanced guidance for competitive/industry dynamics
+- ✅ Better Wall Street Sentiment formatting examples
+
+**Bullet Count Ranges:**
+- 🔴 Major Developments: 3-6 bullets
+- 📊 Financial/Operational: 2-4 bullets
+- ⚠️ Risk Factors: 2-4 bullets
+- 📈 Wall Street Sentiment: 1-4 bullets
+- ⚡ Competitive/Industry: 2-5 bullets
+- 📅 Upcoming Catalysts: 1-3 bullets
+
+**Key Improvements:**
+- AI writes to optimize clarity, not hit artificial word counts
+- Multiple developments don't get combined inappropriately
+- Competitive/Industry section can expand when needed (most important section)
+- All explicit `{ticker}` references preserved in prompts

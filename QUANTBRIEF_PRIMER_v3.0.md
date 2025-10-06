@@ -1,7 +1,7 @@
-# QuantBrief Daily Intelligence System - PRIMER v3.0
+# QuantBrief Daily Intelligence System - PRIMER v3.1
 
-**Last Updated:** October 5, 2025
-**Application File Size:** 14,877 lines
+**Last Updated:** October 6, 2025
+**Application File Size:** 14,897 lines
 **Total Endpoints:** 56 (39 admin + 8 job queue + 9 other)
 **Database:** PostgreSQL with 12 core tables
 **Primary Language:** Python 3.11 (FastAPI framework)
@@ -76,27 +76,56 @@ QuantBrief now generates **3 distinct emails per ticker** during the digest phas
 📝 Content QA: GM, F - 18 articles analyzed
 ```
 
-### Email #3: Stock Intelligence Report (97% Progress)
-**Function:** `send_user_intelligence_report()` - Line 11175
-**Subject Format:** `📊 Stock Intelligence: [Company Names] ([Tickers]) - [X] articles`
+### Email #3: Premium Stock Intelligence Report (97% Progress) - **NEW in v3.1**
+**Function:** `send_user_intelligence_report()` - Line 11233
+**Subject Format:** `📊 Stock Intelligence: [Company Name] ([Ticker]) - [X] articles`
 
-**Purpose:** Clean, user-facing intelligence report (no internal QA clutter)
+**Purpose:** Premium user-facing intelligence report with modern HTML design
 
 **Content:**
+- **Modern HTML template** with gradient blue header and inline styles
+- **Stock price card** in header showing:
+  - Current price from `ticker_reference` cache (no API calls)
+  - Percentage change (green/red)
+  - Current date
+- **Executive summary sections** parsed into 6 visual cards:
+  1. 🔴 **Major Developments** (3-6 bullets)
+  2. 📊 **Financial/Operational Performance** (2-4 bullets)
+  3. ⚠️ **Risk Factors** (2-4 bullets)
+  4. 📈 **Wall Street Sentiment** (1-4 bullets)
+  5. ⚡ **Competitive/Industry Dynamics** (2-5 bullets)
+  6. 📅 **Upcoming Catalysts** (1-3 bullets)
+- **Compressed article links** at bottom organized by:
+  - Company articles
+  - Industry articles
+  - Competitor articles
+- **Star indicators (★)** for articles that are BOTH:
+  - ✅ FLAGGED (high AI relevance score)
+  - ✅ QUALITY domain (WSJ, Bloomberg, Reuters, FT, Barron's)
 - Shows **ONLY flagged articles** (same filtering as Email #1 and #2)
-- Article titles, descriptions, timestamps, publishers
-- **NO AI analysis boxes** (clean presentation)
-- Executive Summary section - **FETCHED FROM DATABASE** (does NOT regenerate)
-- Sorted by priority (same algorithm as Email #1 and #2)
+- **NO AI analysis boxes, NO descriptions** (clean presentation)
+- Uses `resolved_url` for all article links
+- Hides sections with no content automatically
 
 **Timing:** Sent at ~97% progress (after Email #2, before GitHub commit)
 
-**Key Behavior:** Retrieves pre-generated executive summary from `executive_summaries` table (no redundant AI calls)
+**Key Behavior:**
+- Retrieves executive summary from `executive_summaries` table (no regeneration)
+- Parses summary text by emoji headers via `parse_executive_summary_sections()` (Line 11186)
+- **Single-ticker design only** (no multi-ticker support)
+- Inline HTML (no external Jinja2 template)
 
 **Example Subject:**
 ```
-📊 Stock Intelligence: General Motors, Ford Motor Company (GM, F) - 18 articles
+📊 Stock Intelligence: General Motors (GM) - 12 articles
 ```
+
+**Design Features:**
+- Professional gradient header (blue theme)
+- Stock price card with real-time data
+- Visual section dividers with horizontal gradient lines
+- Article cards with domain name + publication date
+- Responsive email-client compatible design
 
 ### Flagged Article Filtering (CRITICAL CHANGE in v3.0)
 
@@ -351,12 +380,80 @@ The job queue system **decouples long-running ticker processing from HTTP reques
 
 ---
 
-## KEY FUNCTION LOCATIONS (v3.0)
+## DATABASE-FIRST TRIAGE SELECTION (NEW IN v3.1)
+
+### The Critical Change
+
+**OLD BEHAVIOR (v3.0 and earlier):**
+```sql
+WHERE ta.found_at >= cutoff  -- Only articles discovered recently
+AND (a.published_at >= cutoff OR NULL)
+```
+
+**NEW BEHAVIOR (v3.1):**
+```sql
+WHERE ta.ticker = %s
+AND (a.published_at >= cutoff OR NULL)
+-- NO found_at filter - database is source of truth
+```
+
+### How It Works
+
+1. **RSS Feed Phase** - Discovers and ingests NEW articles (up to 50/25/25 per category)
+   - Spam filtering happens during ingestion (before database)
+   - Articles persist in database **indefinitely** (no automatic cleanup)
+   - Ingestion limits: 50 company, 25 per industry keyword, 25 per competitor
+
+2. **Triage Selection Phase** - Queries database for articles to triage
+   - Pulls latest 50/25/25 articles by `published_at` (not `found_at`)
+   - **Database is source of truth**, not RSS feed results
+   - Articles ranked within each category/keyword partition
+   - Lookback window (1 day, 7 days, 1 month) filters by publication date
+
+### Benefits
+
+✅ **RSS Feed Gaps Don't Matter** - Even if article disappears from feed, it's still in database
+✅ **Slow-Moving Tickers Get Content** - Fills 50-article limit with older quality articles
+✅ **Fast-Moving Tickers Get Latest** - NVDA fills limit with today's news only
+✅ **Consistent Triage** - Same articles available day-to-day
+✅ **No Article Loss** - Database accumulates complete history
+
+### Example Scenarios
+
+**Scenario 1: Fast-Moving Ticker (NVDA)**
+- **Lookback:** 1 day
+- **Database:** 150 articles published today
+- **Triage:** Latest 50 articles from today (newest first)
+
+**Scenario 2: Slow-Moving Ticker (Obscure Small Cap)**
+- **Lookback:** 7 days
+- **Database:** 30 articles published across 7 days
+- **Triage:** All 30 articles (fills to 50 if possible, otherwise uses what's available)
+
+**Scenario 3: RSS Feed Gap**
+- **Day 1:** RSS returns 80 articles, 50 inserted to DB
+- **Day 2:** RSS only returns 40 articles (20 disappeared!)
+- **Old behavior:** Only 40 articles available for triage ❌
+- **New behavior:** All 50 from Day 1 + 40 from Day 2 = 90 total in DB ✅
+
+### Implementation
+
+**Query Location:** Lines 12862-12916 in `cron_ingest()`
+**Filters Applied:**
+- `WHERE ta.ticker = %s` - Only articles for this ticker
+- `AND (a.published_at >= cutoff OR NULL)` - Within lookback window
+- `ORDER BY a.published_at DESC NULLS LAST` - Newest first
+- `ROW_NUMBER() OVER (PARTITION BY category/keyword)` - Limit per partition
+
+---
+
+## KEY FUNCTION LOCATIONS (v3.1)
 
 ### 3-Email System
 - `send_enhanced_quick_intelligence_email()` - **Line 10353** (Email #1: Article Selection QA)
 - `fetch_digest_articles_with_enhanced_content()` - **Line 10955** (Email #2: Content QA)
-- `send_user_intelligence_report()` - **Line 11175** (Email #3: Stock Intelligence)
+- `send_user_intelligence_report()` - **Line 11233** (Email #3: Premium Stock Intelligence)
+- `parse_executive_summary_sections()` - **Line 11186** (Parse AI summary into 6 sections)
 - `sort_articles_by_priority()` - **Line 10278** (Article priority sorting)
 - `save_executive_summary()` - **Line 1050** (Executive summary database storage)
 - `generate_openai_executive_summary()` - **Line 9999** (OpenAI executive summary generation)

@@ -11484,14 +11484,8 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
         return f'''
             <div style="margin-bottom: 36px;">
-                <div style="display: table; width: 100%; margin-bottom: 18px;">
-                    <div style="display: table-cell; vertical-align: middle;">
-                        <h2 style="margin: 0; font-size: 18px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
-                    </div>
-                    <div style="display: table-cell; vertical-align: middle; width: 100%;">
-                        <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, transparent 100%); margin-left: 16px;"></div>
-                    </div>
-                </div>
+                <h2 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                <hr style="border: 0; height: 2px; background-color: #1e40af; margin: 0 0 18px 0;">
                 {bullet_html}
             </div>
         '''
@@ -11532,7 +11526,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Header -->
                     <tr>
-                        <td style="padding: 36px 40px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                        <td style="padding: 36px 40px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 65%;">
@@ -11567,7 +11561,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Footer -->
                     <tr>
-                        <td style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 28px 40px; color: rgba(255,255,255,0.9);">
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 28px 40px; color: rgba(255,255,255,0.9);">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td>

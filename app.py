@@ -11447,22 +11447,20 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
         article_links = ""
         for article in articles:
-            star = '<span style="color: #f59e0b; margin-right: 6px;">★</span>' if is_starred(article['id'], article['domain']) else ''
+            star = '★ ' if is_starred(article['id'], article['domain']) else ''
             domain_name = get_or_create_formal_domain_name(article['domain']) if article['domain'] else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article['published_at'] else "Recent"
 
             article_links += f'''
-                <a href="{article['resolved_url'] or '#'}" style="display: block; padding: 14px 16px; background-color: #ffffff; border-radius: 6px; text-decoration: none; color: inherit; margin-bottom: 6px; border: 1px solid #e5e7eb;">
-                    <div style="font-size: 15px; font-weight: 600; color: #1f2937; margin-bottom: 6px;">
-                        {star}{article['title']}
-                    </div>
-                    <div style="font-size: 12px; color: #64748b;">{domain_name} • {date_str}</div>
-                </a>
+                <div style="margin-bottom: 8px;">
+                    <a href="{article['resolved_url'] or '#'}" style="font-size: 14px; font-weight: 600; color: #1e40af; text-decoration: none;">{star}{article['title']}</a>
+                    <span style="font-size: 11px; color: #6b7280;"> — {domain_name} • {date_str}</span>
+                </div>
             '''
 
         return f'''
-            <div style="margin-bottom: 20px;">
-                <h3 style="margin: 0 0 12px 0; font-size: 15px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
+            <div style="margin-bottom: 16px;">
+                <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
                 {article_links}
             </div>
         '''
@@ -11474,19 +11472,15 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
         bullet_html = ""
         for bullet in bullets:
-            bullet_html += f'''
-                <div style="background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%); padding: 12px; margin-bottom: 6px; border-radius: 8px; border-left: 4px solid #1e40af; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-                    <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #1f2937;">
-                        {bullet}
-                    </p>
-                </div>
-            '''
+            bullet_html += f'<li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4; color: #374151;">{bullet}</li>'
 
         return f'''
-            <div style="margin-bottom: 24px;">
-                <h2 style="margin: 0 0 8px 0; font-size: 16px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
-                <hr style="border: 0; height: 2px; background-color: #1e40af; margin: 0 0 12px 0;">
-                {bullet_html}
+            <div style="margin-bottom: 16px;">
+                <h2 style="margin: 0 0 6px 0; font-size: 15px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                <hr style="border: 0; height: 1px; background-color: #1e40af; margin: 0 0 8px 0;">
+                <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+                    {bullet_html}
+                </ul>
             </div>
         '''
 
@@ -11526,19 +11520,19 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Header -->
                     <tr>
-                        <td style="padding: 28px 30px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                        <td style="padding: 20px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 65%;">
-                                        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
-                                        <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
-                                        <div style="margin-top: 8px; font-size: 14px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
+                                        <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
+                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
                                     </td>
                                     <td align="right" style="vertical-align: top; width: 35%;">
-                                        <div style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 14px 18px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
-                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; opacity: 0.75;">{current_date}</div>
-                                            <div style="font-size: 24px; font-weight: 700; line-height: 1;">{stock_price}</div>
-                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 700; margin-top: 4px;">{price_change_pct}</div>
+                                        <div style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">
+                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75;">{current_date}</div>
+                                            <div style="font-size: 20px; font-weight: 700; line-height: 1;">{stock_price}</div>
+                                            <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct}</div>
                                         </div>
                                     </td>
                                 </tr>
@@ -11548,12 +11542,12 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Content -->
                     <tr>
-                        <td style="padding: 32px 30px;">
+                        <td style="padding: 24px;">
                             {summary_html}
 
                             <!-- Key Articles -->
-                            <div style="background-color: #f8fafc; padding: 24px; margin: 0 -30px -32px -30px; border-top: 1px solid #e5e7eb;">
-                                <h2 style="margin: 0 0 18px 0; font-size: 16px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Key Articles</h2>
+                            <div style="background-color: #f8fafc; padding: 18px; margin: 0 -24px -24px -24px; border-top: 1px solid #e5e7eb;">
+                                <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Key Articles</h2>
                                 {articles_html}
                             </div>
                         </td>
@@ -11561,7 +11555,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Footer -->
                     <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 20px 30px; color: rgba(255,255,255,0.9);">
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td>

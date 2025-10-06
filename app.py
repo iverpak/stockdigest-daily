@@ -80,6 +80,7 @@ CLAUDE_MAX_CONCURRENCY = int(os.getenv("CLAUDE_MAX_CONCURRENCY", "5"))  # Claude
 PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "5"))
 SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "5"))
 TRIAGE_MAX_CONCURRENCY = int(os.getenv("TRIAGE_MAX_CONCURRENCY", "5"))
+MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))  # Parallel ticker processing
 
 # Global semaphores for concurrent processing
 OPENAI_SEM = BoundedSemaphore(OPENAI_MAX_CONCURRENCY)
@@ -683,21 +684,116 @@ def log_playwright_stats():
             LOG.info(f"PLAYWRIGHT FAILED DOMAINS: {len(failed_domains)} domains still blocked")
 
 # ------------------------------------------------------------------------------
-# Database helpers
+# Database helpers with Connection Pooling
 # ------------------------------------------------------------------------------
-@contextmanager
-def db():
+
+# Global connection pool (initialized at startup)
+DB_POOL = None
+
+def init_connection_pool():
+    """Initialize connection pool at application startup with retry logic"""
+    global DB_POOL
+    if DB_POOL is not None:
+        LOG.warning("Connection pool already initialized")
+        return
+
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL not configured")
-    conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
     try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
+        from psycopg_pool import ConnectionPool
+    except ImportError:
+        LOG.error("❌ psycopg_pool not installed! Install with: pip install psycopg[pool]")
         raise
-    finally:
-        conn.close()
+
+    # Retry logic: 3 attempts with exponential backoff
+    max_attempts = 3
+    backoff_seconds = [2, 5, 10]  # Wait 2s, 5s, 10s between attempts
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            LOG.info(f"🔄 Connection pool initialization attempt {attempt}/{max_attempts}...")
+
+            DB_POOL = ConnectionPool(
+                DATABASE_URL,
+                min_size=5,      # Minimum connections to keep open
+                max_size=45,     # Maximum connections (under 50 DB limit)
+                timeout=30,      # Wait up to 30s for a connection
+                max_idle=300,    # Close idle connections after 5 minutes
+                kwargs={"row_factory": dict_row}
+            )
+
+            # Test the pool with timeout
+            LOG.info("   Testing pool connection...")
+            with DB_POOL.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+
+            LOG.info(f"✅ Database connection pool initialized (min: 5, max: 45) on attempt {attempt}")
+            return  # Success!
+
+        except Exception as e:
+            error_msg = str(e)
+            LOG.error(f"❌ Pool initialization attempt {attempt}/{max_attempts} failed: {error_msg}")
+
+            # Clean up failed pool
+            if DB_POOL is not None:
+                try:
+                    DB_POOL.close()
+                except:
+                    pass
+                DB_POOL = None
+
+            # If not last attempt, wait and retry
+            if attempt < max_attempts:
+                wait_time = backoff_seconds[attempt - 1]
+                LOG.warning(f"⏳ Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                # Last attempt failed - raise exception to fail startup
+                LOG.error(f"💥 CRITICAL: Failed to initialize connection pool after {max_attempts} attempts")
+                LOG.error(f"   Database may be down or unreachable")
+                LOG.error(f"   Last error: {error_msg}")
+                raise RuntimeError(f"Cannot start application without database connection pool (tried {max_attempts} times)")
+
+def close_connection_pool():
+    """Close connection pool at application shutdown"""
+    global DB_POOL
+    if DB_POOL is not None:
+        try:
+            DB_POOL.close()
+            LOG.info("✅ Database connection pool closed")
+            DB_POOL = None
+        except Exception as e:
+            LOG.error(f"❌ Error closing connection pool: {e}")
+
+@contextmanager
+def db():
+    """Get database connection from pool (or create direct connection if pool not initialized)"""
+    global DB_POOL
+
+    # Use pool if available (production)
+    if DB_POOL is not None:
+        with DB_POOL.connection() as conn:
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+    else:
+        # Fallback to direct connection (development/testing)
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL not configured")
+        conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 def ensure_schema():
     """FRESH DATABASE - Complete schema creation for new architecture"""
@@ -11941,7 +12037,7 @@ def get_next_queued_job():
 
             job = cur.fetchone()
             if job:
-                LOG.info(f"📋 Claimed job {job['job_id']} for ticker {job['ticker']}")
+                LOG.info(f"[{job['ticker']}] 📋 Claimed job {job['job_id']} for ticker {job['ticker']}")
             return dict(job) if job else None
 
         except Exception as e:
@@ -11963,11 +12059,11 @@ async def process_ticker_job(job: dict):
     start_time = time.time()
     memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
 
-    LOG.info(f"🚀 [JOB {job_id}] Starting processing for {ticker}")
+    LOG.info(f"[{ticker}] 🚀 [JOB {job_id}] Starting processing for {ticker}")
     LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
 
     try:
-        # NOTE: TICKER_PROCESSING_LOCK is acquired inside cron_ingest/cron_digest
+        # NOTE: TICKER_PROCESSING_LOCK removed from cron_ingest/cron_digest for parallel processing
         # We don't acquire it here to avoid deadlock (lock is not reentrant)
 
         # Check if job was cancelled before starting
@@ -11975,12 +12071,12 @@ async def process_ticker_job(job: dict):
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled before starting, exiting")
+                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled before starting, exiting")
                 return
 
         # PHASE 1: Ingest (already implemented in /cron/ingest)
         update_job_status(job_id, phase='ingest_start', progress=10)
-        LOG.info(f"📥 [JOB {job_id}] Phase 1: Ingest starting...")
+        LOG.info(f"[{ticker}] 📥 [JOB {job_id}] Phase 1: Ingest starting...")
 
         # Call ingest logic (will be defined later in file)
         # We can't import it here due to circular dependency
@@ -11997,7 +12093,7 @@ async def process_ticker_job(job: dict):
 
         # Log detailed ingest stats
         if ingest_result:
-            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete")
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 1: Ingest complete")
             if isinstance(ingest_result, dict):
                 phase1 = ingest_result.get('phase_1_ingest', {})
                 phase2 = ingest_result.get('phase_2_triage', {})
@@ -12013,7 +12109,7 @@ async def process_ticker_job(job: dict):
                 if phase4:
                     LOG.info(f"   Scraping: New({phase4.get('scraped', 0)}) Reused({phase4.get('reused_existing', 0)}) Success({phase4.get('overall_success_rate', 'N/A')})")
         else:
-            LOG.info(f"✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 1: Ingest complete (no detailed stats)")
 
         # Check if cancelled after Phase 1
         # Also re-fetch config to get flagged_articles that were stored during ingest
@@ -12021,7 +12117,7 @@ async def process_ticker_job(job: dict):
             cur.execute("SELECT status, config FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
             job_status = cur.fetchone()
             if job_status and job_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 1, exiting")
+                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Phase 1, exiting")
                 return
 
             # Re-fetch flagged_articles that were stored during ingest phase
@@ -12029,13 +12125,13 @@ async def process_ticker_job(job: dict):
             flagged_article_ids = updated_config.get('flagged_articles', [])
 
             if flagged_article_ids:
-                LOG.info(f"📋 [JOB {job_id}] Retrieved {len(flagged_article_ids)} flagged article IDs from ingest phase")
+                LOG.info(f"[{ticker}] 📋 [JOB {job_id}] Retrieved {len(flagged_article_ids)} flagged article IDs from ingest phase")
             else:
-                LOG.warning(f"⚠️ [JOB {job_id}] No flagged articles found in config after ingest")
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles found in config after ingest")
 
         # PHASE 2: Digest (already implemented in /cron/digest)
         update_job_status(job_id, phase='digest_start', progress=65)
-        LOG.info(f"📧 [JOB {job_id}] Phase 2: Digest starting...")
+        LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Phase 2: Digest starting...")
 
         # Call digest function (defined later in file) - pass flagged articles from triage
         digest_result = await process_digest_phase(
@@ -12049,24 +12145,35 @@ async def process_ticker_job(job: dict):
 
         # Log detailed digest stats
         if digest_result:
-            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete")
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 2: Digest complete")
             if isinstance(digest_result, dict):
                 LOG.info(f"   Status: {digest_result.get('status', 'unknown')}")
                 LOG.info(f"   Articles: {digest_result.get('articles', 0)}")
         else:
-            LOG.info(f"✅ [JOB {job_id}] Phase 2: Digest complete (no detailed stats)")
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 2: Digest complete (no detailed stats)")
 
         # Check if cancelled after Phase 2
         with db() as conn, conn.cursor() as cur:
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
+                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
                 return
+
+        # Log resource usage after digest
+        memory_after_digest = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
+        if DB_POOL:
+            try:
+                pool_stats = DB_POOL.get_stats()
+                LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_digest:.1f}MB, DB Pool={pool_stats.get('pool_size', 0)}/{pool_stats.get('pool_max', 0)} connections")
+            except:
+                LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_digest:.1f}MB")
+        else:
+            LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_digest:.1f}MB")
 
         # EMAIL #3: USER INTELLIGENCE REPORT (no AI analysis, no descriptions)
         update_job_status(job_id, phase='user_report', progress=97)
-        LOG.info(f"📧 [JOB {job_id}] Sending Email #3: User Intelligence Report...")
+        LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3: User Intelligence Report...")
 
         try:
             user_report_result = send_user_intelligence_report(
@@ -12075,13 +12182,13 @@ async def process_ticker_job(job: dict):
                 flagged_article_ids=flagged_article_ids  # Filter to same articles as Email #2
             )
             if user_report_result:
-                LOG.info(f"✅ [JOB {job_id}] Email #3 sent successfully")
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 sent successfully")
                 if isinstance(user_report_result, dict):
                     LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
             else:
-                LOG.warning(f"⚠️ [JOB {job_id}] Email #3 returned no result")
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 returned no result")
         except Exception as e:
-            LOG.error(f"❌ [JOB {job_id}] Email #3 failed: {e}")
+            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #3 failed: {e}")
             # Continue to GitHub commit even if Email #3 fails (Option A)
 
         # Check if cancelled after Phase 3
@@ -12089,13 +12196,13 @@ async def process_ticker_job(job: dict):
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"🚫 [JOB {job_id}] Job cancelled after Email #3, exiting")
+                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Email #3, exiting")
                 return
 
         # COMMIT METADATA TO GITHUB after all emails sent
         # This ensures GitHub commit doesn't trigger server restart before emails are sent
         update_job_status(job_id, phase='commit_metadata', progress=99)
-        LOG.info(f"💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
 
         try:
             # Check if this is the last job in the batch (to control [skip render] flag)
@@ -12125,14 +12232,14 @@ async def process_ticker_job(job: dict):
                 batch_id=batch_id,
                 is_last_job=is_last_job
             )
-            LOG.info(f"✅ [JOB {job_id}] Metadata committed to GitHub successfully")
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Metadata committed to GitHub successfully")
         except Exception as e:
-            LOG.error(f"⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
+            LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
             # Don't fail the job if commit fails - continue processing
 
         # PHASE 3: Complete
         update_job_status(job_id, phase='finalizing', progress=99)
-        LOG.info(f"✅ [JOB {job_id}] Finalizing job...")
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Finalizing job...")
 
         # Calculate final metrics
         duration = time.time() - start_time
@@ -12159,7 +12266,15 @@ async def process_ticker_job(job: dict):
             memory_mb=memory_used
         )
 
-        LOG.info(f"✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
+        # Log final resource stats
+        if DB_POOL:
+            try:
+                pool_stats = DB_POOL.get_stats()
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB, DB pool: {pool_stats.get('pool_size', 0)}/{pool_stats.get('pool_max', 0)})")
+            except:
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
+        else:
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] COMPLETED in {duration:.1f}s (memory: {memory_used:.1f}MB)")
 
         # Record success with circuit breaker
         job_circuit_breaker.record_success()
@@ -12179,7 +12294,7 @@ async def process_ticker_job(job: dict):
         error_trace = traceback.format_exc()
         duration = time.time() - start_time
 
-        LOG.error(f"❌ [JOB {job_id}] FAILED after {duration:.1f}s: {error_msg}")
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] FAILED after {duration:.1f}s: {error_msg}")
         LOG.error(f"   Stacktrace: {error_trace}")
 
         # Determine if this is a system-wide failure
@@ -12212,37 +12327,61 @@ async def process_ticker_job(job: dict):
         raise
 
 def job_worker_loop():
-    """Background worker that polls database for jobs"""
+    """Background worker that polls database for jobs and processes them concurrently"""
     global _job_worker_running
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
-    LOG.info(f"🔧 Job worker started (worker_id: {get_worker_id()})")
+    LOG.info(f"🔧 Job worker started (worker_id: {get_worker_id()}, max_concurrent_jobs: {MAX_CONCURRENT_JOBS})")
 
-    while _job_worker_running:
-        try:
-            # Check circuit breaker
-            if job_circuit_breaker.is_open():
-                LOG.warning("⚠️ Circuit breaker is OPEN, skipping job polling")
-                time.sleep(30)
-                continue
+    # Create thread pool for concurrent job processing
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS, thread_name_prefix="TickerWorker") as executor:
+        active_futures = {}  # Map of future -> job_id
 
-            # Get next job
-            job = get_next_queued_job()
+        while _job_worker_running:
+            try:
+                # Check circuit breaker
+                if job_circuit_breaker.is_open():
+                    LOG.warning("⚠️ Circuit breaker is OPEN, skipping job polling")
+                    time.sleep(30)
+                    continue
 
-            if job:
-                # Process job (blocks until complete)
-                asyncio.run(process_ticker_job(job))
-            else:
-                # No jobs available, sleep and poll again
-                time.sleep(10)
+                # Poll for new jobs if we have capacity
+                while len(active_futures) < MAX_CONCURRENT_JOBS:
+                    job = get_next_queued_job()
 
-        except KeyboardInterrupt:
-            LOG.info("🛑 Job worker received interrupt signal")
-            break
+                    if job:
+                        # Submit job to thread pool
+                        future = executor.submit(asyncio.run, process_ticker_job(job))
+                        active_futures[future] = job['job_id']
+                        LOG.info(f"📤 [JOB {job['job_id']}] Submitted to worker pool ({len(active_futures)}/{MAX_CONCURRENT_JOBS} active)")
+                    else:
+                        # No more jobs available
+                        break
 
-        except Exception as e:
-            LOG.error(f"💥 Job worker error: {e}")
-            LOG.error(traceback.format_exc())
-            time.sleep(30)  # Back off on errors
+                # Wait for at least one job to complete (or timeout)
+                if active_futures:
+                    done_futures, _ = wait(active_futures.keys(), timeout=5, return_when=FIRST_COMPLETED)
+
+                    # Process completed jobs
+                    for done in done_futures:
+                        job_id = active_futures.pop(done)
+                        try:
+                            done.result()  # Raises exception if job failed
+                            LOG.info(f"✅ [JOB {job_id}] Completed successfully ({len(active_futures)}/{MAX_CONCURRENT_JOBS} active)")
+                        except Exception as e:
+                            LOG.error(f"❌ [JOB {job_id}] Failed with exception: {e}")
+                else:
+                    # No active jobs, sleep and poll again
+                    time.sleep(10)
+
+            except KeyboardInterrupt:
+                LOG.info("🛑 Job worker received interrupt signal")
+                break
+
+            except Exception as e:
+                LOG.error(f"💥 Job worker error: {e}")
+                LOG.error(traceback.format_exc())
+                time.sleep(30)  # Back off on errors
 
     LOG.info("🔚 Job worker stopped")
 
@@ -12325,7 +12464,23 @@ async def startup_event():
     LOG.info(f"   Environment: Render.com" if os.getenv('RENDER') else "   Environment: Local")
     LOG.info(f"   Port: {os.getenv('PORT', '10000')}")
     LOG.info(f"   Memory: {memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 'N/A'} MB")
+
+    # Initialize connection pool BEFORE starting job worker
     LOG.info("=" * 80)
+    LOG.info("🔄 Initializing database connection pool...")
+    try:
+        init_connection_pool()
+        LOG.info("=" * 80)
+    except Exception as e:
+        LOG.error("=" * 80)
+        LOG.error(f"💥 STARTUP FAILED: Cannot initialize database connection pool")
+        LOG.error(f"   Error: {e}")
+        LOG.error(f"   Stacktrace: {traceback.format_exc()}")
+        LOG.error("=" * 80)
+        LOG.error("🚨 APPLICATION WILL NOT START - Database connection required for parallel processing")
+        LOG.error("   Check database status and retry")
+        LOG.error("=" * 80)
+        raise  # Re-raise to fail FastAPI startup
     LOG.info("🔧 Initializing job queue system...")
 
     # Reclaim orphaned jobs from previous worker instance (handles Render restarts)
@@ -12428,6 +12583,10 @@ async def shutdown_event():
 
     LOG.info("=" * 80)
     stop_job_worker()
+
+    # Close connection pool
+    LOG.info("🔄 Closing database connection pool...")
+    close_connection_pool()
 
 # ------------------------------------------------------------------------------
 # Pydantic Request Models
@@ -13162,656 +13321,655 @@ async def cron_ingest(
     triage_batch_size: int = Query(default=2, description="Batch size for triage processing")
 ):
     """Enhanced ingest with comprehensive memory monitoring and async batch processing"""
-    async with TICKER_PROCESSING_LOCK:
-        # Set batch size from parameter or environment variable
-        global SCRAPE_BATCH_SIZE
-        if batch_size is not None:
-            SCRAPE_BATCH_SIZE = max(1, min(batch_size, 10))  # Limit between 1-10
-            LOG.info(f"BATCH SIZE OVERRIDE: Using batch_size={SCRAPE_BATCH_SIZE} from API parameter")
+    # Set batch size from parameter or environment variable
+    global SCRAPE_BATCH_SIZE
+    if batch_size is not None:
+        SCRAPE_BATCH_SIZE = max(1, min(batch_size, 10))  # Limit between 1-10
+        LOG.info(f"BATCH SIZE OVERRIDE: Using batch_size={SCRAPE_BATCH_SIZE} from API parameter")
+    
+    start_time = time.time()
+    require_admin(request)
+    ensure_schema()
+    
+    # Initialize memory monitoring with error handling
+    try:
+        memory_monitor.start_monitoring()
+        memory_monitor.take_snapshot("CRON_INGEST_START")
+        LOG.info("=== CRON INGEST STARTING (WITH MEMORY MONITORING & ASYNC BATCHES) ===")
+    except Exception as e:
+        LOG.error(f"Memory monitoring failed to start: {e}")
+        LOG.info("=== CRON INGEST STARTING (WITHOUT MEMORY MONITORING) ===")
+    
+    LOG.info(f"Processing window: {minutes} minutes")
+    LOG.info(f"Target tickers: {tickers or 'ALL'}")
+    LOG.info(f"Batch size: {SCRAPE_BATCH_SIZE}")
+    
+    try:
+        # Reset statistics
+        reset_ingestion_stats()
+        reset_scraping_stats()
+        reset_enhanced_scraping_stats()
+        memory_monitor.take_snapshot("STATS_RESET")
         
-        start_time = time.time()
-        require_admin(request)
-        ensure_schema()
+        # Initialize async semaphores
+        init_async_semaphores()
         
-        # Initialize memory monitoring with error handling
-        try:
-            memory_monitor.start_monitoring()
-            memory_monitor.take_snapshot("CRON_INGEST_START")
-            LOG.info("=== CRON INGEST STARTING (WITH MEMORY MONITORING & ASYNC BATCHES) ===")
-        except Exception as e:
-            LOG.error(f"Memory monitoring failed to start: {e}")
-            LOG.info("=== CRON INGEST STARTING (WITHOUT MEMORY MONITORING) ===")
+        # Calculate dynamic scraping limits for each ticker using enhanced database
+        dynamic_limits = {}
+        if tickers:
+            for ticker in tickers:
+                dynamic_limits[ticker] = calculate_dynamic_scraping_limits(ticker)
+                LOG.info(f"DYNAMIC SCRAPING LIMITS for {ticker}: {dynamic_limits[ticker]}")
         
-        LOG.info(f"Processing window: {minutes} minutes")
-        LOG.info(f"Target tickers: {tickers or 'ALL'}")
-        LOG.info(f"Batch size: {SCRAPE_BATCH_SIZE}")
+        memory_monitor.take_snapshot("LIMITS_CALCULATED")
         
-        try:
-            # Reset statistics
-            reset_ingestion_stats()
-            reset_scraping_stats()
-            reset_enhanced_scraping_stats()
-            memory_monitor.take_snapshot("STATS_RESET")
-            
-            # Initialize async semaphores
-            init_async_semaphores()
-            
-            # Calculate dynamic scraping limits for each ticker using enhanced database
-            dynamic_limits = {}
-            if tickers:
-                for ticker in tickers:
-                    dynamic_limits[ticker] = calculate_dynamic_scraping_limits(ticker)
-                    LOG.info(f"DYNAMIC SCRAPING LIMITS for {ticker}: {dynamic_limits[ticker]}")
-            
-            memory_monitor.take_snapshot("LIMITS_CALCULATED")
-            
-            # PHASE 1: Process feeds for new articles
-            LOG.info("=== PHASE 1: PROCESSING FEEDS (NEW + EXISTING ARTICLES) ===")
-            memory_monitor.take_snapshot("PHASE1_START")
-            
-            # Get feeds using NEW ARCHITECTURE (feeds + ticker_feeds)
-            with resource_cleanup_context("database_connection"):
-                with db() as conn, conn.cursor() as cur:
-                    if tickers:
-                        cur.execute("""
-                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
-                            ORDER BY tf.ticker, tf.category, f.id
-                        """, (tickers,))
-                    else:
-                        cur.execute("""
-                            SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE f.active = TRUE AND tf.active = TRUE
-                            ORDER BY tf.ticker, tf.category, f.id
-                        """)
-                    feeds = list(cur.fetchall())
-            
-            if not feeds:
-                memory_monitor.take_snapshot("NO_FEEDS_FOUND")
-                return {"status": "no_feeds", "message": "No active feeds found"}
-            
-            memory_monitor.take_snapshot("FEEDS_LOADED")
-            
-            # DEBUG: Check what feeds exist before processing (NEW ARCHITECTURE)
-            with resource_cleanup_context("debug_feed_check"):
-                with db() as conn, conn.cursor() as cur:
-                    if tickers:
-                        cur.execute("""
-                            SELECT tf.ticker, tf.category, COUNT(*) as count,
-                                   STRING_AGG(f.name, ' | ') as feed_names
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE tf.ticker = ANY(%s) AND f.active = TRUE AND tf.active = TRUE
-                            GROUP BY tf.ticker, tf.category
-                            ORDER BY tf.ticker, tf.category
-                        """, (tickers,))
-                    else:
-                        cur.execute("""
-                            SELECT tf.ticker, tf.category, COUNT(*) as count,
-                                   STRING_AGG(f.name, ' | ') as feed_names
-                            FROM feeds f
-                            JOIN ticker_feeds tf ON f.id = tf.feed_id
-                            WHERE f.active = TRUE AND tf.active = TRUE
-                            GROUP BY tf.ticker, tf.category
-                            ORDER BY tf.ticker, tf.category
-                        """)
-                    
-                    feed_debug = list(cur.fetchall())
-                    LOG.info("=== FEED DEBUG BEFORE PROCESSING ===")
-                    for feed_row in feed_debug:
-                        LOG.info(f"  {feed_row['ticker']} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
-                    LOG.info("=== END FEED DEBUG ===")
-            
-            ingest_stats = {
-                "total_processed": 0,
-                "total_inserted": 0,
-                "total_duplicates": 0,
-                "total_spam_blocked": 0,
-                "total_limit_reached": 0,
-                "total_insider_trading_blocked": 0,
-                "total_yahoo_rejected": 0
-            }
-
-            # ASYNC FEED PROCESSING: Group feeds by strategy
-            LOG.info("=== ASYNC FEED PROCESSING: Grouping feeds by strategy ===")
-
-            # Group feeds by ticker and category
-            company_feeds = []       # Will be processed: Google→Yahoo sequentially per ticker
-            industry_feeds = []      # Will be processed: All in parallel (Google only)
-            competitor_feeds = []    # Will be processed: Google→Yahoo sequentially per competitor
-
-            for feed in feeds:
-                category = feed.get('category', 'company')
-                if category == 'company':
-                    company_feeds.append(feed)
-                elif category == 'industry':
-                    industry_feeds.append(feed)
-                elif category == 'competitor':
-                    competitor_feeds.append(feed)
-
-            LOG.info(f"Feed groups - Company: {len(company_feeds)}, Industry: {len(industry_feeds)}, Competitor: {len(competitor_feeds)}")
-
-            # Further group company and competitor feeds by ticker for sequential Google→Yahoo processing
-            company_by_ticker = {}  # {ticker: [google_feed, yahoo_feed]}
-            for feed in company_feeds:
-                ticker = feed.get('ticker')
-                if ticker not in company_by_ticker:
-                    company_by_ticker[ticker] = []
-                company_by_ticker[ticker].append(feed)
-
-            # Sort each ticker's feeds: Google first, then Yahoo
-            for ticker in company_by_ticker:
-                company_by_ticker[ticker].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
-
-            # Group competitor feeds by (ticker, competitor_ticker) for sequential processing
-            competitor_by_key = {}  # {(ticker, competitor_ticker): [google_feed, yahoo_feed]}
-            for feed in competitor_feeds:
-                ticker = feed.get('ticker')
-                comp_ticker = feed.get('competitor_ticker', 'unknown')
-                key = (ticker, comp_ticker)
-                if key not in competitor_by_key:
-                    competitor_by_key[key] = []
-                competitor_by_key[key].append(feed)
-
-            # Sort each competitor's feeds: Google first, then Yahoo
-            for key in competitor_by_key:
-                competitor_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
-
-            # Process all groups in parallel using ThreadPoolExecutor
-            LOG.info("=== Starting parallel feed processing with grouped strategy ===")
-            processing_start_time = time.time()
-
-            with ThreadPoolExecutor(max_workers=15) as executor:
-                futures = []
-
-                # Submit company feed groups (sequential Google→Yahoo within each ticker)
-                for ticker, ticker_feeds in company_by_ticker.items():
-                    future = executor.submit(process_feeds_sequentially, ticker_feeds)
-                    futures.append(("company", ticker, future))
-                    LOG.info(f"Submitted company feeds for {ticker}: {len(ticker_feeds)} feeds (Google→Yahoo sequential)")
-
-                # Submit industry feeds (all parallel, Google only)
-                for feed in industry_feeds:
-                    future = executor.submit(ingest_feed_basic_only, feed)
-                    futures.append(("industry", feed.get('search_keyword', 'unknown'), future))
-                LOG.info(f"Submitted {len(industry_feeds)} industry feeds (all parallel)")
-
-                # Submit competitor feed groups (sequential Google→Yahoo within each competitor)
-                for (ticker, comp_ticker), comp_feeds in competitor_by_key.items():
-                    future = executor.submit(process_feeds_sequentially, comp_feeds)
-                    futures.append(("competitor", f"{ticker}/{comp_ticker}", future))
-                    LOG.info(f"Submitted competitor feeds for {ticker}/{comp_ticker}: {len(comp_feeds)} feeds (Google→Yahoo sequential)")
-
-                # Collect results as they complete
-                completed_count = 0
-                for future_type, identifier, future in futures:
-                    try:
-                        stats = future.result()
-                        ingest_stats["total_processed"] += stats["processed"]
-                        ingest_stats["total_inserted"] += stats["inserted"]
-                        ingest_stats["total_duplicates"] += stats["duplicates"]
-                        ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
-                        ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
-                        ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)
-                        ingest_stats["total_yahoo_rejected"] += stats.get("yahoo_rejected", 0)
-
-                        completed_count += 1
-                        LOG.info(f"✅ Completed {future_type} feed group: {identifier} ({completed_count}/{len(futures)})")
-
-                        # Memory monitoring every 5 completions
-                        if completed_count % 5 == 0:
-                            memory_monitor.take_snapshot(f"FEED_PROCESSING_{completed_count}")
-                            current_memory = memory_monitor.get_memory_info()
-                            if current_memory["memory_mb"] > 500:  # 500MB threshold
-                                LOG.warning(f"High memory during feed processing: {current_memory['memory_mb']:.1f}MB")
-                                memory_monitor.force_garbage_collection()
-
-                    except Exception as e:
-                        LOG.error(f"❌ Failed {future_type} feed group: {identifier} - {e}")
-                        continue
-
-            processing_duration = time.time() - processing_start_time
-            LOG.info(f"=== ASYNC FEED PROCESSING COMPLETE: {processing_duration:.2f} seconds ({len(futures)} groups processed) ===")
-            
-            memory_monitor.take_snapshot("PHASE1_FEEDS_COMPLETE")
-            
-            # Now get ALL articles from the timeframe for ticker-specific analysis
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-            articles_by_ticker = {}
-
-            with resource_cleanup_context("database_connection"):
-                with db() as conn, conn.cursor() as cur:
-                    if tickers:
-                        cur.execute("""
-                            WITH ranked_articles AS (
-                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                       a.scraped_content, ta.ai_summary, a.url_hash,
-                                       ROW_NUMBER() OVER (
-                                           PARTITION BY ta.ticker,
-                                               CASE
-                                                   WHEN ta.category = 'company' THEN ta.category
-                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
-                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
-                                               END
-                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
-                                       ) as rn
-                                FROM articles a
-                                JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.ticker = ANY(%s)
-                                AND (a.published_at >= %s OR a.published_at IS NULL)
-                            )
-                            SELECT id, url, resolved_url, title, domain, published_at,
-                                   category, search_keyword, competitor_ticker, ticker,
-                                   scraped_content, ai_summary, url_hash
-                            FROM ranked_articles
-                            WHERE (category = 'company' AND rn <= 50)
-                               OR (category = 'industry' AND rn <= 25)
-                               OR (category = 'competitor' AND rn <= 25)
-                            ORDER BY ticker, category, rn
-                        """, (tickers, cutoff))
-                    else:
-                        cur.execute("""
-                            WITH ranked_articles AS (
-                                SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                       a.scraped_content, ta.ai_summary, a.url_hash,
-                                       ROW_NUMBER() OVER (
-                                           PARTITION BY ta.ticker,
-                                               CASE
-                                                   WHEN ta.category = 'company' THEN ta.category
-                                                   WHEN ta.category = 'industry' THEN ta.search_keyword
-                                                   WHEN ta.category = 'competitor' THEN ta.competitor_ticker
-                                               END
-                                           ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
-                                       ) as rn
-                                FROM articles a
-                                JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE (a.published_at >= %s OR a.published_at IS NULL)
-                            )
-                            SELECT id, url, resolved_url, title, domain, published_at,
-                                   category, search_keyword, competitor_ticker, ticker,
-                                   scraped_content, ai_summary, url_hash
-                            FROM ranked_articles
-                            WHERE (category = 'company' AND rn <= 50)
-                               OR (category = 'industry' AND rn <= 25)
-                               OR (category = 'competitor' AND rn <= 25)
-                            ORDER BY ticker, category, rn
-                        """, (cutoff,))
-
-                    all_articles = list(cur.fetchall())
-
-            memory_monitor.take_snapshot("ARTICLES_LOADED")
-
-            # Log filtering statistics
+        # PHASE 1: Process feeds for new articles
+        LOG.info("=== PHASE 1: PROCESSING FEEDS (NEW + EXISTING ARTICLES) ===")
+        memory_monitor.take_snapshot("PHASE1_START")
+        
+        # Get feeds using NEW ARCHITECTURE (feeds + ticker_feeds)
+        with resource_cleanup_context("database_connection"):
             with db() as conn, conn.cursor() as cur:
                 if tickers:
                     cur.execute("""
-                        SELECT
-                            ta.ticker,
-                            ta.category,
-                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
-                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
-                        FROM ticker_articles ta
-                        JOIN articles a ON ta.article_id = a.id
-                        WHERE ta.ticker = ANY(%s)
-                        GROUP BY ta.ticker, ta.category
-                        ORDER BY ta.ticker, ta.category
-                    """, (cutoff, cutoff, tickers))
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                        FROM feeds f
+                        JOIN ticker_feeds tf ON f.id = tf.feed_id
+                        WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
+                        ORDER BY tf.ticker, tf.category, f.id
+                    """, (tickers,))
                 else:
                     cur.execute("""
-                        SELECT
-                            ta.ticker,
-                            ta.category,
-                            COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
-                            COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
-                        FROM ticker_articles ta
-                        JOIN articles a ON ta.article_id = a.id
-                        GROUP BY ta.ticker, ta.category
-                        ORDER BY ta.ticker, ta.category
-                    """, (cutoff, cutoff))
-
-                filter_stats = cur.fetchall()
-                for stat in filter_stats:
-                    if stat['outside_period'] > 0:
-                        LOG.info(f"📅 [{stat['ticker']}] {stat['category']}: {stat['within_period']} within report period, {stat['outside_period']} excluded (published outside {minutes}min window)")
-
-            # Organize articles by ticker and category
-            for article in all_articles:
-                ticker = article["ticker"]
-                category = article["category"] or "company"
-
-                if ticker not in articles_by_ticker:
-                    articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
-
-                articles_by_ticker[ticker][category].append(article)
-
-            total_articles = len(all_articles)
-            LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
-            memory_monitor.take_snapshot("PHASE1_COMPLETE")
-            
-            # PHASE 2: Pure AI triage
-            LOG.info("=== PHASE 2: PURE AI TRIAGE ===")
-            memory_monitor.take_snapshot("PHASE2_START")
-            triage_results = {}
-            
-            for ticker in articles_by_ticker.keys():
-                LOG.info(f"Running pure AI triage for {ticker}")
-                memory_monitor.take_snapshot(f"TRIAGE_START_{ticker}")
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                        FROM feeds f
+                        JOIN ticker_feeds tf ON f.id = tf.feed_id
+                        WHERE f.active = TRUE AND tf.active = TRUE
+                        ORDER BY tf.ticker, tf.category, f.id
+                    """)
+                feeds = list(cur.fetchall())
+        
+        if not feeds:
+            memory_monitor.take_snapshot("NO_FEEDS_FOUND")
+            return {"status": "no_feeds", "message": "No active feeds found"}
+        
+        memory_monitor.take_snapshot("FEEDS_LOADED")
+        
+        # DEBUG: Check what feeds exist before processing (NEW ARCHITECTURE)
+        with resource_cleanup_context("debug_feed_check"):
+            with db() as conn, conn.cursor() as cur:
+                if tickers:
+                    cur.execute("""
+                        SELECT tf.ticker, tf.category, COUNT(*) as count,
+                               STRING_AGG(f.name, ' | ') as feed_names
+                        FROM feeds f
+                        JOIN ticker_feeds tf ON f.id = tf.feed_id
+                        WHERE tf.ticker = ANY(%s) AND f.active = TRUE AND tf.active = TRUE
+                        GROUP BY tf.ticker, tf.category
+                        ORDER BY tf.ticker, tf.category
+                    """, (tickers,))
+                else:
+                    cur.execute("""
+                        SELECT tf.ticker, tf.category, COUNT(*) as count,
+                               STRING_AGG(f.name, ' | ') as feed_names
+                        FROM feeds f
+                        JOIN ticker_feeds tf ON f.id = tf.feed_id
+                        WHERE f.active = TRUE AND tf.active = TRUE
+                        GROUP BY tf.ticker, tf.category
+                        ORDER BY tf.ticker, tf.category
+                    """)
                 
-                with resource_cleanup_context("ai_triage"):
-                    # Use dual scoring triage (OpenAI + Claude)
-                    selected_results = await perform_ai_triage_with_dual_scoring_async(articles_by_ticker[ticker], ticker, triage_batch_size)
-                    triage_results[ticker] = selected_results
+                feed_debug = list(cur.fetchall())
+                LOG.info("=== FEED DEBUG BEFORE PROCESSING ===")
+                for feed_row in feed_debug:
+                    LOG.info(f"  {feed_row['ticker']} | {feed_row['category']} | Count: {feed_row['count']} | Names: {feed_row['feed_names']}")
+                LOG.info("=== END FEED DEBUG ===")
+        
+        ingest_stats = {
+            "total_processed": 0,
+            "total_inserted": 0,
+            "total_duplicates": 0,
+            "total_spam_blocked": 0,
+            "total_limit_reached": 0,
+            "total_insider_trading_blocked": 0,
+            "total_yahoo_rejected": 0
+        }
 
-                memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")
+        # ASYNC FEED PROCESSING: Group feeds by strategy
+        LOG.info("=== ASYNC FEED PROCESSING: Grouping feeds by strategy ===")
 
-                # Build flagged articles list (will be stored by process_ingest_phase)
-                flagged_articles = []
-                with resource_cleanup_context("database_connection"):
-                    for category, selected_items in selected_results.items():
-                        articles = articles_by_ticker[ticker][category]
-                        LOG.info(f"  Building flagged list for {category}: {len(selected_items)} selected from {len(articles)} articles")
-                        for item in selected_items:
-                            article_idx = item["id"]
-                            if article_idx < len(articles):
-                                article = articles[article_idx]
-                                article_id = article.get("id")
-                                if article_id:
-                                    flagged_articles.append(article_id)
-                                else:
-                                    LOG.warning(f"  Article at index {article_idx} in {category} has no ID!")
+        # Group feeds by ticker and category
+        company_feeds = []       # Will be processed: Google→Yahoo sequentially per ticker
+        industry_feeds = []      # Will be processed: All in parallel (Google only)
+        competitor_feeds = []    # Will be processed: Google→Yahoo sequentially per competitor
 
-                LOG.info(f"✅ Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
-                if flagged_articles:
-                    LOG.info(f"   Sample IDs: {flagged_articles[:5]}...")
+        for feed in feeds:
+            category = feed.get('category', 'company')
+            if category == 'company':
+                company_feeds.append(feed)
+            elif category == 'industry':
+                industry_feeds.append(feed)
+            elif category == 'competitor':
+                competitor_feeds.append(feed)
 
-            memory_monitor.take_snapshot("PHASE2_COMPLETE")
-            
-            # PHASE 3: Send enhanced quick email
-            LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
-            memory_monitor.take_snapshot("PHASE3_START")
+        LOG.info(f"Feed groups - Company: {len(company_feeds)}, Industry: {len(industry_feeds)}, Competitor: {len(competitor_feeds)}")
 
-            with resource_cleanup_context("email_sending"):
-                quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes)
-            
-            LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
-            memory_monitor.take_snapshot("PHASE3_COMPLETE")
-            
-            # PHASE 4: Ticker-specific content scraping and analysis (WITH ASYNC BATCH PROCESSING)
-            LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS (ASYNC BATCHES) ===")
-            memory_monitor.take_snapshot("PHASE4_START")
-            scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
-            
-            # Count total articles to be processed for heartbeat tracking
-            total_articles_to_process = 0
-            for target_ticker in articles_by_ticker.keys():
-                selected = triage_results.get(target_ticker, {})
-                for category in ["company", "industry", "competitor"]:
-                    total_articles_to_process += len(selected.get(category, []))
-            
-            processed_count = 0
-            LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process in batches of {SCRAPE_BATCH_SIZE}")
-            
-            # Track which tickers were successfully processed
-            successfully_processed_tickers = set()
-            
-            for target_ticker in articles_by_ticker.keys():
-                memory_monitor.take_snapshot(f"TICKER_START_{target_ticker}")
-                
-                config = get_ticker_config(target_ticker)
-                metadata = {
-                    "industry_keywords": config.get("industry_keywords", []) if config else [],
-                    "competitors": config.get("competitors", []) if config else []
-                }
-                
-                ticker_success_count = 0
-                selected = triage_results.get(target_ticker, {})
-                
-                # Collect all selected articles for this ticker across categories
-                all_selected_articles = []
-                for category in ["company", "industry", "competitor"]:
-                    category_selected = selected.get(category, [])
-                    
-                    for item in category_selected:
-                        article_idx = item["id"]
-                        if article_idx < len(articles_by_ticker[target_ticker][category]):
-                            article = articles_by_ticker[target_ticker][category][article_idx]
-                            all_selected_articles.append({
-                                "article": article,
-                                "category": category,
-                                "item": item
-                            })
-                
-                # Process articles in batches
-                total_batches = (len(all_selected_articles) + SCRAPE_BATCH_SIZE - 1) // SCRAPE_BATCH_SIZE
-                LOG.info(f"TICKER {target_ticker}: Processing {len(all_selected_articles)} articles in {total_batches} batches of {SCRAPE_BATCH_SIZE}")
-                
-                for batch_num in range(total_batches):
-                    start_idx = batch_num * SCRAPE_BATCH_SIZE
-                    end_idx = min(start_idx + SCRAPE_BATCH_SIZE, len(all_selected_articles))
-                    batch = all_selected_articles[start_idx:end_idx]
-                    
-                    LOG.info(f"TICKER {target_ticker}: Processing batch {batch_num + 1}/{total_batches} ({len(batch)} articles)")
-                    
-                    # Prepare batch for processing
-                    batch_articles = []
-                    batch_categories = []
-                    for selected_article in batch:
-                        batch_articles.append(selected_article["article"])
-                        batch_categories.append(selected_article["category"])
-                    
-                    # Process batch asynchronously with per-article categories
-                    # Add company_name to metadata for AI summarization
-                    metadata["company_name"] = config.get("company_name", target_ticker) if config else target_ticker
-                    try:
-                        batch_results = await process_article_batch_async(
-                            batch_articles,
-                            batch_categories,  # Pass all categories for per-article processing
-                            metadata,
-                            target_ticker
-                        )
-                        
-                        # Update statistics based on batch results
-                        for result in batch_results:
-                            processed_count += 1
-                            
-                            if result["success"]:
-                                ticker_success_count += 1
-                                if result.get("scraped_content") and result.get("ai_summary"):
-                                    scraping_final_stats["scraped"] += 1
-                                    scraping_final_stats["ai_analyzed"] += 1
-                                elif result.get("scraped_content"):
-                                    scraping_final_stats["reused_existing"] += 1
-                            else:
-                                scraping_final_stats["failed"] += 1
-                        
-                        # MEMORY MONITORING: Every batch
-                        elapsed = time.time() - start_time
-                        memory_monitor.take_snapshot(f"BATCH_{batch_num + 1}_COMPLETE")
+        # Further group company and competitor feeds by ticker for sequential Google→Yahoo processing
+        company_by_ticker = {}  # {ticker: [google_feed, yahoo_feed]}
+        for feed in company_feeds:
+            ticker = feed.get('ticker')
+            if ticker not in company_by_ticker:
+                company_by_ticker[ticker] = []
+            company_by_ticker[ticker].append(feed)
+
+        # Sort each ticker's feeds: Google first, then Yahoo
+        for ticker in company_by_ticker:
+            company_by_ticker[ticker].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+
+        # Group competitor feeds by (ticker, competitor_ticker) for sequential processing
+        competitor_by_key = {}  # {(ticker, competitor_ticker): [google_feed, yahoo_feed]}
+        for feed in competitor_feeds:
+            ticker = feed.get('ticker')
+            comp_ticker = feed.get('competitor_ticker', 'unknown')
+            key = (ticker, comp_ticker)
+            if key not in competitor_by_key:
+                competitor_by_key[key] = []
+            competitor_by_key[key].append(feed)
+
+        # Sort each competitor's feeds: Google first, then Yahoo
+        for key in competitor_by_key:
+            competitor_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+
+        # Process all groups in parallel using ThreadPoolExecutor
+        LOG.info("=== Starting parallel feed processing with grouped strategy ===")
+        processing_start_time = time.time()
+
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            futures = []
+
+            # Submit company feed groups (sequential Google→Yahoo within each ticker)
+            for ticker, ticker_feeds in company_by_ticker.items():
+                future = executor.submit(process_feeds_sequentially, ticker_feeds)
+                futures.append(("company", ticker, future))
+                LOG.info(f"Submitted company feeds for {ticker}: {len(ticker_feeds)} feeds (Google→Yahoo sequential)")
+
+            # Submit industry feeds (all parallel, Google only)
+            for feed in industry_feeds:
+                future = executor.submit(ingest_feed_basic_only, feed)
+                futures.append(("industry", feed.get('search_keyword', 'unknown'), future))
+            LOG.info(f"Submitted {len(industry_feeds)} industry feeds (all parallel)")
+
+            # Submit competitor feed groups (sequential Google→Yahoo within each competitor)
+            for (ticker, comp_ticker), comp_feeds in competitor_by_key.items():
+                future = executor.submit(process_feeds_sequentially, comp_feeds)
+                futures.append(("competitor", f"{ticker}/{comp_ticker}", future))
+                LOG.info(f"Submitted competitor feeds for {ticker}/{comp_ticker}: {len(comp_feeds)} feeds (Google→Yahoo sequential)")
+
+            # Collect results as they complete
+            completed_count = 0
+            for future_type, identifier, future in futures:
+                try:
+                    stats = future.result()
+                    ingest_stats["total_processed"] += stats["processed"]
+                    ingest_stats["total_inserted"] += stats["inserted"]
+                    ingest_stats["total_duplicates"] += stats["duplicates"]
+                    ingest_stats["total_spam_blocked"] += stats.get("blocked_spam", 0)
+                    ingest_stats["total_limit_reached"] += stats.get("limit_reached", 0)
+                    ingest_stats["total_insider_trading_blocked"] += stats.get("blocked_insider_trading", 0)
+                    ingest_stats["total_yahoo_rejected"] += stats.get("yahoo_rejected", 0)
+
+                    completed_count += 1
+                    LOG.info(f"✅ Completed {future_type} feed group: {identifier} ({completed_count}/{len(futures)})")
+
+                    # Memory monitoring every 5 completions
+                    if completed_count % 5 == 0:
+                        memory_monitor.take_snapshot(f"FEED_PROCESSING_{completed_count}")
                         current_memory = memory_monitor.get_memory_info()
+                        if current_memory["memory_mb"] > 500:  # 500MB threshold
+                            LOG.warning(f"High memory during feed processing: {current_memory['memory_mb']:.1f}MB")
+                            memory_monitor.force_garbage_collection()
+
+                except Exception as e:
+                    LOG.error(f"❌ Failed {future_type} feed group: {identifier} - {e}")
+                    continue
+
+        processing_duration = time.time() - processing_start_time
+        LOG.info(f"=== ASYNC FEED PROCESSING COMPLETE: {processing_duration:.2f} seconds ({len(futures)} groups processed) ===")
+        
+        memory_monitor.take_snapshot("PHASE1_FEEDS_COMPLETE")
+        
+        # Now get ALL articles from the timeframe for ticker-specific analysis
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        articles_by_ticker = {}
+
+        with resource_cleanup_context("database_connection"):
+            with db() as conn, conn.cursor() as cur:
+                if tickers:
+                    cur.execute("""
+                        WITH ranked_articles AS (
+                            SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                   a.scraped_content, ta.ai_summary, a.url_hash,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY ta.ticker,
+                                           CASE
+                                               WHEN ta.category = 'company' THEN ta.category
+                                               WHEN ta.category = 'industry' THEN ta.search_keyword
+                                               WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                           END
+                                       ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
+                                   ) as rn
+                            FROM articles a
+                            JOIN ticker_articles ta ON a.id = ta.article_id
+                            WHERE ta.ticker = ANY(%s)
+                            AND (a.published_at >= %s OR a.published_at IS NULL)
+                        )
+                        SELECT id, url, resolved_url, title, domain, published_at,
+                               category, search_keyword, competitor_ticker, ticker,
+                               scraped_content, ai_summary, url_hash
+                        FROM ranked_articles
+                        WHERE (category = 'company' AND rn <= 50)
+                           OR (category = 'industry' AND rn <= 25)
+                           OR (category = 'competitor' AND rn <= 25)
+                        ORDER BY ticker, category, rn
+                    """, (tickers, cutoff))
+                else:
+                    cur.execute("""
+                        WITH ranked_articles AS (
+                            SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
+                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                   a.scraped_content, ta.ai_summary, a.url_hash,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY ta.ticker,
+                                           CASE
+                                               WHEN ta.category = 'company' THEN ta.category
+                                               WHEN ta.category = 'industry' THEN ta.search_keyword
+                                               WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                           END
+                                       ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
+                                   ) as rn
+                            FROM articles a
+                            JOIN ticker_articles ta ON a.id = ta.article_id
+                            WHERE (a.published_at >= %s OR a.published_at IS NULL)
+                        )
+                        SELECT id, url, resolved_url, title, domain, published_at,
+                               category, search_keyword, competitor_ticker, ticker,
+                               scraped_content, ai_summary, url_hash
+                        FROM ranked_articles
+                        WHERE (category = 'company' AND rn <= 50)
+                           OR (category = 'industry' AND rn <= 25)
+                           OR (category = 'competitor' AND rn <= 25)
+                        ORDER BY ticker, category, rn
+                    """, (cutoff,))
+
+                all_articles = list(cur.fetchall())
+
+        memory_monitor.take_snapshot("ARTICLES_LOADED")
+
+        # Log filtering statistics
+        with db() as conn, conn.cursor() as cur:
+            if tickers:
+                cur.execute("""
+                    SELECT
+                        ta.ticker,
+                        ta.category,
+                        COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
+                        COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
+                    FROM ticker_articles ta
+                    JOIN articles a ON ta.article_id = a.id
+                    WHERE ta.ticker = ANY(%s)
+                    GROUP BY ta.ticker, ta.category
+                    ORDER BY ta.ticker, ta.category
+                """, (cutoff, cutoff, tickers))
+            else:
+                cur.execute("""
+                    SELECT
+                        ta.ticker,
+                        ta.category,
+                        COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
+                        COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
+                    FROM ticker_articles ta
+                    JOIN articles a ON ta.article_id = a.id
+                    GROUP BY ta.ticker, ta.category
+                    ORDER BY ta.ticker, ta.category
+                """, (cutoff, cutoff))
+
+            filter_stats = cur.fetchall()
+            for stat in filter_stats:
+                if stat['outside_period'] > 0:
+                    LOG.info(f"📅 [{stat['ticker']}] {stat['category']}: {stat['within_period']} within report period, {stat['outside_period']} excluded (published outside {minutes}min window)")
+
+        # Organize articles by ticker and category
+        for article in all_articles:
+            ticker = article["ticker"]
+            category = article["category"] or "company"
+
+            if ticker not in articles_by_ticker:
+                articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
+
+            articles_by_ticker[ticker][category].append(article)
+
+        total_articles = len(all_articles)
+        LOG.info(f"=== PHASE 1 COMPLETE: {ingest_stats['total_inserted']} new + {total_articles} total in timeframe ===")
+        memory_monitor.take_snapshot("PHASE1_COMPLETE")
+        
+        # PHASE 2: Pure AI triage
+        LOG.info("=== PHASE 2: PURE AI TRIAGE ===")
+        memory_monitor.take_snapshot("PHASE2_START")
+        triage_results = {}
+        
+        for ticker in articles_by_ticker.keys():
+            LOG.info(f"Running pure AI triage for {ticker}")
+            memory_monitor.take_snapshot(f"TRIAGE_START_{ticker}")
+            
+            with resource_cleanup_context("ai_triage"):
+                # Use dual scoring triage (OpenAI + Claude)
+                selected_results = await perform_ai_triage_with_dual_scoring_async(articles_by_ticker[ticker], ticker, triage_batch_size)
+                triage_results[ticker] = selected_results
+
+            memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")
+
+            # Build flagged articles list (will be stored by process_ingest_phase)
+            flagged_articles = []
+            with resource_cleanup_context("database_connection"):
+                for category, selected_items in selected_results.items():
+                    articles = articles_by_ticker[ticker][category]
+                    LOG.info(f"  Building flagged list for {category}: {len(selected_items)} selected from {len(articles)} articles")
+                    for item in selected_items:
+                        article_idx = item["id"]
+                        if article_idx < len(articles):
+                            article = articles[article_idx]
+                            article_id = article.get("id")
+                            if article_id:
+                                flagged_articles.append(article_id)
+                            else:
+                                LOG.warning(f"  Article at index {article_idx} in {category} has no ID!")
+
+            LOG.info(f"✅ Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
+            if flagged_articles:
+                LOG.info(f"   Sample IDs: {flagged_articles[:5]}...")
+
+        memory_monitor.take_snapshot("PHASE2_COMPLETE")
+        
+        # PHASE 3: Send enhanced quick email
+        LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
+        memory_monitor.take_snapshot("PHASE3_START")
+
+        with resource_cleanup_context("email_sending"):
+            quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes)
+        
+        LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
+        memory_monitor.take_snapshot("PHASE3_COMPLETE")
+        
+        # PHASE 4: Ticker-specific content scraping and analysis (WITH ASYNC BATCH PROCESSING)
+        LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS (ASYNC BATCHES) ===")
+        memory_monitor.take_snapshot("PHASE4_START")
+        scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
+        
+        # Count total articles to be processed for heartbeat tracking
+        total_articles_to_process = 0
+        for target_ticker in articles_by_ticker.keys():
+            selected = triage_results.get(target_ticker, {})
+            for category in ["company", "industry", "competitor"]:
+                total_articles_to_process += len(selected.get(category, []))
+        
+        processed_count = 0
+        LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process in batches of {SCRAPE_BATCH_SIZE}")
+        
+        # Track which tickers were successfully processed
+        successfully_processed_tickers = set()
+        
+        for target_ticker in articles_by_ticker.keys():
+            memory_monitor.take_snapshot(f"TICKER_START_{target_ticker}")
+            
+            config = get_ticker_config(target_ticker)
+            metadata = {
+                "industry_keywords": config.get("industry_keywords", []) if config else [],
+                "competitors": config.get("competitors", []) if config else []
+            }
+            
+            ticker_success_count = 0
+            selected = triage_results.get(target_ticker, {})
+            
+            # Collect all selected articles for this ticker across categories
+            all_selected_articles = []
+            for category in ["company", "industry", "competitor"]:
+                category_selected = selected.get(category, [])
+                
+                for item in category_selected:
+                    article_idx = item["id"]
+                    if article_idx < len(articles_by_ticker[target_ticker][category]):
+                        article = articles_by_ticker[target_ticker][category][article_idx]
+                        all_selected_articles.append({
+                            "article": article,
+                            "category": category,
+                            "item": item
+                        })
+            
+            # Process articles in batches
+            total_batches = (len(all_selected_articles) + SCRAPE_BATCH_SIZE - 1) // SCRAPE_BATCH_SIZE
+            LOG.info(f"TICKER {target_ticker}: Processing {len(all_selected_articles)} articles in {total_batches} batches of {SCRAPE_BATCH_SIZE}")
+            
+            for batch_num in range(total_batches):
+                start_idx = batch_num * SCRAPE_BATCH_SIZE
+                end_idx = min(start_idx + SCRAPE_BATCH_SIZE, len(all_selected_articles))
+                batch = all_selected_articles[start_idx:end_idx]
+                
+                LOG.info(f"TICKER {target_ticker}: Processing batch {batch_num + 1}/{total_batches} ({len(batch)} articles)")
+                
+                # Prepare batch for processing
+                batch_articles = []
+                batch_categories = []
+                for selected_article in batch:
+                    batch_articles.append(selected_article["article"])
+                    batch_categories.append(selected_article["category"])
+                
+                # Process batch asynchronously with per-article categories
+                # Add company_name to metadata for AI summarization
+                metadata["company_name"] = config.get("company_name", target_ticker) if config else target_ticker
+                try:
+                    batch_results = await process_article_batch_async(
+                        batch_articles,
+                        batch_categories,  # Pass all categories for per-article processing
+                        metadata,
+                        target_ticker
+                    )
+                    
+                    # Update statistics based on batch results
+                    for result in batch_results:
+                        processed_count += 1
                         
-                        LOG.info(f"BATCH COMPLETE: {batch_num + 1}/{total_batches} for {target_ticker} - {processed_count}/{total_articles_to_process} total ({elapsed:.1f}s elapsed)")
-                        LOG.info(f"BATCH STATS: Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
-                        LOG.info(f"MEMORY: {current_memory['memory_mb']:.1f}MB, CPU: {current_memory['cpu_percent']:.1f}%")
-                        
-                        # Force garbage collection if memory gets high
-                        if current_memory["memory_mb"] > 800:  # 800MB threshold
-                            LOG.warning(f"HIGH MEMORY USAGE: {current_memory['memory_mb']:.1f}MB - forcing garbage collection")
-                            gc_stats = memory_monitor.force_garbage_collection()
-                            memory_monitor.take_snapshot(f"BATCH_POST_GC_{batch_num + 1}")
-                            LOG.info(f"GC: Freed {gc_stats['objects_freed']} objects")
-                            
-                    except Exception as e:
-                        LOG.error(f"BATCH PROCESSING ERROR: Batch {batch_num + 1} for {target_ticker} failed: {e}")
-                        # Mark articles in failed batch as failed
-                        for _ in batch:
-                            processed_count += 1
+                        if result["success"]:
+                            ticker_success_count += 1
+                            if result.get("scraped_content") and result.get("ai_summary"):
+                                scraping_final_stats["scraped"] += 1
+                                scraping_final_stats["ai_analyzed"] += 1
+                            elif result.get("scraped_content"):
+                                scraping_final_stats["reused_existing"] += 1
+                        else:
                             scraping_final_stats["failed"] += 1
-                        continue
-                
-                # Track tickers that had successful processing
-                if ticker_success_count > 0:
-                    successfully_processed_tickers.add(target_ticker)
-                
-                LOG.info(f"TICKER {target_ticker} COMPLETE: {ticker_success_count} successful articles")
-                memory_monitor.take_snapshot(f"TICKER_COMPLETE_{target_ticker}")
+                    
+                    # MEMORY MONITORING: Every batch
+                    elapsed = time.time() - start_time
+                    memory_monitor.take_snapshot(f"BATCH_{batch_num + 1}_COMPLETE")
+                    current_memory = memory_monitor.get_memory_info()
+                    
+                    LOG.info(f"BATCH COMPLETE: {batch_num + 1}/{total_batches} for {target_ticker} - {processed_count}/{total_articles_to_process} total ({elapsed:.1f}s elapsed)")
+                    LOG.info(f"BATCH STATS: Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
+                    LOG.info(f"MEMORY: {current_memory['memory_mb']:.1f}MB, CPU: {current_memory['cpu_percent']:.1f}%")
+                    
+                    # Force garbage collection if memory gets high
+                    if current_memory["memory_mb"] > 800:  # 800MB threshold
+                        LOG.warning(f"HIGH MEMORY USAGE: {current_memory['memory_mb']:.1f}MB - forcing garbage collection")
+                        gc_stats = memory_monitor.force_garbage_collection()
+                        memory_monitor.take_snapshot(f"BATCH_POST_GC_{batch_num + 1}")
+                        LOG.info(f"GC: Freed {gc_stats['objects_freed']} objects")
+                        
+                except Exception as e:
+                    LOG.error(f"BATCH PROCESSING ERROR: Batch {batch_num + 1} for {target_ticker} failed: {e}")
+                    # Mark articles in failed batch as failed
+                    for _ in batch:
+                        processed_count += 1
+                        scraping_final_stats["failed"] += 1
+                    continue
             
-            # Final heartbeat before completion
-            elapsed = time.time() - start_time
-            LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in batches in {elapsed:.1f}s")
-            LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
-            memory_monitor.take_snapshot("PHASE4_COMPLETE")
+            # Track tickers that had successful processing
+            if ticker_success_count > 0:
+                successfully_processed_tickers.add(target_ticker)
+            
+            LOG.info(f"TICKER {target_ticker} COMPLETE: {ticker_success_count} successful articles")
+            memory_monitor.take_snapshot(f"TICKER_COMPLETE_{target_ticker}")
+        
+        # Final heartbeat before completion
+        elapsed = time.time() - start_time
+        LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in batches in {elapsed:.1f}s")
+        LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
+        memory_monitor.take_snapshot("PHASE4_COMPLETE")
 
-            # Consolidated scraping statistics
-            total_attempts = enhanced_scraping_stats["total_attempts"]
-            if total_attempts > 0:
-                total_success = (enhanced_scraping_stats["requests_success"] +
-                                enhanced_scraping_stats["playwright_success"] +
-                                enhanced_scraping_stats.get("scrapfly_success", 0))
-                overall_rate = (total_success / total_attempts) * 100
+        # Consolidated scraping statistics
+        total_attempts = enhanced_scraping_stats["total_attempts"]
+        if total_attempts > 0:
+            total_success = (enhanced_scraping_stats["requests_success"] +
+                            enhanced_scraping_stats["playwright_success"] +
+                            enhanced_scraping_stats.get("scrapfly_success", 0))
+            overall_rate = (total_success / total_attempts) * 100
 
-                requests_attempts = enhanced_scraping_stats["by_method"]["requests"]["attempts"]
-                requests_success = enhanced_scraping_stats["by_method"]["requests"]["successes"]
-                requests_rate = (requests_success / requests_attempts * 100) if requests_attempts > 0 else 0
+            requests_attempts = enhanced_scraping_stats["by_method"]["requests"]["attempts"]
+            requests_success = enhanced_scraping_stats["by_method"]["requests"]["successes"]
+            requests_rate = (requests_success / requests_attempts * 100) if requests_attempts > 0 else 0
 
-                playwright_attempts = enhanced_scraping_stats["by_method"]["playwright"]["attempts"]
-                playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
-                playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
+            playwright_attempts = enhanced_scraping_stats["by_method"]["playwright"]["attempts"]
+            playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
+            playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
 
-                scrapfly_attempts = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("attempts", 0)
-                scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
-                scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
+            scrapfly_attempts = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("attempts", 0)
+            scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
+            scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
 
-                LOG.info("=" * 60)
-                LOG.info("SCRAPING SUCCESS RATES")
-                LOG.info("=" * 60)
-                LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
-                LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
-                LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
-                LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
-                if scrapfly_stats["requests_made"] > 0:
-                    LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
-                LOG.info("=" * 60)
-            
-            # CRITICAL: Final cleanup before returning response
-            LOG.info("=== PERFORMING FINAL CLEANUP ===")
-            memory_monitor.take_snapshot("BEFORE_FINAL_CLEANUP")
-            
-            try:
-                await full_resource_cleanup()  # Single call with await
-                memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
-                LOG.info("=== FINAL CLEANUP COMPLETE ===")
-            except Exception as cleanup_error:
-                LOG.error(f"Error during final cleanup: {cleanup_error}")
-                memory_monitor.take_snapshot("CLEANUP_ERROR")
-            
-            processing_time = time.time() - start_time
-            LOG.info(f"=== CRON INGEST COMPLETE - Total time: {processing_time:.1f}s ===")
-            
-            # Calculate scraping stats
-            total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
-            total_scraping_success = (enhanced_scraping_stats["requests_success"] +
-                                     enhanced_scraping_stats["playwright_success"] +
-                                     enhanced_scraping_stats.get("scrapfly_success", 0))
-            overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
-            
-            # Stop memory monitoring and get summary
-            memory_summary = memory_monitor.stop_monitoring()
-            
-            # Prepare response with monitoring data
-            response = {
-                "status": "completed",
-                "processing_time_seconds": round(processing_time, 1),
-                "workflow": "enhanced_ticker_reference_with_async_batch_processing",
-                "batch_size_used": SCRAPE_BATCH_SIZE,
+            LOG.info("=" * 60)
+            LOG.info("SCRAPING SUCCESS RATES")
+            LOG.info("=" * 60)
+            LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
+            LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
+            LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
+            LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
+            if scrapfly_stats["requests_made"] > 0:
+                LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
+            LOG.info("=" * 60)
+        
+        # CRITICAL: Final cleanup before returning response
+        LOG.info("=== PERFORMING FINAL CLEANUP ===")
+        memory_monitor.take_snapshot("BEFORE_FINAL_CLEANUP")
+        
+        try:
+            await full_resource_cleanup()  # Single call with await
+            memory_monitor.take_snapshot("AFTER_FINAL_CLEANUP")
+            LOG.info("=== FINAL CLEANUP COMPLETE ===")
+        except Exception as cleanup_error:
+            LOG.error(f"Error during final cleanup: {cleanup_error}")
+            memory_monitor.take_snapshot("CLEANUP_ERROR")
+        
+        processing_time = time.time() - start_time
+        LOG.info(f"=== CRON INGEST COMPLETE - Total time: {processing_time:.1f}s ===")
+        
+        # Calculate scraping stats
+        total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
+        total_scraping_success = (enhanced_scraping_stats["requests_success"] +
+                                 enhanced_scraping_stats["playwright_success"] +
+                                 enhanced_scraping_stats.get("scrapfly_success", 0))
+        overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
+        
+        # Stop memory monitoring and get summary
+        memory_summary = memory_monitor.stop_monitoring()
+        
+        # Prepare response with monitoring data
+        response = {
+            "status": "completed",
+            "processing_time_seconds": round(processing_time, 1),
+            "workflow": "enhanced_ticker_reference_with_async_batch_processing",
+            "batch_size_used": SCRAPE_BATCH_SIZE,
 
-                "phase_1_ingest": {
-                    "total_processed": ingest_stats["total_processed"],
-                    "total_inserted": ingest_stats["total_inserted"],
-                    "total_duplicates": ingest_stats["total_duplicates"],
-                    "total_spam_blocked": ingest_stats["total_spam_blocked"],
-                    "total_limit_reached": ingest_stats["total_limit_reached"],
-                    "total_insider_trading_blocked": ingest_stats["total_insider_trading_blocked"],
-                    "total_yahoo_rejected": ingest_stats["total_yahoo_rejected"],
-                    "total_articles_in_timeframe": total_articles
+            "phase_1_ingest": {
+                "total_processed": ingest_stats["total_processed"],
+                "total_inserted": ingest_stats["total_inserted"],
+                "total_duplicates": ingest_stats["total_duplicates"],
+                "total_spam_blocked": ingest_stats["total_spam_blocked"],
+                "total_limit_reached": ingest_stats["total_limit_reached"],
+                "total_insider_trading_blocked": ingest_stats["total_insider_trading_blocked"],
+                "total_yahoo_rejected": ingest_stats["total_yahoo_rejected"],
+                "total_articles_in_timeframe": total_articles
+            },
+            "phase_2_triage": {
+                "type": "pure_ai_triage_only",
+                "tickers_processed": len(triage_results),
+                "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()},
+                "flagged_articles": flagged_articles  # Article IDs flagged during triage
+            },
+            "phase_3_quick_email": {"sent": quick_email_sent},
+            "phase_4_async_batch_scraping": {
+                **scraping_final_stats,
+                "overall_success_rate": f"{overall_scraping_rate:.1f}%",
+                "tier_breakdown": {
+                    "requests_success": enhanced_scraping_stats["requests_success"],
+                    "playwright_success": enhanced_scraping_stats["playwright_success"],
+                    "scrapfly_success": enhanced_scraping_stats.get("scrapfly_success", 0),
+                    "total_attempts": total_scraping_attempts
                 },
-                "phase_2_triage": {
-                    "type": "pure_ai_triage_only",
-                    "tickers_processed": len(triage_results),
-                    "selections_by_ticker": {k: {cat: len(items) for cat, items in v.items()} for k, v in triage_results.items()},
-                    "flagged_articles": flagged_articles  # Article IDs flagged during triage
-                },
-                "phase_3_quick_email": {"sent": quick_email_sent},
-                "phase_4_async_batch_scraping": {
-                    **scraping_final_stats,
-                    "overall_success_rate": f"{overall_scraping_rate:.1f}%",
-                    "tier_breakdown": {
-                        "requests_success": enhanced_scraping_stats["requests_success"],
-                        "playwright_success": enhanced_scraping_stats["playwright_success"],
-                        "scrapfly_success": enhanced_scraping_stats.get("scrapfly_success", 0),
-                        "total_attempts": total_scraping_attempts
-                    },
-                    "scrapfly_cost": f"${scrapfly_stats['cost_estimate']:.3f}",
-                    "dynamic_limits": dynamic_limits,
-                    "batch_processing": {
-                        "batch_size": SCRAPE_BATCH_SIZE,
-                        "total_articles": total_articles_to_process,
-                        "articles_per_batch": SCRAPE_BATCH_SIZE,
-                        "estimated_batches": total_articles_to_process // SCRAPE_BATCH_SIZE if total_articles_to_process > 0 else 0
-                    }
-                },
-                "successfully_processed_tickers": list(successfully_processed_tickers),
-                "message": f"Processing completed successfully with async batch processing (batch_size={SCRAPE_BATCH_SIZE})",
-                "github_sync_required": len(successfully_processed_tickers) > 0,
-
-                # Memory monitoring data
-                "memory_monitoring": {
-                    "enabled": True,
-                    "total_snapshots": len(memory_monitor.snapshots),
-                    "memory_summary": memory_summary,
-                    "peak_memory_mb": max([s.get("memory_mb", 0) for s in memory_monitor.snapshots]) if memory_monitor.snapshots else 0,
-                    "final_memory_mb": memory_summary.get("final_memory_mb") if memory_summary else None,
-                    "total_memory_change_mb": memory_summary.get("total_change_mb") if memory_summary else None
+                "scrapfly_cost": f"${scrapfly_stats['cost_estimate']:.3f}",
+                "dynamic_limits": dynamic_limits,
+                "batch_processing": {
+                    "batch_size": SCRAPE_BATCH_SIZE,
+                    "total_articles": total_articles_to_process,
+                    "articles_per_batch": SCRAPE_BATCH_SIZE,
+                    "estimated_batches": total_articles_to_process // SCRAPE_BATCH_SIZE if total_articles_to_process > 0 else 0
                 }
+            },
+            "successfully_processed_tickers": list(successfully_processed_tickers),
+            "message": f"Processing completed successfully with async batch processing (batch_size={SCRAPE_BATCH_SIZE})",
+            "github_sync_required": len(successfully_processed_tickers) > 0,
+
+            # Memory monitoring data
+            "memory_monitoring": {
+                "enabled": True,
+                "total_snapshots": len(memory_monitor.snapshots),
+                "memory_summary": memory_summary,
+                "peak_memory_mb": max([s.get("memory_mb", 0) for s in memory_monitor.snapshots]) if memory_monitor.snapshots else 0,
+                "final_memory_mb": memory_summary.get("final_memory_mb") if memory_summary else None,
+                "total_memory_change_mb": memory_summary.get("total_change_mb") if memory_summary else None
             }
-            
-            return response
-            
-        except Exception as e:
-            # CRITICAL ERROR HANDLING WITH MEMORY SNAPSHOT
-            LOG.error(f"CRITICAL ERROR in cron_ingest: {str(e)}")
-            memory_monitor.take_snapshot("CRITICAL_ERROR")
-            
-            # Get detailed memory info at crash
-            current_memory = memory_monitor.get_memory_info()
-            tracemalloc_info = memory_monitor.get_tracemalloc_top(20)
-            
-            LOG.error(f"MEMORY AT CRASH: {current_memory}")
-            LOG.error(f"TOP MEMORY ALLOCATIONS AT CRASH: {tracemalloc_info}")
-            
-            # Emergency cleanup
-            try:
-                cleanup_result = await full_resource_cleanup()
-                LOG.info(f"Emergency cleanup completed: {cleanup_result}")
-            except Exception as cleanup_error:
-                LOG.error(f"Error during emergency cleanup: {cleanup_error}")
-            
-            return {
-                "status": "critical_error",
-                "message": str(e),
-                "batch_size_used": SCRAPE_BATCH_SIZE,
-                "memory_monitoring": {
-                    "snapshots_taken": len(memory_monitor.snapshots),
-                    "memory_at_crash": current_memory,
-                    "top_allocations": tracemalloc_info[:5],  # Top 5 memory allocations
-                    "error_occurred": True
-                }
+        }
+        
+        return response
+        
+    except Exception as e:
+        # CRITICAL ERROR HANDLING WITH MEMORY SNAPSHOT
+        LOG.error(f"CRITICAL ERROR in cron_ingest: {str(e)}")
+        memory_monitor.take_snapshot("CRITICAL_ERROR")
+        
+        # Get detailed memory info at crash
+        current_memory = memory_monitor.get_memory_info()
+        tracemalloc_info = memory_monitor.get_tracemalloc_top(20)
+        
+        LOG.error(f"MEMORY AT CRASH: {current_memory}")
+        LOG.error(f"TOP MEMORY ALLOCATIONS AT CRASH: {tracemalloc_info}")
+        
+        # Emergency cleanup
+        try:
+            cleanup_result = await full_resource_cleanup()
+            LOG.info(f"Emergency cleanup completed: {cleanup_result}")
+        except Exception as cleanup_error:
+            LOG.error(f"Error during emergency cleanup: {cleanup_error}")
+        
+        return {
+            "status": "critical_error",
+            "message": str(e),
+            "batch_size_used": SCRAPE_BATCH_SIZE,
+            "memory_monitoring": {
+                "snapshots_taken": len(memory_monitor.snapshots),
+                "memory_at_crash": current_memory,
+                "top_allocations": tracemalloc_info[:5],  # Top 5 memory allocations
+                "error_occurred": True
             }
+        }
 
 def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, category: str):
     """Helper to update statistics"""
@@ -13841,42 +13999,41 @@ async def cron_digest(
     minutes: int = Query(default=1440, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers for digest")
 ):
-    async with TICKER_PROCESSING_LOCK:
-        """Generate and send email digest with content scraping data and AI summaries"""
-        require_admin(request)
-        ensure_schema()
+    """Generate and send email digest with content scraping data and AI summaries"""
+    require_admin(request)
+    ensure_schema()
 
-        try:
-            LOG.info(f"=== DIGEST GENERATION STARTING ===")
-            LOG.info(f"Time window: {minutes} minutes, Tickers: {tickers}")
+    try:
+        LOG.info(f"=== DIGEST GENERATION STARTING ===")
+        LOG.info(f"Time window: {minutes} minutes, Tickers: {tickers}")
 
-            # Use the existing enhanced digest function that sends emails
-            LOG.info("Calling enhanced digest function...")
-            result = fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
+        # Use the existing enhanced digest function that sends emails
+        LOG.info("Calling enhanced digest function...")
+        result = fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
 
-            # The function returns a detailed result dict, let's pass it through with additional metadata
-            if isinstance(result, dict):
-                result["minutes"] = minutes
-                result["requested_tickers"] = tickers
-                LOG.info(f"Digest result: {result.get('status', 'unknown')} - {result.get('articles', 0)} articles")
-                return result
-            else:
-                LOG.error(f"Unexpected result type from digest function: {type(result)}")
-                return {
-                    "status": "error",
-                    "message": "Unexpected result from digest generation",
-                    "minutes": minutes,
-                    "tickers": tickers
-                }
-
-        except Exception as e:
-            LOG.error(f"Digest generation failed: {e}")
-            LOG.error(f"Error details: {traceback.format_exc()}")
+        # The function returns a detailed result dict, let's pass it through with additional metadata
+        if isinstance(result, dict):
+            result["minutes"] = minutes
+            result["requested_tickers"] = tickers
+            LOG.info(f"Digest result: {result.get('status', 'unknown')} - {result.get('articles', 0)} articles")
+            return result
+        else:
+            LOG.error(f"Unexpected result type from digest function: {type(result)}")
             return {
                 "status": "error",
-                "message": str(e),
-                "tickers": tickers,
-                "minutes": minutes
+                "message": "Unexpected result from digest generation",
+                "minutes": minutes,
+                "tickers": tickers
+            }
+
+    except Exception as e:
+        LOG.error(f"Digest generation failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "tickers": tickers,
+            "minutes": minutes
             }
         
 # FIXED: Updated endpoint with proper request body handling

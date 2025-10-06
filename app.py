@@ -11183,94 +11183,316 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
     }
 
 
+def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
+    """
+    Parse executive summary text into sections by emoji headers.
+    Returns dict: {section_name: [bullet1, bullet2, ...]}
+    """
+    sections = {
+        "major_developments": [],
+        "financial_operational": [],
+        "risk_factors": [],
+        "wall_street": [],
+        "competitive_industry": [],
+        "upcoming_catalysts": []
+    }
+
+    if not summary_text:
+        return sections
+
+    # Split by emoji headers
+    section_markers = [
+        ("🔴 MAJOR DEVELOPMENTS", "major_developments"),
+        ("📊 FINANCIAL/OPERATIONAL PERFORMANCE", "financial_operational"),
+        ("⚠️ RISK FACTORS", "risk_factors"),
+        ("📈 WALL STREET SENTIMENT", "wall_street"),
+        ("⚡ COMPETITIVE/INDUSTRY DYNAMICS", "competitive_industry"),
+        ("📅 UPCOMING CATALYSTS", "upcoming_catalysts")
+    ]
+
+    current_section = None
+    for line in summary_text.split('\n'):
+        line = line.strip()
+
+        # Check if line is a section header
+        for marker, section_key in section_markers:
+            if line.startswith(marker):
+                current_section = section_key
+                break
+        else:
+            # Line is content, not a header
+            if current_section and line.startswith('•'):
+                # Extract bullet text
+                bullet_text = line[1:].strip()  # Remove bullet point
+                if bullet_text:
+                    sections[current_section].append(bullet_text)
+
+    return sections
+
+
 def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                    flagged_article_ids: List[int] = None) -> Dict:
     """
-    Email #3: Stock Intelligence - Final user-facing report
-    - Same flagged articles as Content QA email
-    - No AI analysis boxes
-    - No description boxes
-    - Clean presentation for end users
-    - Uses executive summary from database
+    Email #3: Premium Stock Intelligence Report (Single Ticker)
+    - Modern HTML design with inline styles
+    - Stock price card in header
+    - Parsed executive summary sections
+    - Compressed article links
+    - Star indicators for FLAGGED + QUALITY articles
     """
-    LOG.info("=== EMAIL #3: STOCK INTELLIGENCE (USER REPORT) ===")
-    if flagged_article_ids:
-        LOG.info(f"Filtering to {len(flagged_article_ids)} flagged articles from triage")
+    LOG.info("=== EMAIL #3: PREMIUM STOCK INTELLIGENCE (USER REPORT) ===")
 
-    # Fetch executive summaries from database for each ticker
-    executive_summaries = {}
-    if tickers:
-        with db() as conn, conn.cursor() as cur:
-            for ticker in tickers:
-                cur.execute("""
-                    SELECT summary_text FROM executive_summaries
-                    WHERE ticker = %s AND summary_date = CURRENT_DATE
-                    ORDER BY generated_at DESC LIMIT 1
-                """, (ticker,))
-                result = cur.fetchone()
-                if result:
-                    executive_summaries[ticker] = result['summary_text']
-                    LOG.info(f"Retrieved executive summary for {ticker} from database ({len(result['summary_text'])} chars)")
-                else:
-                    LOG.warning(f"No executive summary found in database for {ticker}")
+    # Single ticker only
+    if not tickers or len(tickers) == 0:
+        return {"status": "error", "message": "No ticker specified"}
 
-    # Fetch articles with AI/descriptions hidden
-    result = fetch_digest_articles_with_enhanced_content(
-        hours=hours,
-        tickers=tickers,
-        show_ai_analysis=False,   # Hide AI analysis boxes
-        show_descriptions=False,  # Hide description boxes
-        flagged_article_ids=flagged_article_ids  # Filter to flagged articles only
-    )
+    ticker = tickers[0]  # Take first ticker only
+    LOG.info(f"Generating premium report for {ticker}")
 
-    # If fetch returns dict with status (error case), return it
-    if isinstance(result, dict) and "status" in result:
-        return result
+    # Fetch ticker config
+    config = get_ticker_config(ticker)
+    if not config:
+        return {"status": "error", "message": f"No config found for {ticker}"}
 
-    # Get articles for sending
-    articles_by_ticker = result if isinstance(result, dict) else {}
+    company_name = config.get("company_name", ticker)
+    sector = config.get("sector", "Financial Services")
 
-    if not articles_by_ticker:
-        return {
-            "status": "no_articles",
-            "message": "No articles to send in user report",
-            "tickers": tickers or "all"
-        }
+    # Fetch stock price from ticker_reference (cached)
+    stock_price = "$0.00"
+    price_change_pct = "+0.00%"
+    price_change_color = "#4ade80"  # Green default
 
-    # Build HTML (same as Content QA but without AI/descriptions)
-    days = int(hours / 24) if hours >= 24 else 0
-    html = build_enhanced_digest_html(
-        articles_by_ticker,
-        days if days > 0 else 1,
-        show_ai_analysis=False,
-        show_descriptions=False,
-        flagged_article_ids=flagged_article_ids
-    )
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT financial_last_price, financial_price_change_pct
+            FROM ticker_reference
+            WHERE ticker = %s
+        """, (ticker,))
+        price_data = cur.fetchone()
 
-    # Create subject line for Email #3 - UPDATED HEADER
-    ticker_display_list = []
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        company_name = config.get("company_name", ticker) if config else ticker
-        ticker_display_list.append(f"{company_name} ({ticker})")
-    ticker_list = ', '.join(ticker_display_list)
+        if price_data and price_data['financial_last_price']:
+            stock_price = f"${price_data['financial_last_price']:.2f}"
+            if price_data['financial_price_change_pct'] is not None:
+                pct = price_data['financial_price_change_pct']
+                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
 
-    total_articles = sum(
-        sum(len(arts) for arts in categories.values())
-        for categories in articles_by_ticker.values()
-    )
+    # Fetch executive summary from database
+    executive_summary_text = ""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT summary_text FROM executive_summaries
+            WHERE ticker = %s AND summary_date = CURRENT_DATE
+            ORDER BY generated_at DESC LIMIT 1
+        """, (ticker,))
+        result = cur.fetchone()
+        if result:
+            executive_summary_text = result['summary_text']
+            LOG.info(f"Retrieved executive summary for {ticker} ({len(executive_summary_text)} chars)")
+        else:
+            LOG.warning(f"No executive summary found for {ticker}")
 
-    subject = f"📊 Stock Intelligence: {ticker_list} - {total_articles} articles"
+    # Parse executive summary into sections
+    sections = parse_executive_summary_sections(executive_summary_text)
+
+    # Fetch flagged articles
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    articles_by_category = {"company": [], "industry": [], "competitor": []}
+
+    with db() as conn, conn.cursor() as cur:
+        if flagged_article_ids:
+            cur.execute("""
+                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
+                       ta.category, ta.search_keyword, ta.competitor_ticker
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND a.id = ANY(%s)
+                AND (a.published_at >= %s OR a.published_at IS NULL)
+                ORDER BY a.published_at DESC NULLS LAST
+            """, (ticker, flagged_article_ids, cutoff))
+        else:
+            cur.execute("""
+                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
+                       ta.category, ta.search_keyword, ta.competitor_ticker
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND (a.published_at >= %s OR a.published_at IS NULL)
+                ORDER BY a.published_at DESC NULLS LAST
+            """, (ticker, cutoff))
+
+        articles = cur.fetchall()
+        for article in articles:
+            category = article['category'] or 'company'
+            if category in articles_by_category:
+                articles_by_category[category].append(article)
+
+    # Check if FLAGGED + QUALITY for star logic
+    def is_starred(article_id, domain):
+        is_flagged = article_id in (flagged_article_ids or [])
+        is_quality = normalize_domain(domain) in QUALITY_DOMAINS
+        return is_flagged and is_quality
+
+    # Build article sections HTML
+    def build_article_section(title, articles, category_label):
+        if not articles:
+            return ""
+
+        article_links = ""
+        for article in articles:
+            star = '<span style="color: #f59e0b; margin-right: 6px;">★</span>' if is_starred(article['id'], article['domain']) else ''
+            domain_name = get_or_create_formal_domain_name(article['domain']) if article['domain'] else "Unknown Source"
+            date_str = format_date_short(article['published_at']) if article['published_at'] else "Recent"
+
+            article_links += f'''
+                <a href="{article['resolved_url'] or '#'}" style="display: block; padding: 14px 16px; background-color: #ffffff; border-radius: 6px; text-decoration: none; color: inherit; margin-bottom: 6px; border: 1px solid #e5e7eb;">
+                    <div style="font-size: 15px; font-weight: 600; color: #1f2937; margin-bottom: 6px;">
+                        {star}{article['title']}
+                    </div>
+                    <div style="font-size: 12px; color: #64748b;">{domain_name} • {date_str}</div>
+                </a>
+            '''
+
+        return f'''
+            <div style="margin-bottom: 28px;">
+                <h3 style="margin: 0 0 16px 0; font-size: 15px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
+                {article_links}
+            </div>
+        '''
+
+    # Build executive summary section HTML
+    def build_summary_section(title, bullets):
+        if not bullets:
+            return ""
+
+        bullet_html = ""
+        for bullet in bullets:
+            bullet_html += f'''
+                <div style="background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%); padding: 18px; margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #1e40af; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                    <p style="margin: 0 0 10px 0; font-size: 15px; line-height: 1.6; color: #1f2937;">
+                        {bullet}
+                    </p>
+                </div>
+            '''
+
+        return f'''
+            <div style="margin-bottom: 36px;">
+                <div style="display: table; width: 100%; margin-bottom: 18px;">
+                    <div style="display: table-cell; vertical-align: middle;">
+                        <h2 style="margin: 0; font-size: 18px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                    </div>
+                    <div style="display: table-cell; vertical-align: middle; width: 100%;">
+                        <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, transparent 100%); margin-left: 16px;"></div>
+                    </div>
+                </div>
+                {bullet_html}
+            </div>
+        '''
+
+    # Current date
+    current_date = datetime.now().strftime("%b %d, %Y")
+
+    # Build full HTML
+    summary_html = ""
+    summary_html += build_summary_section("Major Developments", sections["major_developments"])
+    summary_html += build_summary_section("Financial/Operational Performance", sections["financial_operational"])
+    summary_html += build_summary_section("Risk Factors", sections["risk_factors"])
+    summary_html += build_summary_section("Wall Street Sentiment", sections["wall_street"])
+    summary_html += build_summary_section("Competitive/Industry Dynamics", sections["competitive_industry"])
+    summary_html += build_summary_section("Upcoming Catalysts", sections["upcoming_catalysts"])
+
+    articles_html = ""
+    articles_html += build_article_section("COMPANY", articles_by_category['company'], "company")
+    articles_html += build_article_section("INDUSTRY", articles_by_category['industry'], "industry")
+    articles_html += build_article_section("COMPETITORS", articles_by_category['competitor'], "competitor")
+
+    total_articles = sum(len(arts) for arts in articles_by_category.values())
+
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{ticker} Intelligence Report</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+
+                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: hidden;">
+
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 36px 40px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="width: 65%;">
+                                        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
+                                        <h1 style="margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
+                                        <div style="margin-top: 10px; font-size: 14px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
+                                    </td>
+                                    <td align="right" style="vertical-align: top; width: 35%;">
+                                        <div style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 16px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
+                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; opacity: 0.75;">{current_date}</div>
+                                            <div style="font-size: 28px; font-weight: 700; line-height: 1;">{stock_price}</div>
+                                            <div style="font-size: 15px; color: {price_change_color}; font-weight: 700; margin-top: 4px;">{price_change_pct}</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 44px 40px;">
+                            {summary_html}
+
+                            <!-- Key Articles -->
+                            <div style="background-color: #f8fafc; padding: 32px; margin: 0 -40px -44px -40px; border-top: 1px solid #e5e7eb;">
+                                <h2 style="margin: 0 0 24px 0; font-size: 18px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Key Articles</h2>
+                                {articles_html}
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 28px 40px; color: rgba(255,255,255,0.9);">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td>
+                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">QuantBrief</div>
+                                        <div style="font-size: 12px; opacity: 0.8;">Stock Intelligence Delivered Daily</div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>'''
+
+    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {total_articles} articles"
     success = send_email(subject, html)
 
-    LOG.info(f"📧 Email #3 (Stock Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
+    LOG.info(f"📧 Email #3 (Premium Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
 
     return {
         "status": "sent" if success else "failed",
         "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
+        "ticker": ticker,
         "recipient": DIGEST_TO,
-        "email_type": "stock_intelligence_report"
+        "email_type": "premium_stock_intelligence"
     }
 
 # ------------------------------------------------------------------------------

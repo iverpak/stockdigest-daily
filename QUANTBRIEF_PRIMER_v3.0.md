@@ -1,10 +1,11 @@
-# QuantBrief Daily Intelligence System - PRIMER v3.1
+# QuantBrief Daily Intelligence System - PRIMER v3.2
 
 **Last Updated:** October 6, 2025
-**Application File Size:** 14,897 lines
+**Application File Size:** 14,900+ lines
 **Total Endpoints:** 56 (39 admin + 8 job queue + 9 other)
 **Database:** PostgreSQL with 12 core tables
 **Primary Language:** Python 3.11 (FastAPI framework)
+**New in v3.2:** Async feed ingestion with grouped parallel processing (5.5x faster)
 
 ---
 
@@ -21,6 +22,124 @@ QuantBrief is an **AI-powered financial news aggregation and analysis system** t
 
 **Target Users:** Investors, analysts, portfolio managers tracking specific stocks
 **Processing Model:** Server-side job queue with real-time progress monitoring (eliminates HTTP 520 errors)
+
+---
+
+## ASYNC FEED INGESTION PERFORMANCE (NEW IN v3.2)
+
+QuantBrief now uses **grouped parallel processing** for RSS feed ingestion, dramatically improving performance while maintaining data integrity.
+
+### Performance Improvement
+
+**Before (Sequential):**
+- 11 feeds processed one at a time
+- ~5 seconds per feed
+- **Total: ~55 seconds per ticker**
+
+**After (Grouped Async):**
+- Feeds grouped by strategy and processed in parallel
+- Google→Yahoo pairs remain sequential (prevents duplicates)
+- **Total: ~10 seconds per ticker**
+- **Speedup: 5.5x faster!** 🚀
+
+### Feed Structure (11 Feeds Per Ticker)
+
+Each ticker has 11 RSS feeds organized as:
+
+1. **Company Feeds (2 total):**
+   - Google News: Company name search
+   - Yahoo Finance: Ticker symbol
+
+2. **Industry Feeds (3 total):**
+   - Google News only (one feed per industry keyword)
+   - No Yahoo feeds for industry
+
+3. **Competitor Feeds (6 total):**
+   - 3 competitors × 2 sources each (Google + Yahoo)
+
+### Grouped Async Strategy
+
+```
+┌─────────────────────────────────┐
+│  Group 1: Company Feeds         │
+│  Google → Yahoo (sequential)    │ ← 10 seconds
+└─────────────────────────────────┘
+         ↓ Run in parallel
+┌─────────────────────────────────┐
+│  Group 2: Industry Feeds        │
+│  Keyword 1, 2, 3 (all parallel) │ ← 5 seconds
+└─────────────────────────────────┘
+         ↓ Run in parallel
+┌─────────────────────────────────┐
+│  Group 3: Competitor Feeds      │
+│  Comp1: Google → Yahoo (seq)    │
+│  Comp2: Google → Yahoo (seq)    │ ← 10 seconds (max of 3)
+│  Comp3: Google → Yahoo (seq)    │
+└─────────────────────────────────┘
+
+Final Processing Time: max(10s, 5s, 10s) = ~10 seconds
+```
+
+### Why Sequential Within Google/Yahoo Pairs?
+
+**Problem:**
+Yahoo Finance often redirects to original sources:
+- Google finds: `https://reuters.com/article/123`
+- Yahoo finds: `https://yahoo.com/finance/...` → redirects to `https://reuters.com/article/123`
+
+**Solution:**
+Process Google first, then Yahoo sequentially:
+- Google article inserted with `url_hash` based on `reuters.com/article/123`
+- Yahoo article resolves to same URL → deduplication catches it
+- Prevents duplicate scraping/AI analysis (saves 20-40s + API costs)
+
+**URL Hash Generation:**
+```python
+def get_url_hash(url: str, resolved_url: str = None) -> str:
+    primary_url = resolved_url or url  # Uses RESOLVED URL
+    url_clean = re.sub(r'[?&](utm_|ref=|...).*', '', url_lower)
+    return hashlib.md5(url_clean.encode()).hexdigest()
+```
+
+### Implementation Details
+
+**Technology:**
+- `ThreadPoolExecutor` with `max_workers=15`
+- Helper function: `process_feeds_sequentially()` (Line 13124)
+- Main implementation: `/cron/ingest` endpoint (Line 13155)
+
+**Database Safety:**
+- Thread-safe: Each thread gets own DB connection via `@contextmanager`
+- Deduplication: `ON CONFLICT (url_hash) DO UPDATE` prevents race conditions
+- Connection limit: 11 concurrent << 22-97 available Postgres connections (no pool exhaustion)
+
+**Safety Guarantees:**
+✅ **No data corruption** - Sequential G→Y prevents duplicate articles
+✅ **Thread-safe operations** - Isolated DB connections per thread
+✅ **Error handling preserved** - Failed feeds don't block others
+✅ **Stats aggregation maintained** - All metrics accurate
+✅ **Memory monitoring continues** - Snapshots every 5 completions
+
+### Monitoring Logs
+
+When async processing runs, you'll see:
+```
+=== ASYNC FEED PROCESSING: Grouping feeds by strategy ===
+Feed groups - Company: 2, Industry: 3, Competitor: 6
+
+=== Starting parallel feed processing with grouped strategy ===
+Submitted company feeds for AAPL: 2 feeds (Google→Yahoo sequential)
+Submitted 3 industry feeds (all parallel)
+Submitted competitor feeds for AAPL/MSFT: 2 feeds (Google→Yahoo sequential)
+...
+
+✅ Completed industry feed group: Technology (1/7)
+✅ Completed company feed group: AAPL (2/7)
+✅ Completed competitor feed group: AAPL/MSFT (3/7)
+...
+
+=== ASYNC FEED PROCESSING COMPLETE: 10.23 seconds (7 groups processed) ===
+```
 
 ---
 

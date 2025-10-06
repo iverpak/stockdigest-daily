@@ -11447,14 +11447,14 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
         article_links = ""
         for article in articles:
-            star = '★ ' if is_starred(article['id'], article['domain']) else ''
+            star = '<span style="color: #f59e0b;">★</span> ' if is_starred(article['id'], article['domain']) else ''
             domain_name = get_or_create_formal_domain_name(article['domain']) if article['domain'] else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article['published_at'] else "Recent"
 
             article_links += f'''
-                <div style="margin-bottom: 8px;">
-                    <a href="{article['resolved_url'] or '#'}" style="font-size: 14px; font-weight: 600; color: #1e40af; text-decoration: none;">{star}{article['title']}</a>
-                    <span style="font-size: 11px; color: #6b7280;"> — {domain_name} • {date_str}</span>
+                <div style="padding: 10px; margin-bottom: 8px; border-left: 3px solid #1e40af; background-color: #f9fafb;">
+                    <a href="{article['resolved_url'] or '#'}" style="font-size: 14px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article['title']}</a>
+                    <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">{domain_name} • {date_str}</div>
                 </div>
             '''
 

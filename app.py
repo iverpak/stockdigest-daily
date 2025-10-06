@@ -11336,6 +11336,14 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     return sections
 
 
+def is_paywall_article(domain: str) -> bool:
+    """Check if domain is a known paywall using PAYWALL_DOMAINS constant"""
+    if not domain:
+        return False
+    normalized = normalize_domain(domain)
+    return normalized in PAYWALL_DOMAINS
+
+
 def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                    flagged_article_ids: List[int] = None) -> Dict:
     """
@@ -11345,6 +11353,8 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     - Parsed executive summary sections
     - Compressed article links
     - Star indicators for FLAGGED + QUALITY articles
+    - Paywall badges for paywalled articles
+    - Dynamic time span calculation
     """
     LOG.info("=== EMAIL #3: PREMIUM STOCK INTELLIGENCE (USER REPORT) ===")
 
@@ -11434,6 +11444,43 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
             if category in articles_by_category:
                 articles_by_category[category].append(article)
 
+    # Flatten all articles from all categories
+    all_articles = []
+    for category_articles in articles_by_category.values():
+        all_articles.extend(category_articles)
+
+    # Split into analyzed vs paywall
+    analyzed_articles = [a for a in all_articles if not is_paywall_article(a.get('domain', ''))]
+    paywall_articles = [a for a in all_articles if is_paywall_article(a.get('domain', ''))]
+
+    analyzed_count = len(analyzed_articles)
+    paywall_count = len(paywall_articles)
+
+    # Calculate time span from analyzed articles only
+    dates = [a['published_at'] for a in analyzed_articles if a.get('published_at')]
+    if dates and len(dates) > 0:
+        oldest_date = min(dates)
+        newest_date = max(dates)
+        days_diff = (newest_date.date() - oldest_date.date()).days
+
+        if days_diff == 0:
+            time_span_text = "today"
+        elif days_diff == 1:
+            time_span_text = "the past day"
+        else:
+            time_span_text = f"the past {days_diff} days"
+    else:
+        time_span_text = "recent"
+
+    # Build analysis message
+    paywall_suffix = ""
+    if paywall_count > 0:
+        paywall_suffix = f" • {paywall_count} additional paywalled sources identified"
+
+    analysis_message = f"Analysis based on {analyzed_count} publicly available articles from {time_span_text}{paywall_suffix}"
+
+    LOG.info(f"Article counts - Analyzed: {analyzed_count}, Paywalled: {paywall_count}, Time span: {time_span_text}")
+
     # Check if FLAGGED + QUALITY for star logic
     def is_starred(article_id, domain):
         is_flagged = article_id in (flagged_article_ids or [])
@@ -11447,13 +11494,18 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
         article_links = ""
         for article in articles:
+            # Check if paywalled
+            is_paywalled = is_paywall_article(article.get('domain', ''))
+            paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
+
+            # Star for FLAGGED + QUALITY articles
             star = '<span style="color: #f59e0b;">★</span> ' if is_starred(article['id'], article['domain']) else ''
             domain_name = get_or_create_formal_domain_name(article['domain']) if article['domain'] else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article['published_at'] else "Recent"
 
             article_links += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article['resolved_url'] or '#'}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article['title']}</a>
+                    <a href="{article['resolved_url'] or '#'}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article['title']}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''
@@ -11472,12 +11524,11 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
         bullet_html = ""
         for bullet in bullets:
-            bullet_html += f'<li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4; color: #374151;">{bullet}</li>'
+            bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{bullet}</li>'
 
         return f'''
-            <div style="margin-bottom: 16px;">
-                <h2 style="margin: 0 0 6px 0; font-size: 15px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
-                <hr style="border: 0; height: 1px; background-color: #1e40af; margin: 0 0 8px 0;">
+            <div style="margin-bottom: 20px;">
+                <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
                 <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
                     {bullet_html}
                 </ul>
@@ -11509,6 +11560,14 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{ticker} Intelligence Report</title>
+    <style>
+        @media only screen and (max-width: 600px) {{
+            .content-padding {{ padding: 16px !important; }}
+            .header-padding {{ padding: 16px 20px !important; }}
+            .price-box {{ padding: 8px 10px !important; }}
+            .company-name {{ font-size: 20px !important; }}
+        }}
+    </style>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
 
@@ -11520,16 +11579,16 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Header -->
                     <tr>
-                        <td style="padding: 20px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                        <td class="header-padding" style="padding: 20px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 65%;">
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
-                                        <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
+                                        <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
                                         <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
                                     </td>
                                     <td align="right" style="vertical-align: top; width: 35%;">
-                                        <div style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">
+                                        <div class="price-box" style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">
                                             <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75;">{current_date}</div>
                                             <div style="font-size: 20px; font-weight: 700; line-height: 1;">{stock_price}</div>
                                             <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct}</div>
@@ -11542,14 +11601,27 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Content -->
                     <tr>
-                        <td style="padding: 24px;">
+                        <td class="content-padding" style="padding: 24px;">
+
+                            <!-- Executive Summary -->
                             {summary_html}
 
-                            <!-- Key Articles -->
-                            <div style="background-color: #f8fafc; padding: 18px; margin: 0 -24px -24px -24px; border-top: 1px solid #e5e7eb;">
-                                <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Key Articles</h2>
+                            <!-- Transition to Sources -->
+                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+                                    {analysis_message}
+                                </p>
+                            </div>
+
+                            <!-- Divider -->
+                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
+
+                            <!-- Source Articles -->
+                            <div style="margin-bottom: 0;">
+                                <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
                                 {articles_html}
                             </div>
+
                         </td>
                     </tr>
 
@@ -11560,7 +11632,10 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                 <tr>
                                     <td>
                                         <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">QuantBrief</div>
-                                        <div style="font-size: 12px; opacity: 0.8;">Stock Intelligence Delivered Daily</div>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px;">Stock Intelligence Delivered Daily</div>
+                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                            This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
+                                        </div>
                                     </td>
                                 </tr>
                             </table>
@@ -11576,14 +11651,16 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 </body>
 </html>'''
 
-    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {total_articles} articles"
+    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
     success = send_email(subject, html)
 
     LOG.info(f"📧 Email #3 (Premium Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
 
     return {
         "status": "sent" if success else "failed",
-        "articles": total_articles,
+        "articles_analyzed": analyzed_count,
+        "articles_paywalled": paywall_count,
+        "articles_total": analyzed_count + paywall_count,
         "ticker": ticker,
         "recipient": DIGEST_TO,
         "email_type": "premium_stock_intelligence"

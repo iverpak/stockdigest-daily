@@ -15185,21 +15185,47 @@ Domains:
 
         response_text = message.content[0].text
         LOG.info("Claude API response received")
+        LOG.info(f"Response preview (first 200 chars): {response_text[:200]}")
 
         # Step 4: Extract JSON from response
         import json
         import re
 
+        json_content = None
+
+        # Try to extract JSON from code block first
         if '```json' in response_text:
             json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
-            json_content = json_match.group(1) if json_match else response_text
-        elif '{' in response_text:
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            json_content = json_match.group(0) if json_match else response_text
-        else:
-            return {"status": "error", "message": "Could not extract JSON from Claude response"}
+            if json_match:
+                json_content = json_match.group(1).strip()
+                LOG.info("Extracted JSON from ```json code block")
+            else:
+                LOG.warning("Found ```json marker but couldn't extract content")
 
-        domain_mappings = json.loads(json_content)
+        # If no code block, try to find raw JSON object
+        if not json_content and '{' in response_text:
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            if json_match:
+                json_content = json_match.group(0).strip()
+                LOG.info("Extracted raw JSON object")
+            else:
+                LOG.warning("Found '{' but couldn't extract JSON object")
+
+        # Validate we have content
+        if not json_content or not json_content.strip():
+            LOG.error(f"No valid JSON content extracted. Full response:\n{response_text}")
+            return {"status": "error", "message": "Could not extract valid JSON from Claude response", "raw_response": response_text[:500]}
+
+        LOG.info(f"JSON content length: {len(json_content)} chars")
+        LOG.info(f"JSON content preview: {json_content[:200]}")
+
+        # Parse JSON
+        try:
+            domain_mappings = json.loads(json_content)
+        except json.JSONDecodeError as e:
+            LOG.error(f"JSON parsing failed: {e}")
+            LOG.error(f"JSON content that failed to parse:\n{json_content[:1000]}")
+            return {"status": "error", "message": f"Invalid JSON from Claude: {str(e)}", "json_preview": json_content[:500]}
 
         # Step 5: Update database
         LOG.info("Updating database...")

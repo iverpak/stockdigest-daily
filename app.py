@@ -301,7 +301,7 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 # OpenAI Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 
 # Anthropic Claude Configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -11461,8 +11461,8 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
             '''
 
         return f'''
-            <div style="margin-bottom: 28px;">
-                <h3 style="margin: 0 0 16px 0; font-size: 15px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
+            <div style="margin-bottom: 20px;">
+                <h3 style="margin: 0 0 12px 0; font-size: 15px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
                 {article_links}
             </div>
         '''
@@ -11475,17 +11475,17 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
         bullet_html = ""
         for bullet in bullets:
             bullet_html += f'''
-                <div style="background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%); padding: 18px; margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #1e40af; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-                    <p style="margin: 0 0 10px 0; font-size: 15px; line-height: 1.6; color: #1f2937;">
+                <div style="background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%); padding: 12px; margin-bottom: 6px; border-radius: 8px; border-left: 4px solid #1e40af; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                    <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #1f2937;">
                         {bullet}
                     </p>
                 </div>
             '''
 
         return f'''
-            <div style="margin-bottom: 36px;">
-                <h2 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
-                <hr style="border: 0; height: 2px; background-color: #1e40af; margin: 0 0 18px 0;">
+            <div style="margin-bottom: 24px;">
+                <h2 style="margin: 0 0 8px 0; font-size: 16px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                <hr style="border: 0; height: 2px; background-color: #1e40af; margin: 0 0 12px 0;">
                 {bullet_html}
             </div>
         '''
@@ -11526,19 +11526,19 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Header -->
                     <tr>
-                        <td style="padding: 36px 40px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                        <td style="padding: 28px 30px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 65%;">
-                                        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
-                                        <h1 style="margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
-                                        <div style="margin-top: 10px; font-size: 14px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
+                                        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
+                                        <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
+                                        <div style="margin-top: 8px; font-size: 14px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
                                     </td>
                                     <td align="right" style="vertical-align: top; width: 35%;">
-                                        <div style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 16px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
-                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; opacity: 0.75;">{current_date}</div>
-                                            <div style="font-size: 28px; font-weight: 700; line-height: 1;">{stock_price}</div>
-                                            <div style="font-size: 15px; color: {price_change_color}; font-weight: 700; margin-top: 4px;">{price_change_pct}</div>
+                                        <div style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 14px 18px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
+                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; opacity: 0.75;">{current_date}</div>
+                                            <div style="font-size: 24px; font-weight: 700; line-height: 1;">{stock_price}</div>
+                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 700; margin-top: 4px;">{price_change_pct}</div>
                                         </div>
                                     </td>
                                 </tr>
@@ -11548,12 +11548,12 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Content -->
                     <tr>
-                        <td style="padding: 44px 40px;">
+                        <td style="padding: 32px 30px;">
                             {summary_html}
 
                             <!-- Key Articles -->
-                            <div style="background-color: #f8fafc; padding: 32px; margin: 0 -40px -44px -40px; border-top: 1px solid #e5e7eb;">
-                                <h2 style="margin: 0 0 24px 0; font-size: 18px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Key Articles</h2>
+                            <div style="background-color: #f8fafc; padding: 24px; margin: 0 -30px -32px -30px; border-top: 1px solid #e5e7eb;">
+                                <h2 style="margin: 0 0 18px 0; font-size: 16px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Key Articles</h2>
                                 {articles_html}
                             </div>
                         </td>
@@ -11561,7 +11561,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Footer -->
                     <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 28px 40px; color: rgba(255,255,255,0.9);">
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 20px 30px; color: rgba(255,255,255,0.9);">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td>

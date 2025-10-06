@@ -388,6 +388,7 @@ PAYWALL_DOMAINS = {
     "washingtonpost.com", "www.washingtonpost.com",
     "barrons.com", "www.barrons.com",
     "marketwatch.com", "www.marketwatch.com",
+    "bloomberg.com", "www.bloomberg.com",
 
     # Academic/research paywalls
     "sciencedirect.com", "www.sciencedirect.com",

@@ -11802,15 +11802,15 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                         <td class="header-padding" style="padding: 20px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
-                                    <td style="width: 65%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600;">STOCK INTELLIGENCE</div>
-                                        <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">{company_name}</h1>
-                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500;">{ticker} • {sector}</div>
+                                    <td style="width: 65%; vertical-align: top;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
+                                        <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; color: #ffffff;">{company_name}</h1>
+                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker} • {sector}</div>
                                     </td>
                                     <td align="right" style="vertical-align: top; width: 35%;">
-                                        <div class="price-box" style="background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">
-                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75;">{current_date}</div>
-                                            <div style="font-size: 20px; font-weight: 700; line-height: 1;">{stock_price}</div>
+                                        <div style="display: inline-block; background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); text-align: right;">
+                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75; color: #ffffff;">{current_date}</div>
+                                            <div style="font-size: 20px; font-weight: 700; line-height: 1; color: #ffffff;">{stock_price}</div>
                                             <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct}</div>
                                         </div>
                                     </td>
@@ -11851,9 +11851,9 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">QuantBrief</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px;">Stock Intelligence Delivered Daily</div>
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
+                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
                                             This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
                                         </div>
                                     </td>

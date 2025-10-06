@@ -462,6 +462,202 @@ SELECT COUNT(*) FROM ticker_processing_jobs WHERE status = 'queued';
 - `JOB_QUEUE_README.md` - Comprehensive system documentation
 - `IMPLEMENTATION_SUMMARY.md` - Implementation details and testing guide
 
+## Parallel Ticker Processing (v3.3 - Oct 2025)
+
+### Overview
+
+QuantBrief now supports **concurrent ticker processing**, allowing 2-5 tickers to process simultaneously. This reduces total processing time when handling multiple tickers in a batch.
+
+### Architecture Changes
+
+**Before (Sequential):**
+```
+Ticker 1 → 30 min → Complete
+Ticker 2 → 30 min → Complete
+Ticker 3 → 30 min → Complete
+Total: 90 minutes
+```
+
+**After (Parallel with MAX_CONCURRENT_JOBS=2):**
+```
+Ticker 1 ┐
+Ticker 2 ┘ → 30 min → Complete
+Ticker 3   → 30 min → Complete
+Total: 60 minutes
+```
+
+### Key Components
+
+**1. Connection Pooling (Lines 690-770)**
+- Uses `psycopg_pool.ConnectionPool` for efficient connection reuse
+- Configuration: `min_size=5, max_size=45` (under 50 DB limit)
+- Prevents connection exhaustion with concurrent processing
+- Retry logic: 3 attempts with exponential backoff (2s, 5s, 10s)
+- Fail-fast startup if pool cannot initialize
+
+**2. ThreadPoolExecutor Job Worker (Lines 12328-12367)**
+- Concurrent job processing using Python's `ThreadPoolExecutor`
+- Each ticker runs in isolated thread with own event loop (`asyncio.run()`)
+- Polls database for jobs, submits to thread pool up to `MAX_CONCURRENT_JOBS`
+- Uses `wait()` with `FIRST_COMPLETED` for efficient job completion handling
+- Tracks active jobs: `{len(active_futures)}/{MAX_CONCURRENT_JOBS} active`
+
+**3. Lock Removal**
+- Removed `TICKER_PROCESSING_LOCK` from `/cron/ingest` and `/cron/digest`
+- Tickers no longer block each other during processing
+- Admin endpoints keep locks (not performance-critical)
+
+**4. Ticker-Prefixed Logging**
+- 49+ log statements updated with `[{ticker}]` prefix
+- Easy filtering in Render logs: Search for `[RY.TO]` or `[SNAP]`
+- Preserves `[JOB xxx]` correlation IDs
+- Format: `[TICKER] 🚀 [JOB xxx] Starting processing for TICKER`
+
+**5. Resource Monitoring**
+- Connection pool stats logged: `DB Pool={active}/{max} connections`
+- Memory tracking per ticker: `Memory={X}MB`
+- Logged at digest completion and job completion
+- Format: `[{ticker}] 📊 Resource Status: Memory=215MB, DB Pool=18/45`
+
+### Environment Variables
+
+```bash
+MAX_CONCURRENT_JOBS=2  # Number of tickers to process simultaneously (default: 2)
+```
+
+**Scaling:**
+- Start with `2` for testing
+- Scale to `5` after validation
+- Infrastructure: Standard 2GB RAM app, Basic 1GB DB
+
+### Resource Requirements
+
+**Per Ticker:**
+- Memory: ~400MB peak (including Playwright for ~15% of articles)
+- DB Connections: ~15 peak (11 feeds + overhead)
+- Duration: ~30 minutes
+
+**Total for 5 Concurrent Tickers:**
+- Memory: ~2000MB (fits in 2GB app)
+- DB Connections: ~45 peak (within pool limit of 45)
+- Duration: ~30 minutes (same as single ticker!)
+
+### GitHub Commit Logic
+
+**Smart Deployment Control:**
+- Each ticker checks if it's the LAST job in batch
+- Query: `COUNT(*) WHERE status IN ('queued', 'processing')`
+- **NOT last:** `skip_render=TRUE` → `[skip render]` in commit (no deployment)
+- **IS last:** `skip_render=FALSE` → Normal commit (triggers Render deployment)
+
+**Example with 5 Tickers:**
+```
+RY.TO finishes → 4 remaining → [skip render]
+TD.TO finishes → 3 remaining → [skip render]
+VST finishes   → 2 remaining → [skip render]
+CEG finishes   → 1 remaining → [skip render]
+MO finishes    → 0 remaining → DEPLOYS! 🚀
+```
+
+**Result:** Only ONE deployment per batch, regardless of batch size (2, 5, or 100 tickers). **No scheduled commits needed!**
+
+### Shared Semaphores
+
+**Rate Limiting (Global across all tickers):**
+```python
+OPENAI_MAX_CONCURRENCY = 5       # Shared OpenAI semaphore
+CLAUDE_MAX_CONCURRENCY = 5       # Shared Claude semaphore
+PLAYWRIGHT_MAX_CONCURRENCY = 5   # Shared Playwright semaphore
+SCRAPFLY_MAX_CONCURRENCY = 5     # Shared ScrapFly semaphore
+SCRAPE_BATCH_SIZE = 5           # Scraping batch size
+```
+
+These semaphores are **thread-safe** and provide **natural rate limiting** across all concurrent tickers.
+
+### Testing & Validation
+
+**Phase 1: Single Ticker (Validation)**
+```powershell
+$TICKERS = @("RY.TO")
+.\scripts\setup_job_queue.ps1
+```
+Verify: Connection pool initialized, worker starts with `max_concurrent_jobs: 2`
+
+**Phase 2: 2 Parallel Tickers (Testing)**
+```powershell
+$TICKERS = @("RY.TO", "TD.TO")
+.\scripts\setup_job_queue.ps1
+```
+Expected logs:
+```
+📤 [JOB abc] Submitted to worker pool (1/2 active)
+📤 [JOB def] Submitted to worker pool (2/2 active)
+[RY.TO] 🚀 Starting processing for RY.TO
+[TD.TO] 🚀 Starting processing for TD.TO  ← Within SECONDS!
+```
+
+**Phase 3: 5 Parallel Tickers (Production)**
+```powershell
+$TICKERS = @("RY.TO", "TD.TO", "VST", "CEG", "MO")
+```
+Set `MAX_CONCURRENT_JOBS=5` in Render environment variables, then run script.
+
+### Expected Behavior
+
+**Old (Sequential):**
+```
+19:28:50 - PLUG starts
+19:33:00 - SNAP starts (4 min later) ❌
+```
+
+**New (Parallel):**
+```
+19:45:00 - RY.TO starts
+19:45:03 - TD.TO starts (seconds later) ✅
+[RY.TO] 📊 Resource Status: Memory=215MB, DB Pool=18/45
+[TD.TO] 📊 Resource Status: Memory=208MB, DB Pool=22/45
+```
+
+### Thread Safety
+
+**Design Guarantees:**
+- ✅ Each ticker job runs in isolated thread
+- ✅ `asyncio.run()` creates independent event loop per thread
+- ✅ Connection pool is thread-safe (`psycopg_pool`)
+- ✅ Global semaphores are thread-safe (`BoundedSemaphore`)
+- ✅ Database atomic job claiming (`FOR UPDATE SKIP LOCKED`)
+- ✅ No shared mutable state between ticker threads
+
+### Troubleshooting
+
+**Issue: Jobs processing sequentially instead of parallel**
+- Check startup logs for: `🔧 Job worker started (max_concurrent_jobs: 2)`
+- If missing or shows `1`: Old code deployed
+- Solution: Verify commit pushed to GitHub, Render deployed successfully
+
+**Issue: Connection pool errors**
+- Check startup logs for: `✅ Database connection pool initialized`
+- If failed: Database unavailable, check Render DB status
+- Retry logic: 3 attempts before failing startup
+
+**Issue: Memory exhaustion with 5 tickers**
+- Check logs for: `[{ticker}] 📊 Resource Status: Memory=XXX`
+- If >2000MB total: Reduce `MAX_CONCURRENT_JOBS` to `3` or `4`
+- Playwright uses ~100MB per ticker (only for ~15% of articles)
+
+### Performance Metrics
+
+**Achieved (Oct 2025):**
+- ✅ 2 tickers processing simultaneously (PLUG + SNAP)
+- ✅ Connection pooling working (no exhaustion)
+- ✅ Smart GitHub commits (only last ticker triggers deploy)
+- ✅ Ticker-prefixed logging (easy filtering)
+
+**Next Steps:**
+- Scale to 3-5 concurrent tickers
+- Monitor memory and DB connection usage
+- Optimize if needed for higher concurrency
+
 ## Development Notes
 
 - The application uses extensive logging for debugging and monitoring

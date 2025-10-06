@@ -10479,7 +10479,8 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
         summaries[ticker] = {
             "ai_analysis_summary": ai_analysis_summary or "",
             "company_name": company_name,
-            "industry_articles_analyzed": len([a for a in categories.get("industry", []) if a.get("ai_summary")])
+            "industry_articles_analyzed": len([a for a in categories.get("industry", []) if a.get("ai_summary")]),
+            "model_used": model_used  # Track which AI model generated the summary
         }
 
     LOG.info(f"🎯 EXECUTIVE SUMMARY: Completed - generated summaries for {len(summaries)} tickers")
@@ -10874,8 +10875,8 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
         flagged_article_ids: Optional list of flagged article IDs for sorting priority
     """
 
-    # Generate summaries using OpenAI (Claude fallback removed in current version)
-    openai_summaries = generate_ai_final_summaries(articles_by_ticker)
+    # Generate summaries using Claude (primary) with OpenAI fallback
+    openai_summaries = generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name, actually uses Claude→OpenAI fallback
 
     # Format ticker list with company names
     ticker_display_list = []
@@ -10993,12 +10994,13 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
 
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
-        # Display OpenAI summary
+        # Display executive summary (Claude primary, OpenAI fallback)
         openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
+        model_used = openai_summaries.get(ticker, {}).get("model_used", "AI")  # Get actual model used
 
         if openai_summary:
             html.append("<div class='company-summary'>")
-            html.append(f"<div class='summary-title'>📰 Executive Summary (Deep Analysis) - OpenAI</div>")
+            html.append(f"<div class='summary-title'>📰 Executive Summary (Deep Analysis) - {model_used}</div>")
             html.append("<div class='summary-content'>")
 
             # Parse and render summary with structured sections

@@ -1,10 +1,11 @@
-# QuantBrief Daily Intelligence System - PRIMER v3.2
+# QuantBrief Daily Intelligence System - PRIMER v3.3
 
 **Last Updated:** October 6, 2025
-**Application File Size:** 14,900+ lines
+**Application File Size:** 15,300+ lines
 **Total Endpoints:** 56 (39 admin + 8 job queue + 9 other)
 **Database:** PostgreSQL with 12 core tables
 **Primary Language:** Python 3.11 (FastAPI framework)
+**New in v3.3:** Parallel ticker processing (2-5 concurrent tickers) + connection pooling
 **New in v3.2:** Async feed ingestion with grouped parallel processing (5.5x faster)
 
 ---

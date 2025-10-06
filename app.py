@@ -308,7 +308,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 # Anthropic Claude Configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_API_URL = os.getenv("ANTHROPIC_API_URL", "https://api.anthropic.com/v1/messages")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4.5-20250929")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
 USE_CLAUDE_FOR_SUMMARIES = os.getenv("USE_CLAUDE_FOR_SUMMARIES", "true").lower() == "true"
 USE_CLAUDE_FOR_METADATA = os.getenv("USE_CLAUDE_FOR_METADATA", "true").lower() == "true"
 
@@ -15336,7 +15336,7 @@ Domains:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
         message = client.messages.create(
-            model="claude-sonnet-4.5-20250929",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=8192,
             messages=[{"role": "user", "content": prompt}]
         )

@@ -10835,7 +10835,7 @@ def export_beta_users_to_csv() -> int:
 
     Returns: Number of users exported
     """
-    output_path = "/workspaces/quantbrief-daily/data/user_tickers.csv"
+    output_path = "data/user_tickers.csv"
 
     try:
         with db() as conn, conn.cursor() as cur:
@@ -14648,7 +14648,7 @@ async def admin_export_user_csv(request: Request):
         return {
             "status": "success",
             "message": f"Exported {count} active beta users to CSV",
-            "file_path": "/workspaces/quantbrief-daily/data/user_tickers.csv",
+            "file_path": "data/user_tickers.csv",
             "exported_at": datetime.now().isoformat()
         }
     except Exception as e:

@@ -1,13 +1,14 @@
-# QuantBrief Daily Intelligence System - PRIMER v3.4
+# QuantBrief Daily Intelligence System - PRIMER v3.5
 
 **Last Updated:** October 7, 2025
 **Application File Size:** 15,000+ lines
 **Total Endpoints:** 56 (39 admin + 8 job queue + 9 other)
 **Database:** PostgreSQL with 12 core tables
 **Primary Language:** Python 3.11 (FastAPI framework)
-**New in v3.4:** Threading semaphores + Scrapfly Tier 2 + Prompt caching + 24h NEW badge
-**New in v3.3:** Parallel ticker processing (2-5 concurrent tickers) + connection pooling
-**New in v3.2:** Async feed ingestion with grouped parallel processing (5.5x faster)
+**New in v3.5:** **Semaphores DISABLED** (fixes deadlock) + 4 concurrent tickers stable + Connection pool: 80 + Executive summary cache_control
+**New in v3.4:** ~~Threading semaphores~~ (caused deadlock, removed in v3.5) + Scrapfly Tier 2 + Prompt caching + 24h NEW badge
+**New in v3.3:** Parallel ticker processing + connection pooling
+**New in v3.2:** Async feed ingestion (5.5x faster)
 
 ---
 
@@ -698,9 +699,11 @@ QuantBrief maintains a domain-specific scraping strategy system:
 
 ### Rate Limiting & Concurrency
 
-- **Semaphore controls:** Max 5 concurrent scrapes
+- **Semaphores:** **DISABLED as of v3.5** (threading.BoundedSemaphore caused deadlock with 3+ concurrent tickers)
+- **API rate limiting:** Handled by API providers (429 errors retried automatically)
 - **Domain-level delays:** 2-5 seconds between requests to same domain
 - **Circuit breaker:** Halts processing after 3 consecutive system failures
+- **Concurrent tickers:** Recommended 4, supports up to 5
 - **Timeout protection:** 45-minute max per ticker job
 
 ---
@@ -955,7 +958,8 @@ WHERE id NOT IN (
 **Cause:** Too many concurrent tickers or memory leak
 **Solution:**
 - Check `memory_monitor.py` logs for resource tracking
-- Reduce `MAX_CONCURRENT_JOBS` from 5 to 3
+- Recommended: `MAX_CONCURRENT_JOBS=4` (~1200MB total)
+- Maximum: `MAX_CONCURRENT_JOBS=5` (~1500MB total, tight margins)
 - Memory per ticker: ~300MB (down from 400MB with Playwright removed)
 - Manual cleanup: Restart worker (server restart)
 
@@ -963,20 +967,27 @@ WHERE id NOT IN (
 
 ## VERSION HISTORY
 
-### v3.4 (October 7, 2025) - Current
-**Critical Fixes & Features:**
-- **Threading semaphores:** Replaced asyncio.Semaphore with threading.BoundedSemaphore
-  - **Fix:** Event loop binding errors in job queue ("bound to different event loop")
-  - **Impact:** Claude summaries now work 100% in job queue (no more OpenAI fallbacks)
-- **Scrapfly Tier 2:** Playwright commented out (caused hangs on problematic domains)
-  - **Reason:** theglobeandmail.com and similar sites caused indefinite stalls
-  - **New architecture:** Requests → Scrapfly (2-tier, faster, more reliable)
-- **Prompt caching enabled:** Claude API v2024-10-22
-  - **Savings:** ~13% cost reduction (~$572/year for 50 tickers/day)
-  - **How:** System prompts cached for 5 minutes (90% discount on cache hits)
-- **24-hour NEW badge:** Email #3 shows green badge for articles <24 hours old
-- **Executive summary refinement:** "Include all material developments, but keep bullets concise"
-- **File size:** 15,000+ lines (cleaned up ~300 lines of Playwright code)
+### v3.5 (October 7, 2025) - Current
+**Critical Fixes & Production Optimization:**
+- **⚠️ SEMAPHORES DISABLED:** Removed all semaphore acquisitions
+  - **Problem:** threading.BoundedSemaphore blocked threads, freezing async event loops → deadlock at 3+ tickers
+  - **Symptom:** Jobs stuck at 10%-60% progress with no errors
+  - **Solution:** Disabled all 11 semaphore acquisitions; APIs enforce their own rate limits
+  - **Impact:** **4 concurrent tickers now stable** (previously deadlocked at 3)
+- **Connection pool upgrade:** 45 → 80 max (for Basic-1GB database with 100 connection limit)
+  - **Impact:** Supports 4-5 concurrent tickers comfortably
+- **Executive summary cache_control:** Added proper system/user split with caching
+  - **Fix:** Prevents Claude API 520 errors; ~2000 tokens cached per summary
+- **NEW emoji spacing:** Added space after 🆕 for readability
+- **Production config:** `MAX_CONCURRENT_JOBS=4` recommended (up to 5 supported)
+- **Performance:** **4x speedup** (4 tickers: 30 min vs 120 min sequential)
+
+### v3.4 (October 7, 2025) - DEPRECATED
+**Issues:** Threading semaphores caused deadlock with 3+ concurrent tickers (fixed in v3.5)
+- **Scrapfly Tier 2:** Playwright commented out (caused hangs)
+- **Prompt caching:** Claude API v2024-10-22 (~13% cost reduction)
+- **24-hour NEW badge:** Shows green badge for articles <24 hours old
+- **File size:** 15,000+ lines
 
 ### v3.3 (October 6, 2025)
 **Major Changes:**
@@ -1054,9 +1065,10 @@ WHERE id NOT IN (
 
 **Optimization strategies:**
 - Async/await for I/O operations
-- Semaphore-based concurrency control
-- Database connection pooling
-- Executive summary caching (v3.0)
+- ~~Semaphore-based concurrency control~~ (disabled in v3.5, caused deadlock)
+- Database connection pooling (80 max connections)
+- Executive summary caching with prompt caching (v3.0/v3.5)
+- 4 concurrent tickers (4x speedup vs sequential)
 
 ### Future Enhancements (Roadmap)
 

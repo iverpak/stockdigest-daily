@@ -65,7 +65,7 @@ Key changes:
 
 **Test incremental commit:**
 ```bash
-curl -X POST "https://stockdigest-daily.onrender.com/admin/safe-incremental-commit" \
+curl -X POST "https://stockdigest.app/admin/safe-incremental-commit" \
      -H "X-Admin-Token: your_token" \
      -H "Content-Type: application/json" \
      -d '{"tickers": ["MO"]}'
@@ -73,7 +73,7 @@ curl -X POST "https://stockdigest-daily.onrender.com/admin/safe-incremental-comm
 
 **Debug digest issues:**
 ```bash
-curl "https://stockdigest-daily.onrender.com/admin/debug/digest-check/CVS" \
+curl "https://stockdigest.app/admin/debug/digest-check/CVS" \
      -H "X-Admin-Token: your_token"
 ```
 
@@ -113,11 +113,11 @@ Successfully committed CSV to GitHub: abc12345
 ### 1. Test CVS Individually:
 ```bash
 # Test just CVS processing
-curl -X POST "https://stockdigest-daily.onrender.com/cron/ingest?tickers=CVS&minutes=4320" \
+curl -X POST "https://stockdigest.app/cron/ingest?tickers=CVS&minutes=4320" \
      -H "X-Admin-Token: your_token"
 
 # Then test digest
-curl -X POST "https://stockdigest-daily.onrender.com/cron/digest?tickers=CVS&minutes=4320" \
+curl -X POST "https://stockdigest.app/cron/digest?tickers=CVS&minutes=4320" \
      -H "X-Admin-Token: your_token"
 ```
 
@@ -155,13 +155,13 @@ WHERE ticker IN ('MO', 'GM', 'ODFL', 'SO', 'CVS');
 
 2. **Manual commit**: Force commit current database state
 ```bash
-curl -X POST "https://stockdigest-daily.onrender.com/admin/commit-csv-to-github" \
+curl -X POST "https://stockdigest.app/admin/commit-csv-to-github" \
      -H "X-Admin-Token: your_token"
 ```
 
 3. **Incremental recovery**: Commit specific tickers
 ```bash
-curl -X POST "https://stockdigest-daily.onrender.com/admin/safe-incremental-commit" \
+curl -X POST "https://stockdigest.app/admin/safe-incremental-commit" \
      -H "X-Admin-Token: your_token" \
      -d '{"tickers": ["MO", "GM", "ODFL", "SO"]}'
 ```

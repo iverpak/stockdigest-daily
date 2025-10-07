@@ -2,7 +2,7 @@
 # Manually trigger CSV export of active beta users
 
 # Configuration
-$APP = "https://stockdigest-daily.onrender.com"
+$APP = "https://stockdigest.app"
 $TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 
 $headers = @{ "X-Admin-Token" = $TOKEN }

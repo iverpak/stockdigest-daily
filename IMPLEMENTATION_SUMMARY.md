@@ -286,15 +286,15 @@ Look for:
 
 ```bash
 # Check worker status
-curl https://stockdigest-daily.onrender.com/jobs/stats \
+curl https://stockdigest.app/jobs/stats \
   -H "X-Admin-Token: $TOKEN"
 
 # Check specific batch
-curl https://stockdigest-daily.onrender.com/jobs/batch/{batch_id} \
+curl https://stockdigest.app/jobs/batch/{batch_id} \
   -H "X-Admin-Token: $TOKEN"
 
 # Check specific job (includes stacktraces)
-curl https://stockdigest-daily.onrender.com/jobs/{job_id} \
+curl https://stockdigest.app/jobs/{job_id} \
   -H "X-Admin-Token: $TOKEN"
 ```
 

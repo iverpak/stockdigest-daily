@@ -813,7 +813,7 @@ DEFAULT_TICKERS = ["MO", "GM", "ODFL", "SO", "CVS"]
 
 **Check worker health:**
 ```bash
-curl https://stockdigest-daily.onrender.com/jobs/stats \
+curl https://stockdigest.app/jobs/stats \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -832,13 +832,13 @@ curl https://stockdigest-daily.onrender.com/jobs/stats \
 
 **Check batch status:**
 ```bash
-curl https://stockdigest-daily.onrender.com/jobs/batch/{batch_id} \
+curl https://stockdigest.app/jobs/batch/{batch_id} \
   -H "X-Admin-Token: $TOKEN"
 ```
 
 **Check specific job (includes full stacktrace):**
 ```bash
-curl https://stockdigest-daily.onrender.com/jobs/{job_id} \
+curl https://stockdigest.app/jobs/{job_id} \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -880,19 +880,19 @@ LIMIT 10;
 
 **Test digest generation:**
 ```bash
-curl -X GET https://stockdigest-daily.onrender.com/admin/debug/digest/GM \
+curl -X GET https://stockdigest.app/admin/debug/digest/GM \
   -H "X-Admin-Token: $TOKEN"
 ```
 
 **Test AI triage:**
 ```bash
-curl -X GET https://stockdigest-daily.onrender.com/admin/debug/triage/GM \
+curl -X GET https://stockdigest.app/admin/debug/triage/GM \
   -H "X-Admin-Token: $TOKEN"
 ```
 
 **Test scraping strategy:**
 ```bash
-curl -X GET "https://stockdigest-daily.onrender.com/admin/debug/scrape?url=https://example.com/article" \
+curl -X GET "https://stockdigest.app/admin/debug/scrape?url=https://example.com/article" \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -919,7 +919,7 @@ WHERE status = 'processing'
 **Solution:**
 ```bash
 # Manual reset
-curl -X POST https://stockdigest-daily.onrender.com/jobs/circuit-breaker/reset \
+curl -X POST https://stockdigest.app/jobs/circuit-breaker/reset \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -1090,17 +1090,17 @@ WHERE id NOT IN (
 
 **Check Status:**
 ```bash
-curl https://stockdigest-daily.onrender.com/jobs/stats -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest.app/jobs/stats -H "X-Admin-Token: $TOKEN"
 ```
 
 **Reset Circuit Breaker:**
 ```bash
-curl -X POST https://stockdigest-daily.onrender.com/jobs/circuit-breaker/reset -H "X-Admin-Token: $TOKEN"
+curl -X POST https://stockdigest.app/jobs/circuit-breaker/reset -H "X-Admin-Token: $TOKEN"
 ```
 
 **Debug Ticker:**
 ```bash
-curl https://stockdigest-daily.onrender.com/admin/debug/digest/GM -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest.app/admin/debug/digest/GM -H "X-Admin-Token: $TOKEN"
 ```
 
 **View Executive Summaries:**

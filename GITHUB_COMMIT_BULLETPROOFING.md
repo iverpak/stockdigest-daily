@@ -209,11 +209,11 @@ LOG.warning("   These will be reclaimed on next startup")
 ### Test 1: SHA Conflict Simulation
 ```bash
 # Terminal 1
-curl -X POST "https://stockdigest-daily.onrender.com/admin/safe-incremental-commit" \
+curl -X POST "https://stockdigest.app/admin/safe-incremental-commit" \
   -H "X-Admin-Token: $ADMIN_TOKEN" -d '{"tickers": ["AAPL"]}'
 
 # Terminal 2 (immediately after)
-curl -X POST "https://stockdigest-daily.onrender.com/admin/safe-incremental-commit" \
+curl -X POST "https://stockdigest.app/admin/safe-incremental-commit" \
   -H "X-Admin-Token: $ADMIN_TOKEN" -d '{"tickers": ["MSFT"]}'
 ```
 **Expected**: Second commit refetches SHA, retries successfully
@@ -228,12 +228,12 @@ ALTER TABLE ticker_reference DROP COLUMN last_github_sync;
 ### Test 3: Server Restart Recovery
 ```bash
 # Submit job
-curl -X POST "https://stockdigest-daily.onrender.com/jobs/submit" -d '{"tickers": ["AAPL"]}'
+curl -X POST "https://stockdigest.app/jobs/submit" -d '{"tickers": ["AAPL"]}'
 
 # Immediately restart server via Render dashboard
 
 # Check startup logs
-curl "https://stockdigest-daily.onrender.com/jobs/stats"
+curl "https://stockdigest.app/jobs/stats"
 ```
 **Expected**:
 - Startup logs show: "STARTUP: Found 1 jobs in 'processing' state"
@@ -245,13 +245,13 @@ curl "https://stockdigest-daily.onrender.com/jobs/stats"
 
 ### 1. Daily Health Check
 ```bash
-curl https://stockdigest-daily.onrender.com/health | jq '.system.memory_mb'
+curl https://stockdigest.app/health | jq '.system.memory_mb'
 ```
 Watch for memory creep (>400MB sustained = investigate)
 
 ### 2. Job Queue Stats
 ```bash
-curl https://stockdigest-daily.onrender.com/jobs/stats
+curl https://stockdigest.app/jobs/stats
 ```
 Check for:
 - `circuit_breaker.state`: Should be "closed"

@@ -438,13 +438,13 @@ PowerShell → /jobs/batch/{id} (<1s) → Real-time status (poll every 20s)
 
 ```bash
 # Check worker health
-curl https://stockdigest-daily.onrender.com/jobs/stats -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest.app/jobs/stats -H "X-Admin-Token: $TOKEN"
 
 # Check batch status
-curl https://stockdigest-daily.onrender.com/jobs/batch/{batch_id} -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest.app/jobs/batch/{batch_id} -H "X-Admin-Token: $TOKEN"
 
 # Check specific job (includes full stacktrace)
-curl https://stockdigest-daily.onrender.com/jobs/{job_id} -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest.app/jobs/{job_id} -H "X-Admin-Token: $TOKEN"
 ```
 
 ### SQL Queries

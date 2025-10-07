@@ -82,30 +82,19 @@ SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "5"))
 TRIAGE_MAX_CONCURRENCY = int(os.getenv("TRIAGE_MAX_CONCURRENCY", "5"))
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))  # Parallel ticker processing
 
-# Global semaphores for concurrent processing
+# Global semaphores for concurrent processing (thread-safe, work across event loops)
+# These work in both sync and async contexts (with minor blocking during acquisition)
 OPENAI_SEM = BoundedSemaphore(OPENAI_MAX_CONCURRENCY)
-CLAUDE_SEM = BoundedSemaphore(CLAUDE_MAX_CONCURRENCY)  # Claude semaphore
+CLAUDE_SEM = BoundedSemaphore(CLAUDE_MAX_CONCURRENCY)
 PLAYWRIGHT_SEM = BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENCY)
 SCRAPFLY_SEM = BoundedSemaphore(SCRAPFLY_MAX_CONCURRENCY)
+TRIAGE_SEM = BoundedSemaphore(TRIAGE_MAX_CONCURRENCY)
 
-# Async semaphores for async operations
-_async_semaphores_initialized = False
-async_openai_sem = None
-async_claude_sem = None  # Claude async semaphore
-async_playwright_sem = None
-async_scrapfly_sem = None
-async_triage_sem = None
-
-def init_async_semaphores():
-    """Initialize async semaphores - called once per event loop"""
-    global _async_semaphores_initialized, async_openai_sem, async_claude_sem, async_playwright_sem, async_scrapfly_sem, async_triage_sem
-    if not _async_semaphores_initialized:
-        async_openai_sem = asyncio.Semaphore(OPENAI_MAX_CONCURRENCY)
-        async_claude_sem = asyncio.Semaphore(CLAUDE_MAX_CONCURRENCY)  # Initialize Claude semaphore
-        async_playwright_sem = asyncio.Semaphore(PLAYWRIGHT_MAX_CONCURRENCY)
-        async_scrapfly_sem = asyncio.Semaphore(SCRAPFLY_MAX_CONCURRENCY)
-        async_triage_sem = asyncio.Semaphore(TRIAGE_MAX_CONCURRENCY)
-        _async_semaphores_initialized = True
+# NOTE: Removed asyncio semaphores (2025-10-07)
+# Reason: asyncio.Semaphore binds to specific event loop, causing errors when
+# using asyncio.run() in ThreadPoolExecutor (job queue system).
+# Solution: Use threading.BoundedSemaphore which works across threads and event loops.
+# Trade-off: Tiny blocking overhead (~microseconds) vs 100% async, but negligible impact.
 
 def get_openai_session():
     """Get a requests session with retry logic for OpenAI API calls"""
@@ -3841,9 +3830,6 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
             keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
             return None, f"Competitor '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['competitor_per_keyword']})"
     
-    # Ensure async semaphores are initialized
-    init_async_semaphores()
-    
     enhanced_scraping_stats["total_attempts"] += 1
 
     # Check if domain should skip TIER 1 (known JavaScript-heavy domains)
@@ -3903,7 +3889,7 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
     if SCRAPFLY_API_KEY:
         LOG.info(f"ASYNC TIER 2 (Scrapfly): Attempting {domain}")
 
-        async with async_scrapfly_sem:
+        with SCRAPFLY_SEM:
             try:
                 scrapfly_content, scrapfly_error = await scrape_with_scrapfly_async(url, domain)
 
@@ -5316,11 +5302,8 @@ async def generate_ai_individual_summary_async(scraped_content: str, title: str,
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         LOG.warning(f"AI summary generation skipped - API key: {bool(OPENAI_API_KEY)}, content length: {len(scraped_content) if scraped_content else 0}")
         return None
-    
-    # Ensure async semaphores are initialized
-    init_async_semaphores()
-    
-    async with async_openai_sem:
+
+    with OPENAI_SEM:
         try:
             config = get_ticker_config(ticker)
             company_name = config.get("name", ticker) if config else ticker
@@ -5398,8 +5381,7 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    init_async_semaphores()
-    async with async_claude_sem:
+    with CLAUDE_SEM:
         try:
             # System prompt (cached - instructions that repeat across articles)
             system_prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
@@ -5457,8 +5439,7 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    init_async_semaphores()
-    async with async_claude_sem:
+    with CLAUDE_SEM:
         try:
             # System prompt (cached - competitive analysis framework)
             system_prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze articles and write summaries using ONLY facts explicitly stated in the text.
@@ -5522,8 +5503,7 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    init_async_semaphores()
-    async with async_claude_sem:
+    with CLAUDE_SEM:
         try:
             # System prompt (cached - industry analysis framework)
             system_prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
@@ -5589,8 +5569,7 @@ async def generate_openai_article_summary(company_name: str, ticker: str, title:
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    init_async_semaphores()
-    async with async_openai_sem:
+    with OPENAI_SEM:
         try:
             prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Write a summary using ONLY facts explicitly stated.
 
@@ -5631,8 +5610,7 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    init_async_semaphores()
-    async with async_openai_sem:
+    with OPENAI_SEM:
         try:
             prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
@@ -5689,8 +5667,7 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    init_async_semaphores()
-    async with async_openai_sem:
+    with OPENAI_SEM:
         try:
             prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
@@ -8016,9 +7993,6 @@ async def perform_ai_triage_with_dual_scoring_async(
         LOG.warning("No AI API keys configured - skipping triage")
         return selected_results
 
-    # Ensure async semaphores are initialized
-    init_async_semaphores()
-
     # Get ticker metadata
     config = get_ticker_config(ticker)
     company_name = config.get("name", ticker) if config else ticker
@@ -8226,10 +8200,7 @@ async def perform_ai_triage_with_batching_async(
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - skipping triage")
         return {"company": [], "industry": [], "competitor": []}
-    
-    # Ensure async semaphores are initialized
-    init_async_semaphores()
-    
+
     selected_results = {"company": [], "industry": [], "competitor": []}
 
     # Get ticker metadata for enhanced prompts
@@ -11789,6 +11760,14 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
+            # Check if article is <24 hours old
+            is_new = False
+            if article.get('published_at'):
+                hours_old = (datetime.now(timezone.utc) - article['published_at']).total_seconds() / 3600
+                is_new = hours_old < 24
+
+            new_badge = ' <span style="font-size: 10px; color: #10b981; font-weight: 600; background-color: #d1fae5; padding: 2px 6px; border-radius: 3px; margin-left: 4px;">NEW</span>' if is_new else ''
+
             # Star for FLAGGED + QUALITY articles
             star = '<span style="color: #f59e0b;">★</span> ' if is_starred(article['id'], article['domain']) else ''
             domain_name = get_or_create_formal_domain_name(article['domain']) if article['domain'] else "Unknown Source"
@@ -11796,7 +11775,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
             article_links += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article['resolved_url'] or '#'}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article['title']}{paywall_badge}</a>
+                    <a href="{article['resolved_url'] or '#'}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article['title']}{paywall_badge}{new_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''
@@ -13543,10 +13522,7 @@ async def cron_ingest(
         reset_scraping_stats()
         reset_enhanced_scraping_stats()
         memory_monitor.take_snapshot("STATS_RESET")
-        
-        # Initialize async semaphores
-        init_async_semaphores()
-        
+
         # Calculate dynamic scraping limits for each ticker using enhanced database
         dynamic_limits = {}
         if tickers:

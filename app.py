@@ -11771,7 +11771,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
             article_links += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article['resolved_url'] or '#'}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article['title']}{paywall_badge}{new_badge}</a>
+                    <a href="{article['resolved_url'] or '#'}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{new_badge}{article['title']}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''

@@ -8105,13 +8105,13 @@ async def perform_ai_triage_with_dual_scoring_async(
 
                 if OPENAI_API_KEY:
                     async def run_openai():
-                        async with async_openai_sem:
+                        with OPENAI_SEM:
                             return await operation["openai_func"](*operation["openai_args"])
                     openai_task = run_openai()
 
                 if ANTHROPIC_API_KEY:
                     async def run_claude():
-                        async with async_claude_sem:
+                        with CLAUDE_SEM:
                             return await operation["claude_func"](*operation["claude_args"])
                     claude_task = run_claude()
 
@@ -8298,9 +8298,9 @@ async def perform_ai_triage_with_batching_async(
         batch_tasks = []
         for op in batch:
             async def run_with_semaphore(operation):
-                async with async_triage_sem:
+                with TRIAGE_SEM:
                     return await operation["task_func"](*operation["args"])
-            
+
             task = run_with_semaphore(op)
             batch_tasks.append((op, task))
         

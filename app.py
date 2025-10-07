@@ -888,6 +888,11 @@ def ensure_schema():
                 ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS ai_summary TEXT;
                 ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS ai_model VARCHAR(50);
 
+                -- Add relevance scoring columns for industry article gate (Oct 2025)
+                ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS relevance_score NUMERIC(3,1);
+                ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS relevance_reason TEXT;
+                ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS is_rejected BOOLEAN DEFAULT FALSE;
+
                 -- ticker_reference table - EXACT match to CSV structure
                 CREATE TABLE IF NOT EXISTS ticker_reference (
                     ticker VARCHAR(20) PRIMARY KEY,
@@ -4228,6 +4233,72 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
     # Execute all scraping tasks concurrently
     scraping_results = await asyncio.gather(*scraping_tasks, return_exceptions=True)
 
+    # Phase 1.5: Industry article relevance scoring (NEW - Oct 2025)
+    # For industry articles only, score relevance after scraping but before AI summarization
+    relevance_scores = {}  # {article_index: {"score": float, "reason": str, "is_rejected": bool, "provider": str}}
+
+    for i, result in enumerate(scraping_results):
+        if isinstance(result, Exception) or not result["success"]:
+            continue
+
+        article_category = categories[i] if i < len(categories) else categories[0]
+
+        # Only score industry articles
+        if article_category == "industry" and result.get("scraped_content"):
+            article = articles_batch[i]
+            industry_keyword = article.get("search_keyword", "unknown industry")
+
+            try:
+                LOG.info(f"[{analysis_ticker}] 📊 Scoring relevance for industry article {i}: {article.get('title', 'No title')[:60]}...")
+
+                relevance_result = await score_industry_article_relevance(
+                    ticker=analysis_ticker,
+                    company_name=target_company_name,
+                    industry_keyword=industry_keyword,
+                    title=article.get("title", ""),
+                    scraped_content=result["scraped_content"]
+                )
+
+                relevance_scores[i] = relevance_result
+
+                # Log score
+                score = relevance_result["score"]
+                is_rejected = relevance_result["is_rejected"]
+                provider = relevance_result["provider"]
+                status = "REJECTED" if is_rejected else "ACCEPTED"
+
+                LOG.info(f"[{analysis_ticker}] {'✗' if is_rejected else '✓'} Article {i} scored {score:.1f}/10 [{status}] via {provider}")
+                LOG.debug(f"   Reason: {relevance_result['reason']}")
+
+                # Store relevance score in database immediately
+                article_id = article.get("id")
+                if article_id:
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE ticker_articles
+                            SET relevance_score = %s,
+                                relevance_reason = %s,
+                                is_rejected = %s
+                            WHERE ticker = %s AND article_id = %s
+                        """, (
+                            score,
+                            relevance_result["reason"],
+                            is_rejected,
+                            analysis_ticker,
+                            article_id
+                        ))
+                        LOG.debug(f"   Saved relevance score to database for article {article_id}")
+
+            except Exception as e:
+                LOG.error(f"[{analysis_ticker}] ❌ Relevance scoring failed for article {i}: {e}")
+                # Don't block processing on scoring failure - treat as accepted
+                relevance_scores[i] = {
+                    "score": 5.0,
+                    "reason": f"Scoring failed: {str(e)}",
+                    "is_rejected": False,
+                    "provider": "error"
+                }
+
     # Phase 2: Concurrent AI summarization with category-specific prompts
     successful_scrapes = []
     for i, result in enumerate(scraping_results):
@@ -4242,7 +4313,23 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                 "ai_model": None
             })
         elif result["success"]:
-            successful_scrapes.append((i, result))
+            # Check if article was rejected by relevance gate
+            if i in relevance_scores and relevance_scores[i]["is_rejected"]:
+                article_category = categories[i] if i < len(categories) else categories[0]
+                LOG.info(f"[{analysis_ticker}] ⏭️ Skipping AI summary for rejected {article_category} article {i} (score: {relevance_scores[i]['score']:.1f}/10)")
+                # Add to results as successful scrape but no AI summary
+                results.append({
+                    "article_id": articles_batch[i]["id"],
+                    "article_idx": i,
+                    "success": True,
+                    "scraped_content": result["scraped_content"],
+                    "ai_summary": None,  # Rejected articles get no summary
+                    "ai_model": None,
+                    "content_scraped_at": result["content_scraped_at"],
+                    "scraping_error": None
+                })
+            else:
+                successful_scrapes.append((i, result))
 
     if successful_scrapes:
         LOG.info(f"BATCH PHASE 2: AI summarization of {len(successful_scrapes)} successful scrapes with category-specific prompts")
@@ -5135,7 +5222,32 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     if article.get('scraped_content') and article.get('ai_summary'):
         analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
         header_badges.append(analyzed_html)
-    
+
+    # 6. Relevance score badge for industry articles (NEW - Oct 2025)
+    relevance_badge_html = ""
+    relevance_reason_html = ""
+    if category == "industry" and article.get('relevance_score') is not None:
+        score = article.get('relevance_score')
+        is_rejected = article.get('is_rejected', False)
+        reason = article.get('relevance_reason', 'No reason provided')
+
+        # Color and label based on rejection status
+        if is_rejected:
+            badge_style = "background-color: #fee; color: #c53030; border: 1px solid #fc8181;"
+            badge_icon = "✗"
+            badge_label = f"REJECTED ({score:.1f}/10)"
+        else:
+            badge_style = "background-color: #e6ffed; color: #22543d; border: 1px solid #9ae6b4;"
+            badge_icon = "✓"
+            badge_label = f"ACCEPTED ({score:.1f}/10)"
+
+        relevance_badge_html = f'<span style="display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; {badge_style}">{badge_icon} {badge_label}</span>'
+        header_badges.append(relevance_badge_html)
+
+        # Relevance reason shown below badges, above AI summary
+        reason_escaped = html.escape(reason)
+        relevance_reason_html = f"<br><div style='color: #718096; font-size: 11px; font-style: italic; margin-top: 4px; padding: 6px 8px; background-color: #f7fafc; border-left: 3px solid {'#fc8181' if is_rejected else '#9ae6b4'}; border-radius: 3px;'><strong>Relevance:</strong> {reason_escaped}</div>"
+
     # AI Summary section - check for ai_summary field (conditional based on show_ai_analysis)
     ai_summary_html = ""
     if show_ai_analysis and article.get("ai_summary"):
@@ -5164,6 +5276,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         <div class='article-content'>
             <a href='{link_url}' target='_blank'>{title}</a>
             <span class='meta'> | {pub_date}</span>
+            {relevance_reason_html}
             {ai_summary_html}
             {description_html}
         </div>
@@ -5711,6 +5824,322 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
         except Exception as e:
             LOG.error(f"Claude competitor summary failed for {competitor_ticker}: {e}")
     return None
+
+
+async def score_industry_article_relevance_claude(
+    ticker: str,
+    company_name: str,
+    industry_keyword: str,
+    title: str,
+    scraped_content: str
+) -> Optional[Dict]:
+    """
+    Score industry article relevance to target company (0-10 scale) using Claude.
+    Returns {"score": float, "reason": str} or None on error.
+    Uses prompt caching for cost savings.
+    """
+    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 100:
+        return None
+
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with CLAUDE_SEM:
+    if True:  # Maintain indentation
+        try:
+            # System prompt (cached - relevance scoring framework)
+            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article is ACTUALLY relevant to {company_name} ({ticker}), not just tangentially related to the {industry_keyword} keyword.
+
+**Your Task:**
+Rate this article's relevance to {company_name} on a 0-10 scale and explain why in 1-2 sentences.
+
+**Scoring Rubric:**
+
+**TIER 1: Highly Relevant (8-10)**
+- Article discusses {industry_keyword} trends/events that DIRECTLY affect {company_name}'s:
+  • Core business operations or revenue drivers
+  • Cost structure or profit margins
+  • Competitive positioning or market share
+  • Regulatory environment or compliance requirements
+  • Supply chain or key partnerships
+- Specific companies/competitors in {company_name}'s sector are named with material developments
+- Market data (TAM, growth rates, pricing) clearly impacts {company_name}'s addressable market
+- Technology/product developments affect {company_name}'s product roadmap or R&D priorities
+
+**TIER 2: Moderately Relevant (5-7)**
+- Article covers {industry_keyword} sector broadly with some relevance to {company_name}:
+  • General sector trends that indirectly affect {company_name}
+  • Broader economic/regulatory factors affecting the {industry_keyword} industry
+  • Competitor news with sector-wide implications (not just single company updates)
+  • Industry research/analysis that provides competitive context
+- Mentions multiple companies in the sector, including peers of {company_name}
+- Discusses market opportunities or challenges affecting the sector as a whole
+
+**TIER 3: Tangentially Related (2-4)**
+- Article mentions {industry_keyword} but connection to {company_name} is weak:
+  • Generic industry commentary without specific company or market impacts
+  • Single competitor news with no broader sector implications
+  • Distant geographic markets where {company_name} has minimal presence
+  • Industry mentioned in passing, not the article's focus
+  • Opinion pieces or trend lists without hard data
+- Very limited actionable intelligence for {company_name} investors
+
+**TIER 4: Not Relevant (0-1)**
+- Article is NOT actually about {industry_keyword} or {company_name}:
+  • Keyword appears by coincidence (company name collision, unrelated usage)
+  • Different industry using similar terminology
+  • Only mentions sector in generic context (e.g., "like companies in {industry_keyword}...")
+  • Exclusively about unrelated companies/topics
+  • Marketing content, press releases without news value
+
+**Critical Filters - Always score 0-1 if:**
+- Article is primarily about a different industry (keyword match is coincidental)
+- Only connection is a passing mention or analogy
+- Content is pure speculation without factual basis
+- Advertorial or promotional content without news substance
+- Company name collision (e.g., "Apple" the fruit vs AAPL the company)
+
+**Output Format:**
+Return JSON only:
+{{
+  "score": <float 0.0-10.0>,
+  "reason": "<1-2 sentence explanation of score>"
+}}
+
+**Examples:**
+
+TIER 1 (Score: 9.0):
+{{
+  "score": 9.0,
+  "reason": "Article provides detailed Q3 2024 sales data for electric vehicles in North America with specific market share figures for major manufacturers, directly relevant to {company_name}'s competitive position and revenue forecasts."
+}}
+
+TIER 2 (Score: 6.0):
+{{
+  "score": 6.0,
+  "reason": "Discusses broader semiconductor supply chain constraints affecting automotive industry, which impacts {company_name} but article lacks specific details about their products or tier suppliers."
+}}
+
+TIER 3 (Score: 3.0):
+{{
+  "score": 3.0,
+  "reason": "Generic trend piece about future of {industry_keyword} with vague predictions and no specific companies, data, or actionable insights for {company_name} investors."
+}}
+
+TIER 4 (Score: 0.0):
+{{
+  "score": 0.0,
+  "reason": "Article about {industry_keyword} in a completely different context (e.g., banking software when we're tracking industrial manufacturing); keyword match is coincidental."
+}}
+
+**Your Goal:** Be STRICT. Only scores of 5+ should proceed to expensive AI summarization. When in doubt, score lower."""
+
+            # User content (variable, not cached)
+            user_content = f"""**Article Title:** {title}
+
+**Industry Keyword:** {industry_keyword}
+
+**Article Content:**
+{scraped_content[:8000]}
+
+Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Return JSON only."""
+
+            headers = {
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2024-10-22",  # Updated for prompt caching
+                "content-type": "application/json"
+            }
+
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 512,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}  # Cache system instructions
+                    }
+                ],
+                "messages": [{"role": "user", "content": user_content}]
+            }
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                    if response.status != 200:
+                        LOG.error(f"Claude relevance scoring error {response.status} for {ticker}")
+                        return None
+
+                    result = await response.json()
+                    content = result.get("content", [{}])[0].get("text", "")
+
+                    try:
+                        parsed = json.loads(content)
+                        score = float(parsed.get("score", 0.0))
+                        reason = parsed.get("reason", "No reason provided")
+
+                        # Validate score range
+                        if not (0.0 <= score <= 10.0):
+                            LOG.warning(f"Claude returned invalid score {score} for {ticker}, clamping to 0-10")
+                            score = max(0.0, min(10.0, score))
+
+                        return {"score": score, "reason": reason}
+                    except (json.JSONDecodeError, ValueError) as e:
+                        LOG.error(f"Failed to parse Claude relevance score for {ticker}: {e}")
+                        return None
+
+        except Exception as e:
+            LOG.error(f"Claude relevance scoring failed for {ticker}: {str(e)}")
+            return None
+
+    return None
+
+
+async def score_industry_article_relevance_openai(
+    ticker: str,
+    company_name: str,
+    industry_keyword: str,
+    title: str,
+    scraped_content: str
+) -> Optional[Dict]:
+    """
+    Score industry article relevance to target company (0-10 scale) using OpenAI.
+    Fallback when Claude is unavailable.
+    Returns {"score": float, "reason": str} or None on error.
+    """
+    if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 100:
+        return None
+
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with OPENAI_SEM:
+    if True:  # Maintain indentation
+        try:
+            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article is ACTUALLY relevant to {company_name} ({ticker}), not just tangentially related to the {industry_keyword} keyword.
+
+Rate this article's relevance on a 0-10 scale:
+- 8-10: Highly relevant (directly affects {company_name}'s operations, costs, revenue, or competitive position)
+- 5-7: Moderately relevant (sector trends with indirect impact on {company_name})
+- 2-4: Tangentially related (weak connection, limited actionable intelligence)
+- 0-1: Not relevant (coincidental keyword match, different industry, or no real connection)
+
+Return JSON only:
+{{
+  "score": <float 0.0-10.0>,
+  "reason": "<1-2 sentence explanation>"
+}}
+
+Be STRICT. Only scores of 5+ should proceed to expensive AI summarization."""
+
+            user_content = f"""**Article Title:** {title}
+
+**Industry Keyword:** {industry_keyword}
+
+**Article Content:**
+{scraped_content[:8000]}
+
+Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Return JSON only."""
+
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "model": OPENAI_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 256,
+                "response_format": {"type": "json_object"}
+            }
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+                    if response.status != 200:
+                        LOG.error(f"OpenAI relevance scoring error {response.status} for {ticker}")
+                        return None
+
+                    result = await response.json()
+                    content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+                    try:
+                        parsed = json.loads(content)
+                        score = float(parsed.get("score", 0.0))
+                        reason = parsed.get("reason", "No reason provided")
+
+                        # Validate score range
+                        if not (0.0 <= score <= 10.0):
+                            LOG.warning(f"OpenAI returned invalid score {score} for {ticker}, clamping to 0-10")
+                            score = max(0.0, min(10.0, score))
+
+                        return {"score": score, "reason": reason}
+                    except (json.JSONDecodeError, ValueError) as e:
+                        LOG.error(f"Failed to parse OpenAI relevance score for {ticker}: {e}")
+                        return None
+
+        except Exception as e:
+            LOG.error(f"OpenAI relevance scoring failed for {ticker}: {str(e)}")
+            return None
+
+    return None
+
+
+async def score_industry_article_relevance(
+    ticker: str,
+    company_name: str,
+    industry_keyword: str,
+    title: str,
+    scraped_content: str,
+    threshold: float = 4.0
+) -> Dict:
+    """
+    Main wrapper for industry article relevance scoring.
+    Tries Claude first, falls back to OpenAI if needed.
+
+    Args:
+        ticker: Stock ticker (e.g., "AAPL")
+        company_name: Company name (e.g., "Apple Inc.")
+        industry_keyword: Industry keyword being evaluated (e.g., "Cloud Computing")
+        title: Article title
+        scraped_content: Full article text
+        threshold: Minimum score to accept (default 4.0, rejects ≤4)
+
+    Returns:
+        {
+            "score": float (0.0-10.0),
+            "reason": str,
+            "is_rejected": bool (True if score <= threshold),
+            "provider": str ("claude" or "openai" or "error")
+        }
+    """
+    # Try Claude first (primary)
+    result = await score_industry_article_relevance_claude(
+        ticker, company_name, industry_keyword, title, scraped_content
+    )
+
+    if result:
+        result["is_rejected"] = result["score"] <= threshold
+        result["provider"] = "claude"
+        return result
+
+    # Fallback to OpenAI
+    LOG.warning(f"Claude relevance scoring unavailable for {ticker}, trying OpenAI fallback")
+    result = await score_industry_article_relevance_openai(
+        ticker, company_name, industry_keyword, title, scraped_content
+    )
+
+    if result:
+        result["is_rejected"] = result["score"] <= threshold
+        result["provider"] = "openai"
+        return result
+
+    # Both failed
+    LOG.error(f"Both Claude and OpenAI relevance scoring failed for {ticker}")
+    return {
+        "score": 0.0,
+        "reason": "AI scoring unavailable (both providers failed)",
+        "is_rejected": True,
+        "provider": "error"
+    }
 
 
 async def generate_claude_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
@@ -11691,7 +12120,8 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                         ta.found_at, ta.category,
                         ta.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
+                        ta.competitor_ticker,
+                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
                     WHERE ta.found_at >= %s
@@ -11709,7 +12139,8 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                         ta.found_at, ta.category,
                         ta.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
+                        ta.competitor_ticker,
+                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
                     WHERE ta.found_at >= %s
@@ -11727,7 +12158,8 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                         ta.found_at, ta.category,
                         ta.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
+                        ta.competitor_ticker,
+                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
                     WHERE ta.found_at >= %s
@@ -11744,7 +12176,8 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
                         ta.found_at, ta.category,
                         ta.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker
+                        ta.competitor_ticker,
+                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
                     WHERE ta.found_at >= %s
@@ -12108,6 +12541,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                 WHERE ta.ticker = %s
                 AND a.id = ANY(%s)
                 AND (a.published_at >= %s OR a.published_at IS NULL)
+                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                 ORDER BY a.published_at DESC NULLS LAST
             """, (ticker, flagged_article_ids, cutoff))
         else:
@@ -12118,6 +12552,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.ticker = %s
                 AND (a.published_at >= %s OR a.published_at IS NULL)
+                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                 ORDER BY a.published_at DESC NULLS LAST
             """, (ticker, cutoff))
 

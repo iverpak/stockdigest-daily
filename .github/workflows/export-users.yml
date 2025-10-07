@@ -1,0 +1,43 @@
+name: Export Beta Users CSV
+
+on:
+  schedule:
+    # Run every day at 4:00 AM UTC (11:00 PM EST / Midnight EDT)
+    - cron: '0 4 * * *'
+
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  export-users:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Export Beta Users to CSV
+        run: |
+          echo "🔄 Triggering CSV export..."
+
+          response=$(curl -X POST \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_TOKEN }}" \
+            -w "\n%{http_code}" \
+            -s \
+            https://stockdigest-daily.onrender.com/admin/export-user-csv)
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -eq 200 ]; then
+            echo "✅ CSV export successful!"
+            exit 0
+          else
+            echo "❌ CSV export failed with status $http_code"
+            exit 1
+          fi
+
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "::error::CSV export failed. Check logs above for details."

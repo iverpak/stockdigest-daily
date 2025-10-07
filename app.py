@@ -5401,9 +5401,10 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
     init_async_semaphores()
     async with async_claude_sem:
         try:
-            prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+            # System prompt (cached - instructions that repeat across articles)
+            system_prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
 
-**Focus:** This article is about {company_name}'s operations, financials, and strategic actions. Extract all material facts about {company_name}.
+**Focus:** Extract all material facts about {company_name} from the article.
 
 **Content Priority (address only what article contains):**
 - Financial metrics: Revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods
@@ -5421,14 +5422,20 @@ Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most ma
 - Cite sources in parentheses using domain name only: (Reuters), (Business Wire)
 - FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
 - NO inference beyond explicit guidance/commentary
-- Each sentence must add new factual information
+- Each sentence must add new factual information"""
 
-TARGET: {company_name} ({ticker})
+            # User content (variable - changes per article)
+            user_content = f"""TARGET: {company_name} ({ticker})
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
-            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-            data = {"model": ANTHROPIC_MODEL, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2024-10-22", "content-type": "application/json"}
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 8192,
+                "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                "messages": [{"role": "user", "content": user_content}]
+            }
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
                 async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
@@ -5453,9 +5460,10 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
     init_async_semaphores()
     async with async_claude_sem:
         try:
-            prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+            # System prompt (cached - competitive analysis framework)
+            system_prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze articles and write summaries using ONLY facts explicitly stated in the text.
 
-**Focus:** This article is about {competitor_name}'s operations, but your analysis must explain competitive implications for {target_company}. Extract facts about {competitor_name} AND assess impact on {target_company}'s competitive position.
+**Focus:** Extract facts about {competitor_name} AND assess impact on {target_company}'s competitive position.
 
 **Content Priority (address only what article contains):**
 - Financial metrics: {competitor_name}'s revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods → Explain competitive pressure/opportunity for {target_company}
@@ -5478,15 +5486,21 @@ Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with competi
 - Cite sources in parentheses using domain name only: (Reuters), (Bloomberg)
 - FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
 - NO inference beyond explicit guidance/commentary
-- Each paragraph must connect {competitor_name} facts to {target_company} competitive impact
+- Each paragraph must connect {competitor_name} facts to {target_company} competitive impact"""
 
-TARGET COMPANY: {target_company} ({target_ticker})
+            # User content (variable - changes per article)
+            user_content = f"""TARGET COMPANY: {target_company} ({target_ticker})
 COMPETITOR: {competitor_name} ({competitor_ticker})
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
-            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-            data = {"model": ANTHROPIC_MODEL, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2024-10-22", "content-type": "application/json"}
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 8192,
+                "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                "messages": [{"role": "user", "content": user_content}]
+            }
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
                 async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
@@ -5511,9 +5525,10 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
     init_async_semaphores()
     async with async_claude_sem:
         try:
-            prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+            # System prompt (cached - industry analysis framework)
+            system_prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
 
-**Focus:** This article contains {industry_keyword} industry insights, but your analysis must explain specific implications for {target_company}'s operations, costs, demand, or competitive position.
+**Focus:** Extract {industry_keyword} industry insights and explain specific implications for {target_company}'s operations, costs, demand, or competitive position.
 
 **Content Priority (address only what article contains):**
 - Market dynamics: TAM/SAM sizing, growth rates, adoption trends with specific figures → How this affects {target_company}'s addressable market and growth runway
@@ -5538,15 +5553,21 @@ Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with {target
 - Cite sources in parentheses using domain name only: (WSJ), (FT)
 - FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
 - NO inference beyond explicit projections/guidance
-- Each paragraph must connect sector facts to {target_company}-specific impact
+- Each paragraph must connect sector facts to {target_company}-specific impact"""
 
-TARGET COMPANY: {target_company} ({target_ticker})
+            # User content (variable - changes per article)
+            user_content = f"""TARGET COMPANY: {target_company} ({target_ticker})
 SECTOR FOCUS: {industry_keyword}
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
-            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-            data = {"model": ANTHROPIC_MODEL, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2024-10-22", "content-type": "application/json"}
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 8192,
+                "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                "messages": [{"role": "user", "content": user_content}]
+            }
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
                 async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
@@ -7457,24 +7478,32 @@ SELECTION STANDARD:
 Return a JSON array of selected articles. Each must have:
 [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about relevance.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about relevance."""
 
-Articles: {json.dumps(items, separators=(',', ':'))}"""
+    # Separate variable content for better caching (articles data changes per call)
+    user_content = f"Articles: {json.dumps(items, separators=(',', ':'))}"
 
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2024-10-22",  # Updated for prompt caching
             "content-type": "application/json"
         }
 
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
+                }
+            ],
             "messages": [
                 {
                     "role": "user",
-                    "content": system_prompt
+                    "content": user_content
                 }
             ]
         }
@@ -7639,21 +7668,29 @@ SELECTION STANDARD:
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about sector relevance to {company_name}.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about sector relevance to {company_name}."""
 
-Articles: {json.dumps(items, separators=(',', ':'))}"""
+    # Separate variable content for better caching
+    user_content = f"Articles: {json.dumps(items, separators=(',', ':'))}"
 
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2024-10-22",  # Updated for prompt caching
             "content-type": "application/json"
         }
 
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "messages": [{"role": "user", "content": system_prompt}]
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
+                }
+            ],
+            "messages": [{"role": "user", "content": user_content}]
         }
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
@@ -7788,21 +7825,29 @@ SELECTION STANDARD:
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about relevance.
+CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about relevance."""
 
-Articles: {json.dumps(items, separators=(',', ':'))}"""
+    # Separate variable content for better caching
+    user_content = f"Articles: {json.dumps(items, separators=(',', ':'))}"
 
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2024-10-22",  # Updated for prompt caching
             "content-type": "application/json"
         }
 
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "messages": [{"role": "user", "content": system_prompt}]
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
+                }
+            ],
+            "messages": [{"role": "user", "content": user_content}]
         }
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
@@ -10454,9 +10499,13 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
     prompt, company_name = result
 
     try:
+        # System prompt is the same across tickers (cacheable)
+        # Extract instructions part and put ticker-specific content in user message
+        # For executive summaries, the prompt already contains both instructions and content
+        # We'll use the whole prompt as user content since it's ticker-specific
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2024-10-22",  # Updated for prompt caching
             "content-type": "application/json"
         }
 

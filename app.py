@@ -22,8 +22,9 @@ from urllib.robotparser import RobotFileParser
 import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, Request, HTTPException, Query, Body, UploadFile, File
-from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, EmailStr
 
 import feedparser
 import requests
@@ -280,7 +281,10 @@ if not LOG.handlers:
 # ------------------------------------------------------------------------------
 # Config / Environment
 # ------------------------------------------------------------------------------
-APP = FastAPI(title="Quantbrief Stock News Aggregator")
+APP = FastAPI(title="StockDigest Stock Intelligence Platform")
+
+# Templates setup for landing page
+templates = Jinja2Templates(directory="templates")
 app = APP  # for uvicorn
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -1040,9 +1044,25 @@ def ensure_schema():
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_exec_summ_ticker_date ON executive_summaries(ticker, summary_date DESC);
+
+                -- Beta users table for landing page signups
+                CREATE TABLE IF NOT EXISTS beta_users (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    ticker1 VARCHAR(10) NOT NULL,
+                    ticker2 VARCHAR(10) NOT NULL,
+                    ticker3 VARCHAR(10) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    status VARCHAR(50) DEFAULT 'active'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_beta_users_status ON beta_users(status);
+                CREATE INDEX IF NOT EXISTS idx_beta_users_created_at ON beta_users(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_beta_users_email ON beta_users(email);
             """)
 
-    LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE")
+    LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS")
 
 def update_schema_for_content():
     """Deprecated - schema already created in ensure_schema()"""
@@ -10760,6 +10780,89 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
         return False
 
 
+def send_beta_signup_notification(name: str, email: str, ticker1: str, ticker2: str, ticker3: str) -> bool:
+    """
+    Send admin notification email for new beta signup.
+    Returns True if email sent successfully, False otherwise.
+    """
+    try:
+        # Get company names for better readability
+        companies = []
+        for ticker in [ticker1, ticker2, ticker3]:
+            config = get_ticker_config(ticker)
+            if config:
+                companies.append(f"{ticker} ({config.get('company_name', 'Unknown')})")
+            else:
+                companies.append(ticker)
+
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px;">
+            <h2 style="color: #1e40af;">🎉 New Beta User Signed Up!</h2>
+
+            <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <p style="margin: 8px 0;"><strong>Name:</strong> {name}</p>
+                <p style="margin: 8px 0;"><strong>Email:</strong> {email}</p>
+                <p style="margin: 8px 0;"><strong>Tracking:</strong></p>
+                <ul style="margin: 8px 0; padding-left: 20px;">
+                    <li>{companies[0]}</li>
+                    <li>{companies[1]}</li>
+                    <li>{companies[2]}</li>
+                </ul>
+                <p style="margin: 8px 0; color: #6b7280; font-size: 14px;">
+                    <strong>Signed up:</strong> {datetime.now().strftime('%B %d, %Y at %I:%M %p EST')}
+                </p>
+            </div>
+
+            <p style="color: #6b7280; font-size: 14px;">
+                This user will be included in tomorrow's 7 AM processing run.
+            </p>
+        </div>
+        """
+
+        subject = f"🎉 New Beta User: {name} tracking {ticker1}, {ticker2}, {ticker3}"
+
+        return send_email(subject=subject, html_body=html_body, to=ADMIN_EMAIL)
+
+    except Exception as e:
+        LOG.error(f"Failed to send beta signup notification: {e}")
+        return False
+
+
+def export_beta_users_to_csv() -> int:
+    """
+    Export active beta users to CSV for daily processing.
+    Called daily at 11:00 PM EST via Render cron.
+
+    Returns: Number of users exported
+    """
+    output_path = "/workspaces/quantbrief-daily/data/user_tickers.csv"
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, email, ticker1, ticker2, ticker3
+                FROM beta_users
+                WHERE status = 'active'
+                ORDER BY email
+            """)
+            users = cur.fetchall()
+
+        # Write CSV with header
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['name', 'email', 'ticker1', 'ticker2', 'ticker3'])
+            for user in users:
+                writer.writerow([user['name'], user['email'], user['ticker1'], user['ticker2'], user['ticker3']])
+
+        LOG.info(f"✅ Exported {len(users)} active beta users to {output_path}")
+        return len(users)
+
+    except Exception as e:
+        LOG.error(f"❌ CSV export failed: {e}")
+        LOG.error(traceback.format_exc())
+        raise
+
+
 def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440) -> bool:
     """Email #1: Article Selection QA - Shows which articles were flagged by AI triage"""
     try:
@@ -12816,9 +12919,168 @@ class CLIRequest(BaseModel):
 # ------------------------------------------------------------------------------
 # API Routes
 # ------------------------------------------------------------------------------
-@APP.get("/")
-def root():
-    return {"status": "ok", "service": "Quantbrief Stock News Aggregator"}
+@APP.get("/", response_class=HTMLResponse)
+async def landing_page(request: Request):
+    """Serve the StockDigest beta signup landing page"""
+    return templates.TemplateResponse("signup.html", {"request": request})
+
+
+# ------------------------------------------------------------------------------
+# Beta Signup API Endpoints
+# ------------------------------------------------------------------------------
+
+@APP.get("/api/validate-ticker")
+async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_length=10)):
+    """
+    Validate ticker with smart Canadian .TO suggestions.
+    Public endpoint (no auth required) for live form validation.
+
+    Returns:
+    - valid=True: Ticker found in database
+    - valid=False + suggestion: Ticker not found, but .TO variant exists
+    - valid=False: No matches found
+    """
+    try:
+        # Normalize ticker format (handles case, removes quotes, etc)
+        normalized = normalize_ticker_format(ticker)
+
+        # Try exact match first
+        config = get_ticker_config(normalized)
+
+        if config:
+            # Exact match found ✓
+            return {
+                "valid": True,
+                "ticker": normalized,
+                "company_name": config.get("company_name", "Unknown"),
+                "exchange": config.get("exchange", "Unknown"),
+                "country": config.get("country", "Unknown")
+            }
+
+        # No exact match - try Canadian variant (.TO suffix)
+        # Only if: no existing suffix AND ticker is 2-5 chars (typical Canadian ticker length)
+        if '.' not in normalized and 2 <= len(normalized) <= 5:
+            canadian_ticker = f"{normalized}.TO"
+            canadian_config = get_ticker_config(canadian_ticker)
+
+            if canadian_config:
+                # Found Canadian variant - suggest it
+                return {
+                    "valid": False,
+                    "suggestion": {
+                        "ticker": canadian_ticker,
+                        "company_name": canadian_config.get("company_name", "Unknown"),
+                        "exchange": canadian_config.get("exchange", "TSX"),
+                        "country": canadian_config.get("country", "Canada"),
+                        "message": f"Did you mean {canadian_ticker}?"
+                    }
+                }
+
+        # No matches found - ticker not recognized
+        return {
+            "valid": False,
+            "message": f"Ticker '{ticker}' not recognized. Try another."
+        }
+
+    except Exception as e:
+        LOG.error(f"Ticker validation error for '{ticker}': {e}")
+        return {
+            "valid": False,
+            "message": "Validation error. Please try again."
+        }
+
+
+class BetaSignupRequest(BaseModel):
+    """Pydantic model for beta signup form"""
+    name: str
+    email: str
+    ticker1: str
+    ticker2: str
+    ticker3: str
+
+
+@APP.post("/api/beta-signup")
+async def beta_signup_endpoint(signup: BetaSignupRequest):
+    """
+    Handle beta sign-up form submissions with strict ticker validation.
+    Public endpoint (no auth required).
+    """
+    try:
+        # Validate and clean input
+        name = signup.name.strip()
+        email = signup.email.strip().lower()
+
+        # Validate name
+        if not name or len(name) > 255:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Name must be 1-255 characters"}
+            )
+
+        # Validate email format
+        import re
+        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_regex, email):
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Invalid email format"}
+            )
+
+        # Normalize and validate tickers
+        tickers = []
+        ticker_data = []
+        for ticker_input in [signup.ticker1, signup.ticker2, signup.ticker3]:
+            normalized = normalize_ticker_format(ticker_input.strip())
+            config = get_ticker_config(normalized)
+
+            if not config:
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "error", "message": f"Ticker '{ticker_input}' not recognized"}
+                )
+
+            tickers.append(normalized)
+            ticker_data.append({
+                "ticker": normalized,
+                "company": config.get("company_name", "Unknown")
+            })
+
+        # Check for duplicate email
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT email FROM beta_users WHERE email = %s", (email,))
+            if cur.fetchone():
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "error", "message": "Email already registered"}
+                )
+
+        # Save to database
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO beta_users (name, email, ticker1, ticker2, ticker3, created_at, status)
+                VALUES (%s, %s, %s, %s, %s, NOW(), 'active')
+            """, (name, email, tickers[0], tickers[1], tickers[2]))
+            conn.commit()
+
+        # Send admin notification email
+        send_beta_signup_notification(name, email, tickers[0], tickers[1], tickers[2])
+
+        LOG.info(f"✅ New beta user: {email} tracking {tickers[0]}, {tickers[1]}, {tickers[2]}")
+
+        return {
+            "status": "success",
+            "message": "Welcome to StockDigest beta!",
+            "tickers": ticker_data
+        }
+
+    except Exception as e:
+        LOG.error(f"Beta signup error: {e}")
+        LOG.error(traceback.format_exc())
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Server error. Please try again."}
+        )
+
 
 @APP.get("/health")
 def health_check():
@@ -14368,6 +14630,30 @@ async def regenerate_metadata(request: Request, body: RegenerateMetadataRequest)
             "metadata": metadata,
             "feeds_created": len(feeds_created)
         }
+
+
+@APP.post("/admin/export-user-csv")
+async def admin_export_user_csv(request: Request):
+    """
+    Manually trigger CSV export of beta users.
+    Requires X-Admin-Token authentication.
+    """
+    # Validate admin token
+    admin_token = request.headers.get("X-Admin-Token")
+    if not admin_token or admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        count = export_beta_users_to_csv()
+        return {
+            "status": "success",
+            "message": f"Exported {count} active beta users to CSV",
+            "file_path": "/workspaces/quantbrief-daily/data/user_tickers.csv",
+            "exported_at": datetime.now().isoformat()
+        }
+    except Exception as e:
+        LOG.error(f"CSV export failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 
 @APP.post("/admin/force-digest")

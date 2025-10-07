@@ -1071,7 +1071,6 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_beta_users_status ON beta_users(status);
                 CREATE INDEX IF NOT EXISTS idx_beta_users_created_at ON beta_users(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_beta_users_email ON beta_users(email);
-                CREATE INDEX IF NOT EXISTS idx_beta_users_terms_version ON beta_users(terms_version);
 
                 -- Add terms versioning columns to existing beta_users table (safe migration)
                 DO $$
@@ -1085,6 +1084,9 @@ def ensure_schema():
                         ADD COLUMN privacy_accepted_at TIMESTAMPTZ;
                     END IF;
                 END $$;
+
+                -- Create index AFTER adding columns
+                CREATE INDEX IF NOT EXISTS idx_beta_users_terms_version ON beta_users(terms_version);
 
                 -- Unsubscribe tokens table
                 CREATE TABLE IF NOT EXISTS unsubscribe_tokens (
@@ -12071,10 +12073,6 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     total_articles_count = analyzed_count
     lookback_days = hours // 24 if hours >= 24 else 1
 
-    # Build HTML sections using helper functions
-    executive_summary_html = build_executive_summary_html(sections)
-    articles_html = build_articles_html(articles_by_category)
-
     # Get or create unsubscribe token
     if recipient_email:
         unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
@@ -12087,40 +12085,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     # Current date
     current_date = datetime.now().strftime("%b %d, %Y")
 
-    # Render Jinja2 template
-    try:
-        # Create a minimal request-like object for template rendering
-        class FakeRequest:
-            def __init__(self):
-                self.headers = {}
-                self.url = type('URL', (), {'path': '/email'})()
-
-        fake_request = FakeRequest()
-
-        template = templates.get_template("email_intelligence_report.html")
-        html = template.render(
-            request=fake_request,
-            ticker=ticker,
-            company_name=company_name,
-            industry=sector,
-            current_date=current_date,
-            stock_price=stock_price,
-            price_change=price_change_pct,
-            price_change_color=price_change_color,
-            executive_summary_html=executive_summary_html,
-            total_articles=total_articles_count,
-            paywalled_count=paywalled_count,
-            lookback_days=lookback_days,
-            articles_html=articles_html,
-            unsubscribe_url=unsubscribe_url
-        )
-    except Exception as e:
-        LOG.error(f"Error rendering email template: {e}")
-        LOG.error(traceback.format_exc())
-        return {"status": "error", "message": f"Template rendering failed: {str(e)}"}
-
-    # OLD INLINE HTML - Replaced by Jinja2 template above (commented out for reference)
-    """
+    # Build inline HTML with legal disclaimers
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -12166,6 +12131,15 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                         </td>
                     </tr>
 
+                    <!-- Legal Disclaimer Banner -->
+                    <tr>
+                        <td style="padding: 12px 24px; background-color: #fef3c7; border-bottom: 1px solid #fcd34d;">
+                            <p style="margin: 0; font-size: 11px; color: #92400e; line-height: 1.5; font-weight: 500; text-align: center;">
+                                ⚠️ <strong>DISCLAIMER:</strong> This report is for informational purposes only and does not constitute investment advice. Not a recommendation to buy or sell securities.
+                            </p>
+                        </td>
+                    </tr>
+
                     <!-- Content -->
                     <tr>
                         <td class="content-padding" style="padding: 24px;">
@@ -12200,8 +12174,26 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                     <td>
                                         <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
                                         <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
+
+                                        <!-- Legal Disclaimer -->
                                         <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
                                             This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
+                                        </div>
+
+                                        <!-- Links -->
+                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
+                                        </div>
+
+                                        <!-- Copyright -->
+                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 8px; color: #ffffff;">
+                                            © 2025 StockDigest. All rights reserved.
                                         </div>
                                     </td>
                                 </tr>
@@ -12217,7 +12209,6 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
 </body>
 </html>'''
-    """
 
     subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {total_articles_count} articles analyzed"
     success = send_email(subject, html)

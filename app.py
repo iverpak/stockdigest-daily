@@ -1465,34 +1465,45 @@ def validate_ticker_format(ticker: str) -> bool:
         # Standard formats
         r'^[A-Z]{1,8}$',                          # US: MSFT, AAPL, GOOGL, BERKSHIRE
         r'^[A-Z0-9]{1,8}\.[A-Z]{1,4}$',          # International: RY.TO, BHP.AX, VOD.L, 005930.KS (Korean), 7203.T (Tokyo)
-        
+
+        # Crypto pairs (Yahoo Finance format)
+        r'^[A-Z0-9]{2,10}-USD$',                 # Crypto to USD: BTC-USD, ETH-USD, BNB-USD
+        r'^[A-Z0-9]{2,10}-[A-Z]{3}$',           # Crypto pairs: BTC-EUR, ETH-GBP
+
+        # Forex pairs (Yahoo Finance format)
+        r'^[A-Z]{6}=X$',                         # Forex: EURUSD=X, GBPUSD=X, CADJPY=X
+        r'^[A-Z]{3}=X$',                         # Single currency to USD: CAD=X, EUR=X
+
+        # Market indices (Yahoo Finance format)
+        r'^\^[A-Z0-9]{2,8}$',                    # Indices: ^GSPC, ^DJI, ^IXIC, ^FTSE
+
         # Special class/series formats
         r'^[A-Z]{1,6}-[A-Z]$',                   # Class shares: BRK-A, BRK-B
         r'^[A-Z]{1,6}-[A-Z]{2}$',               # Extended class: BRK-PA
         r'^[A-Z]{1,6}-[A-Z]\.[A-Z]{1,4}$',      # International class: TECK-A.TO
-        
+
         # Rights, warrants, units
         r'^[A-Z]{1,6}\.R$',                      # Rights: AAPL.R
-        r'^[A-Z]{1,6}\.W$',                      # Warrants: AAPL.W  
+        r'^[A-Z]{1,6}\.W$',                      # Warrants: AAPL.W
         r'^[A-Z]{1,6}\.U$',                      # Units: AAPL.U
         r'^[A-Z]{1,6}\.UN$',                     # Units: REI.UN (Canadian REITs)
-        
+
         # Canadian specific formats
         r'^[A-Z]{1,6}\.TO$',                     # Toronto: RY.TO, TD.TO
         r'^[A-Z]{1,6}\.V$',                      # Vancouver: XXX.V
         r'^[A-Z]{1,6}\.CN$',                     # Canadian National: XXX.CN
-        
+
         # Other international suffixes
         r'^[A-Z]{1,6}\.L$',                      # London: VOD.L, BP.L
         r'^[A-Z]{1,6}\.AX$',                     # Australia: BHP.AX, CBA.AX
         r'^[A-Z]{1,6}\.HK$',                     # Hong Kong: 0005.HK
         r'^\d{4}\.HK$',                          # Hong Kong numeric: 0700.HK
-        
+
         # European formats
         r'^[A-Z]{1,6}\.DE$',                     # Germany: SAP.DE
         r'^[A-Z]{1,6}\.PA$',                     # Paris: MC.PA
         r'^[A-Z]{1,6}\.AS$',                     # Amsterdam: ASML.AS
-        
+
         # ADR formats
         r'^[A-Z]{1,6}-ADR$',                     # ADRs: NVO-ADR
     ]
@@ -1535,8 +1546,9 @@ def normalize_ticker_format(ticker: str) -> str:
             normalized = normalized[:-len(colon_suffix)] + dot_suffix
             break
 
-    # Remove quotes and invalid characters (keep only alphanumeric, dots, dashes)
-    normalized = re.sub(r'[^A-Z0-9.-]', '', normalized)
+    # Remove quotes and invalid characters (keep alphanumeric, dots, dashes, carets, equals)
+    # Keep: letters, numbers, dot (.), dash (-), caret (^), equals (=)
+    normalized = re.sub(r'[^A-Z0-9.\-\^=]', '', normalized)
     
     # Handle common exchange variations and map to Yahoo Finance standard
     exchange_mappings = {
@@ -1979,8 +1991,20 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
         try:
             cur.execute("SELECT 1 FROM ticker_reference LIMIT 1")
         except Exception as e:
-            LOG.info(f"[DB_DEBUG] ticker_reference table doesn't exist yet (fresh database): {e}")
-            return None
+            LOG.warning(f"⚠️ ticker_reference table doesn't exist yet, using fallback config for {ticker}")
+            # Return fallback config instead of None
+            return {
+                'ticker': ticker,
+                'name': ticker,
+                'company_name': ticker,
+                'industry_keywords': [],
+                'competitors': [],
+                'sector': 'Unknown',
+                'industry': 'Unknown',
+                'sub_industry': '',
+                'has_full_config': False,
+                'use_google_only': True
+            }
 
         # Add debug query first
         cur.execute("SELECT COUNT(*) as count FROM ticker_reference WHERE ticker = %s", (ticker,))
@@ -2008,8 +2032,20 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
         result = cur.fetchone()
         LOG.info(f"[DB_DEBUG] Raw database result for '{ticker}': {result}")
         if not result:
-            LOG.info(f"[DB_DEBUG] No result found for ticker '{ticker}'")
-            return None
+            LOG.warning(f"⚠️ No config found for {ticker} - using fallback config (Google News only)")
+            # Return fallback config instead of None to prevent crashes
+            return {
+                'ticker': ticker,
+                'name': ticker,
+                'company_name': ticker,  # Use ticker as display name
+                'industry_keywords': [],
+                'competitors': [],
+                'sector': 'Unknown',
+                'industry': 'Unknown',
+                'sub_industry': '',
+                'has_full_config': False,  # Flag for downstream logic
+                'use_google_only': True    # Skip Yahoo Finance feeds
+            }
         
         # Convert 3 separate keyword fields back to array format
         industry_keywords = []
@@ -11834,7 +11870,11 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             # Check if article is new (< 24 hours)
             is_new = False
             if article.get('published_at'):
-                age_hours = (datetime.now(timezone.utc) - article['published_at']).total_seconds() / 3600
+                published_at = article['published_at']
+                # Ensure timezone-aware datetime
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
                 is_new = age_hours < 24
             new_badge = '🆕 ' if is_new else ''
 
@@ -12076,7 +12116,12 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     # Get or create unsubscribe token
     if recipient_email:
         unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
-        unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
+        if unsubscribe_token:
+            unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
+        else:
+            # Email not in beta_users (admin/test email) - use generic link
+            unsubscribe_url = "https://stockdigest.app/unsubscribe"
+            LOG.warning(f"No unsubscribe token for {recipient_email} (not a beta user), using generic link")
     else:
         # Fallback for testing/admin emails without recipient
         unsubscribe_url = "https://stockdigest.app/unsubscribe"
@@ -13363,9 +13408,20 @@ def get_or_create_unsubscribe_token(email: str) -> str:
     """
     Get existing unsubscribe token or create new one.
     Reuses token if user hasn't unsubscribed yet.
+    Returns empty string if email is not a beta user (admin/test emails).
     """
     try:
         with db() as conn, conn.cursor() as cur:
+            # First, check if email exists in beta_users (required for foreign key)
+            cur.execute("""
+                SELECT email FROM beta_users WHERE email = %s
+            """, (email,))
+            user_exists = cur.fetchone()
+
+            if not user_exists:
+                LOG.warning(f"Email {email} not in beta_users, skipping unsubscribe token generation")
+                return ""  # Return empty string for admin/test emails
+
             # Check if unused token exists
             cur.execute("""
                 SELECT token FROM unsubscribe_tokens
@@ -13381,7 +13437,7 @@ def get_or_create_unsubscribe_token(email: str) -> str:
             return generate_unsubscribe_token(email)
     except Exception as e:
         LOG.error(f"Error getting unsubscribe token: {e}")
-        # Fallback: return empty string (email will have broken unsubscribe link but won't crash)
+        # Fallback: return empty string (email will have generic unsubscribe link)
         return ""
 
 

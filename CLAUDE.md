@@ -127,10 +127,11 @@ Total: max(10s, 5s, 10s) = ~10 seconds
 4. **Digest Generation** (`/cron/digest`): Email compilation using Jinja2 templates
 
 #### Rate Limiting and Concurrency
-- **Thread-safe semaphores** using `threading.BoundedSemaphore` (not asyncio.Semaphore)
-  - **Why:** asyncio.Semaphore binds to event loop, causing errors in job queue (asyncio.run() in threads)
-  - **Solution:** threading.BoundedSemaphore works across threads and event loops
-  - **Trade-off:** Tiny blocking overhead (~microseconds) vs 100% async, negligible impact
+- **Semaphores DISABLED (as of Oct 2025)** to prevent threading deadlock
+  - **Problem:** `threading.BoundedSemaphore` blocks threads, freezing async event loops
+  - **Symptom:** 3+ concurrent tickers would deadlock (threads waiting for semaphores, can't release them)
+  - **Solution:** Disabled all semaphore acquisitions (APIs enforce their own rate limits)
+  - **Result:** 4 concurrent tickers run smoothly, occasional 429 errors handled gracefully
 - Domain-specific scraping strategies defined in `get_domain_strategy()`
 - User-agent rotation and referrer spoofing
 
@@ -498,8 +499,8 @@ Total: 60 minutes
 
 **1. Connection Pooling (Lines 690-770)**
 - Uses `psycopg_pool.ConnectionPool` for efficient connection reuse
-- Configuration: `min_size=5, max_size=45` (under 50 DB limit)
-- Prevents connection exhaustion with concurrent processing
+- Configuration: `min_size=5, max_size=80` (under 100 DB limit for Basic-1GB)
+- Supports up to 4-5 concurrent tickers comfortably
 - Retry logic: 3 attempts with exponential backoff (2s, 5s, 10s)
 - Fail-fast startup if pool cannot initialize
 
@@ -530,13 +531,14 @@ Total: 60 minutes
 ### Environment Variables
 
 ```bash
-MAX_CONCURRENT_JOBS=2  # Number of tickers to process simultaneously (default: 2)
+MAX_CONCURRENT_JOBS=4  # Number of tickers to process simultaneously (default: 2, recommended: 4)
 ```
 
 **Scaling:**
-- Start with `2` for testing
-- Scale to `5` after validation
-- Infrastructure: Standard 2GB RAM app, Basic 1GB DB
+- Default: `2` (conservative, always safe)
+- **Recommended: `4`** (optimal balance of speed and stability)
+- Maximum: `5` (tight margins, not recommended)
+- Infrastructure: Standard 2GB RAM app, Basic-1GB DB (100 connections)
 
 ### Resource Requirements
 
@@ -545,10 +547,17 @@ MAX_CONCURRENT_JOBS=2  # Number of tickers to process simultaneously (default: 2
 - DB Connections: ~15 peak (11 feeds + overhead)
 - Duration: ~25-30 minutes
 
-**Total for 5 Concurrent Tickers:**
-- Memory: ~1500MB (comfortable in 2GB app)
-- DB Connections: ~45 peak (within pool limit of 45)
+**Recommended: 4 Concurrent Tickers**
+- Memory: ~1200MB (60% of 2GB - comfortable) ✅
+- DB Connections: ~60 peak (75% of 80 pool limit - comfortable) ✅
 - Duration: ~30 minutes (same as single ticker!)
+- **4x faster than sequential** (120 min → 30 min for 4 tickers)
+
+**Maximum: 5 Concurrent Tickers** (not recommended)
+- Memory: ~1500MB (75% of 2GB - tight margins) ⚠️
+- DB Connections: ~75 peak (94% of 80 pool limit - very tight) ⚠️
+- Duration: ~30 minutes (no time benefit vs 4 concurrent)
+- **Risk:** Tight resource margins, frequent API rate limit errors
 
 ### GitHub Commit Logic
 
@@ -569,25 +578,36 @@ MO finishes    → 0 remaining → DEPLOYS! 🚀
 
 **Result:** Only ONE deployment per batch, regardless of batch size (2, 5, or 100 tickers). **No scheduled commits needed!**
 
-### Shared Semaphores (threading.BoundedSemaphore)
+### Semaphores: DISABLED (Oct 2025)
 
-**Rate Limiting (Global across all tickers):**
+**⚠️ All semaphores disabled to prevent deadlock with concurrent tickers**
+
+**Previous Implementation (Caused Deadlock):**
 ```python
-OPENAI_SEM = BoundedSemaphore(5)   # OpenAI API (thread-safe)
-CLAUDE_SEM = BoundedSemaphore(5)   # Claude API (thread-safe)
-SCRAPFLY_SEM = BoundedSemaphore(5) # Scrapfly API (thread-safe)
-TRIAGE_SEM = BoundedSemaphore(5)   # Triage operations (thread-safe)
+# DISABLED - Caused threading deadlock
+# OPENAI_SEM = BoundedSemaphore(5)   # OpenAI API
+# CLAUDE_SEM = BoundedSemaphore(5)   # Claude API
+# SCRAPFLY_SEM = BoundedSemaphore(5) # Scrapfly API
+# TRIAGE_SEM = BoundedSemaphore(5)   # Triage operations
 ```
 
-**Why threading.BoundedSemaphore (not asyncio.Semaphore)?**
-- **Problem:** asyncio.Semaphore binds to specific event loop
-- **Error:** "Semaphore is bound to a different event loop" in job queue
-- **Cause:** Job worker uses `asyncio.run()` in threads → new event loops
-- **Solution:** threading.BoundedSemaphore works across threads and event loops
-- **Trade-off:** Tiny blocking (~microseconds) vs 100% async, negligible impact
-- **Benefit:** True global rate limiting across ALL tickers
+**Why Disabled:**
+- **Problem:** `threading.BoundedSemaphore` **blocks the thread** while waiting for a slot
+- **Impact:** Blocked thread → frozen async event loop → async calls can't complete
+- **Deadlock:** With 3+ tickers, threads block waiting for slots that can never be released
+- **Result:** Jobs freeze at various progress points (10%, 40%, 60%)
 
-These semaphores are **thread-safe** and provide **natural rate limiting** across all concurrent tickers.
+**Current Solution:**
+- No semaphores → no thread blocking → event loops run freely
+- APIs enforce their own rate limits (return 429 errors)
+- Code has retry logic to handle 429 errors gracefully
+- **Result:** 4 concurrent tickers run smoothly with occasional rate limit errors
+
+**Future Consideration:**
+Could implement async-safe rate limiting using:
+- Per-thread `asyncio.Semaphore` (rate limiting per ticker, not global)
+- Database-based queue (global rate limiting, slower but safe)
+- Currently not needed - API rate limits are sufficient
 
 ### Testing & Validation
 
@@ -596,7 +616,7 @@ These semaphores are **thread-safe** and provide **natural rate limiting** acros
 $TICKERS = @("RY.TO")
 .\scripts\setup_job_queue.ps1
 ```
-Verify: Connection pool initialized, worker starts with `max_concurrent_jobs: 2`
+Verify: Connection pool initialized, worker starts with `max_concurrent_jobs: 4`
 
 **Phase 2: 2 Parallel Tickers (Testing)**
 ```powershell
@@ -605,17 +625,18 @@ $TICKERS = @("RY.TO", "TD.TO")
 ```
 Expected logs:
 ```
-📤 [JOB abc] Submitted to worker pool (1/2 active)
-📤 [JOB def] Submitted to worker pool (2/2 active)
+📤 [JOB abc] Submitted to worker pool (1/4 active)
+📤 [JOB def] Submitted to worker pool (2/4 active)
 [RY.TO] 🚀 Starting processing for RY.TO
 [TD.TO] 🚀 Starting processing for TD.TO  ← Within SECONDS!
 ```
 
-**Phase 3: 5 Parallel Tickers (Production)**
+**Phase 3: 4 Parallel Tickers (Recommended Production)**
 ```powershell
-$TICKERS = @("RY.TO", "TD.TO", "VST", "CEG", "MO")
+$TICKERS = @("RY.TO", "TD.TO", "VST", "CEG")
 ```
-Set `MAX_CONCURRENT_JOBS=5` in Render environment variables, then run script.
+Set `MAX_CONCURRENT_JOBS=4` in Render environment variables, then run script.
+**Expected:** All 4 complete in ~30 minutes with comfortable resource margins.
 
 ### Expected Behavior
 
@@ -623,14 +644,20 @@ Set `MAX_CONCURRENT_JOBS=5` in Render environment variables, then run script.
 ```
 19:28:50 - PLUG starts
 19:33:00 - SNAP starts (4 min later) ❌
+Total for 4 tickers: 120 minutes
 ```
 
-**New (Parallel):**
+**New (4 Concurrent):**
 ```
 19:45:00 - RY.TO starts
 19:45:03 - TD.TO starts (seconds later) ✅
-[RY.TO] 📊 Resource Status: Memory=215MB, DB Pool=18/45
-[TD.TO] 📊 Resource Status: Memory=208MB, DB Pool=22/45
+19:45:05 - VST starts (seconds later) ✅
+19:45:07 - CEG starts (seconds later) ✅
+[RY.TO] 📊 Resource Status: Memory=280MB, DB Pool=18/80
+[TD.TO] 📊 Resource Status: Memory=295MB, DB Pool=20/80
+[VST] 📊 Resource Status: Memory=312MB, DB Pool=16/80
+[CEG] 📊 Resource Status: Memory=305MB, DB Pool=19/80
+Total for 4 tickers: ~30 minutes (4x faster!)
 ```
 
 ### Thread Safety
@@ -639,39 +666,55 @@ Set `MAX_CONCURRENT_JOBS=5` in Render environment variables, then run script.
 - ✅ Each ticker job runs in isolated thread
 - ✅ `asyncio.run()` creates independent event loop per thread
 - ✅ Connection pool is thread-safe (`psycopg_pool`)
-- ✅ Global semaphores are thread-safe (`BoundedSemaphore`)
+- ✅ ~~Global semaphores are thread-safe~~ **Semaphores DISABLED** (prevented deadlock)
 - ✅ Database atomic job claiming (`FOR UPDATE SKIP LOCKED`)
 - ✅ No shared mutable state between ticker threads
+- ✅ APIs enforce their own rate limits (no manual limiting needed)
 
 ### Troubleshooting
 
 **Issue: Jobs processing sequentially instead of parallel**
-- Check startup logs for: `🔧 Job worker started (max_concurrent_jobs: 2)`
-- If missing or shows `1`: Old code deployed
-- Solution: Verify commit pushed to GitHub, Render deployed successfully
+- Check startup logs for: `🔧 Job worker started (max_concurrent_jobs: 4)`
+- If missing or shows different number: Check Render environment variables
+- Solution: Set `MAX_CONCURRENT_JOBS=4` in Render dashboard
 
 **Issue: Connection pool errors**
-- Check startup logs for: `✅ Database connection pool initialized`
+- Check startup logs for: `✅ Database connection pool initialized (5-80 connections)`
 - If failed: Database unavailable, check Render DB status
 - Retry logic: 3 attempts before failing startup
 
-**Issue: Memory exhaustion with 5 tickers**
+**Issue: Jobs stuck at 10% progress (not advancing)**
+- **Cause:** Threading deadlock from semaphores (should be fixed as of Oct 2025)
+- **Check:** Ensure latest code deployed (semaphores should be disabled)
+- **Verify:** Search logs for `# SEMAPHORE DISABLED` comments
+- **Rollback:** If still using semaphores, reduce `MAX_CONCURRENT_JOBS` to `2`
+
+**Issue: Frequent API rate limit errors (429)**
+- **Expected:** Occasional 429 errors are normal with semaphores disabled
+- **Acceptable:** < 10 rate limit errors per batch
+- **Problem:** > 20 rate limit errors per batch
+- **Solution:** Reduce `MAX_CONCURRENT_JOBS` from `4` to `3`
+
+**Issue: Memory exhaustion**
 - Check logs for: `[{ticker}] 📊 Resource Status: Memory=XXX`
-- If >1500MB total: Reduce `MAX_CONCURRENT_JOBS` to `3` or `4`
+- If >1500MB total: Reduce `MAX_CONCURRENT_JOBS` to `3`
 - Scrapfly is lightweight (~50MB overhead vs Playwright's 100MB)
 
 ### Performance Metrics
 
 **Achieved (Oct 2025):**
-- ✅ 2 tickers processing simultaneously (PLUG + SNAP)
-- ✅ Connection pooling working (no exhaustion)
+- ✅ **4 concurrent tickers processing smoothly** (recommended production config)
+- ✅ Connection pool upgraded to 80 (supports up to 5 concurrent)
+- ✅ Semaphores disabled to prevent threading deadlock
 - ✅ Smart GitHub commits (only last ticker triggers deploy)
 - ✅ Ticker-prefixed logging (easy filtering)
+- ✅ **4x speedup:** 4 tickers in 30 min vs 120 min sequential
 
-**Next Steps:**
-- Scale to 3-5 concurrent tickers
-- Monitor memory and DB connection usage
-- Optimize if needed for higher concurrency
+**Stable Production Configuration:**
+- `MAX_CONCURRENT_JOBS=4`
+- Memory usage: ~1200MB / 2GB (60%)
+- DB connections: ~60 / 80 (75%)
+- Processing time: ~30 minutes per batch
 
 ## Development Notes
 
@@ -722,7 +765,7 @@ Set `MAX_CONCURRENT_JOBS=5` in Render environment variables, then run script.
 4. `generate_claude_article_summary()` - ~500 tokens cached
 5. `generate_claude_competitor_article_summary()` - ~600 tokens cached
 6. `generate_claude_industry_article_summary()` - ~600 tokens cached
-7. `generate_claude_executive_summary()` - User content (no system/cache separation yet)
+7. `generate_claude_executive_summary()` - **~2000 tokens cached** (added Oct 2025)
 
 **Cost Savings (50 tickers/morning):**
 - Triage: $0.36/run saved

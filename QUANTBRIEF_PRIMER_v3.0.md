@@ -1,10 +1,11 @@
-# QuantBrief Daily Intelligence System - PRIMER v3.3
+# QuantBrief Daily Intelligence System - PRIMER v3.4
 
-**Last Updated:** October 6, 2025
-**Application File Size:** 15,300+ lines
+**Last Updated:** October 7, 2025
+**Application File Size:** 15,000+ lines
 **Total Endpoints:** 56 (39 admin + 8 job queue + 9 other)
 **Database:** PostgreSQL with 12 core tables
 **Primary Language:** Python 3.11 (FastAPI framework)
+**New in v3.4:** Threading semaphores + Scrapfly Tier 2 + Prompt caching + 24h NEW badge
 **New in v3.3:** Parallel ticker processing (2-5 concurrent tickers) + connection pooling
 **New in v3.2:** Async feed ingestion with grouped parallel processing (5.5x faster)
 
@@ -14,15 +15,16 @@
 
 QuantBrief is an **AI-powered financial news aggregation and analysis system** that:
 
-1. **Ingests** RSS feeds from 100+ financial news sources
-2. **Scrapes** full article content using multi-strategy approach (anti-bot bypass)
-3. **Triages** articles using OpenAI AI to determine relevance and categorization
-4. **Generates** 3 distinct QA emails per ticker (triage → content review → user report)
-5. **Stores** executive summaries in PostgreSQL for reuse
-6. **Commits** processed data to GitHub repository for version control
+1. **Ingests** RSS feeds from 100+ financial news sources (async, 5.5x faster)
+2. **Scrapes** full article content using 2-tier fallback (Requests → Scrapfly)
+3. **Triages** articles using dual AI scoring (OpenAI + Claude run in parallel)
+4. **Summarizes** articles with Claude API (prompt caching enabled, 13% cost savings)
+5. **Generates** 3 distinct QA emails per ticker with 24-hour NEW badges
+6. **Stores** executive summaries in PostgreSQL for reuse
+7. **Commits** processed data to GitHub repository for version control
 
 **Target Users:** Investors, analysts, portfolio managers tracking specific stocks
-**Processing Model:** Server-side job queue with real-time progress monitoring (eliminates HTTP 520 errors)
+**Processing Model:** Server-side job queue with parallel processing (2-5 concurrent tickers)
 
 ---
 
@@ -318,21 +320,21 @@ CREATE TABLE IF NOT EXISTS executive_summaries (
 1. **Single-File Monolith:** All logic in `app.py` (14,877 lines) - no microservices
 2. **PostgreSQL-Centric:** Database as single source of truth (no Redis, no external queues)
 3. **Job Queue Pattern:** Background worker polls database, eliminates HTTP 520 errors
-4. **AI-First Approach:** OpenAI drives triage, categorization, summarization
-5. **Anti-Bot Resilience:** Multi-strategy scraping (Playwright, ScrapingBee, ScrapFly)
+4. **AI-First Approach:** Dual scoring (OpenAI + Claude), prompt caching enabled
+5. **Anti-Bot Resilience:** 2-tier scraping (Requests → Scrapfly) - Playwright commented out
 
 ### Technology Stack
 
 **Backend:**
 - FastAPI (Python 3.11)
-- PostgreSQL (primary database)
-- OpenAI API (GPT-4o-mini for triage, GPT-4 for summaries)
+- PostgreSQL (primary database with connection pooling)
+- Claude API (primary, v2024-10-22 with prompt caching)
+- OpenAI API (triage + fallback for summaries)
 
 **Scraping Tools:**
-- newspaper3k (primary scraper)
-- Playwright (anti-bot domains)
-- ScrapingBee (premium fallback)
-- ScrapFly (secondary premium fallback)
+- newspaper3k (Tier 1, free, ~70% success)
+- Scrapfly (Tier 2, $0.002/article, ~95% success)
+- ~~Playwright~~ (commented out - caused hangs)
 
 **Email & Templates:**
 - Jinja2 templating (`email_template.html`)
@@ -623,20 +625,20 @@ AND (a.published_at >= cutoff OR NULL)
 ### Phase 2: Digest (60-95% Progress)
 
 **Step 1: Content Scraping**
-- Multi-strategy approach:
-  1. **newspaper3k** (primary, fast)
-  2. **Playwright** (anti-bot domains, slower)
-  3. **ScrapingBee** (premium fallback)
-  4. **ScrapFly** (secondary premium)
-- Domain-specific strategy overrides in `domain_strategies` table
+- 2-tier fallback approach:
+  1. **newspaper3k** (Tier 1: Requests, free, ~70% success)
+  2. **Scrapfly** (Tier 2: Premium API, $0.002/article, ~95% success)
+- Domain-specific strategy overrides (skip Tier 1 for known JS-heavy sites)
 
-**Step 2: AI Analysis (OpenAI GPT-4)**
+**Step 2: AI Analysis (Claude Sonnet 4.5)**
 - Generates detailed analysis for each flagged article
 - Extracts key topics, themes, sentiment
 - Assesses business impact
+- Prompt caching enabled (90% discount on repeated prompts)
 
 **Step 3: Executive Summary Generation**
-- OpenAI GPT-4 generates overview of all flagged articles
+- Claude Sonnet 4.5 generates overview of all flagged articles
+- OpenAI GPT-4 fallback if Claude fails
 - Saved to `executive_summaries` table (Line 1050)
 
 **Step 4: Email #2 Sent**
@@ -950,17 +952,45 @@ WHERE id NOT IN (
 
 ### Issue: High memory usage
 
-**Cause:** Playwright browsers not cleaned up
+**Cause:** Too many concurrent tickers or memory leak
 **Solution:**
-- Check `memory_monitor.py` logs
-- Playwright instances auto-cleanup after 30 minutes
+- Check `memory_monitor.py` logs for resource tracking
+- Reduce `MAX_CONCURRENT_JOBS` from 5 to 3
+- Memory per ticker: ~300MB (down from 400MB with Playwright removed)
 - Manual cleanup: Restart worker (server restart)
 
 ---
 
 ## VERSION HISTORY
 
-### v3.0 (October 5, 2025) - Current
+### v3.4 (October 7, 2025) - Current
+**Critical Fixes & Features:**
+- **Threading semaphores:** Replaced asyncio.Semaphore with threading.BoundedSemaphore
+  - **Fix:** Event loop binding errors in job queue ("bound to different event loop")
+  - **Impact:** Claude summaries now work 100% in job queue (no more OpenAI fallbacks)
+- **Scrapfly Tier 2:** Playwright commented out (caused hangs on problematic domains)
+  - **Reason:** theglobeandmail.com and similar sites caused indefinite stalls
+  - **New architecture:** Requests → Scrapfly (2-tier, faster, more reliable)
+- **Prompt caching enabled:** Claude API v2024-10-22
+  - **Savings:** ~13% cost reduction (~$572/year for 50 tickers/day)
+  - **How:** System prompts cached for 5 minutes (90% discount on cache hits)
+- **24-hour NEW badge:** Email #3 shows green badge for articles <24 hours old
+- **Executive summary refinement:** "Include all material developments, but keep bullets concise"
+- **File size:** 15,000+ lines (cleaned up ~300 lines of Playwright code)
+
+### v3.3 (October 6, 2025)
+**Major Changes:**
+- Parallel ticker processing (2-5 concurrent tickers)
+- Connection pooling (psycopg_pool)
+- ThreadPoolExecutor job worker
+- Smart GitHub commits (only last ticker triggers deployment)
+
+### v3.2 (October 5, 2025)
+**Major Changes:**
+- Async feed ingestion (5.5x faster)
+- Grouped parallel processing for RSS feeds
+
+### v3.0 (October 5, 2025)
 **Major Changes:**
 - 3-Email QA workflow (Article Selection → Content QA → Stock Intelligence)
 - Executive summary database storage (eliminates redundant AI calls)
@@ -1014,10 +1044,11 @@ WHERE id NOT IN (
 ### Performance Considerations
 
 **Bottlenecks:**
-1. **OpenAI API calls** (10-20s per batch)
+1. **Claude/OpenAI API calls** (5-15s per batch)
+   - Mitigated by prompt caching (90% discount on repeated prompts)
    - Mitigated by batch processing (2-3 articles per call)
-2. **Playwright scraping** (30-60s per article)
-   - Mitigated by domain strategy detection (only use when needed)
+2. **Scrapfly scraping** (3-5s per article for Tier 2)
+   - Mitigated by domain strategy detection (70% use free Tier 1)
 3. **Database queries** (1-5s for complex joins)
    - Mitigated by indexing on (ticker, published_at)
 

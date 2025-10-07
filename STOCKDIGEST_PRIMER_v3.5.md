@@ -2,10 +2,12 @@
 
 **Last Updated:** October 7, 2025
 **Application File Size:** 15,000+ lines
-**Total Endpoints:** 56 (39 admin + 8 job queue + 9 other)
-**Database:** PostgreSQL with 12 core tables
+**Total Endpoints:** 59 (39 admin + 8 job queue + 12 public)
+**Database:** PostgreSQL with 14 core tables (includes legal compliance tables)
 **Primary Language:** Python 3.11 (FastAPI framework)
-**New in v3.5:** **Semaphores DISABLED** (fixes deadlock) + 4 concurrent tickers stable + Connection pool: 80 + Executive summary cache_control
+**Legal:** Province of Ontario, Canada | CASL & PIPEDA Compliant | Terms v1.0 | Privacy v1.0
+**Contact:** stockdigest.research@gmail.com
+**New in v3.5:** **Semaphores DISABLED** (fixes deadlock) + 4 concurrent tickers stable + Connection pool: 80 + Executive summary cache_control + **Legal integration** (Terms/Privacy pages, unsubscribe tokens, Email #3 Jinja2 refactor)
 **New in v3.4:** ~~Threading semaphores~~ (caused deadlock, removed in v3.5) + Scrapfly Tier 2 + Prompt caching + 24h NEW badge
 **New in v3.3:** Parallel ticker processing + connection pooling
 **New in v3.2:** Async feed ingestion (5.5x faster)
@@ -199,19 +201,27 @@ StockDigest now generates **3 distinct emails per ticker** during the digest pha
 📝 Content QA: GM, F - 18 articles analyzed
 ```
 
-### Email #3: Premium Stock Intelligence Report (97% Progress) - **NEW in v3.1**
-**Function:** `send_user_intelligence_report()` - Line 11233
-**Subject Format:** `📊 Stock Intelligence: [Company Name] ([Ticker]) - [X] articles`
+### Email #3: Premium Stock Intelligence Report (97% Progress) - **UPDATED in v3.5**
+**Function:** `send_user_intelligence_report(hours, tickers, flagged_article_ids, recipient_email)` - Line 11873
+**Template:** `email_intelligence_report.html` (Jinja2)
+**Subject Format:** `📊 Stock Intelligence: [Company Name] ([Ticker]) - [X] articles analyzed`
 
-**Purpose:** Premium user-facing intelligence report with modern HTML design
+**Purpose:** Premium user-facing intelligence report with legal disclaimers and professional design
+
+**NEW in v3.5: Full Jinja2 Refactor**
+- Replaced 100+ lines of inline HTML with clean Jinja2 template rendering
+- Helper functions: `build_executive_summary_html()` (Line 11785), `build_articles_html()` (Line 11818)
+- Maintainable, testable, professional code
+- Legal compliance integrated (top disclaimer, footer disclaimer, unsubscribe links)
 
 **Content:**
-- **Modern HTML template** with gradient blue header and inline styles
+- **Top disclaimer banner:** "For informational purposes only. Not investment advice."
+- **Modern HTML template** with gradient blue header
 - **Stock price card** in header showing:
   - Current price from `ticker_reference` cache (no API calls)
   - Percentage change (green/red)
   - Current date
-- **Executive summary sections** parsed into 6 visual cards:
+- **Executive summary sections** rendered as 6 visual cards:
   1. 🔴 **Major Developments** (3-6 bullets)
   2. 📊 **Financial/Operational Performance** (2-4 bullets)
   3. ⚠️ **Risk Factors** (2-4 bullets)
@@ -222,9 +232,14 @@ StockDigest now generates **3 distinct emails per ticker** during the digest pha
   - Company articles
   - Industry articles
   - Competitor articles
-- **Star indicators (★)** for articles that are BOTH:
-  - ✅ FLAGGED (high AI relevance score)
-  - ✅ QUALITY domain (WSJ, Bloomberg, Reuters, FT, Barron's)
+- **Visual indicators:**
+  - **Star** (★) for FLAGGED + QUALITY articles
+  - **NEW badge** (🆕) for articles published <24 hours ago
+  - **PAYWALL badge** (red) for paywalled domains
+- **Comprehensive footer:**
+  - Legal disclaimer box
+  - Links: Terms of Service | Privacy Policy | Contact | Unsubscribe (all full URLs)
+  - Copyright notice
 - Shows **ONLY flagged articles** (same filtering as Email #1 and #2)
 - **NO AI analysis boxes, NO descriptions** (clean presentation)
 - Uses `resolved_url` for all article links
@@ -234,21 +249,32 @@ StockDigest now generates **3 distinct emails per ticker** during the digest pha
 
 **Key Behavior:**
 - Retrieves executive summary from `executive_summaries` table (no regeneration)
-- Parses summary text by emoji headers via `parse_executive_summary_sections()` (Line 11186)
+- Parses summary text by emoji headers via `parse_executive_summary_sections()` (Line 11733)
+- **Generates unique unsubscribe token** via `get_or_create_unsubscribe_token(recipient_email)`
 - **Single-ticker design only** (no multi-ticker support)
-- Inline HTML (no external Jinja2 template)
+- **Requires `recipient_email` parameter** for proper unsubscribe functionality
+
+**Template Variables:**
+- `ticker`, `company_name`, `industry`, `current_date`
+- `stock_price`, `price_change`, `price_change_color`
+- `executive_summary_html` (pre-rendered HTML string)
+- `articles_html` (pre-rendered HTML string)
+- `total_articles`, `paywalled_count`, `lookback_days`
+- `unsubscribe_url` (unique per user)
 
 **Example Subject:**
 ```
-📊 Stock Intelligence: General Motors (GM) - 12 articles
+📊 Stock Intelligence: General Motors (GM) - 12 articles analyzed
 ```
 
 **Design Features:**
 - Professional gradient header (blue theme)
 - Stock price card with real-time data
+- Legal disclaimer banners (top and footer)
 - Visual section dividers with horizontal gradient lines
 - Article cards with domain name + publication date
 - Responsive email-client compatible design
+- CASL/CAN-SPAM compliant unsubscribe link
 
 ### Flagged Article Filtering (CRITICAL CHANGE in v3.0)
 
@@ -338,7 +364,11 @@ CREATE TABLE IF NOT EXISTS executive_summaries (
 - ~~Playwright~~ (commented out - caused hangs)
 
 **Email & Templates:**
-- Jinja2 templating (`email_template.html`)
+- Jinja2 templating
+  - `email_intelligence_report.html` - Email #3 (Premium Intelligence Report) with legal disclaimers
+  - `email_template.html` - Email #2 (Content QA) - Legacy template
+  - `signup.html` - Beta landing page
+  - `terms_of_service.html`, `privacy_policy.html` - Legal pages
 - SMTP delivery (configurable)
 - Toronto timezone (America/Toronto)
 
@@ -346,7 +376,7 @@ CREATE TABLE IF NOT EXISTS executive_summaries (
 - GitHub integration via `safe_incremental_commit()` (Line 14707)
 - Automatic daily commits of processed data
 
-### Database Schema (12 Tables)
+### Database Schema (14 Tables)
 
 **Content Storage:**
 - `articles` - Full article content with URL deduplication
@@ -360,6 +390,29 @@ CREATE TABLE IF NOT EXISTS executive_summaries (
   - Columns: ticker, summary_date, summary_text, ai_provider, article_ids, counts, generated_at
   - UNIQUE(ticker, summary_date) - overwrites on same-day re-runs
   - Generated during Email #2, reused in Email #3
+
+**Beta User Management (UPDATED IN v3.5):**
+- `beta_users` - Beta signup data with legal compliance tracking
+  - Core fields: name, email, ticker1, ticker2, ticker3, status, created_at
+  - **Legal tracking (NEW in v3.5):**
+    - `terms_version` VARCHAR(10) DEFAULT '1.0' - Terms of Service version
+    - `terms_accepted_at` TIMESTAMPTZ - When user accepted Terms
+    - `privacy_version` VARCHAR(10) DEFAULT '1.0' - Privacy Policy version
+    - `privacy_accepted_at` TIMESTAMPTZ - When user accepted Privacy
+  - UNIQUE constraint on email
+  - Status field: 'active' | 'paused' | 'cancelled'
+  - Exported daily to `data/user_tickers.csv` for morning processing
+
+**Unsubscribe System (NEW IN v3.5):**
+- `unsubscribe_tokens` - Token-based unsubscribe for CASL/CAN-SPAM compliance
+  - `token` VARCHAR(64) UNIQUE - Cryptographically secure (43-char URL-safe, 256-bit entropy)
+  - `user_email` VARCHAR(255) - Foreign key to beta_users(email)
+  - `created_at` TIMESTAMPTZ - Token generation time
+  - `used_at` TIMESTAMPTZ - When token was used (NULL if unused)
+  - `ip_address` VARCHAR(45) - Security tracking
+  - `user_agent` TEXT - Security tracking
+  - One token per user, reusable until unsubscribed
+  - Indexed on token, email, and used_at
 
 **Job Queue System:**
 - `ticker_processing_batches` - Batch tracking (status, job counts, config)
@@ -497,8 +550,29 @@ The job queue system **decouples long-running ticker processing from HTTP reques
 - `POST /cron/digest` - Email digest generation and delivery (Line 13303)
 - `POST /admin/safe-incremental-commit` - GitHub commit (Line 14707)
 
-### Public Endpoints
-- `GET /` - API documentation
+### Public Endpoints (12 endpoints - No Authentication Required)
+- `GET /` - Beta landing page with legal disclaimers (HTML)
+  - Top disclaimer banner: "For informational purposes only"
+  - Required Terms/Privacy checkbox before signup
+  - Footer links: Terms | Privacy | Contact
+- `GET /terms-of-service` - Terms of Service page (NEW in v3.5)
+  - Province of Ontario, Canada jurisdiction
+  - Contact: stockdigest.research@gmail.com
+  - Last Updated: October 7, 2025 (v1.0)
+- `GET /privacy-policy` - Privacy Policy page (NEW in v3.5)
+  - PIPEDA compliant (Canadian privacy law)
+  - GDPR/CCPA rights included
+  - Last Updated: October 7, 2025 (v1.0)
+- `GET /unsubscribe?token=xxx` - Token-based unsubscribe (NEW in v3.5)
+  - Validates cryptographic token
+  - Idempotent (safe to click multiple times)
+  - Security tracking (IP, user agent)
+  - Branded success/error HTML pages
+  - CASL/CAN-SPAM compliant
+- `GET /api/validate-ticker` - Live ticker validation with Canadian .TO suggestions
+- `POST /api/beta-signup` - Beta user signup form submission
+  - Now logs terms acceptance timestamp + version
+  - Generates unsubscribe token automatically
 - `GET /health` - Health check
 
 ---
@@ -575,11 +649,20 @@ AND (a.published_at >= cutoff OR NULL)
 ### 3-Email System
 - `send_enhanced_quick_intelligence_email()` - **Line 10353** (Email #1: Article Selection QA)
 - `fetch_digest_articles_with_enhanced_content()` - **Line 10955** (Email #2: Content QA)
-- `send_user_intelligence_report()` - **Line 11233** (Email #3: Premium Stock Intelligence)
-- `parse_executive_summary_sections()` - **Line 11186** (Parse AI summary into 6 sections)
+- `send_user_intelligence_report(hours, tickers, flagged_article_ids, recipient_email)` - **Line 11873** (Email #3: Premium Intelligence Report)
+  - **NEW in v3.5:** Jinja2 template refactor with legal disclaimers
+  - **Requires:** `recipient_email` parameter for unsubscribe token generation
+- `build_executive_summary_html(sections)` - **Line 11785** (Helper: Render summary sections as HTML)
+- `build_articles_html(articles_by_category)` - **Line 11818** (Helper: Render article links as HTML)
+- `parse_executive_summary_sections()` - **Line 11733** (Parse AI summary into 6 sections)
 - `sort_articles_by_priority()` - **Line 10278** (Article priority sorting)
 - `save_executive_summary()` - **Line 1050** (Executive summary database storage)
-- `generate_openai_executive_summary()` - **Line 9999** (OpenAI executive summary generation)
+- `generate_openai_executive_summary()` - **Line 10069** (Executive summary AI prompt)
+
+### Unsubscribe System (NEW in v3.5)
+- `generate_unsubscribe_token(email)` - **Line 13055** (Generate cryptographic token)
+- `get_or_create_unsubscribe_token(email)` - **Line 13085** (Get existing or create new token)
+- `/unsubscribe` endpoint handler - **Line 12981** (Token validation + unsubscribe processing)
 
 ### Job Queue System
 - `process_digest_phase()` - **Line 11393** (Main digest phase orchestrator)
@@ -982,6 +1065,18 @@ WHERE id NOT IN (
 - **Production config:** `MAX_CONCURRENT_JOBS=4` recommended (up to 5 supported)
 - **Performance:** **4x speedup** (4 tickers: 30 min vs 120 min sequential)
 
+**Legal Integration (October 7, 2025):**
+- **Terms & Privacy pages:** Province of Ontario, Canada | CASL & PIPEDA compliant
+- **Beta signup updates:** Logs terms acceptance timestamp + version (v1.0)
+- **Token-based unsubscribe:** Cryptographic tokens (256-bit entropy), CASL/CAN-SPAM compliant
+- **Email #3 Jinja2 refactor:** Replaced 100+ lines of inline HTML with clean template
+  - New template: `email_intelligence_report.html`
+  - Helper functions: `build_executive_summary_html()`, `build_articles_html()`
+  - Legal disclaimers: Top banner + comprehensive footer
+- **New database tables:** `unsubscribe_tokens` (security tracking)
+- **Updated schema:** `beta_users` now tracks terms/privacy versions + acceptance timestamps
+- **New public endpoints:** `/terms-of-service`, `/privacy-policy`, `/unsubscribe`
+
 ### v3.4 (October 7, 2025) - DEPRECATED
 **Issues:** Threading semaphores caused deadlock with 3+ concurrent tickers (fixed in v3.5)
 - **Scrapfly Tier 2:** Playwright commented out (caused hangs)
@@ -1109,8 +1204,12 @@ SELECT * FROM executive_summaries WHERE ticker = 'GM' ORDER BY summary_date DESC
 ```
 
 **Key Files:**
-- `app.py` - Main application (14,877 lines)
-- `email_template.html` - Jinja2 email template
+- `app.py` - Main application (15,000+ lines)
+- `email_intelligence_report.html` - Email #3 Jinja2 template (NEW in v3.5)
+- `email_template.html` - Email #2 Jinja2 template (legacy)
+- `signup.html` - Beta landing page with legal disclaimers
+- `terms_of_service.html` - Terms of Service page (v1.0)
+- `privacy_policy.html` - Privacy Policy page (v1.0)
 - `memory_monitor.py` - Resource tracking
 - `data/ticker_reference.csv` - Ticker metadata
 - `scripts/setup_job_queue.ps1` - Production automation
@@ -1118,10 +1217,11 @@ SELECT * FROM executive_summaries WHERE ticker = 'GM' ORDER BY summary_date DESC
 **Key Functions:**
 - Email #1: Line 10353
 - Email #2: Line 10955
-- Email #3: Line 11175
+- Email #3: Line 11873 (updated in v3.5)
 - Article Sorting: Line 10278
 - Executive Summary Save: Line 1050
-- Digest Phase: Line 11393
+- Digest Phase: Line 11626 (updated in v3.5)
+- Unsubscribe Token Generation: Line 13055
 
 ---
 

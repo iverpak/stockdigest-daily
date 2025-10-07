@@ -12085,6 +12085,10 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     # Current date
     current_date = datetime.now().strftime("%b %d, %Y")
 
+    # Build HTML sections using helper functions
+    summary_html = build_executive_summary_html(sections)
+    articles_html = build_articles_html(articles_by_category)
+
     # Build inline HTML with legal disclaimers
     html = f'''<!DOCTYPE html>
 <html lang="en">

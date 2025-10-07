@@ -11760,17 +11760,9 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
-            # Check if article is <24 hours old
-            is_new = False
-            if article.get('published_at'):
-                pub_date = article['published_at']
-                # Ensure both datetimes are timezone-aware for comparison
-                if pub_date.tzinfo is None:
-                    pub_date = pub_date.replace(tzinfo=timezone.utc)
-                hours_old = (datetime.now(timezone.utc) - pub_date).total_seconds() / 3600
-                is_new = hours_old < 24
-
-            new_badge = ' <span style="font-size: 10px; color: #10b981; font-weight: 600; background-color: #d1fae5; padding: 2px 6px; border-radius: 3px; margin-left: 4px;">NEW</span>' if is_new else ''
+            # Check if article is <24 hours old (same logic as executive summary)
+            is_new = is_within_24_hours(article.get('published_at'))
+            new_badge = ' 🆕' if is_new else ''
 
             # Star for FLAGGED + QUALITY articles
             star = '<span style="color: #f59e0b;">★</span> ' if is_starred(article['id'], article['domain']) else ''

@@ -5411,7 +5411,7 @@ Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most ma
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
-            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2024-10-22", "content-type": "application/json"}
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
@@ -5475,7 +5475,7 @@ COMPETITOR: {competitor_name} ({competitor_ticker})
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
-            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2024-10-22", "content-type": "application/json"}
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
@@ -5541,7 +5541,7 @@ SECTOR FOCUS: {industry_keyword}
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
-            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2024-10-22", "content-type": "application/json"}
+            headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
@@ -7463,7 +7463,7 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2024-10-22",  # Updated for prompt caching
+            "anthropic-version": "2023-06-01",  # Updated for prompt caching
             "content-type": "application/json"
         }
 
@@ -7653,7 +7653,7 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2024-10-22",  # Updated for prompt caching
+            "anthropic-version": "2023-06-01",  # Updated for prompt caching
             "content-type": "application/json"
         }
 
@@ -7810,7 +7810,7 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2024-10-22",  # Updated for prompt caching
+            "anthropic-version": "2023-06-01",  # Updated for prompt caching
             "content-type": "application/json"
         }
 
@@ -10476,7 +10476,7 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         # We'll use the whole prompt as user content since it's ticker-specific
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2024-10-22",  # Updated for prompt caching
+            "anthropic-version": "2023-06-01",  # Updated for prompt caching
             "content-type": "application/json"
         }
 

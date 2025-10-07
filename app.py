@@ -13428,8 +13428,9 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
         # Try exact match first
         config = get_ticker_config(normalized)
 
-        if config:
-            # Exact match found ✓
+        # Check if ticker exists in database (has_full_config=True means it's real, False means fallback)
+        if config and config.get('has_full_config', True):
+            # Real ticker found in database ✓
             return {
                 "valid": True,
                 "ticker": normalized,
@@ -13444,7 +13445,8 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
             canadian_ticker = f"{normalized}.TO"
             canadian_config = get_ticker_config(canadian_ticker)
 
-            if canadian_config:
+            # Check if Canadian variant exists in database (not just fallback)
+            if canadian_config and canadian_config.get('has_full_config', True):
                 # Found Canadian variant - suggest it
                 return {
                     "valid": False,
@@ -13457,7 +13459,7 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
                     }
                 }
 
-        # No matches found - ticker not recognized
+        # No matches found in database - ticker not recognized
         return {
             "valid": False,
             "message": f"Ticker '{ticker}' not recognized. Try another."

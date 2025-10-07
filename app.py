@@ -11782,8 +11782,97 @@ def is_paywall_article(domain: str) -> bool:
     return normalized in PAYWALL_DOMAINS
 
 
+def build_executive_summary_html(sections: Dict[str, List[str]]) -> str:
+    """
+    Convert executive summary sections dict into HTML string.
+    Used by Jinja2 template.
+    """
+    def build_section(title: str, bullets: List[str]) -> str:
+        if not bullets:
+            return ""
+
+        bullet_html = ""
+        for bullet in bullets:
+            bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{bullet}</li>'
+
+        return f'''
+            <div style="margin-bottom: 20px;">
+                <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+                    {bullet_html}
+                </ul>
+            </div>
+        '''
+
+    html = ""
+    html += build_section("Major Developments", sections.get("major_developments", []))
+    html += build_section("Financial/Operational Performance", sections.get("financial_operational", []))
+    html += build_section("Risk Factors", sections.get("risk_factors", []))
+    html += build_section("Wall Street Sentiment", sections.get("wall_street", []))
+    html += build_section("Competitive/Industry Dynamics", sections.get("competitive_industry", []))
+    html += build_section("Upcoming Catalysts", sections.get("upcoming_catalysts", []))
+
+    return html
+
+
+def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
+    """
+    Convert articles by category into HTML string for email template.
+    """
+    def build_category_section(title: str, articles: List[Dict], category: str) -> str:
+        if not articles:
+            return ""
+
+        article_links = ""
+        for article in articles:
+            # Check if article is paywalled
+            is_paywalled = is_paywall_article(article.get('domain', ''))
+            paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
+
+            # Check if article is new (< 24 hours)
+            is_new = False
+            if article.get('published_at'):
+                age_hours = (datetime.now(timezone.utc) - article['published_at']).total_seconds() / 3600
+                is_new = age_hours < 24
+            new_badge = '🆕 ' if is_new else ''
+
+            # Star for FLAGGED + QUALITY articles
+            domain = article.get('domain', '')
+            is_quality = domain.lower() in [
+                'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
+                'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
+            ]
+            # Assume article is flagged if it's in the list (this function only gets flagged articles)
+            star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
+
+            domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+            date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
+
+            article_links += f'''
+                <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{new_badge}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                </div>
+            '''
+
+        return f'''
+            <div style="margin-bottom: 16px;">
+                <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
+                {article_links}
+            </div>
+        '''
+
+    html = ""
+    html += build_category_section("COMPANY", articles_by_category.get('company', []), "company")
+    html += build_category_section("INDUSTRY", articles_by_category.get('industry', []), "industry")
+    html += build_category_section("COMPETITORS", articles_by_category.get('competitor', []), "competitor")
+
+    return html
+
+
 def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
-                                   flagged_article_ids: List[int] = None) -> Dict:
+                                   flagged_article_ids: List[int] = None,
+                                   recipient_email: str = None) -> Dict:
     """
     Email #3: Premium Stock Intelligence Report (Single Ticker)
     - Modern HTML design with inline styles
@@ -11977,25 +12066,61 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
             </div>
         '''
 
+    # Count paywalled articles
+    paywalled_count = paywall_count
+    total_articles_count = analyzed_count
+    lookback_days = hours // 24 if hours >= 24 else 1
+
+    # Build HTML sections using helper functions
+    executive_summary_html = build_executive_summary_html(sections)
+    articles_html = build_articles_html(articles_by_category)
+
+    # Get or create unsubscribe token
+    if recipient_email:
+        unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
+        unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
+    else:
+        # Fallback for testing/admin emails without recipient
+        unsubscribe_url = "https://stockdigest.app/unsubscribe"
+        LOG.warning("No recipient_email provided for Email #3, unsubscribe link will be generic")
+
     # Current date
     current_date = datetime.now().strftime("%b %d, %Y")
 
-    # Build full HTML
-    summary_html = ""
-    summary_html += build_summary_section("Major Developments", sections["major_developments"])
-    summary_html += build_summary_section("Financial/Operational Performance", sections["financial_operational"])
-    summary_html += build_summary_section("Risk Factors", sections["risk_factors"])
-    summary_html += build_summary_section("Wall Street Sentiment", sections["wall_street"])
-    summary_html += build_summary_section("Competitive/Industry Dynamics", sections["competitive_industry"])
-    summary_html += build_summary_section("Upcoming Catalysts", sections["upcoming_catalysts"])
+    # Render Jinja2 template
+    try:
+        # Create a minimal request-like object for template rendering
+        class FakeRequest:
+            def __init__(self):
+                self.headers = {}
+                self.url = type('URL', (), {'path': '/email'})()
 
-    articles_html = ""
-    articles_html += build_article_section("COMPANY", articles_by_category['company'], "company")
-    articles_html += build_article_section("INDUSTRY", articles_by_category['industry'], "industry")
-    articles_html += build_article_section("COMPETITORS", articles_by_category['competitor'], "competitor")
+        fake_request = FakeRequest()
 
-    total_articles = sum(len(arts) for arts in articles_by_category.values())
+        template = templates.get_template("email_intelligence_report.html")
+        html = template.render(
+            request=fake_request,
+            ticker=ticker,
+            company_name=company_name,
+            industry=sector,
+            current_date=current_date,
+            stock_price=stock_price,
+            price_change=price_change_pct,
+            price_change_color=price_change_color,
+            executive_summary_html=executive_summary_html,
+            total_articles=total_articles_count,
+            paywalled_count=paywalled_count,
+            lookback_days=lookback_days,
+            articles_html=articles_html,
+            unsubscribe_url=unsubscribe_url
+        )
+    except Exception as e:
+        LOG.error(f"Error rendering email template: {e}")
+        LOG.error(traceback.format_exc())
+        return {"status": "error", "message": f"Template rendering failed: {str(e)}"}
 
+    # OLD INLINE HTML - Replaced by Jinja2 template above (commented out for reference)
+    """
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -12092,8 +12217,9 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
 </body>
 </html>'''
+    """
 
-    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
+    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {total_articles_count} articles analyzed"
     success = send_email(subject, html)
 
     LOG.info(f"📧 Email #3 (Premium Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
@@ -12523,7 +12649,8 @@ async def process_ticker_job(job: dict):
             user_report_result = send_user_intelligence_report(
                 hours=int(minutes/60),
                 tickers=[ticker],
-                flagged_article_ids=flagged_article_ids  # Filter to same articles as Email #2
+                flagged_article_ids=flagged_article_ids,  # Filter to same articles as Email #2
+                recipient_email=DIGEST_TO  # TODO: Replace with actual user email from beta_users
             )
             if user_report_result:
                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 sent successfully")

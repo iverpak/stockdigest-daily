@@ -10366,10 +10366,10 @@ RULES:
 - Omit section headers with no content
 
 REPORTING PHILOSOPHY:
-- Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals
+- Include all material developments, but keep bullets concise
+- If uncertain about materiality, include it - but in ONE sentence
 - Include transaction amounts when available for scale context
 - Strategic significance matters more than transaction size
-- Better to include marginal news than miss something material
 
 ---
 

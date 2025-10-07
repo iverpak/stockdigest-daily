@@ -1,13 +1,13 @@
 # StockDigest Daily Intelligence System - PRIMER v3.5
 
-**Last Updated:** October 7, 2025
+**Last Updated:** October 8, 2025
 **Application File Size:** 15,000+ lines
 **Total Endpoints:** 59 (39 admin + 8 job queue + 12 public)
 **Database:** PostgreSQL with 14 core tables (includes legal compliance tables)
 **Primary Language:** Python 3.11 (FastAPI framework)
 **Legal:** Province of Ontario, Canada | CASL & PIPEDA Compliant | Terms v1.0 | Privacy v1.0
 **Contact:** stockdigest.research@gmail.com
-**New in v3.5:** **Semaphores DISABLED** (fixes deadlock) + 4 concurrent tickers stable + Connection pool: 80 + Executive summary cache_control + **Legal integration** (Terms/Privacy pages, unsubscribe tokens, Email #3 Jinja2 refactor)
+**New in v3.5:** **Semaphores DISABLED** (fixes deadlock) + 4 concurrent tickers stable + Connection pool: 80 + Executive summary cache_control + **Legal integration** (Terms/Privacy pages, unsubscribe tokens, Email #3 Jinja2 refactor) + **Relaxed ticker validation** (crypto, forex, indices supported) + **Polygon.io fallback** (5 calls/min free tier) + **"Last Close" label** in Email #3 header
 **New in v3.4:** ~~Threading semaphores~~ (caused deadlock, removed in v3.5) + Scrapfly Tier 2 + Prompt caching + 24h NEW badge
 **New in v3.3:** Parallel ticker processing + connection pooling
 **New in v3.2:** Async feed ingestion (5.5x faster)
@@ -218,9 +218,9 @@ StockDigest now generates **3 distinct emails per ticker** during the digest pha
 - **Top disclaimer banner:** "For informational purposes only. Not investment advice."
 - **Modern HTML template** with gradient blue header
 - **Stock price card** in header showing:
-  - Current price from `ticker_reference` cache (no API calls)
-  - Percentage change (green/red)
-  - Current date
+  - Today's date (email sent date)
+  - Last close price (from `ticker_reference` cache or yfinance/Polygon.io)
+  - Daily return with "Last Close" label for clarity (sleek, subtle styling)
 - **Executive summary sections** rendered as 6 visual cards:
   1. 🔴 **Major Developments** (3-6 bullets)
   2. 📊 **Financial/Operational Performance** (2-4 bullets)
@@ -788,6 +788,97 @@ StockDigest maintains a domain-specific scraping strategy system:
 - **Circuit breaker:** Halts processing after 3 consecutive system failures
 - **Concurrent tickers:** Recommended 4, supports up to 5
 - **Timeout protection:** 45-minute max per ticker job
+
+---
+
+## FINANCIAL DATA & TICKER VALIDATION (NEW IN v3.5)
+
+### Relaxed Ticker Validation
+
+StockDigest now supports a wide range of ticker formats beyond traditional US stocks.
+
+**Supported Formats:**
+- ✅ **Regular US stocks:** AAPL, MSFT, TSLA, NVDA
+- ✅ **International stocks:** RY.TO (Canada), BP.L (London), SAP.DE (Germany), 005930.KS (Korea)
+- ✅ **Cryptocurrency:** BTC-USD, ETH-USD, SOL-USD, BNB-USD
+- ✅ **Forex pairs:** EURUSD=X, CADJPY=X, GBPUSD=X, CAD=X
+- ✅ **Market indices:** ^GSPC (S&P 500), ^DJI (Dow), ^IXIC (NASDAQ)
+- ✅ **ETFs:** SPY, VOO, QQQ, IVV
+- ✅ **Class shares:** BRK-A, BRK-B, TECK-A.TO
+- ✅ **Private company competitors:** No ticker required (Google News only)
+
+**Key Changes:**
+- `validate_ticker_format()` - 15+ regex patterns (Line 1479)
+- `normalize_ticker_format()` - Preserves special characters: `^`, `=`, `-`, `.` (Line 1542)
+- Fallback config prevents crashes for unknown tickers
+
+**Special Character Handling:**
+- Caret (^) for indices: `^GSPC` ✅
+- Equals (=) for forex: `EURUSD=X` ✅
+- Hyphen (-) for crypto: `BTC-USD` ✅
+- Dot (.) for exchanges: `RY.TO` ✅
+
+### Financial Data with Polygon.io Fallback
+
+**2-Tier Data Fetching:**
+
+```
+┌─────────────────────────────────────────────────┐
+│ 1. yfinance (Primary)                           │
+│    ├─ Full data (13 fields)                     │
+│    ├─ Includes: market cap, analysts, volume    │
+│    ├─ 3 retries with exponential backoff        │
+│    └─ ~48 calls/minute (undocumented limit)     │
+└─────────────────────────────────────────────────┘
+                    ↓ If fails
+┌─────────────────────────────────────────────────┐
+│ 2. Polygon.io (Fallback)                        │
+│    ├─ Minimal data (price + daily return)       │
+│    ├─ Free tier: 5 calls/minute                 │
+│    ├─ Rate limited with automatic sleep         │
+│    └─ Enough for Email #3 header card           │
+└─────────────────────────────────────────────────┘
+                    ↓ If fails
+┌─────────────────────────────────────────────────┐
+│ 3. Return None                                  │
+│    Email #3 shows "N/A" for price data          │
+└─────────────────────────────────────────────────┘
+```
+
+**Key Functions:**
+- `get_stock_context()` - Main entry point (Line 1966)
+- `get_stock_context_polygon()` - Polygon.io fallback (Line 1895)
+- `_wait_for_polygon_rate_limit()` - Rate limiter for free tier (Line 1874)
+
+**Validation Changes:**
+- **Old:** Required both `currentPrice` AND `marketCap` (rejected forex/indices)
+- **New:** Only requires `currentPrice` (market cap optional)
+- **Result:** Forex (EURUSD=X) and Indices (^GSPC) now work! ✅
+
+**Email #3 Requirements:**
+- Only needs: `financial_last_price` and `financial_price_change_pct`
+- Both yfinance and Polygon.io provide these fields
+- Header displays: "+2.5% Last Close" (sleek label)
+
+**Environment Setup:**
+```bash
+POLYGON_API_KEY=your_api_key_here  # Get free at polygon.io
+```
+
+**Rate Limiting:**
+- Polygon.io free tier: 5 calls/minute
+- Sliding window with automatic sleep
+- Logs: `⏳ Polygon.io rate limit reached, waiting 12.3s...`
+
+**Data Returned:**
+
+| Field | yfinance | Polygon.io | Email #3 Needs |
+|-------|----------|------------|----------------|
+| Last Price | ✅ | ✅ | ✅ YES |
+| Price Change % | ✅ | ✅ | ✅ YES |
+| Market Cap | ✅ | ❌ | ❌ No |
+| Volume | ✅ | ✅ | ❌ No |
+| Analyst Data | ✅ | ❌ | ❌ No |
 
 ---
 

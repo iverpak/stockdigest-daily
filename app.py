@@ -66,9 +66,15 @@ from memory_monitor import (
     full_resource_cleanup
 )
 import yfinance as yf
+from collections import deque
 
 # Global session for OpenAI API calls with retries
 _openai_session = None
+
+# Polygon.io rate limiter (5 calls/minute for free tier)
+POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
+POLYGON_RATE_LIMIT = 5  # calls per minute
+POLYGON_CALL_TIMES = deque(maxlen=POLYGON_RATE_LIMIT)  # Track last N call times
 
 import asyncio
 
@@ -935,17 +941,6 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
 
-                CREATE TABLE IF NOT EXISTS competitor_metadata (
-                    id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(20) NOT NULL,
-                    competitor_name VARCHAR(255) NOT NULL,
-                    competitor_ticker VARCHAR(20),
-                    relationship_type VARCHAR(50) DEFAULT 'competitor',
-                    ai_generated BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(ticker, competitor_name)
-                );
-
                 -- All indexes for performance
                 CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_articles_domain ON articles(domain);
@@ -1296,25 +1291,42 @@ def associate_ticker_with_feed_new_architecture(ticker: str, feed_id: int, categ
             return False
 
 def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> list:
-    """Create feeds using new architecture with per-relationship categories"""
+    """Create feeds using new architecture with per-relationship categories
+
+    Supports fallback configs (no full ticker data):
+    - Always creates Google News feeds (works with any text)
+    - Only creates Yahoo Finance feeds if has_full_config=True
+    """
     feeds_created = []
     company_name = metadata.get("company_name", ticker)
+    use_google_only = metadata.get("use_google_only", False)
+    has_full_config = metadata.get("has_full_config", True)  # Default to True for backward compatibility
 
-    LOG.info(f"🔄 Creating feeds for {ticker} using NEW ARCHITECTURE (category-per-relationship)")
+    if use_google_only or not has_full_config:
+        LOG.info(f"🔄 Creating feeds for {ticker} using GOOGLE NEWS ONLY (no full config available)")
+    else:
+        LOG.info(f"🔄 Creating feeds for {ticker} using NEW ARCHITECTURE (Google News + Yahoo Finance)")
 
-    # 1. Company feeds - will be associated with category="company"
+    # 1. Company feeds - ALWAYS create Google News, optionally create Yahoo Finance
     company_feeds = [
         {
             "url": f"https://news.google.com/rss/search?q=\"{company_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
             "name": f"Google News: {company_name}",
-            "search_keyword": company_name
-        },
-        {
-            "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
-            "name": f"Yahoo Finance: {ticker}",
-            "search_keyword": ticker
+            "search_keyword": company_name,
+            "source": "google"
         }
     ]
+
+    # Only add Yahoo Finance if we have full config
+    if not use_google_only and has_full_config:
+        company_feeds.append({
+            "url": f"https://finance.yahoo.com/rss/headline?s={ticker}",
+            "name": f"Yahoo Finance: {ticker}",
+            "search_keyword": ticker,
+            "source": "yahoo"
+        })
+    else:
+        LOG.info(f"⏭️ Skipping Yahoo Finance feed for {ticker} (using Google News only)")
 
     for feed_config in company_feeds:
         try:
@@ -1328,7 +1340,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
             if associate_ticker_with_feed_new_architecture(ticker, feed_id, "company"):
                 feeds_created.append({
                     "feed_id": feed_id,
-                    "config": {"category": "company", "name": feed_config["name"]}
+                    "config": {"category": "company", "name": feed_config["name"], "source": feed_config["source"]}
                 })
 
         except Exception as e:
@@ -1355,45 +1367,49 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
             LOG.error(f"❌ Failed to create industry feed for {ticker}: {e}")
 
     # 3. Competitor feeds - will be associated with category="competitor"
+    # Supports competitors WITHOUT tickers (private companies) - Google News only
     competitors = metadata.get("competitors", [])[:3]
     for comp in competitors:
-        if isinstance(comp, dict) and comp.get('name') and comp.get('ticker'):
+        if isinstance(comp, dict) and comp.get('name'):
             comp_name = comp['name']
-            comp_ticker = comp['ticker']
+            comp_ticker = comp.get('ticker')  # May be None for private companies
 
             try:
-                # Google News competitor feed - neutral name, shareable
+                # ALWAYS create Google News feed (works for any company name)
                 feed_id = upsert_feed_new_architecture(
                     url=f"https://news.google.com/rss/search?q=\"{comp_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
                     name=f"Google News: {comp_name}",  # Neutral name (no "Competitor:" prefix)
                     search_keyword=comp_name,
-                    competitor_ticker=comp_ticker
+                    competitor_ticker=comp_ticker  # Can be None
                 )
 
                 # Associate this feed with this ticker as "competitor" category
                 if associate_ticker_with_feed_new_architecture(ticker, feed_id, "competitor"):
                     feeds_created.append({
                         "feed_id": feed_id,
-                        "config": {"category": "competitor", "name": comp_name}
+                        "config": {"category": "competitor", "name": comp_name, "source": "google"}
                     })
 
-                # Yahoo Finance competitor feed - neutral name, shareable
-                feed_id = upsert_feed_new_architecture(
-                    url=f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
-                    name=f"Yahoo Finance: {comp_ticker}",  # Neutral name (no "Competitor:" prefix)
-                    search_keyword=comp_name,
-                    competitor_ticker=comp_ticker
-                )
+                # ONLY create Yahoo Finance feed if competitor has a ticker (public company)
+                if comp_ticker:
+                    feed_id = upsert_feed_new_architecture(
+                        url=f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                        name=f"Yahoo Finance: {comp_ticker}",  # Neutral name (no "Competitor:" prefix)
+                        search_keyword=comp_name,
+                        competitor_ticker=comp_ticker
+                    )
 
-                # Associate this feed with this ticker as "competitor" category
-                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "competitor"):
-                    feeds_created.append({
-                        "feed_id": feed_id,
-                        "config": {"category": "competitor", "name": comp_name}
-                    })
+                    # Associate this feed with this ticker as "competitor" category
+                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "competitor"):
+                        feeds_created.append({
+                            "feed_id": feed_id,
+                            "config": {"category": "competitor", "name": comp_name, "source": "yahoo"}
+                        })
+                else:
+                    LOG.info(f"⏭️ Competitor {comp_name} has no ticker - using Google News only (private company)")
 
             except Exception as e:
-                LOG.error(f"❌ Failed to create competitor feeds for {ticker}: {e}")
+                LOG.error(f"❌ Failed to create competitor feeds for {comp_name}: {e}")
 
     LOG.info(f"✅ Created {len(feeds_created)} feed associations for {ticker} using NEW ARCHITECTURE (category-per-relationship)")
     return feeds_created
@@ -1855,11 +1871,107 @@ def format_financial_percent(value, include_plus=True):
     except:
         return None
 
+def _wait_for_polygon_rate_limit():
+    """
+    Rate limiter for Polygon.io API (5 calls/minute for free tier).
+    Blocks until safe to make next call.
+    """
+    now = time.time()
+
+    # Remove calls older than 60 seconds
+    while POLYGON_CALL_TIMES and now - POLYGON_CALL_TIMES[0] > 60:
+        POLYGON_CALL_TIMES.popleft()
+
+    # If at limit, wait until oldest call expires
+    if len(POLYGON_CALL_TIMES) >= POLYGON_RATE_LIMIT:
+        sleep_time = 60 - (now - POLYGON_CALL_TIMES[0]) + 1  # +1 second buffer
+        if sleep_time > 0:
+            LOG.info(f"⏳ Polygon.io rate limit reached, waiting {sleep_time:.1f}s...")
+            time.sleep(sleep_time)
+
+    # Record this call
+    POLYGON_CALL_TIMES.append(time.time())
+
+def get_stock_context_polygon(ticker: str) -> Optional[Dict]:
+    """
+    Fetch financial data from Polygon.io as fallback when yfinance fails.
+    Free tier: 5 API calls/minute.
+
+    Returns dict with price and yesterday's return, or None on failure.
+    """
+    if not POLYGON_API_KEY:
+        LOG.warning("POLYGON_API_KEY not set, skipping Polygon.io fallback")
+        return None
+
+    try:
+        _wait_for_polygon_rate_limit()
+
+        # Get previous close (snapshot endpoint)
+        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/prev"
+        params = {"apiKey": POLYGON_API_KEY}
+
+        LOG.info(f"📊 Fetching from Polygon.io: {ticker}")
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code != 200:
+            LOG.warning(f"Polygon.io API error {response.status_code}: {response.text[:200]}")
+            return None
+
+        data = response.json()
+
+        if data.get("status") != "OK" or not data.get("results"):
+            LOG.warning(f"Polygon.io no data for {ticker}")
+            return None
+
+        result = data["results"][0]
+
+        # Extract price data
+        close_price = result.get("c")  # Close price
+        open_price = result.get("o")   # Open price
+
+        if not close_price:
+            LOG.warning(f"Polygon.io missing price data for {ticker}")
+            return None
+
+        # Calculate yesterday's return (close vs open)
+        yesterday_return = None
+        if close_price and open_price:
+            yesterday_return = ((close_price - open_price) / open_price) * 100
+
+        # Build financial data dict (minimal - just what Email #3 needs)
+        financial_data = {
+            'financial_last_price': float(close_price),
+            'financial_price_change_pct': float(yesterday_return) if yesterday_return else None,
+            'financial_yesterday_return_pct': float(yesterday_return) if yesterday_return else None,
+            'financial_ytd_return_pct': None,  # Not available from Polygon free tier
+            'financial_market_cap': None,
+            'financial_enterprise_value': None,
+            'financial_volume': float(result.get("v")) if result.get("v") else None,
+            'financial_avg_volume': None,
+            'financial_analyst_target': None,
+            'financial_analyst_range_low': None,
+            'financial_analyst_range_high': None,
+            'financial_analyst_count': None,
+            'financial_analyst_recommendation': None,
+            'financial_snapshot_date': datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
+        }
+
+        LOG.info(f"✅ Polygon.io data retrieved for {ticker}: Price=${close_price:.2f}, Return={yesterday_return:.2f}%")
+        return financial_data
+
+    except Exception as e:
+        LOG.error(f"❌ Polygon.io failed for {ticker}: {e}")
+        return None
+
 def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optional[Dict]:
     """
-    Fetch financial data from yfinance with retry logic and timeout.
-    Returns dict with 13 financial fields + snapshot_date, or None on failure.
-    All-or-nothing: if critical fields missing, returns None.
+    Fetch financial data with yfinance (primary) and Polygon.io (fallback).
+
+    Returns dict with price + yesterday's return (required for Email #3).
+    Other fields (market cap, analysts) are optional extras.
+
+    Validation: Only requires price data (not market cap).
+    This supports forex (EURUSD=X), indices (^GSPC), crypto (BTC-USD), stocks (AAPL).
     """
 
     for attempt in range(retries):
@@ -1946,9 +2058,10 @@ def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optio
             num_analysts = info.get('numberOfAnalystOpinions')
             recommendation = info.get('recommendationKey', '').capitalize() if info.get('recommendationKey') else None
 
-            # Validate critical fields (all-or-nothing)
-            if not current_price or not market_cap:
-                raise ValueError(f"Missing critical financial fields for {ticker}")
+            # Validate critical fields (RELAXED: only require price, not market cap)
+            # This allows forex (EURUSD=X), indices (^GSPC), crypto to work
+            if not current_price:
+                raise ValueError(f"Missing price data for {ticker}")
 
             # Build financial data dict
             financial_data = {
@@ -1968,7 +2081,8 @@ def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optio
                 'financial_snapshot_date': datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
             }
 
-            LOG.info(f"✅ Financial data retrieved for {ticker}: Price=${current_price:.2f}, MCap={format_financial_number(market_cap)}")
+            mcap_str = format_financial_number(market_cap) if market_cap else "N/A"
+            LOG.info(f"✅ yfinance data retrieved for {ticker}: Price=${current_price:.2f}, MCap={mcap_str}")
             return financial_data
 
         except Exception as e:
@@ -1977,9 +2091,18 @@ def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optio
                 time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
             else:
                 LOG.error(f"❌ yfinance failed after {retries} attempts for {ticker}")
-                return None
+                # Don't return None yet - try Polygon.io fallback
 
-    return None
+    # yfinance failed, try Polygon.io as fallback
+    LOG.info(f"🔄 Trying Polygon.io fallback for {ticker}...")
+    polygon_data = get_stock_context_polygon(ticker)
+
+    if polygon_data:
+        LOG.info(f"✅ Polygon.io fallback succeeded for {ticker}")
+        return polygon_data
+    else:
+        LOG.error(f"❌ Both yfinance and Polygon.io failed for {ticker}")
+        return None
 
 # Backwards compatability ticker_reference to ticker_config
 def get_ticker_config(ticker: str) -> Optional[Dict]:
@@ -3020,21 +3143,6 @@ def update_specific_tickers_on_github(tickers: list, commit_message: str = None)
     except Exception as e:
         LOG.error(f"Failed to update specific tickers: {e}")
         return {"status": "error", "message": f"Update failed: {str(e)}"}
-
-def store_competitor_metadata(ticker: str, competitors: List[Dict]) -> None:
-    """Store competitor metadata in a dedicated table for better normalization"""
-    with db() as conn, conn.cursor() as cur:
-        # Store each competitor
-        for comp in competitors:
-            if isinstance(comp, dict) and comp.get('ticker') and comp.get('name'):
-                cur.execute("""
-                    INSERT INTO competitor_metadata (ticker, company_name, parent_ticker)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (ticker, parent_ticker)
-                    DO UPDATE SET
-                        company_name = EXCLUDED.company_name,
-                        updated_at = NOW()
-                """, (comp['ticker'], comp['name'], ticker))
 
 def extract_article_content(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -8482,7 +8590,7 @@ class TriageResponse(BaseModel):
 def get_competitor_display_name(search_keyword: str, competitor_ticker: str = None) -> str:
     """
     Get standardized competitor display name using database lookup with proper fallback
-    Priority: ticker_reference.company_name -> competitor_metadata -> search_keyword -> fallback
+    Priority: ticker_reference.company_name -> search_keyword -> fallback
 
     ALWAYS uses competitor_ticker to lookup company_name in ticker_reference table.
     Never relies on search_keyword for display (search_keyword is feed query parameter, not display name).
@@ -8517,27 +8625,11 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
         except Exception as e:
             LOG.debug(f"ticker_reference lookup failed for competitor {competitor_ticker}: {e}")
 
-    # STEP 2: Try competitor_metadata table as backup
-    if competitor_ticker:
-        try:
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT competitor_name FROM competitor_metadata
-                    WHERE competitor_ticker = %s AND active = TRUE
-                    LIMIT 1
-                """, (competitor_ticker,))
-                result = cur.fetchone()
-
-                if result and result["competitor_name"]:
-                    return result["competitor_name"]
-        except Exception as e:
-            LOG.debug(f"competitor_metadata lookup failed for competitor {competitor_ticker}: {e}")
-
-    # STEP 3: Fallback to search_keyword ONLY if it looks like a company name (not ticker)
+    # STEP 2: Fallback to search_keyword ONLY if it looks like a company name (not ticker)
     if search_keyword and not search_keyword.isupper():  # Likely a company name, not ticker
         return search_keyword
 
-    # STEP 4: Final fallback - use ticker if that's all we have
+    # STEP 3: Final fallback - use ticker if that's all we have
     return competitor_ticker or search_keyword or "Unknown Competitor"
 
 def determine_article_category_for_ticker(article_row: dict, viewing_ticker: str) -> str:
@@ -9470,10 +9562,11 @@ INDUSTRY KEYWORDS (exactly 3):
 
 COMPETITORS (exactly 3):
 - Must be direct business competitors, not just same-sector companies
-- Must be currently publicly traded
+- Prefer publicly traded companies with tickers when possible
 - Format as structured objects with 'name' and 'ticker' fields
-- Verify ticker is correct Yahoo Finance format
-- Exclude: Private companies, subsidiaries, companies acquired in last 2 years
+- For private companies: Include name but omit or set ticker to empty string
+- Verify ticker is correct Yahoo Finance format (if provided)
+- Exclude: Subsidiaries, companies acquired in last 2 years
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -12172,7 +12265,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                         <div style="display: inline-block; background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); text-align: right;">
                                             <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75; color: #ffffff;">{current_date}</div>
                                             <div style="font-size: 20px; font-weight: 700; line-height: 1; color: #ffffff;">{stock_price}</div>
-                                            <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct}</div>
+                                            <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct} <span style="font-size: 10px; opacity: 0.7; font-weight: 400; margin-left: 4px;">Last Close</span></div>
                                         </div>
                                     </td>
                                 </tr>

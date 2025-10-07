@@ -381,7 +381,10 @@ StockDigest generates 3 distinct emails per ticker during the digest phase, form
 **Content:**
 - **Top disclaimer banner:** "For informational purposes only. Not investment advice."
 - **Modern HTML template** with gradient header
-- **Stock price card** in header (price, % change, date from `ticker_reference` cache)
+- **Stock price card** in header showing:
+  - Today's date (email sent date)
+  - Last close price (from `ticker_reference` cache or yfinance/Polygon.io)
+  - Daily return with "Last Close" label for clarity
 - **Executive summary sections** rendered as 6 visual cards:
   1. 🔴 Major Developments (3-6 bullets)
   2. 📊 Financial/Operational Performance (2-4 bullets)
@@ -821,6 +824,58 @@ Total for 4 tickers: ~30 minutes (4x faster!)
 - Robust error handling with fallback strategies for content extraction
 - Built-in rate limiting and respect for robots.txt files
 - **Job queue worker starts automatically on FastAPI startup** (see `@APP.on_event("startup")`)
+
+## Financial Data & Ticker Validation (Oct 2025)
+
+### Relaxed Ticker Validation
+
+**Supported Ticker Formats:**
+- ✅ **Regular US stocks:** AAPL, MSFT, TSLA
+- ✅ **International stocks:** RY.TO, BP.L, SAP.DE, 005930.KS
+- ✅ **Cryptocurrency:** BTC-USD, ETH-USD, SOL-USD
+- ✅ **Forex pairs:** EURUSD=X, CADJPY=X, CAD=X
+- ✅ **Market indices:** ^GSPC, ^DJI, ^IXIC
+- ✅ **ETFs:** SPY, VOO, QQQ
+- ✅ **Class shares:** BRK-A, BRK-B
+
+**Key Functions:**
+- `validate_ticker_format()` - Line 1479 (15+ regex patterns)
+- `normalize_ticker_format()` - Line 1542 (preserves ^, =, -, .)
+
+**Validation Changes:**
+- Market cap no longer required (only price required)
+- Supports forex and indices (which don't have market cap)
+- Fallback config prevents crashes for unknown tickers
+
+### Financial Data Fetching with Polygon.io Fallback
+
+**Architecture (2-tier):**
+```
+1. yfinance (primary)
+   ├─ Full data (13 fields including market cap, analysts)
+   ├─ 3 retries with exponential backoff
+   └─ ~48 calls/minute limit (undocumented)
+
+2. Polygon.io (fallback - only if yfinance fails)
+   ├─ Minimal data (price + daily return)
+   ├─ Free tier: 5 calls/minute
+   └─ Rate limited with automatic sleep
+```
+
+**Key Functions:**
+- `get_stock_context()` - Line 1966 (main entry point)
+- `get_stock_context_polygon()` - Line 1895 (Polygon.io fallback)
+- `_wait_for_polygon_rate_limit()` - Line 1874 (rate limiter)
+
+**Email #3 Requirements:**
+- Only needs: `financial_last_price` and `financial_price_change_pct`
+- Both providers supply these fields
+- Header card displays: "Last Close" label for clarity
+
+**Environment Variable:**
+```bash
+POLYGON_API_KEY=your_api_key_here  # Get free key at polygon.io
+```
 
 ## Key Function Locations
 

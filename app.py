@@ -3889,7 +3889,9 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
     if SCRAPFLY_API_KEY:
         LOG.info(f"ASYNC TIER 2 (Scrapfly): Attempting {domain}")
 
-        with SCRAPFLY_SEM:
+        # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+        # with SCRAPFLY_SEM:
+        if True:  # Maintain indentation
             try:
                 scrapfly_content, scrapfly_error = await scrape_with_scrapfly_async(url, domain)
 
@@ -5303,7 +5305,9 @@ async def generate_ai_individual_summary_async(scraped_content: str, title: str,
         LOG.warning(f"AI summary generation skipped - API key: {bool(OPENAI_API_KEY)}, content length: {len(scraped_content) if scraped_content else 0}")
         return None
 
-    with OPENAI_SEM:
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with OPENAI_SEM:
+    if True:  # Maintain indentation
         try:
             config = get_ticker_config(ticker)
             company_name = config.get("name", ticker) if config else ticker
@@ -5381,7 +5385,9 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    with CLAUDE_SEM:
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with CLAUDE_SEM:
+    if True:  # Maintain indentation
         try:
             # System prompt (cached - instructions that repeat across articles)
             system_prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
@@ -5439,7 +5445,9 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    with CLAUDE_SEM:
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with CLAUDE_SEM:
+    if True:  # Maintain indentation
         try:
             # System prompt (cached - competitive analysis framework)
             system_prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze articles and write summaries using ONLY facts explicitly stated in the text.
@@ -5503,7 +5511,9 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    with CLAUDE_SEM:
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with CLAUDE_SEM:
+    if True:  # Maintain indentation
         try:
             # System prompt (cached - industry analysis framework)
             system_prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
@@ -5569,7 +5579,9 @@ async def generate_openai_article_summary(company_name: str, ticker: str, title:
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    with OPENAI_SEM:
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with OPENAI_SEM:
+    if True:  # Maintain indentation
         try:
             prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Write a summary using ONLY facts explicitly stated.
 
@@ -5610,7 +5622,9 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    with OPENAI_SEM:
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with OPENAI_SEM:
+    if True:  # Maintain indentation
         try:
             prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
@@ -5667,7 +5681,9 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    with OPENAI_SEM:
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with OPENAI_SEM:
+    if True:  # Maintain indentation
         try:
             prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
 
@@ -8105,13 +8121,17 @@ async def perform_ai_triage_with_dual_scoring_async(
 
                 if OPENAI_API_KEY:
                     async def run_openai():
-                        with OPENAI_SEM:
+                        # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+                        # with OPENAI_SEM:
+                        if True:  # Maintain indentation
                             return await operation["openai_func"](*operation["openai_args"])
                     openai_task = run_openai()
 
                 if ANTHROPIC_API_KEY:
                     async def run_claude():
-                        with CLAUDE_SEM:
+                        # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+                        # with CLAUDE_SEM:
+                        if True:  # Maintain indentation
                             return await operation["claude_func"](*operation["claude_args"])
                     claude_task = run_claude()
 
@@ -8298,7 +8318,9 @@ async def perform_ai_triage_with_batching_async(
         batch_tasks = []
         for op in batch:
             async def run_with_semaphore(operation):
-                with TRIAGE_SEM:
+                # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+                # with TRIAGE_SEM:
+                if True:  # Maintain indentation
                     return await operation["task_func"](*operation["args"])
 
             task = run_with_semaphore(op)

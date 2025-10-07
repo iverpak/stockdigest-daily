@@ -11763,7 +11763,11 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
             # Check if article is <24 hours old
             is_new = False
             if article.get('published_at'):
-                hours_old = (datetime.now(timezone.utc) - article['published_at']).total_seconds() / 3600
+                pub_date = article['published_at']
+                # Ensure both datetimes are timezone-aware for comparison
+                if pub_date.tzinfo is None:
+                    pub_date = pub_date.replace(tzinfo=timezone.utc)
+                hours_old = (datetime.now(timezone.utc) - pub_date).total_seconds() / 3600
                 is_new = hours_old < 24
 
             new_badge = ' <span style="font-size: 10px; color: #10b981; font-weight: 600; background-color: #d1fae5; padding: 2px 6px; border-radius: 3px; margin-left: 4px;">NEW</span>' if is_new else ''

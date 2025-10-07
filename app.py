@@ -486,10 +486,11 @@ DOMAIN_STRATEGIES = {
     }
 }
 
-# Domains that should skip TIER 1 (requests) and go directly to TIER 2 (Playwright)
+# Domains that should skip TIER 1 (requests) and go directly to TIER 2 (Scrapfly)
 # These are typically JavaScript-heavy sites that timeout on standard requests
+# UPDATED 2025-10-06: Now skips to Scrapfly (Playwright commented out)
 SKIP_TIER1_DOMAINS = {
-    'businesswire.com',  # Slow to load, always requires Playwright
+    'businesswire.com',  # Slow to load, JavaScript-heavy
 }
 
 # FIXED: Ticker-specific ingestion stats to prevent race conditions
@@ -3080,18 +3081,26 @@ def create_scraping_session():
     
     return session
 
-# Add this function after your existing extract_article_content function
+# ============================================================================
+# PLAYWRIGHT SCRAPING - COMMENTED OUT (2025-10-06)
+# ============================================================================
+# REASON: Playwright can hang indefinitely on problematic domains (e.g., theglobeandmail.com)
+#         causing entire ticker processing to stall with no timeout protection.
+# REPLACED WITH: Scrapfly as Tier 2 (faster, more reliable, handles anti-bot better)
+# TO REVERT: Uncomment this function and restore Tier 2 Playwright block in
+#            safe_content_scraper_with_3tier_fallback_async() below
+# COST IMPACT: Minimal (~$0.01-0.02 per ticker with Scrapfly as Tier 2)
+# ============================================================================
+"""
 async def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Memory-optimized article extraction using Playwright with enhanced content cleaning (ASYNC VERSION)
-    """
+    # Memory-optimized article extraction using Playwright with enhanced content cleaning (ASYNC VERSION)
     try:
         # Check for known paywall domains first
         if normalize_domain(domain) in PAYWALL_DOMAINS:
             return None, f"Paywall domain: {domain}"
-        
+
         LOG.info(f"PLAYWRIGHT: Starting browser for {domain}")
-        
+
         async with async_playwright() as p:
             # Launch browser with memory optimization
             browser = await p.chromium.launch(
@@ -3111,15 +3120,15 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                     '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 ]
             )
-            
+
             LOG.info(f"PLAYWRIGHT: Browser launched, navigating to {url}")
-            
+
             # Create new page with smaller viewport to save memory
             page = await browser.new_page(
                 viewport={'width': 1280, 'height': 720},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
-            
+
             # Set additional headers to look more human
             await page.set_extra_http_headers({
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -3129,19 +3138,19 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1'
             })
-            
+
             try:
                 # REDUCED TIMEOUT - 15 seconds instead of 30
                 await page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
-                
+
                 # Shorter wait for dynamic content
                 await page.wait_for_timeout(1000)
-                
+
                 # Try multiple content extraction methods
                 raw_content = None
                 extraction_method = None
-                
+
                 # Method 1: Try article tag first
                 try:
                     article_element = await page.query_selector('article')
@@ -3150,7 +3159,7 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                         extraction_method = "article tag"
                 except Exception:
                     pass
-                
+
                 # Method 2: Try main content selectors
                 if not raw_content or len(raw_content.strip()) < 200:
                     selectors = [
@@ -3174,11 +3183,11 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                                     break
                         except Exception:
                             continue
-                
+
                 # Method 3: Smart body text extraction (removes navigation/ads)
                 if not raw_content or len(raw_content.strip()) < 200:
                     try:
-                        raw_content = await page.evaluate("""
+                        raw_content = await page.evaluate('''
                             () => {
                                 // Remove unwanted elements
                                 const unwanted = document.querySelectorAll(`
@@ -3188,7 +3197,7 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                                     [class*="ad"], [class*="sidebar"], [class*="nav"]
                                 `);
                                 unwanted.forEach(el => el.remove());
-                                
+
                                 // Try to find main content area
                                 const candidates = [
                                     document.querySelector('main'),
@@ -3197,16 +3206,16 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                                     document.querySelector('.content'),
                                     document.body
                                 ];
-                                
+
                                 for (let candidate of candidates) {
                                     if (candidate && candidate.innerText && candidate.innerText.length > 200) {
                                         return candidate.innerText;
                                     }
                                 }
-                                
+
                                 return document.body ? document.body.innerText : '';
                             }
-                        """)
+                        ''')
                         extraction_method = "smart body extraction"
                     except Exception:
                         try:
@@ -3214,7 +3223,7 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                             extraction_method = "fallback body text"
                         except Exception:
                             raw_content = None
-                
+
             except Exception as e:
                 LOG.warning(f"PLAYWRIGHT: Navigation/extraction failed for {domain}: {str(e)}")
                 raw_content = None
@@ -3224,24 +3233,24 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                     await browser.close()
                 except Exception:
                     pass
-            
+
             if not raw_content or len(raw_content.strip()) < 100:
                 LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient raw content extracted")
                 return None, "Insufficient content extracted"
-            
+
             # ENHANCED CONTENT CLEANING
             cleaned_content = clean_scraped_content(raw_content, url, domain)
-            
+
             if not cleaned_content or len(cleaned_content.strip()) < 100:
                 LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Content too short after cleaning")
                 return None, "Content too short after cleaning"
-            
+
             # Enhanced content validation on cleaned content
             is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
             if not is_valid:
                 LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> {validation_msg}")
                 return None, validation_msg
-            
+
             # Check for common error pages or blocking messages on cleaned content
             content_lower = cleaned_content.lower()
             error_indicators = [
@@ -3249,14 +3258,14 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
                 "please verify you are human", "cloudflare", "rate limit", "blocked",
                 "security check", "unusual traffic"
             ]
-            
+
             if any(indicator in content_lower for indicator in error_indicators):
                 LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Error page detected")
                 return None, "Error page or blocking detected"
-            
+
             LOG.info(f"PLAYWRIGHT SUCCESS: {domain} -> {len(cleaned_content)} chars extracted and cleaned via {extraction_method}")
             return cleaned_content.strip(), None
-            
+
     except Exception as e:
         error_msg = f"Playwright extraction failed: {str(e)}"
         LOG.error(f"PLAYWRIGHT ERROR: {domain} -> {error_msg}")
@@ -3265,6 +3274,8 @@ async def extract_article_content_with_playwright(url: str, domain: str) -> Tupl
         # Add this cleanup
         import gc
         gc.collect()
+"""
+# ============================================================================
 
 
 async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
@@ -3685,8 +3696,9 @@ def log_scraping_success_rates():
     LOG.info("=" * 60)
     LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
     LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% of tier attempts ({requests_success}/{requests_attempts})")
-    LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% of tier attempts ({playwright_success}/{playwright_attempts})")
-    LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% of tier attempts ({scrapfly_success}/{scrapfly_attempts})")
+    LOG.info(f"TIER 2 (Scrapfly): {scrapfly_rate:.1f}% of tier attempts ({scrapfly_success}/{scrapfly_attempts})")
+    if playwright_attempts > 0:
+        LOG.info(f"[DISABLED] Playwright: {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
 
     if scrapfly_attempts > 0:
         LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
@@ -3834,10 +3846,10 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
     
     enhanced_scraping_stats["total_attempts"] += 1
 
-    # Check if domain should skip TIER 1 (known Playwright-only domains)
+    # Check if domain should skip TIER 1 (known JavaScript-heavy domains)
     if domain in SKIP_TIER1_DOMAINS:
-        LOG.info(f"⚡ SKIP TIER 1: {domain} (known Playwright-only domain)")
-        error = "Skipped TIER 1 (Playwright-only domain)"
+        LOG.info(f"⚡ SKIP TIER 1: {domain} (known JavaScript-heavy domain, going to Scrapfly)")
+        error = "Skipped TIER 1 (JavaScript-heavy domain)"
     else:
         # TIER 1: Try standard requests-based scraping
         LOG.info(f"ASYNC TIER 1 (Requests): Attempting {domain}")
@@ -3859,15 +3871,21 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
             error = str(e)
 
         LOG.info(f"ASYNC TIER 1 FAILED: {domain} - {error}")
-    
+
+    # ============================================================================
+    # TIER 2: PLAYWRIGHT - COMMENTED OUT (2025-10-06)
+    # Replaced with Scrapfly below for reliability (no hangs, better anti-bot)
+    # To revert: Uncomment this block and rename Scrapfly back to Tier 3
+    # ============================================================================
+    """
     # TIER 2: Try Playwright fallback
     LOG.info(f"ASYNC TIER 2 (Playwright): Attempting {domain}")
     enhanced_scraping_stats["by_method"]["playwright"]["attempts"] += 1
-    
+
     async with async_playwright_sem:
         try:
             playwright_content, playwright_error = await extract_article_content_with_playwright(url, domain)
-            
+
             if playwright_content:
                 enhanced_scraping_stats["playwright_success"] += 1
                 enhanced_scraping_stats["by_method"]["playwright"]["successes"] += 1
@@ -3875,32 +3893,35 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
                 return playwright_content, f"ASYNC TIER 2 SUCCESS: {len(playwright_content)} chars via Playwright"
         except Exception as e:
             playwright_error = str(e)
-    
+
     LOG.info(f"ASYNC TIER 2 FAILED: {domain} - {playwright_error}")
-    
-    # TIER 3: Try Scrapfly fallback
+    """
+    playwright_error = "Playwright disabled (commented out)"
+    # ============================================================================
+
+    # TIER 2: Try Scrapfly fallback (PROMOTED from Tier 3 on 2025-10-06)
     if SCRAPFLY_API_KEY:
-        LOG.info(f"ASYNC TIER 3 (Scrapfly): Attempting {domain}")
-        
+        LOG.info(f"ASYNC TIER 2 (Scrapfly): Attempting {domain}")
+
         async with async_scrapfly_sem:
             try:
                 scrapfly_content, scrapfly_error = await scrape_with_scrapfly_async(url, domain)
-                
+
                 if scrapfly_content:
                     enhanced_scraping_stats["scrapfly_success"] += 1
                     update_scraping_stats(category, keyword, True)
-                    return scrapfly_content, f"ASYNC TIER 3 SUCCESS: {len(scrapfly_content)} chars via Scrapfly"
+                    return scrapfly_content, f"ASYNC TIER 2 SUCCESS: {len(scrapfly_content)} chars via Scrapfly"
             except Exception as e:
                 scrapfly_error = str(e)
-        
-        LOG.info(f"ASYNC TIER 3 FAILED: {domain} - {scrapfly_error}")
+
+        LOG.info(f"ASYNC TIER 2 FAILED: {domain} - {scrapfly_error}")
     else:
-        LOG.info(f"ASYNC TIER 3 SKIPPED: Scrapfly API key not configured")
+        LOG.info(f"ASYNC TIER 2 SKIPPED: Scrapfly API key not configured")
         scrapfly_error = "not configured"
-    
+
     # All tiers failed
     enhanced_scraping_stats["total_failures"] += 1
-    return None, f"ALL ASYNC TIERS FAILED - Requests: {error}, Playwright: {playwright_error}, Scrapfly: {scrapfly_error if SCRAPFLY_API_KEY else 'not configured'}"
+    return None, f"ALL ASYNC TIERS FAILED - Tier 1 (Requests): {error}, Tier 2 (Scrapfly): {scrapfly_error if SCRAPFLY_API_KEY else 'not configured'}"
 
 def log_enhanced_scraping_stats():
     """Log comprehensive scraping statistics across all methods"""
@@ -3919,8 +3940,9 @@ def log_enhanced_scraping_stats():
     LOG.info("=== ENHANCED SCRAPING FINAL STATS ===")
     LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total})")
     LOG.info(f"  TIER 1 (Requests): {requests_success} successes / {enhanced_scraping_stats['by_method']['requests']['attempts']} attempts")
-    LOG.info(f"  TIER 2 (Playwright): {playwright_success} successes / {enhanced_scraping_stats['by_method']['playwright']['attempts']} attempts")
-    LOG.info(f"  TIER 3 (Scrapfly): {scrapfly_success} successes / {enhanced_scraping_stats['by_method']['scrapfly']['attempts']} attempts")
+    LOG.info(f"  TIER 2 (Scrapfly): {scrapfly_success} successes / {enhanced_scraping_stats['by_method']['scrapfly']['attempts']} attempts")
+    if enhanced_scraping_stats['by_method']['playwright']['attempts'] > 0:
+        LOG.info(f"  [DISABLED] Playwright: {playwright_success} successes / {enhanced_scraping_stats['by_method']['playwright']['attempts']} attempts")
     
     # Calculate tier-specific success rates
     for method, stats in enhanced_scraping_stats["by_method"].items():
@@ -13972,8 +13994,9 @@ async def cron_ingest(
             LOG.info("=" * 60)
             LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
             LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
-            LOG.info(f"TIER 2 (Playwright): {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
-            LOG.info(f"TIER 3 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
+            LOG.info(f"TIER 2 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
+            if playwright_attempts > 0:
+                LOG.info(f"[DISABLED] Playwright: {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
             if scrapfly_stats["requests_made"] > 0:
                 LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
             LOG.info("=" * 60)

@@ -38,11 +38,11 @@ The new job queue system decouples long-running processing from HTTP requests, e
 
 **QuantBrief** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
 
-- **Single-file monolithic design**: All functionality is contained in `app.py` (~14,877 lines)
+- **Single-file monolithic design**: All functionality is contained in `app.py` (~15,000+ lines)
 - **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, and executive summaries
 - **Job queue system**: Background worker for reliable, resumable processing (eliminates HTTP 520 errors)
-- **AI-powered content analysis**: Uses OpenAI API for article summarization and relevance scoring
-- **Multi-source content scraping**: Supports various scraping strategies including Playwright for anti-bot domains
+- **AI-powered content analysis**: Claude API (primary) with OpenAI fallback, prompt caching enabled (v2024-10-22)
+- **Multi-source content scraping**: 2-tier fallback (newspaper3k → Scrapfly) - Playwright commented out for reliability
 - **3-Email QA workflow**: Automated quality assurance pipeline with triage, content review, and user-facing reports
 
 ### Key Components
@@ -119,23 +119,28 @@ Total: max(10s, 5s, 10s) = ~10 seconds
 
 **Legacy: Direct HTTP Processing**
 1. **Feed Ingestion** (`/cron/ingest` - Line 13155): Async RSS feed parsing with grouped strategy
-2. **Content Scraping**: Multi-strategy approach with fallbacks (newspaper3k → Playwright → ScrapingBee → ScrapFly)
-3. **AI Triage**: OpenAI-powered relevance scoring and categorization
+2. **Content Scraping**: 2-tier fallback (newspaper3k → Scrapfly)
+   - **Tier 1 (Requests):** Free, fast (~70% success rate)
+   - **Tier 2 (Scrapfly):** Paid ($0.002/article), reliable (~95% success rate)
+   - **Playwright:** Commented out (caused hangs on problematic domains like theglobeandmail.com)
+3. **AI Triage**: Dual scoring (OpenAI + Claude run in parallel), results merged for better quality
 4. **Digest Generation** (`/cron/digest`): Email compilation using Jinja2 templates
 
-#### Anti-Bot and Rate Limiting
+#### Rate Limiting and Concurrency
+- **Thread-safe semaphores** using `threading.BoundedSemaphore` (not asyncio.Semaphore)
+  - **Why:** asyncio.Semaphore binds to event loop, causing errors in job queue (asyncio.run() in threads)
+  - **Solution:** threading.BoundedSemaphore works across threads and event loops
+  - **Trade-off:** Tiny blocking overhead (~microseconds) vs 100% async, negligible impact
 - Domain-specific scraping strategies defined in `get_domain_strategy()`
-- Playwright-based browser automation for challenging sites
-- Built-in semaphore controls for concurrent processing
 - User-agent rotation and referrer spoofing
 
 ### Memory Management
 
 The `memory_monitor.py` module provides comprehensive resource tracking including:
 - Database connection monitoring
-- Playwright browser instance cleanup
 - Async task lifecycle management
 - Memory snapshot comparisons
+- Connection pool utilization tracking
 
 ### API Endpoints
 
@@ -287,7 +292,7 @@ QuantBrief generates 3 distinct emails per ticker during the digest phase, formi
 **Timing:** Sent at ~95% progress (end of digest phase)
 **Key Behavior:** Generates and SAVES executive summary to database via `save_executive_summary()` (Line 1050)
 
-#### Email #3: Premium Stock Intelligence Report (Line 11233)
+#### Email #3: Premium Stock Intelligence Report (Line 11638)
 **Function:** `send_user_intelligence_report()`
 **Subject:** `📊 Stock Intelligence: [Company Name] ([Ticker]) - [X] articles`
 **Purpose:** Premium user-facing intelligence report with modern HTML design
@@ -302,7 +307,10 @@ QuantBrief generates 3 distinct emails per ticker during the digest phase, formi
   5. ⚡ Competitive/Industry Dynamics (2-5 bullets)
   6. 📅 Upcoming Catalysts (1-3 bullets)
 - **Compressed article links** at bottom (Company/Industry/Competitors)
-- **Star indicators** (★) for FLAGGED + QUALITY articles only
+- **Visual indicators:**
+  - **Star** (★) for FLAGGED + QUALITY articles
+  - **NEW badge** (green) for articles published <24 hours ago
+  - **PAYWALL badge** (red) for paywalled domains
 - Shows ONLY flagged articles (same filtering as Email #1 and #2)
 - NO AI analysis boxes, NO descriptions (clean presentation)
 **Timing:** Sent at ~97% progress (after Email #2, before GitHub commit)
@@ -533,12 +541,12 @@ MAX_CONCURRENT_JOBS=2  # Number of tickers to process simultaneously (default: 2
 ### Resource Requirements
 
 **Per Ticker:**
-- Memory: ~400MB peak (including Playwright for ~15% of articles)
+- Memory: ~300MB peak (Scrapfly is lighter than Playwright)
 - DB Connections: ~15 peak (11 feeds + overhead)
-- Duration: ~30 minutes
+- Duration: ~25-30 minutes
 
 **Total for 5 Concurrent Tickers:**
-- Memory: ~2000MB (fits in 2GB app)
+- Memory: ~1500MB (comfortable in 2GB app)
 - DB Connections: ~45 peak (within pool limit of 45)
 - Duration: ~30 minutes (same as single ticker!)
 
@@ -561,16 +569,23 @@ MO finishes    → 0 remaining → DEPLOYS! 🚀
 
 **Result:** Only ONE deployment per batch, regardless of batch size (2, 5, or 100 tickers). **No scheduled commits needed!**
 
-### Shared Semaphores
+### Shared Semaphores (threading.BoundedSemaphore)
 
 **Rate Limiting (Global across all tickers):**
 ```python
-OPENAI_MAX_CONCURRENCY = 5       # Shared OpenAI semaphore
-CLAUDE_MAX_CONCURRENCY = 5       # Shared Claude semaphore
-PLAYWRIGHT_MAX_CONCURRENCY = 5   # Shared Playwright semaphore
-SCRAPFLY_MAX_CONCURRENCY = 5     # Shared ScrapFly semaphore
-SCRAPE_BATCH_SIZE = 5           # Scraping batch size
+OPENAI_SEM = BoundedSemaphore(5)   # OpenAI API (thread-safe)
+CLAUDE_SEM = BoundedSemaphore(5)   # Claude API (thread-safe)
+SCRAPFLY_SEM = BoundedSemaphore(5) # Scrapfly API (thread-safe)
+TRIAGE_SEM = BoundedSemaphore(5)   # Triage operations (thread-safe)
 ```
+
+**Why threading.BoundedSemaphore (not asyncio.Semaphore)?**
+- **Problem:** asyncio.Semaphore binds to specific event loop
+- **Error:** "Semaphore is bound to a different event loop" in job queue
+- **Cause:** Job worker uses `asyncio.run()` in threads → new event loops
+- **Solution:** threading.BoundedSemaphore works across threads and event loops
+- **Trade-off:** Tiny blocking (~microseconds) vs 100% async, negligible impact
+- **Benefit:** True global rate limiting across ALL tickers
 
 These semaphores are **thread-safe** and provide **natural rate limiting** across all concurrent tickers.
 
@@ -642,8 +657,8 @@ Set `MAX_CONCURRENT_JOBS=5` in Render environment variables, then run script.
 
 **Issue: Memory exhaustion with 5 tickers**
 - Check logs for: `[{ticker}] 📊 Resource Status: Memory=XXX`
-- If >2000MB total: Reduce `MAX_CONCURRENT_JOBS` to `3` or `4`
-- Playwright uses ~100MB per ticker (only for ~15% of articles)
+- If >1500MB total: Reduce `MAX_CONCURRENT_JOBS` to `3` or `4`
+- Scrapfly is lightweight (~50MB overhead vs Playwright's 100MB)
 
 ### Performance Metrics
 
@@ -688,19 +703,49 @@ Set `MAX_CONCURRENT_JOBS=5` in Render environment variables, then run script.
 - `cron_digest()` - Line 13335 (Digest generation)
 - `safe_incremental_commit()` - Line 14732 (GitHub commit)
 
-## Executive Summary AI Prompt (v3.1)
+## Claude API Prompt Caching (2024-10-22)
 
-The executive summary prompt has been optimized for flexibility and quality:
+**Enabled:** October 2025
+**API Version:** `2024-10-22` (upgraded from `2023-06-01`)
+**Impact:** ~13% cost reduction per run (~$572/year savings for 50 tickers/day)
 
-**Removed:**
-- ❌ Word count targets (100-150w, 80-120w, etc.)
-- ❌ Prescriptive bullet limits that force combining unrelated facts
+**How It Works:**
+- System prompts marked with `cache_control: {"type": "ephemeral"}`
+- First API call: Full cost
+- Subsequent calls (within 5 min): 90% discount on cached portion
+- Works perfectly with parallel ticker processing
 
-**Added:**
-- ✅ Flexible bullet count ranges (3-6, 2-4, 1-4, 2-5)
-- ✅ "Cast a WIDE net" philosophy - include rumors, undisclosed deals
+**Functions Using Caching (7 total):**
+1. `triage_company_articles_claude()` - ~900 tokens cached
+2. `triage_industry_articles_claude()` - ~800 tokens cached
+3. `triage_competitor_articles_claude()` - ~800 tokens cached
+4. `generate_claude_article_summary()` - ~500 tokens cached
+5. `generate_claude_competitor_article_summary()` - ~600 tokens cached
+6. `generate_claude_industry_article_summary()` - ~600 tokens cached
+7. `generate_claude_executive_summary()` - User content (no system/cache separation yet)
+
+**Cost Savings (50 tickers/morning):**
+- Triage: $0.36/run saved
+- Summaries: $1.15/run saved
+- Total: ~$1.59/run (13% reduction)
+- Monthly: ~$47.70 (30 runs)
+- Yearly: ~$572
+
+## Executive Summary AI Prompt (v3.2)
+
+**Latest Update:** October 2025 - Refined for conciseness
+
+**Reporting Philosophy Changes:**
+- ❌ ~~"Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals"~~
+- ❌ ~~"Better to include marginal news than miss something material"~~
+- ✅ **NEW:** "Include all material developments, but keep bullets concise"
+- ✅ **NEW:** "If uncertain about materiality, include it - but in ONE sentence"
+
+**Key Characteristics:**
+- ✅ Flexible bullet count ranges (3-6, 2-4, 1-4, 2-5) - no forced combining
 - ✅ Enhanced guidance for competitive/industry dynamics
 - ✅ Better Wall Street Sentiment formatting examples
+- ✅ All explicit `{ticker}` references preserved in prompts
 
 **Bullet Count Ranges:**
 - 🔴 Major Developments: 3-6 bullets

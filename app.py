@@ -10252,8 +10252,8 @@ def is_description_valuable(title: str, description: str) -> bool:
     
     return True
 
-def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[tuple[str, str]]:
-    """Helper: Build executive summary prompt and extract company name. Returns (prompt, company_name) or None."""
+def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[tuple[str, str, str]]:
+    """Helper: Build executive summary prompt and extract company name. Returns (system_prompt, user_content, company_name) or None."""
     company_name = config.get("name", ticker)
 
     # Extract articles by category
@@ -10304,7 +10304,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
             source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             competitor_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
 
-    # Build combined article text
+    # Build combined article text for user message
     all_content = []
     if company_summaries:
         all_content.append("COMPANY ARTICLES:")
@@ -10316,9 +10316,10 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
         all_content.append("\nCOMPETITOR ARTICLES:")
         all_content.extend(competitor_summaries)
 
-    combined_content = "\n".join(all_content)
+    user_content = "\n".join(all_content)
 
-    prompt = f"""You are a hedge fund analyst creating an intelligence summary for {company_name} ({ticker}). All article summaries are already written from {ticker} investor perspective.
+    # System instructions (ticker-specific but cacheable per ticker)
+    system_prompt = f"""You are a hedge fund analyst creating an intelligence summary for {company_name} ({ticker}). All article summaries are already written from {ticker} investor perspective.
 
 OUTPUT FORMAT - Use these exact headers (omit sections with no content):
 🔴 MAJOR DEVELOPMENTS
@@ -10449,12 +10450,9 @@ CROSS-CATEGORY INTELLIGENCE:
 - If competitor/industry development is major for {ticker} → can appear in Major Developments
 - Sort insights by TYPE (what they are) not SOURCE (where they came from)
 
-ALL ARTICLE SUMMARIES (already {ticker}-focused):
-{combined_content}
-
 Generate structured summary. Omit empty sections."""
 
-    return (prompt, company_name)
+    return (system_prompt, user_content, company_name)
 
 
 def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[str]:
@@ -10467,13 +10465,15 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
     if not result:
         return None
 
-    prompt, company_name = result
+    system_prompt, user_content, company_name = result
 
     try:
-        # System prompt is the same across tickers (cacheable)
-        # Extract instructions part and put ticker-specific content in user message
-        # For executive summaries, the prompt already contains both instructions and content
-        # We'll use the whole prompt as user content since it's ticker-specific
+        # Log prompt sizes for debugging 520 errors
+        system_tokens_est = len(system_prompt) // 4
+        user_tokens_est = len(user_content) // 4
+        total_tokens_est = system_tokens_est + user_tokens_est
+        LOG.info(f"[{ticker}] Executive summary prompt size: system={len(system_prompt)} chars (~{system_tokens_est} tokens), user={len(user_content)} chars (~{user_tokens_est} tokens), total=~{total_tokens_est} tokens")
+
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "anthropic-version": "2023-06-01",  # Updated for prompt caching
@@ -10483,10 +10483,17 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 10000,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
+                }
+            ],
             "messages": [
                 {
                     "role": "user",
-                    "content": prompt
+                    "content": user_content
                 }
             ]
         }
@@ -10523,7 +10530,10 @@ def generate_openai_executive_summary(ticker: str, categories: Dict[str, List[Di
     if not result:
         return None
 
-    prompt, company_name = result
+    system_prompt, user_content, company_name = result
+
+    # For OpenAI, combine system and user content (format: instructions + article summaries)
+    prompt = f"{system_prompt}\n\nALL ARTICLE SUMMARIES:\n{user_content}"
 
     try:
         headers = {
@@ -11762,7 +11772,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
             # Check if article is <24 hours old (same logic as executive summary)
             is_new = is_within_24_hours(article.get('published_at'))
-            new_badge = ' 🆕' if is_new else ''
+            new_badge = '🆕 ' if is_new else ''
 
             # Star for FLAGGED + QUALITY articles
             star = '<span style="color: #f59e0b;">★</span> ' if is_starred(article['id'], article['domain']) else ''

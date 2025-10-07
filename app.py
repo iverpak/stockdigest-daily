@@ -707,7 +707,7 @@ def init_connection_pool():
             DB_POOL = ConnectionPool(
                 DATABASE_URL,
                 min_size=5,      # Minimum connections to keep open
-                max_size=45,     # Maximum connections (under 50 DB limit)
+                max_size=80,     # Maximum connections (under 100 DB limit for Basic-1GB)
                 timeout=30,      # Wait up to 30s for a connection
                 max_idle=300,    # Close idle connections after 5 minutes
                 kwargs={"row_factory": dict_row}

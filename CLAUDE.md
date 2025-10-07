@@ -36,7 +36,7 @@ The new job queue system decouples long-running processing from HTTP requests, e
 
 ### Core Application Structure
 
-**QuantBrief** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
+**StockDigest** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
 
 - **Single-file monolithic design**: All functionality is contained in `app.py` (~15,000+ lines)
 - **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, and executive summaries
@@ -260,7 +260,7 @@ Uses Jinja2 templating (`email_template.html`) with:
 
 ### 3-Email Quality Assurance Workflow
 
-QuantBrief generates 3 distinct emails per ticker during the digest phase, forming a complete QA pipeline:
+StockDigest generates 3 distinct emails per ticker during the digest phase, forming a complete QA pipeline:
 
 #### Email #1: Article Selection QA (Line 10353)
 **Function:** `send_enhanced_quick_intelligence_email()`
@@ -438,13 +438,13 @@ PowerShell → /jobs/batch/{id} (<1s) → Real-time status (poll every 20s)
 
 ```bash
 # Check worker health
-curl https://quantbrief-daily.onrender.com/jobs/stats -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest-daily.onrender.com/jobs/stats -H "X-Admin-Token: $TOKEN"
 
 # Check batch status
-curl https://quantbrief-daily.onrender.com/jobs/batch/{batch_id} -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest-daily.onrender.com/jobs/batch/{batch_id} -H "X-Admin-Token: $TOKEN"
 
 # Check specific job (includes full stacktrace)
-curl https://quantbrief-daily.onrender.com/jobs/{job_id} -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest-daily.onrender.com/jobs/{job_id} -H "X-Admin-Token: $TOKEN"
 ```
 
 ### SQL Queries
@@ -475,7 +475,7 @@ SELECT COUNT(*) FROM ticker_processing_jobs WHERE status = 'queued';
 
 ### Overview
 
-QuantBrief now supports **concurrent ticker processing**, allowing 2-5 tickers to process simultaneously. This reduces total processing time when handling multiple tickers in a batch.
+StockDigest now supports **concurrent ticker processing**, allowing 2-5 tickers to process simultaneously. This reduces total processing time when handling multiple tickers in a batch.
 
 ### Architecture Changes
 

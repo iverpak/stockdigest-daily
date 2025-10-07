@@ -1,4 +1,4 @@
-# QuantBrief Daily Intelligence System - PRIMER v3.5
+# StockDigest Daily Intelligence System - PRIMER v3.5
 
 **Last Updated:** October 7, 2025
 **Application File Size:** 15,000+ lines
@@ -14,7 +14,7 @@
 
 ## WHAT THIS APPLICATION DOES
 
-QuantBrief is an **AI-powered financial news aggregation and analysis system** that:
+StockDigest is an **AI-powered financial news aggregation and analysis system** that:
 
 1. **Ingests** RSS feeds from 100+ financial news sources (async, 5.5x faster)
 2. **Scrapes** full article content using 2-tier fallback (Requests → Scrapfly)
@@ -31,7 +31,7 @@ QuantBrief is an **AI-powered financial news aggregation and analysis system** t
 
 ## ASYNC FEED INGESTION PERFORMANCE (NEW IN v3.2)
 
-QuantBrief now uses **grouped parallel processing** for RSS feed ingestion, dramatically improving performance while maintaining data integrity.
+StockDigest now uses **grouped parallel processing** for RSS feed ingestion, dramatically improving performance while maintaining data integrity.
 
 ### Performance Improvement
 
@@ -149,7 +149,7 @@ Submitted competitor feeds for AAPL/MSFT: 2 feeds (Google→Yahoo sequential)
 
 ## 3-EMAIL QUALITY ASSURANCE WORKFLOW (NEW IN v3.0)
 
-QuantBrief now generates **3 distinct emails per ticker** during the digest phase, forming a complete QA pipeline. This is the most significant architectural change in v3.0.
+StockDigest now generates **3 distinct emails per ticker** during the digest phase, forming a complete QA pipeline. This is the most significant architectural change in v3.0.
 
 ### Email #1: Article Selection QA (60% Progress)
 **Function:** `send_enhanced_quick_intelligence_email()` - Line 10353
@@ -678,7 +678,7 @@ AND (a.published_at >= cutoff OR NULL)
 
 **Function:** `get_domain_strategy()` (check codebase for line number)
 
-QuantBrief maintains a domain-specific scraping strategy system:
+StockDigest maintains a domain-specific scraping strategy system:
 
 **Tier 1: Direct Scraping (newspaper3k)**
 - Most financial news sites (Yahoo Finance, CNBC, Reuters)
@@ -770,7 +770,7 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your-email@gmail.com
 SMTP_PASSWORD=your-app-password
-SMTP_FROM=QuantBrief <your-email@gmail.com>
+SMTP_FROM=StockDigest <your-email@gmail.com>
 SMTP_TO=recipient@example.com
 
 # Scraping (Optional - Premium Services)
@@ -813,7 +813,7 @@ DEFAULT_TICKERS = ["MO", "GM", "ODFL", "SO", "CVS"]
 
 **Check worker health:**
 ```bash
-curl https://quantbrief-daily.onrender.com/jobs/stats \
+curl https://stockdigest-daily.onrender.com/jobs/stats \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -832,13 +832,13 @@ curl https://quantbrief-daily.onrender.com/jobs/stats \
 
 **Check batch status:**
 ```bash
-curl https://quantbrief-daily.onrender.com/jobs/batch/{batch_id} \
+curl https://stockdigest-daily.onrender.com/jobs/batch/{batch_id} \
   -H "X-Admin-Token: $TOKEN"
 ```
 
 **Check specific job (includes full stacktrace):**
 ```bash
-curl https://quantbrief-daily.onrender.com/jobs/{job_id} \
+curl https://stockdigest-daily.onrender.com/jobs/{job_id} \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -880,19 +880,19 @@ LIMIT 10;
 
 **Test digest generation:**
 ```bash
-curl -X GET https://quantbrief-daily.onrender.com/admin/debug/digest/GM \
+curl -X GET https://stockdigest-daily.onrender.com/admin/debug/digest/GM \
   -H "X-Admin-Token: $TOKEN"
 ```
 
 **Test AI triage:**
 ```bash
-curl -X GET https://quantbrief-daily.onrender.com/admin/debug/triage/GM \
+curl -X GET https://stockdigest-daily.onrender.com/admin/debug/triage/GM \
   -H "X-Admin-Token: $TOKEN"
 ```
 
 **Test scraping strategy:**
 ```bash
-curl -X GET "https://quantbrief-daily.onrender.com/admin/debug/scrape?url=https://example.com/article" \
+curl -X GET "https://stockdigest-daily.onrender.com/admin/debug/scrape?url=https://example.com/article" \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -919,7 +919,7 @@ WHERE status = 'processing'
 **Solution:**
 ```bash
 # Manual reset
-curl -X POST https://quantbrief-daily.onrender.com/jobs/circuit-breaker/reset \
+curl -X POST https://stockdigest-daily.onrender.com/jobs/circuit-breaker/reset \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -1090,17 +1090,17 @@ WHERE id NOT IN (
 
 **Check Status:**
 ```bash
-curl https://quantbrief-daily.onrender.com/jobs/stats -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest-daily.onrender.com/jobs/stats -H "X-Admin-Token: $TOKEN"
 ```
 
 **Reset Circuit Breaker:**
 ```bash
-curl -X POST https://quantbrief-daily.onrender.com/jobs/circuit-breaker/reset -H "X-Admin-Token: $TOKEN"
+curl -X POST https://stockdigest-daily.onrender.com/jobs/circuit-breaker/reset -H "X-Admin-Token: $TOKEN"
 ```
 
 **Debug Ticker:**
 ```bash
-curl https://quantbrief-daily.onrender.com/admin/debug/digest/GM -H "X-Admin-Token: $TOKEN"
+curl https://stockdigest-daily.onrender.com/admin/debug/digest/GM -H "X-Admin-Token: $TOKEN"
 ```
 
 **View Executive Summaries:**

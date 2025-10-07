@@ -1,8 +1,8 @@
-# QuantBrief Job Queue - PowerShell Client
+# StockDigest Job Queue - PowerShell Client
 # Uses server-side job queue for reliable, resumable processing
 
 # Configuration
-$APP = "https://quantbrief-daily.onrender.com"
+$APP = "https://stockdigest-daily.onrender.com"
 $TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 $TICKERS = @("RY.TO", "TD.TO", "VST", "CEG")
 $MINUTES = 4320  # Time window in minutes
@@ -11,7 +11,7 @@ $TRIAGE_BATCH_SIZE = 3  # Triage batch size
 
 $headers = @{ "X-Admin-Token" = $TOKEN; "Content-Type" = "application/json" }
 
-Write-Host "=== QUANTBRIEF JOB QUEUE PROCESSING ===" -ForegroundColor Cyan
+Write-Host "=== STOCKDIGEST JOB QUEUE PROCESSING ===" -ForegroundColor Cyan
 Write-Host "Window: $MINUTES min | Scraping Batch: $BATCH_SIZE | Triage Batch: $TRIAGE_BATCH_SIZE" -ForegroundColor Yellow
 Write-Host "Tickers: $($TICKERS -join ', ')" -ForegroundColor Yellow
 

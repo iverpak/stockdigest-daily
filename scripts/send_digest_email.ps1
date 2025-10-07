@@ -1,9 +1,9 @@
-# QuantBrief - Send Digest Email Only
+# StockDigest - Send Digest Email Only
 # Uses existing articles in database to generate and send Stock Intelligence email
 # Does NOT re-scrape or re-ingest articles
 
 # Configuration (matches setup_job_queue.ps1)
-$APP = "https://quantbrief-daily.onrender.com"
+$APP = "https://stockdigest-daily.onrender.com"
 $TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 $TICKERS = @("RY.TO", "TD.TO", "VST", "CEG")
 $MINUTES = 4320  # Time window in minutes

@@ -1,4 +1,4 @@
-# QuantBrief Job Queue System
+# StockDigest Job Queue System
 
 ## Overview
 

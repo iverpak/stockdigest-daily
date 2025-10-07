@@ -1,6 +1,6 @@
 # Simple script to call the domain update endpoint
 
-$APP_URL = "https://quantbrief-daily.onrender.com"
+$APP_URL = "https://stockdigest-daily.onrender.com"
 $ADMIN_TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 
 Write-Host "========================================" -ForegroundColor Cyan

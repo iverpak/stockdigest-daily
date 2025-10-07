@@ -1,8 +1,8 @@
-# QuantBrief - Monitor Batch Script
+# StockDigest - Monitor Batch Script
 # Reconnect to a running batch and watch progress in real-time
 
 # Configuration
-$APP = "https://quantbrief-daily.onrender.com"
+$APP = "https://stockdigest-daily.onrender.com"
 $TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 
 $headers = @{ "X-Admin-Token" = $TOKEN; "Content-Type" = "application/json" }

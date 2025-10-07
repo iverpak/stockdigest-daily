@@ -51,7 +51,7 @@
 
 ### T+5 min: Health Check
 ```bash
-curl https://quantbrief-daily.onrender.com/health
+curl https://stockdigest-daily.onrender.com/health
 ```
 
 **Expected Response**:
@@ -92,7 +92,7 @@ curl https://quantbrief-daily.onrender.com/health
 ### 2. Test Health Endpoint
 
 ```bash
-curl https://quantbrief-daily.onrender.com/health | jq
+curl https://stockdigest-daily.onrender.com/health | jq
 ```
 
 **Verify**:
@@ -103,7 +103,7 @@ curl https://quantbrief-daily.onrender.com/health | jq
 ### 3. Test Job Queue Stats
 
 ```bash
-curl https://quantbrief-daily.onrender.com/jobs/stats \
+curl https://stockdigest-daily.onrender.com/jobs/stats \
   -H "X-Admin-Token: a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 ```
 
@@ -121,7 +121,7 @@ curl https://quantbrief-daily.onrender.com/jobs/stats \
 
 ```bash
 # Single ticker test (will trigger immediate deployment)
-curl -X POST https://quantbrief-daily.onrender.com/jobs/submit \
+curl -X POST https://stockdigest-daily.onrender.com/jobs/submit \
   -H "X-Admin-Token: a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn" \
   -H "Content-Type: application/json" \
   -d '{"tickers": ["AAPL"], "minutes": 1440}'
@@ -141,7 +141,7 @@ curl -X POST https://quantbrief-daily.onrender.com/jobs/submit \
 ```bash
 # Replace with actual batch_id from step 4
 BATCH_ID="550e8400-..."
-curl https://quantbrief-daily.onrender.com/jobs/batch/$BATCH_ID \
+curl https://stockdigest-daily.onrender.com/jobs/batch/$BATCH_ID \
   -H "X-Admin-Token: a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 ```
 
@@ -220,10 +220,10 @@ git push origin main
 **Diagnostics**:
 ```bash
 # Check circuit breaker
-curl https://quantbrief-daily.onrender.com/jobs/stats | jq '.circuit_breaker_state'
+curl https://stockdigest-daily.onrender.com/jobs/stats | jq '.circuit_breaker_state'
 
 # If "open", reset:
-curl -X POST https://quantbrief-daily.onrender.com/jobs/circuit-breaker/reset \
+curl -X POST https://stockdigest-daily.onrender.com/jobs/circuit-breaker/reset \
   -H "X-Admin-Token: $TOKEN"
 ```
 
@@ -290,7 +290,7 @@ git push origin main
 # 2. Wait for Render to deploy reverted version (3-5 min)
 
 # 3. Verify old behavior restored
-curl https://quantbrief-daily.onrender.com/health
+curl https://stockdigest-daily.onrender.com/health
 
 # 4. Investigate issue in dev environment
 ```
@@ -327,9 +327,9 @@ curl https://quantbrief-daily.onrender.com/health
 ## Contact & Support
 
 **Render Dashboard**: https://dashboard.render.com
-**GitHub Repo**: https://github.com/iverpak/quantbrief-daily
-**Health Check**: https://quantbrief-daily.onrender.com/health
-**Job Stats**: https://quantbrief-daily.onrender.com/jobs/stats
+**GitHub Repo**: https://github.com/iverpak/stockdigest-daily
+**Health Check**: https://stockdigest-daily.onrender.com/health
+**Job Stats**: https://stockdigest-daily.onrender.com/jobs/stats
 
 **Documentation**:
 - GITHUB_COMMIT_BULLETPROOFING.md - Technical deep dive

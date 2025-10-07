@@ -1,4 +1,4 @@
-# QuantBrief Job Queue Implementation Summary
+# StockDigest Job Queue Implementation Summary
 
 ## What Was Built
 
@@ -286,15 +286,15 @@ Look for:
 
 ```bash
 # Check worker status
-curl https://quantbrief-daily.onrender.com/jobs/stats \
+curl https://stockdigest-daily.onrender.com/jobs/stats \
   -H "X-Admin-Token: $TOKEN"
 
 # Check specific batch
-curl https://quantbrief-daily.onrender.com/jobs/batch/{batch_id} \
+curl https://stockdigest-daily.onrender.com/jobs/batch/{batch_id} \
   -H "X-Admin-Token: $TOKEN"
 
 # Check specific job (includes stacktraces)
-curl https://quantbrief-daily.onrender.com/jobs/{job_id} \
+curl https://stockdigest-daily.onrender.com/jobs/{job_id} \
   -H "X-Admin-Token: $TOKEN"
 ```
 

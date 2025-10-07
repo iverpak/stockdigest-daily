@@ -104,7 +104,7 @@ commit_message = f"{skip_prefix}Incremental update: {ticker} - {timestamp}"
 
 ### Batch Submission
 ```bash
-curl -X POST "https://quantbrief-daily.onrender.com/jobs/submit" \
+curl -X POST "https://stockdigest-daily.onrender.com/jobs/submit" \
   -H "X-Admin-Token: $TOKEN" \
   -d '{"tickers": ["RY.TO", "TD.TO", "NVDA", "META"], "minutes": 1440}'
 ```
@@ -308,14 +308,14 @@ All jobs use `[skip render]` EXCEPT last job in batch.
 
 **Force deployment on specific ticker**:
 ```bash
-curl -X POST "https://quantbrief-daily.onrender.com/admin/safe-incremental-commit" \
+curl -X POST "https://stockdigest-daily.onrender.com/admin/safe-incremental-commit" \
   -H "X-Admin-Token: $TOKEN" \
   -d '{"tickers": ["AAPL"], "skip_render": false}'
 ```
 
 **Force no deployment (emergency)**:
 ```bash
-curl -X POST "https://quantbrief-daily.onrender.com/admin/safe-incremental-commit" \
+curl -X POST "https://stockdigest-daily.onrender.com/admin/safe-incremental-commit" \
   -H "X-Admin-Token: $TOKEN" \
   -d '{"tickers": ["AAPL"], "skip_render": true}'
 ```
@@ -326,7 +326,7 @@ curl -X POST "https://quantbrief-daily.onrender.com/admin/safe-incremental-commi
 
 ### Test 1: 4-Ticker Batch
 ```bash
-curl -X POST "https://quantbrief-daily.onrender.com/jobs/submit" \
+curl -X POST "https://stockdigest-daily.onrender.com/jobs/submit" \
   -d '{"tickers": ["RY.TO", "TD.TO", "NVDA", "META"]}'
 ```
 
@@ -339,7 +339,7 @@ curl -X POST "https://quantbrief-daily.onrender.com/jobs/submit" \
 
 ### Test 2: Single Ticker
 ```bash
-curl -X POST "https://quantbrief-daily.onrender.com/jobs/submit" \
+curl -X POST "https://stockdigest-daily.onrender.com/jobs/submit" \
   -d '{"tickers": ["AAPL"]}'
 ```
 
@@ -370,7 +370,7 @@ Incremental update: META - 20250930_130000 [job:def456]
 
 ### Check Batch Status
 ```bash
-curl "https://quantbrief-daily.onrender.com/jobs/batch/$BATCH_ID"
+curl "https://stockdigest-daily.onrender.com/jobs/batch/$BATCH_ID"
 ```
 
 **Look for**:
@@ -380,7 +380,7 @@ curl "https://quantbrief-daily.onrender.com/jobs/batch/$BATCH_ID"
 
 ### Check Server Uptime
 ```bash
-curl "https://quantbrief-daily.onrender.com/health" | jq '.worker.worker_id'
+curl "https://stockdigest-daily.onrender.com/health" | jq '.worker.worker_id'
 ```
 
 Compare worker_id before/after batch:

@@ -10060,14 +10060,14 @@ def get_ticker_reference(ticker: str) -> Optional[Dict]:
         return cur.fetchone()
 
 def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
-    """Update reference table with AI-generated enhancements"""
+    """UPSERT reference table with AI-generated enhancements (INSERT if new, UPDATE if exists)"""
     try:
         # Convert array format back to separate fields for database storage
         keywords = metadata.get("industry_keywords", [])
         keyword_1 = keywords[0] if len(keywords) > 0 else None
         keyword_2 = keywords[1] if len(keywords) > 1 else None
         keyword_3 = keywords[2] if len(keywords) > 2 else None
-        
+
         # Convert competitors to separate fields - Initialize all fields
         competitors = metadata.get("competitors", [])
         comp_data = {
@@ -10075,7 +10075,7 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
             'competitor_2_name': None, 'competitor_2_ticker': None,
             'competitor_3_name': None, 'competitor_3_ticker': None
         }
-        
+
         for i, comp in enumerate(competitors[:3], 1):
             if isinstance(comp, dict):
                 comp_data[f'competitor_{i}_name'] = comp.get('name')
@@ -10083,67 +10083,89 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
             else:
                 # Handle old string format if needed
                 comp_data[f'competitor_{i}_name'] = str(comp) if comp else None
-        
-        LOG.info(f"DEBUG: Updating {ticker} with keywords={[keyword_1, keyword_2, keyword_3]} and competitors={comp_data}")
-        
+
+        LOG.info(f"DEBUG: UPSERT {ticker} with keywords={[keyword_1, keyword_2, keyword_3]} and competitors={comp_data}")
+
         with db() as conn, conn.cursor() as cur:
+            # UPSERT: INSERT new ticker or UPDATE existing one
             cur.execute("""
-                UPDATE ticker_reference
-                SET industry_keyword_1 = %s,
-                    industry_keyword_2 = %s,
-                    industry_keyword_3 = %s,
-                    competitor_1_name = %s,
-                    competitor_1_ticker = %s,
-                    competitor_2_name = %s,
-                    competitor_2_ticker = %s,
-                    competitor_3_name = %s,
-                    competitor_3_ticker = %s,
+                INSERT INTO ticker_reference (
+                    ticker, company_name, sector, industry, sub_industry,
+                    industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                    competitor_1_name, competitor_1_ticker,
+                    competitor_2_name, competitor_2_ticker,
+                    competitor_3_name, competitor_3_ticker,
+                    ai_generated, ai_enhanced_at, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW(), NOW())
+                ON CONFLICT (ticker) DO UPDATE SET
+                    industry_keyword_1 = EXCLUDED.industry_keyword_1,
+                    industry_keyword_2 = EXCLUDED.industry_keyword_2,
+                    industry_keyword_3 = EXCLUDED.industry_keyword_3,
+                    competitor_1_name = EXCLUDED.competitor_1_name,
+                    competitor_1_ticker = EXCLUDED.competitor_1_ticker,
+                    competitor_2_name = EXCLUDED.competitor_2_name,
+                    competitor_2_ticker = EXCLUDED.competitor_2_ticker,
+                    competitor_3_name = EXCLUDED.competitor_3_name,
+                    competitor_3_ticker = EXCLUDED.competitor_3_ticker,
                     ai_generated = TRUE,
                     ai_enhanced_at = NOW(),
                     updated_at = NOW()
-                WHERE ticker = %s
             """, (
+                normalize_ticker_format(ticker),
+                metadata.get('company_name', ticker),
+                metadata.get('sector') if metadata.get('sector') not in ['Unknown', ''] else None,
+                metadata.get('industry') if metadata.get('industry') not in ['Unknown', ''] else None,
+                metadata.get('sub_industry', ''),
                 keyword_1, keyword_2, keyword_3,
                 comp_data['competitor_1_name'],
                 comp_data['competitor_1_ticker'],
                 comp_data['competitor_2_name'],
                 comp_data['competitor_2_ticker'],
                 comp_data['competitor_3_name'],
-                comp_data['competitor_3_ticker'],
-                normalize_ticker_format(ticker)
+                comp_data['competitor_3_ticker']
             ))
-            
-            if cur.rowcount > 0:
-                LOG.info(f"Updated {ticker} reference table with AI enhancements")
-            else:
-                LOG.warning(f"No ticker reference found to update for {ticker}")
-                
+
+            LOG.info(f"✅ UPSERT successful for {ticker} reference table with AI enhancements")
+
     except Exception as e:
-        LOG.error(f"Failed to update ticker reference AI data for {ticker}: {e}")
+        LOG.error(f"Failed to UPSERT ticker reference AI data for {ticker}: {e}")
 
 def update_ticker_reference_financial_data(ticker: str, financial_data: Dict):
-    """Update reference table with financial data from yfinance"""
+    """UPSERT reference table with financial data from yfinance (INSERT if new, UPDATE if exists)"""
     try:
         with db() as conn, conn.cursor() as cur:
+            # UPSERT: INSERT new ticker or UPDATE existing one with financial data
             cur.execute("""
-                UPDATE ticker_reference
-                SET financial_last_price = %s,
-                    financial_price_change_pct = %s,
-                    financial_yesterday_return_pct = %s,
-                    financial_ytd_return_pct = %s,
-                    financial_market_cap = %s,
-                    financial_enterprise_value = %s,
-                    financial_volume = %s,
-                    financial_avg_volume = %s,
-                    financial_analyst_target = %s,
-                    financial_analyst_range_low = %s,
-                    financial_analyst_range_high = %s,
-                    financial_analyst_count = %s,
-                    financial_analyst_recommendation = %s,
-                    financial_snapshot_date = %s,
+                INSERT INTO ticker_reference (
+                    ticker, company_name,
+                    financial_last_price, financial_price_change_pct, financial_yesterday_return_pct,
+                    financial_ytd_return_pct, financial_market_cap, financial_enterprise_value,
+                    financial_volume, financial_avg_volume, financial_analyst_target,
+                    financial_analyst_range_low, financial_analyst_range_high, financial_analyst_count,
+                    financial_analyst_recommendation, financial_snapshot_date,
+                    created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (ticker) DO UPDATE SET
+                    financial_last_price = EXCLUDED.financial_last_price,
+                    financial_price_change_pct = EXCLUDED.financial_price_change_pct,
+                    financial_yesterday_return_pct = EXCLUDED.financial_yesterday_return_pct,
+                    financial_ytd_return_pct = EXCLUDED.financial_ytd_return_pct,
+                    financial_market_cap = EXCLUDED.financial_market_cap,
+                    financial_enterprise_value = EXCLUDED.financial_enterprise_value,
+                    financial_volume = EXCLUDED.financial_volume,
+                    financial_avg_volume = EXCLUDED.financial_avg_volume,
+                    financial_analyst_target = EXCLUDED.financial_analyst_target,
+                    financial_analyst_range_low = EXCLUDED.financial_analyst_range_low,
+                    financial_analyst_range_high = EXCLUDED.financial_analyst_range_high,
+                    financial_analyst_count = EXCLUDED.financial_analyst_count,
+                    financial_analyst_recommendation = EXCLUDED.financial_analyst_recommendation,
+                    financial_snapshot_date = EXCLUDED.financial_snapshot_date,
                     updated_at = NOW()
-                WHERE ticker = %s
             """, (
+                normalize_ticker_format(ticker),
+                ticker,  # Use ticker as fallback company_name if creating new row
                 financial_data.get('financial_last_price'),
                 financial_data.get('financial_price_change_pct'),
                 financial_data.get('financial_yesterday_return_pct'),
@@ -10157,17 +10179,13 @@ def update_ticker_reference_financial_data(ticker: str, financial_data: Dict):
                 financial_data.get('financial_analyst_range_high'),
                 financial_data.get('financial_analyst_count'),
                 financial_data.get('financial_analyst_recommendation'),
-                financial_data.get('financial_snapshot_date'),
-                normalize_ticker_format(ticker)
+                financial_data.get('financial_snapshot_date')
             ))
 
-            if cur.rowcount > 0:
-                LOG.info(f"✅ Updated {ticker} with financial data (snapshot: {financial_data.get('financial_snapshot_date')})")
-            else:
-                LOG.warning(f"No ticker reference found to update financial data for {ticker}")
+            LOG.info(f"✅ UPSERT successful for {ticker} with financial data (snapshot: {financial_data.get('financial_snapshot_date')})")
 
     except Exception as e:
-        LOG.error(f"Failed to update ticker reference financial data for {ticker}: {e}")
+        LOG.error(f"Failed to UPSERT ticker reference financial data for {ticker}: {e}")
 
 def validate_metadata(metadata):
     """
@@ -12033,7 +12051,10 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
         return {"status": "error", "message": f"No config found for {ticker}"}
 
     company_name = config.get("company_name", ticker)
-    sector = config.get("sector", "Financial Services")
+    sector = config.get("sector")
+
+    # Format sector display (show "• Sector" only if sector exists and not empty/null)
+    sector_display = f" • {sector}" if sector and sector.strip() else ""
 
     # Fetch stock price from ticker_reference (cached)
     stock_price = "$0.00"
@@ -12259,26 +12280,18 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                     <td style="width: 65%; vertical-align: top;">
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
                                         <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; color: #ffffff;">{company_name}</h1>
-                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker} • {sector}</div>
+                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
                                     </td>
                                     <td align="right" style="vertical-align: top; width: 35%;">
                                         <div style="display: inline-block; background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); text-align: right;">
-                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75; color: #ffffff;">{current_date}</div>
-                                            <div style="font-size: 20px; font-weight: 700; line-height: 1; color: #ffffff;">{stock_price}</div>
-                                            <div style="font-size: 13px; color: {price_change_color}; font-weight: 700; margin-top: 3px;">{price_change_pct} <span style="font-size: 10px; opacity: 0.7; font-weight: 400; margin-left: 4px;">Last Close</span></div>
+                                            <div style="font-size: 14px; font-weight: 500; opacity: 0.7; margin-bottom: 4px; color: #ffffff;">{current_date}</div>
+                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; margin-bottom: 8px; color: #ffffff;">Last Close</div>
+                                            <div style="font-size: 36px; font-weight: 700; line-height: 1; margin-bottom: 8px; color: #ffffff;">{stock_price}</div>
+                                            <div style="font-size: 16px; color: {price_change_color}; font-weight: 600;">{price_change_pct}</div>
                                         </div>
                                     </td>
                                 </tr>
                             </table>
-                        </td>
-                    </tr>
-
-                    <!-- Legal Disclaimer Banner -->
-                    <tr>
-                        <td style="padding: 12px 24px; background-color: #fef3c7; border-bottom: 1px solid #fcd34d;">
-                            <p style="margin: 0; font-size: 11px; color: #92400e; line-height: 1.5; font-weight: 500; text-align: center;">
-                                ⚠️ <strong>DISCLAIMER:</strong> This report is for informational purposes only and does not constitute investment advice. Not a recommendation to buy or sell securities.
-                            </p>
                         </td>
                     </tr>
 

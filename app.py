@@ -13425,7 +13425,14 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
         # Normalize ticker format (handles case, removes quotes, etc)
         normalized = normalize_ticker_format(ticker)
 
-        # Try exact match first
+        # TIER 1: Format validation (reject obvious garbage immediately)
+        if not validate_ticker_format(normalized):
+            return {
+                "valid": False,
+                "message": "Invalid ticker format"
+            }
+
+        # TIER 2: Database whitelist (only allow approved tickers)
         config = get_ticker_config(normalized)
 
         # Check if ticker exists in database (has_full_config=True means it's real, False means fallback)
@@ -13462,7 +13469,7 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
         # No matches found in database - ticker not recognized
         return {
             "valid": False,
-            "message": f"Ticker '{ticker}' not recognized. Try another."
+            "message": "Ticker not recognized"
         }
 
     except Exception as e:

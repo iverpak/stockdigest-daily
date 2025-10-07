@@ -7,6 +7,7 @@ import hashlib
 import re
 import pytz
 import json
+import secrets
 import openai
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
@@ -327,6 +328,12 @@ SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False", "
 EMAIL_FROM = _first(os.getenv("MAILGUN_FROM"), os.getenv("EMAIL_FROM"), SMTP_USERNAME)
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
+
+# Legal document versions
+TERMS_VERSION = "1.0"
+PRIVACY_VERSION = "1.0"
+TERMS_LAST_UPDATED = "October 7, 2025"
+PRIVACY_LAST_UPDATED = "October 7, 2025"
 
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
@@ -1054,12 +1061,46 @@ def ensure_schema():
                     ticker2 VARCHAR(10) NOT NULL,
                     ticker3 VARCHAR(10) NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
-                    status VARCHAR(50) DEFAULT 'active'
+                    status VARCHAR(50) DEFAULT 'active',
+                    terms_version VARCHAR(10) DEFAULT '1.0',
+                    terms_accepted_at TIMESTAMPTZ,
+                    privacy_version VARCHAR(10) DEFAULT '1.0',
+                    privacy_accepted_at TIMESTAMPTZ
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_beta_users_status ON beta_users(status);
                 CREATE INDEX IF NOT EXISTS idx_beta_users_created_at ON beta_users(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_beta_users_email ON beta_users(email);
+                CREATE INDEX IF NOT EXISTS idx_beta_users_terms_version ON beta_users(terms_version);
+
+                -- Add terms versioning columns to existing beta_users table (safe migration)
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                 WHERE table_name='beta_users' AND column_name='terms_version') THEN
+                        ALTER TABLE beta_users
+                        ADD COLUMN terms_version VARCHAR(10) DEFAULT '1.0',
+                        ADD COLUMN terms_accepted_at TIMESTAMPTZ,
+                        ADD COLUMN privacy_version VARCHAR(10) DEFAULT '1.0',
+                        ADD COLUMN privacy_accepted_at TIMESTAMPTZ;
+                    END IF;
+                END $$;
+
+                -- Unsubscribe tokens table
+                CREATE TABLE IF NOT EXISTS unsubscribe_tokens (
+                    id SERIAL PRIMARY KEY,
+                    user_email VARCHAR(255) NOT NULL,
+                    token VARCHAR(64) UNIQUE NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    used_at TIMESTAMPTZ,
+                    ip_address VARCHAR(45),
+                    user_agent TEXT,
+                    FOREIGN KEY (user_email) REFERENCES beta_users(email) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_email ON unsubscribe_tokens(user_email);
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
             """)
 
     LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS")
@@ -12925,6 +12966,173 @@ async def landing_page(request: Request):
     return templates.TemplateResponse("signup.html", {"request": request})
 
 
+@APP.get("/terms-of-service", response_class=HTMLResponse)
+async def terms_page(request: Request):
+    """Serve Terms of Service page"""
+    return templates.TemplateResponse("terms_of_service.html", {"request": request})
+
+
+@APP.get("/privacy-policy", response_class=HTMLResponse)
+async def privacy_page(request: Request):
+    """Serve Privacy Policy page"""
+    return templates.TemplateResponse("privacy_policy.html", {"request": request})
+
+
+@APP.get("/unsubscribe", response_class=HTMLResponse)
+async def unsubscribe_page(request: Request, token: str = Query(...)):
+    """
+    Handle unsubscribe requests via token link.
+    Idempotent: Can be called multiple times safely.
+    """
+    LOG.info(f"Unsubscribe request with token: {token[:10]}...")
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Validate token and get user info
+            cur.execute("""
+                SELECT ut.user_email, ut.used_at, bu.name, bu.status
+                FROM unsubscribe_tokens ut
+                JOIN beta_users bu ON ut.user_email = bu.email
+                WHERE ut.token = %s
+            """, (token,))
+            result = cur.fetchone()
+
+            if not result:
+                LOG.warning(f"Invalid unsubscribe token: {token[:10]}...")
+                return HTMLResponse("""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Invalid Link - StockDigest</title>
+                        <style>
+                            body {
+                                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                                background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+                                min-height: 100vh;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                margin: 0;
+                                padding: 20px;
+                            }
+                            .container {
+                                background: white;
+                                padding: 40px;
+                                border-radius: 12px;
+                                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                                max-width: 500px;
+                                text-align: center;
+                            }
+                            h1 { color: #dc2626; margin-bottom: 16px; }
+                            p { color: #374151; line-height: 1.6; }
+                            a { color: #1e40af; text-decoration: none; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h1>❌ Invalid Unsubscribe Link</h1>
+                            <p>This unsubscribe link is invalid or has expired.</p>
+                            <p>If you need assistance, please contact us at <a href="mailto:stockdigest.research@gmail.com">stockdigest.research@gmail.com</a></p>
+                            <p style="margin-top: 24px;"><a href="/">← Return to Home</a></p>
+                        </div>
+                    </body>
+                    </html>
+                """, status_code=404)
+
+            email = result['user_email']
+            name = result['name']
+            already_cancelled = result['status'] == 'cancelled'
+            already_used = result['used_at'] is not None
+
+            # Capture request metadata for security tracking
+            ip_address = request.client.host if request.client else None
+            user_agent = request.headers.get('user-agent', '')
+
+            if not already_cancelled:
+                # Mark user as unsubscribed
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'cancelled'
+                    WHERE email = %s
+                """, (email,))
+                LOG.info(f"Unsubscribed user: {email}")
+
+            if not already_used:
+                # Mark token as used
+                cur.execute("""
+                    UPDATE unsubscribe_tokens
+                    SET used_at = NOW(), ip_address = %s, user_agent = %s
+                    WHERE token = %s
+                """, (ip_address, user_agent, token))
+                LOG.info(f"Marked token as used for {email}")
+
+            conn.commit()
+
+            # Return success page
+            return HTMLResponse(f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Unsubscribed - StockDigest</title>
+                    <style>
+                        body {{
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+                            min-height: 100vh;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            margin: 0;
+                            padding: 20px;
+                        }}
+                        .container {{
+                            background: white;
+                            padding: 40px;
+                            border-radius: 12px;
+                            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                            max-width: 500px;
+                            text-align: center;
+                        }}
+                        h1 {{ color: #059669; margin-bottom: 16px; }}
+                        p {{ color: #374151; line-height: 1.6; margin-bottom: 12px; }}
+                        .email {{ background: #f3f4f6; padding: 8px 12px; border-radius: 4px; font-family: monospace; }}
+                        a {{ color: #1e40af; text-decoration: none; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h1>✅ Successfully Unsubscribed</h1>
+                        <p><strong>{name}</strong>, you've been unsubscribed from StockDigest.</p>
+                        <p class="email">{email}</p>
+                        <p style="margin-top: 24px;">You will no longer receive daily stock intelligence reports.</p>
+                        <p style="margin-top: 16px; font-size: 14px; color: #6b7280;">
+                            Changed your mind? <a href="/">Re-subscribe here</a>
+                        </p>
+                        <p style="margin-top: 24px; font-size: 14px; color: #6b7280;">
+                            Questions? <a href="mailto:stockdigest.research@gmail.com">Contact us</a>
+                        </p>
+                    </div>
+                </body>
+                </html>
+            """)
+
+    except Exception as e:
+        LOG.error(f"Error processing unsubscribe: {e}")
+        LOG.error(traceback.format_exc())
+
+        return HTMLResponse("""
+            <!DOCTYPE html>
+            <html>
+            <head><title>Error - StockDigest</title></head>
+            <body>
+                <h1>Something went wrong</h1>
+                <p>We couldn't process your unsubscribe request. Please try again or contact support.</p>
+                <p><a href="mailto:stockdigest.research@gmail.com">stockdigest.research@gmail.com</a></p>
+            </body>
+            </html>
+        """, status_code=500)
+
+
 # ------------------------------------------------------------------------------
 # Beta Signup API Endpoints
 # ------------------------------------------------------------------------------
@@ -12999,6 +13207,62 @@ class BetaSignupRequest(BaseModel):
     ticker3: str
 
 
+def generate_unsubscribe_token(email: str) -> str:
+    """
+    Generate cryptographically secure unsubscribe token for user.
+    Returns: 43-character URL-safe token
+    """
+    token = secrets.token_urlsafe(32)  # 32 bytes = 43 chars base64
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO unsubscribe_tokens (user_email, token)
+                VALUES (%s, %s)
+                ON CONFLICT (token) DO NOTHING
+                RETURNING token
+            """, (email, token))
+            result = cur.fetchone()
+
+            if not result:
+                # Token collision (astronomically rare), retry
+                LOG.warning(f"Token collision for {email}, regenerating")
+                return generate_unsubscribe_token(email)
+
+            conn.commit()
+            LOG.info(f"Generated unsubscribe token for {email}")
+            return token
+    except Exception as e:
+        LOG.error(f"Error generating unsubscribe token: {e}")
+        raise
+
+
+def get_or_create_unsubscribe_token(email: str) -> str:
+    """
+    Get existing unsubscribe token or create new one.
+    Reuses token if user hasn't unsubscribed yet.
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Check if unused token exists
+            cur.execute("""
+                SELECT token FROM unsubscribe_tokens
+                WHERE user_email = %s AND used_at IS NULL
+                ORDER BY created_at DESC LIMIT 1
+            """, (email,))
+            result = cur.fetchone()
+
+            if result:
+                return result['token']
+
+            # No unused token found, generate new one
+            return generate_unsubscribe_token(email)
+    except Exception as e:
+        LOG.error(f"Error getting unsubscribe token: {e}")
+        # Fallback: return empty string (email will have broken unsubscribe link but won't crash)
+        return ""
+
+
 @APP.post("/api/beta-signup")
 async def beta_signup_endpoint(signup: BetaSignupRequest):
     """
@@ -13054,13 +13318,24 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
                     content={"status": "error", "message": "Email already registered"}
                 )
 
-        # Save to database
+        # Save to database with terms tracking
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO beta_users (name, email, ticker1, ticker2, ticker3, created_at, status)
-                VALUES (%s, %s, %s, %s, %s, NOW(), 'active')
-            """, (name, email, tickers[0], tickers[1], tickers[2]))
+                INSERT INTO beta_users (
+                    name, email, ticker1, ticker2, ticker3, created_at, status,
+                    terms_version, terms_accepted_at, privacy_version, privacy_accepted_at
+                )
+                VALUES (%s, %s, %s, %s, %s, NOW(), 'active', %s, NOW(), %s, NOW())
+            """, (name, email, tickers[0], tickers[1], tickers[2], TERMS_VERSION, PRIVACY_VERSION))
             conn.commit()
+
+        # Generate unsubscribe token
+        try:
+            unsubscribe_token = generate_unsubscribe_token(email)
+            LOG.info(f"Created unsubscribe token for {email}")
+        except Exception as e:
+            LOG.error(f"Failed to create unsubscribe token for {email}: {e}")
+            # Don't block signup if token generation fails
 
         # Send admin notification email
         send_beta_signup_notification(name, email, tickers[0], tickers[1], tickers[2])

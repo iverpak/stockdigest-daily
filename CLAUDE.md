@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Information
+
+**Name:** StockDigest
+**Domain:** https://stockdigest.app
+**GitHub:** https://github.com/iverpak/stockdigest-daily
+**Database:** stockdigest-db (PostgreSQL on Render)
+
 ## Development Commands
 
 ### Running the Application
@@ -39,11 +46,12 @@ The new job queue system decouples long-running processing from HTTP requests, e
 **StockDigest** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
 
 - **Single-file monolithic design**: All functionality is contained in `app.py` (~15,000+ lines)
-- **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, and executive summaries
+- **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, executive summaries, and beta users
 - **Job queue system**: Background worker for reliable, resumable processing (eliminates HTTP 520 errors)
 - **AI-powered content analysis**: Claude API (primary) with OpenAI fallback, prompt caching enabled (v2024-10-22)
 - **Multi-source content scraping**: 2-tier fallback (newspaper3k → Scrapfly) - Playwright commented out for reliability
 - **3-Email QA workflow**: Automated quality assurance pipeline with triage, content review, and user-facing reports
+- **Beta landing page**: Professional signup page with live ticker validation and smart Canadian ticker suggestions
 
 ### Key Components
 
@@ -52,6 +60,7 @@ The new job queue system decouples long-running processing from HTTP requests, e
 - Articles table with deduplication via URL hashing
 - Metadata tracking for company information and processing state
 - Executive summaries table (`executive_summaries`) - stores daily AI-generated summaries with unique constraint on (ticker, summary_date)
+- **Beta users table (`beta_users`)** - NEW: stores beta user signups with name, email, 3 tickers, and status
 
 #### Content Pipeline
 
@@ -145,7 +154,12 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 
 ### API Endpoints
 
-#### Job Queue Endpoints (NEW - Production)
+#### Public Endpoints (No Authentication)
+- `GET /`: Beta landing page (HTML)
+- `GET /api/validate-ticker`: Live ticker validation with Canadian .TO suggestions
+- `POST /api/beta-signup`: Beta user signup form submission
+
+#### Job Queue Endpoints (Production)
 - `POST /jobs/submit`: Submit batch of tickers for server-side processing
 - `GET /jobs/batch/{batch_id}`: Get real-time status of all jobs in batch
 - `GET /jobs/{job_id}`: Get detailed job status (includes stacktraces)
@@ -159,6 +173,7 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `POST /admin/force-digest`: Generate digest emails for specific tickers
 - `POST /admin/wipe-database`: Complete database reset
 - `GET /admin/ticker-metadata/{ticker}`: Retrieve ticker configuration
+- **`POST /admin/export-user-csv`**: Export beta users to CSV for daily processing
 
 #### Legacy Automation Endpoints (Direct HTTP)
 - `POST /cron/ingest`: RSS feed processing and article discovery (⚠️ Subject to HTTP timeouts)
@@ -188,6 +203,12 @@ Key tables managed through schema initialization:
 - `ticker_references`: Company metadata and exchange information
 - `feeds`: RSS feed sources (shareable across tickers)
 - `ticker_feeds`: Many-to-many ticker-feed relationships with per-relationship categories
+
+**Beta User Management (NEW - October 2025):**
+- `beta_users`: Beta signup data (name, email, ticker1, ticker2, ticker3, status, created_at)
+  - UNIQUE constraint on email
+  - Status field: 'active' | 'paused' | 'cancelled'
+  - Exported daily to `data/user_tickers.csv` for morning processing
 
 **Job Queue System (NEW):**
 - `ticker_processing_batches`: Batch tracking (status, job counts, config)

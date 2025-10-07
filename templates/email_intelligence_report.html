@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ ticker }} Intelligence Report</title>
+    <style>
+        @media only screen and (max-width: 600px) {
+            .content-padding { padding: 16px !important; }
+            .header-padding { padding: 16px 20px !important; }
+            .price-box { padding: 8px 10px !important; }
+            .company-name { font-size: 20px !important; }
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+
+                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: hidden;">
+
+                    <!-- TOP DISCLAIMER (Subtle) -->
+                    <tr>
+                        <td style="background-color: #f0f4f8; padding: 10px 20px; border-bottom: 1px solid #cbd5e1;">
+                            <div style="font-size: 11px; color: #64748b; line-height: 1.5; text-align: center;">
+                                <strong style="color: #475569;">For informational purposes only.</strong> Not investment advice. Please consult a financial advisor before making investment decisions.
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Header -->
+                    <tr>
+                        <td class="header-padding" style="padding: 20px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="width: 65%; vertical-align: top;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
+                                        <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; color: #ffffff;">{{ company_name }}</h1>
+                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{{ ticker }} • {{ industry }}</div>
+                                    </td>
+                                    <td align="right" style="vertical-align: top; width: 35%;">
+                                        <div style="display: inline-block; background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); text-align: right;">
+                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.75; color: #ffffff;">{{ current_date }}</div>
+                                            <div style="font-size: 20px; font-weight: 700; line-height: 1; color: #ffffff;">{{ stock_price }}</div>
+                                            <div style="font-size: 13px; color: {{ price_change_color }}; font-weight: 700; margin-top: 3px;">{{ price_change }}</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td class="content-padding" style="padding: 24px;">
+
+                            <!-- Executive Summary Sections -->
+                            {{ executive_summary_html }}
+
+                            <!-- Transition to Sources -->
+                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+                                    Analysis based on {{ total_articles }} publicly available articles from the past {{ lookback_days }} days • {{ paywalled_count }} additional paywalled sources identified
+                                </p>
+                            </div>
+
+                            <!-- Divider -->
+                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
+
+                            <!-- Source Articles -->
+                            {{ articles_html }}
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer with COMPREHENSIVE DISCLAIMER -->
+                    <tr>
+                        <td style="background-color: #f3f4f6; padding: 20px 24px; border-top: 3px solid #1e40af;">
+                            <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #d1d5db;">
+                                <div style="font-size: 14px; font-weight: 700; color: #1e40af; margin-bottom: 8px;">StockDigest</div>
+                                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">Stock Intelligence Delivered Daily</div>
+                                <div style="font-size: 11px; color: #9ca3af;">
+                                    <a href="https://stockdigest.app/terms-of-service" style="color: #1e40af; text-decoration: none; margin-right: 12px;">Terms of Service</a>
+                                    <a href="https://stockdigest.app/privacy-policy" style="color: #1e40af; text-decoration: none; margin-right: 12px;">Privacy Policy</a>
+                                    <a href="mailto:stockdigest.research@gmail.com" style="color: #1e40af; text-decoration: none; margin-right: 12px;">Contact</a>
+                                    <a href="{{ unsubscribe_url }}" style="color: #1e40af; text-decoration: none;">Unsubscribe</a>
+                                </div>
+                            </div>
+
+                            <!-- LEGAL DISCLAIMER BOX (Professional) -->
+                            <div style="background-color: #ffffff; border-left: 3px solid #1e40af; border-radius: 4px; padding: 14px 16px; margin-bottom: 12px;">
+                                <div style="font-size: 11px; font-weight: 600; color: #1e40af; margin-bottom: 6px;">Disclaimer</div>
+                                <div style="font-size: 10px; color: #64748b; line-height: 1.6;">
+                                    <p style="margin: 0 0 6px 0;">This digest is for informational and educational purposes only and does not constitute investment advice, financial advice, or any recommendation to buy, sell, or hold securities. StockDigest makes no warranties about the accuracy or completeness of this information.</p>
+
+                                    <p style="margin: 0;">Past performance does not guarantee future results. Always conduct your own research and consult a licensed financial advisor before making investment decisions. By using this service, you agree to our <a href="https://stockdigest.app/terms-of-service" style="color: #1e40af; text-decoration: none;">Terms of Service</a>.</p>
+                                </div>
+                            </div>
+
+                            <!-- Copyright -->
+                            <div style="font-size: 10px; color: #9ca3af; text-align: center; line-height: 1.4;">
+                                © 2025 StockDigest. All rights reserved. This is a beta service.<br>
+                                Content aggregated from public sources. All articles remain property of their original publishers.
+                            </div>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>

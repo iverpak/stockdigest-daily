@@ -3309,18 +3309,41 @@ def create_scraping_session():
     return session
 
 # ============================================================================
-# PLAYWRIGHT REMOVED (Oct 2025) - Replaced with Scrapfly-only scraping
+# PLAYWRIGHT REMOVED (Oct 2025) - Replaced with 3-Tier Scrapfly Architecture
 # ============================================================================
 # Playwright caused indefinite hangs and required 100MB+ overhead per ticker.
-# Scrapfly Extraction API handles all sites reliably with clean text output.
+# NEW: 3-tier fallback: Scrapfly scrape+extract → Scrapfly HTML → Free
 # ============================================================================
 
+# Helper functions for tier implementations
+def _host(u: str) -> str:
+    """Extract hostname from URL"""
+    h = (urlparse(u).hostname or "").lower()
+    if h.startswith("www."):
+        h = h[4:]
+    return h
 
-async def scrape_with_scrapfly_ai_extract(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
+def _matches(host: str, dom: str) -> bool:
+    """Check if host matches domain (exact or subdomain)"""
+    return host == dom or host.endswith("." + dom)
+
+# Domains requiring anti-bot protection (used in Tier 1 and Tier 2)
+ANTIBOT_DOMAINS = {
+    "simplywall.st", "seekingalpha.com", "zacks.com", "benzinga.com",
+    "cnbc.com", "investing.com", "gurufocus.com", "fool.com",
+    "insidermonkey.com", "nasdaq.com", "markets.financialcontent.com",
+    "thefly.com", "streetinsider.com", "accesswire.com",
+    "247wallst.com", "barchart.com", "telecompaper.com",
+    "news.stocktradersdaily.com", "sharewise.com"
+}
+
+
+async def scrape_with_scrapfly_scrape_and_extract(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    TIER 1: Scrapfly AI Extraction API
-    Uses POST /extract endpoint with extraction_model for AI-powered article extraction.
-    Cost: ~$0.002 per article
+    TIER 1: Scrapfly Web Scraping API WITH built-in extraction
+    Uses GET /scrape endpoint with extraction_model parameter.
+    Scrapfly fetches the page AND extracts article data in one call.
+    Cost: ~$0.002 per article (1 API credit for scrape + 5 for extraction_model = 6 total)
     Success rate: ~90-95% (expected)
     """
     global scrapfly_stats, enhanced_scraping_stats
@@ -3343,32 +3366,46 @@ async def scrape_with_scrapfly_ai_extract(url: str, domain: str, max_retries: in
                 LOG.info(f"TIER 1 RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
                 await asyncio.sleep(delay)
 
-            LOG.info(f"TIER 1 (Scrapfly AI): Starting extraction for {domain} (attempt {attempt + 1})")
+            LOG.info(f"TIER 1 (Scrapfly Scrape+Extract): Starting for {domain} (attempt {attempt + 1})")
 
-            # Update usage stats
+            # Update usage stats (6 credits = ~$0.002)
             scrapfly_stats["requests_made"] += 1
             scrapfly_stats["cost_estimate"] += 0.002
             scrapfly_stats["by_domain"][domain]["attempts"] += 1
             enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
 
-            # Build payload for /extract endpoint (POST, not GET)
-            payload = {
+            # Build params for Web Scraping API with extraction
+            params = {
                 "key": SCRAPFLY_API_KEY,
                 "url": url,
-                "extraction_model": "article",  # AI auto-extraction
+                "extraction_model": "article",  # Use built-in article extraction model
                 "country": "us"
             }
 
+            # Enable anti-bot protection for known tough domains
+            host = _host(url)
+            if any(_matches(host, d) for d in ANTIBOT_DOMAINS) and "video.media" not in host:
+                params["asp"] = "true"
+                params["render_js"] = "true"
+
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.post("https://api.scrapfly.io/extract", json=payload) as response:
+                async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
                     if response.status == 200:
                         try:
                             result = await response.json()
 
-                            # Extract AI-generated article data
-                            data = result.get("data", {})
-                            text = data.get("text", "").strip() if data else ""
-                            title = data.get("title", "") if data else ""
+                            # Extract the extracted data from response
+                            extracted_data = result.get("result", {}).get("extraction")
+
+                            if not extracted_data:
+                                LOG.warning(f"TIER 1: No extraction data for {domain}")
+                                if attempt < max_retries:
+                                    continue
+                                return None, "Scrapfly extraction returned no data"
+
+                            # Get article text from extraction
+                            text = extracted_data.get("text", "").strip()
+                            title = extracted_data.get("title", "")
 
                             if not text or len(text) < 100:
                                 LOG.warning(f"TIER 1: Extraction empty for {domain} (got {len(text)} chars)")
@@ -3398,7 +3435,7 @@ async def scrape_with_scrapfly_ai_extract(url: str, domain: str, max_retries: in
                             scrapfly_stats["by_domain"][domain]["successes"] += 1
                             enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
 
-                            LOG.info(f"✅ TIER 1 SUCCESS: {domain} -> {len(cleaned_content)} chars (AI extraction)")
+                            LOG.info(f"✅ TIER 1 SUCCESS: {domain} -> {len(cleaned_content)} chars (Scrapfly scrape+extract)")
                             return cleaned_content, None
 
                         except Exception as e:
@@ -3408,7 +3445,6 @@ async def scrape_with_scrapfly_ai_extract(url: str, domain: str, max_retries: in
                             return None, f"Processing error: {str(e)}"
 
                     elif response.status == 402:
-                        # Payment required
                         LOG.error(f"TIER 1: Payment required (quota exceeded) for {domain}")
                         return None, "Scrapfly quota exceeded"
 
@@ -3438,7 +3474,137 @@ async def scrape_with_scrapfly_ai_extract(url: str, domain: str, max_retries: in
             return None, str(e)
 
     scrapfly_stats["failed"] += 1
-    return None, f"Scrapfly AI extraction failed after {max_retries + 1} attempts"
+    return None, f"Scrapfly scrape+extract failed after {max_retries + 1} attempts"
+
+
+async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
+    """
+    TIER 2: Scrapfly Web Scraping API WITHOUT extraction + newspaper3k parsing
+    Uses GET /scrape endpoint to fetch HTML, then we parse with newspaper3k.
+    Cost: ~$0.0003 per article (1 API credit for basic scrape)
+    Success rate: ~85% (Scrapfly handles anti-bot, newspaper3k parses)
+    """
+    global scrapfly_stats, enhanced_scraping_stats
+
+    if "video.media.yql.yahoo.com" in url:
+        LOG.warning(f"TIER 2: Rejecting video URL: {url}")
+        return None, "Video URL not supported"
+
+    for attempt in range(max_retries + 1):
+        try:
+            if not SCRAPFLY_API_KEY:
+                return None, "Scrapfly API key not configured"
+
+            if normalize_domain(domain) in PAYWALL_DOMAINS:
+                return None, f"Paywall domain: {domain}"
+
+            if attempt > 0:
+                delay = 2 ** attempt
+                LOG.info(f"TIER 2 RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
+                await asyncio.sleep(delay)
+
+            LOG.info(f"TIER 2 (Scrapfly HTML): Starting for {domain} (attempt {attempt + 1})")
+
+            # Update usage stats (1 credit = ~$0.0003)
+            scrapfly_stats["requests_made"] += 1
+            scrapfly_stats["cost_estimate"] += 0.0003
+            scrapfly_stats["by_domain"][domain]["attempts"] += 1
+
+            # Build params for Web Scraping API without extraction
+            params = {
+                "key": SCRAPFLY_API_KEY,
+                "url": url,
+                "country": "us"
+            }
+
+            # Enable anti-bot protection for known tough domains
+            host = _host(url)
+            if any(_matches(host, d) for d in ANTIBOT_DOMAINS) and "video.media" not in host:
+                params["asp"] = "true"
+                params["render_js"] = "true"
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
+                    if response.status == 200:
+                        try:
+                            result = await response.json()
+                            html_content = result.get("result", {}).get("content", "")
+
+                            if not html_content or len(html_content) < 500:
+                                LOG.warning(f"TIER 2: Insufficient HTML for {domain} ({len(html_content)} bytes)")
+                                if attempt < max_retries:
+                                    continue
+                                return None, "Insufficient HTML"
+
+                            # Parse with newspaper3k
+                            article = newspaper.Article(url)
+                            article.set_html(html_content)
+                            article.parse()
+
+                            text = article.text.strip()
+
+                            if not text or len(text) < 100:
+                                LOG.warning(f"TIER 2: newspaper3k extraction empty for {domain} ({len(text)} chars)")
+                                if attempt < max_retries:
+                                    continue
+                                return None, "Extraction returned insufficient content"
+
+                            # Minimal cleaning
+                            cleaned_content = clean_scraped_content(text, url, domain)
+
+                            if not cleaned_content or len(cleaned_content) < 100:
+                                LOG.warning(f"TIER 2: Content too short after cleaning for {domain}")
+                                if attempt < max_retries:
+                                    continue
+                                return None, "Content too short after cleaning"
+
+                            # Validation
+                            is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
+                            if not is_valid:
+                                LOG.warning(f"TIER 2: Validation failed for {domain}: {validation_msg}")
+                                if attempt < max_retries:
+                                    continue
+                                return None, f"Validation failed: {validation_msg}"
+
+                            LOG.info(f"✅ TIER 2 SUCCESS: {domain} -> {len(cleaned_content)} chars (Scrapfly HTML + newspaper3k)")
+                            return cleaned_content, None
+
+                        except Exception as e:
+                            LOG.warning(f"TIER 2: Error processing for {domain}: {e}")
+                            if attempt < max_retries:
+                                continue
+                            return None, str(e)
+
+                    elif response.status == 402:
+                        LOG.error(f"TIER 2: Payment required for {domain}")
+                        return None, "Scrapfly quota exceeded"
+
+                    elif response.status == 422:
+                        error_text = await response.text()
+                        LOG.warning(f"TIER 2: 422 for {domain}: {error_text[:500]}")
+                        return None, "Invalid parameters"
+
+                    elif response.status == 429:
+                        LOG.warning(f"TIER 2: Rate limited for {domain}")
+                        if attempt < max_retries:
+                            await asyncio.sleep(5)
+                            continue
+                        return None, "Rate limited"
+
+                    else:
+                        error_text = await response.text()
+                        LOG.warning(f"TIER 2: HTTP {response.status} for {domain}: {error_text[:500]}")
+                        if attempt < max_retries:
+                            continue
+                        return None, f"HTTP {response.status}"
+
+        except Exception as e:
+            LOG.warning(f"TIER 2: Request error for {domain} (attempt {attempt + 1}): {e}")
+            if attempt < max_retries:
+                continue
+            return None, str(e)
+
+    return None, f"Scrapfly HTML fetch failed after {max_retries + 1} attempts"
 
 
 async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
@@ -3508,53 +3674,43 @@ async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str
 
 async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    2-TIER SCRAPING ARCHITECTURE:
+    3-TIER SCRAPING ARCHITECTURE:
 
-    Tier 1: Scrapfly AI Extraction (paid, high success rate)
+    Tier 1: Scrapfly Web Scraping API + Extraction (scrape+extract in one call)
       ↓ If fails
-    Tier 2: Free requests + newspaper3k (free, moderate success rate)
+    Tier 2: Scrapfly Web Scraping API + newspaper3k (Scrapfly HTML, we parse)
+      ↓ If fails
+    Tier 3: Free requests + newspaper3k (completely free)
 
     Returns: (content, error_message)
     """
-    # Try Tier 1: Scrapfly AI Extraction
-    content, error = await scrape_with_scrapfly_ai_extract(url, domain, max_retries)
+    # Try Tier 1: Scrapfly scrape + extraction
+    content, error1 = await scrape_with_scrapfly_scrape_and_extract(url, domain, max_retries)
 
     if content:
         return content, None
 
-    LOG.warning(f"⚠️ TIER 1 failed for {domain}: {error}")
-    LOG.info(f"🔄 Falling back to TIER 2 (free) for {domain}")
+    LOG.warning(f"⚠️ TIER 1 failed for {domain}: {error1}")
+    LOG.info(f"🔄 Falling back to TIER 2 (Scrapfly HTML only) for {domain}")
 
-    # Try Tier 2: Free scraping
-    content, error2 = await scrape_with_requests_free(url, domain)
+    # Try Tier 2: Scrapfly HTML + newspaper3k
+    content, error2 = await scrape_with_scrapfly_html_only(url, domain, max_retries)
 
     if content:
         return content, None
 
-    # Both tiers failed
-    LOG.error(f"❌ BOTH TIERS FAILED for {domain} - Tier 1: {error}, Tier 2: {error2}")
-    return None, f"All methods failed (T1: {error}, T2: {error2})"
+    LOG.warning(f"⚠️ TIER 2 failed for {domain}: {error2}")
+    LOG.info(f"🔄 Falling back to TIER 3 (free) for {domain}")
 
+    # Try Tier 3: Free scraping
+    content, error3 = await scrape_with_requests_free(url, domain)
 
-# Helper function for Tier 2
-def _host(u: str) -> str:
-    h = (urlparse(u).hostname or "").lower()
-    if h.startswith("www."):
-        h = h[4:]
-    return h
+    if content:
+        return content, None
 
-def _matches(host: str, dom: str) -> bool:
-    return host == dom or host.endswith("." + dom)
-
-# Domains requiring anti-bot protection (kept for reference, not used in new architecture)
-ANTIBOT_DOMAINS = {
-    "simplywall.st", "seekingalpha.com", "zacks.com", "benzinga.com",
-    "cnbc.com", "investing.com", "gurufocus.com", "fool.com",
-    "insidermonkey.com", "nasdaq.com", "markets.financialcontent.com",
-    "thefly.com", "streetinsider.com", "accesswire.com",
-    "247wallst.com", "barchart.com", "telecompaper.com",
-    "news.stocktradersdaily.com", "sharewise.com"
-}
+    # All tiers failed
+    LOG.error(f"❌ ALL 3 TIERS FAILED for {domain} - T1: {error1}, T2: {error2}, T3: {error3}")
+    return None, f"All methods failed (T1: {error1}, T2: {error2}, T3: {error3})"
 
 
 def get_random_user_agent():

@@ -3399,6 +3399,13 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                         try:
                             result = await response.json()
 
+                            # Check if result is valid
+                            if not result or not isinstance(result, dict):
+                                LOG.warning(f"SCRAPFLY: Invalid JSON response for {domain} (got {type(result).__name__})")
+                                if attempt < max_retries:
+                                    continue
+                                break
+
                             # Extract article data from Scrapfly's extraction
                             extracted_data = result.get("result", {}).get("extracted_data", {})
                             article_data = extracted_data.get("article", {})

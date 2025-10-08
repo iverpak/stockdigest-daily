@@ -377,7 +377,6 @@ SPAM_DOMAINS = {
 QUALITY_DOMAINS = {
     "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
     "barrons.com", "cnbc.com", "marketwatch.com",
-    "theglobeandmail.com",
     "apnews.com",
 }
 
@@ -10673,70 +10672,66 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
     """Helper: Build executive summary prompt and extract company name. Returns (system_prompt, user_content, company_name) or None."""
     company_name = config.get("name", ticker)
 
-    # Extract articles by category
-    company_articles = [a for a in categories.get("company", []) if a.get("ai_summary")]
-    industry_articles = [a for a in categories.get("industry", []) if a.get("ai_summary")]
-    competitor_articles = [a for a in categories.get("competitor", []) if a.get("ai_summary")]
+    # Collect ALL flagged articles across all categories
+    all_flagged_articles = []
+
+    # Company articles
+    for article in categories.get("company", []):
+        if article.get("ai_summary"):
+            article['_category'] = 'COMPANY'
+            article['_category_tag'] = '[COMPANY]'
+            all_flagged_articles.append(article)
+
+    # Industry articles
+    for article in categories.get("industry", []):
+        if article.get("ai_summary"):
+            keyword = article.get("search_keyword", "Industry")
+            article['_category'] = 'INDUSTRY'
+            article['_category_tag'] = f'[INDUSTRY - {keyword}]'
+            all_flagged_articles.append(article)
+
+    # Competitor articles
+    for article in categories.get("competitor", []):
+        if article.get("ai_summary"):
+            article['_category'] = 'COMPETITOR'
+            article['_category_tag'] = '[COMPETITOR]'
+            all_flagged_articles.append(article)
 
     # Must have at least some content
-    if not company_articles and not industry_articles and not competitor_articles:
+    if not all_flagged_articles:
         LOG.warning(f"[{ticker}] No articles with AI summaries - skipping executive summary")
         return None
 
-    # Build content sections
-    company_summaries = []
-    for article in company_articles[:20]:
+    # Sort all articles globally by published_at DESC (newest first)
+    all_flagged_articles.sort(
+        key=lambda x: x.get("published_at") or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True
+    )
+
+    # Build unified timeline with category tags
+    unified_timeline = []
+    for article in all_flagged_articles[:50]:  # Limit to 50 most recent
         title = article.get("title", "")
         ai_summary = article.get("ai_summary", "")
         domain = article.get("domain", "")
         published_at = article.get("published_at")
         date_str = format_date_short(published_at)
+        category_tag = article.get("_category_tag", "[UNKNOWN]")
 
         if ai_summary:
             source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            company_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
+            unified_timeline.append(f"• {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
 
-    industry_summaries = []
-    for article in industry_articles[:15]:
-        title = article.get("title", "")
-        ai_summary = article.get("ai_summary", "")
-        domain = article.get("domain", "")
-        keyword = article.get("search_keyword", "Industry")
-        published_at = article.get("published_at")
-        date_str = format_date_short(published_at)
-
-        if ai_summary:
-            source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            industry_summaries.append(f"• {title} [Industry: {keyword}] [{source_name}] {date_str}: {ai_summary}")
-
-    competitor_summaries = []
-    for article in competitor_articles[:15]:
-        title = article.get("title", "")
-        ai_summary = article.get("ai_summary", "")
-        domain = article.get("domain", "")
-        published_at = article.get("published_at")
-        date_str = format_date_short(published_at)
-
-        if ai_summary:
-            source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            competitor_summaries.append(f"• {title} [{source_name}] {date_str}: {ai_summary}")
-
-    # Build combined article text for user message
-    all_content = []
-    if company_summaries:
-        all_content.append("COMPANY ARTICLES:")
-        all_content.extend(company_summaries)
-    if industry_summaries:
-        all_content.append("\nINDUSTRY ARTICLES:")
-        all_content.extend(industry_summaries)
-    if competitor_summaries:
-        all_content.append("\nCOMPETITOR ARTICLES:")
-        all_content.extend(competitor_summaries)
-
-    user_content = "\n".join(all_content)
+    user_content = "UNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
 
     # System instructions (ticker-specific but cacheable per ticker)
     system_prompt = f"""You are a hedge fund analyst creating an intelligence summary for {company_name} ({ticker}). All article summaries are already written from {ticker} investor perspective.
+
+INPUT FORMAT:
+Articles are provided in a UNIFIED TIMELINE sorted newest to oldest. Each article has a category tag:
+- [COMPANY] = Articles directly about {ticker}
+- [INDUSTRY - keyword] = Industry/sector articles relevant to {ticker}
+- [COMPETITOR] = Articles about {ticker}'s competitors
 
 OUTPUT FORMAT - Use these exact headers (omit sections with no content):
 🔴 MAJOR DEVELOPMENTS
@@ -10763,7 +10758,7 @@ REPORTING PHILOSOPHY:
 ---
 
 🔴 MAJOR DEVELOPMENTS (3-6 bullets)
-Source: Company articles primarily, plus relevant competitor/industry moves
+Source: Primarily [COMPANY] articles, plus relevant [INDUSTRY] and [COMPETITOR] articles with competitive implications
 
 Lead with most material developments. Each bullet = one discrete event with full context.
 
@@ -10781,7 +10776,7 @@ Combine related facts into single bullets when they tell one story.
 ---
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets)
-Source: Company articles only
+Source: [COMPANY] articles only
 
 Quantified metrics only. Include:
 - Earnings, revenue, guidance, margins with exact figures
@@ -10793,7 +10788,7 @@ Quantified metrics only. Include:
 ---
 
 ⚠️ RISK FACTORS (2-4 bullets)
-Source: Company, industry, and competitor articles
+Source: [COMPANY], [INDUSTRY], and [COMPETITOR] articles
 
 Include threats with impact/timeline when available:
 - {ticker} operational risks: Production issues, supply chain, quality problems
@@ -10805,7 +10800,7 @@ Include threats with impact/timeline when available:
 ---
 
 📈 WALL STREET SENTIMENT (1-4 bullets)
-Source: Company articles only
+Source: [COMPANY] articles only
 
 Analyst actions on {ticker} only.
 
@@ -10817,7 +10812,7 @@ If 3+ analysts moved same direction in same week:
 ---
 
 ⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-5 bullets)
-Source: Industry and competitor articles (already written with {ticker} impact framing)
+Source: [INDUSTRY] and [COMPETITOR] articles (already written with {ticker} impact framing)
 
 Include ONLY developments affecting {ticker}'s competitive position:
 - Competitor M&A: Strategic deals affecting market structure in {ticker}'s segments
@@ -10839,7 +10834,7 @@ Omit this section entirely if no material competitive/industry developments affe
 ---
 
 📅 UPCOMING CATALYSTS (1-3 bullets)
-Source: Company articles only
+Source: [COMPANY] articles only
 
 Events with specific dates only:
 - Earnings dates, investor days, regulatory deadlines, product launches
@@ -11074,30 +11069,13 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 # 3-EMAIL SYSTEM - Article Sorting and Email Functions
 # ------------------------------------------------------------------------------
 
-def sort_articles_by_priority(articles: List[Dict], flagged_ids: List[int]) -> List[Dict]:
-    """Sort articles by priority: FLAGGED+QUALITY, FLAGGED, REMAINING (newest first within each group)"""
-    flagged_quality = []
-    flagged_only = []
-    remaining = []
-
-    for article in articles:
-        article_id = article.get('id')
-        domain = normalize_domain(article.get('domain', ''))
-        is_flagged = article_id in flagged_ids if flagged_ids else False
-        is_quality = domain in QUALITY_DOMAINS
-
-        if is_flagged and is_quality:
-            flagged_quality.append(article)
-        elif is_flagged:
-            flagged_only.append(article)
-        else:
-            remaining.append(article)
-
-    # Sort each group by published_at (newest first)
-    for group in [flagged_quality, flagged_only, remaining]:
-        group.sort(key=lambda x: x.get('published_at') or x.get('found_at') or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-
-    return flagged_quality + flagged_only + remaining
+def sort_articles_chronologically(articles: List[Dict]) -> List[Dict]:
+    """Sort articles by published_at DESC (newest first), regardless of quality or flagged status"""
+    return sorted(
+        articles,
+        key=lambda x: x.get('published_at') or x.get('found_at') or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True
+    )
 
 
 def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
@@ -11370,32 +11348,13 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 category_triage = triage_data.get(category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
 
-                # Enhanced article sorting - Quality+Flagged first, then Flagged, then Non-Flagged
-                # Within each group, sort by time (newest first)
+                # Chronological sorting - newest to oldest within category
                 enhanced_articles = []
                 for idx, article in enumerate(articles):
                     domain = normalize_domain(article.get("domain", ""))
                     is_ai_selected = idx in selected_article_data
                     is_quality_domain = domain in QUALITY_DOMAINS
                     is_problematic = domain in PROBLEMATIC_SCRAPE_DOMAINS
-
-                    priority = 999
-                    triage_reason = ""
-                    ai_priority = "Low"
-
-                    # Determine priority tier
-                    if is_quality_domain and is_ai_selected and not is_problematic:
-                        priority = 0  # Quality + Flagged = TOP priority
-                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
-                        triage_reason = f"Quality domain + AI flagged ({ai_priority})"
-                    elif is_ai_selected:
-                        # All flagged articles get priority 1 (sorted by time within this tier)
-                        priority = 1
-                        ai_priority = normalize_priority_to_display(selected_article_data[idx].get("scrape_priority", "Low"))
-                        triage_reason = selected_article_data[idx].get("why", "")
-                    elif is_quality_domain and not is_problematic:
-                        priority = 999  # Quality but NOT flagged = bottom
-                        triage_reason = "Quality domain (not flagged)"
 
                     # Extract OpenAI and Claude scores from triage data
                     openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
@@ -11404,20 +11363,16 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     enhanced_articles.append({
                         "article": article,
                         "idx": idx,
-                        "priority": priority,
                         "is_ai_selected": is_ai_selected,
                         "is_quality_domain": is_quality_domain,
                         "is_problematic": is_problematic,
-                        "triage_reason": triage_reason,
-                        "ai_priority": ai_priority,
                         "openai_score": openai_score,
                         "claude_score": claude_score,
                         "published_at": article.get("published_at")
                     })
 
-                # Sort by priority tier, then by time (newest first)
+                # Sort chronologically (newest first)
                 enhanced_articles.sort(key=lambda x: (
-                    x["priority"],
                     -(x["published_at"].timestamp() if x["published_at"] else 0)
                 ))
 
@@ -11680,33 +11635,13 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             html.append("</div>")
             html.append("</div>")
 
-        # Sort articles within each category using priority sorting if flagged_ids provided
+        # Sort articles chronologically within each category (newest first)
         for category in ["company", "industry", "competitor"]:
             if category in categories and categories[category]:
                 articles = categories[category]
 
-                # Apply priority sorting if flagged article IDs are provided
-                if flagged_article_ids:
-                    articles = sort_articles_by_priority(articles, flagged_article_ids)
-                else:
-                    # Original sorting: Quality domains first, then AI analyzed, then by time
-                    def sort_key(article):
-                        domain = normalize_domain(article.get("domain", ""))
-                        is_quality_domain = domain in QUALITY_DOMAINS
-                        is_analyzed = bool(article.get('ai_summary') or article.get('ai_triage_selected'))
-                        pub_time = article.get("published_at") or datetime.min.replace(tzinfo=timezone.utc)
-
-                        # Priority: 0 = quality domain, 1 = analyzed, 2 = other
-                        if is_quality_domain:
-                            priority = 0
-                        elif is_analyzed:
-                            priority = 1
-                        else:
-                            priority = 2
-
-                        return (priority, -pub_time.timestamp())
-
-                    articles = sorted(articles, key=sort_key)
+                # Simple chronological sorting (newest first)
+                articles = sort_articles_chronologically(articles)
 
                 category_icons = {
                     "company": "🎯",

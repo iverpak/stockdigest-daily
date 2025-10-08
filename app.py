@@ -302,8 +302,8 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 
 # Anthropic Claude Configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -5969,7 +5969,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
                     result = await response.json()
-                    LOG.debug(f"Claude response for {ticker}: {str(result)[:500]}")
+                    LOG.error(f"Claude response for {ticker}: {str(result)[:500]}")
                     content = result.get("content", [{}])[0].get("text", "")
 
                     if not content:
@@ -6066,7 +6066,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
                     result = await response.json()
-                    LOG.debug(f"OpenAI response for {ticker}: {str(result)[:500]}")
+                    LOG.error(f"OpenAI response for {ticker}: {str(result)[:500]}")
                     content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
 
                     if not content:
@@ -12748,7 +12748,8 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
         if flagged_article_ids:
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker
+                       ta.category, ta.search_keyword, ta.competitor_ticker,
+                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.ticker = %s
@@ -12760,7 +12761,8 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
         else:
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker
+                       ta.category, ta.search_keyword, ta.competitor_ticker,
+                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.ticker = %s
@@ -13187,7 +13189,7 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
         if flagged_article_ids:
             LOG.info(f"[JOB {job_id}] Filtering to {len(flagged_article_ids)} flagged articles from triage")
 
-        result = fetch_digest_func(
+        result = await fetch_digest_func(
             minutes / 60,
             [ticker],
             show_ai_analysis=True,

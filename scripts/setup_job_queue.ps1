@@ -74,6 +74,7 @@ try {
         minutes = $MINUTES
         batch_size = $BATCH_SIZE
         triage_batch_size = $TRIAGE_BATCH_SIZE
+        mode = "test"  # Test mode: Send Email #3 immediately to admin
     } | ConvertTo-Json
 
     $batch = Invoke-RestMethod -Method Post "$APP/jobs/submit" -Headers $headers -Body $submitBody

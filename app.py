@@ -3462,8 +3462,12 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                             LOG.info(f"SCRAPFLY SUCCESS: {domain} -> {len(cleaned_content)} chars (extraction API)")
                             return cleaned_content, None
 
-                        except Exception as json_error:
-                            LOG.warning(f"SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
+                        except Exception as e:
+                            # Catch any other unexpected errors during processing
+                            LOG.error(f"SCRAPFLY: Unexpected error processing response for {domain}: {e}")
+                            LOG.error(f"SCRAPFLY: Error type: {type(e).__name__}")
+                            import traceback
+                            LOG.error(f"SCRAPFLY: Traceback: {traceback.format_exc()[:500]}")
                             if attempt < max_retries:
                                 continue
                             break

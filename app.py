@@ -3394,14 +3394,23 @@ async def scrape_with_scrapfly_scrape_and_extract(url: str, domain: str, max_ret
                         try:
                             result = await response.json()
 
-                            # Extract the extracted data from response
-                            extracted_data = result.get("result", {}).get("extraction")
+                            # Extract the extracted data from response (correct field name!)
+                            extracted_data_wrapper = result.get("result", {}).get("extracted_data")
 
-                            if not extracted_data:
-                                LOG.warning(f"TIER 1: No extraction data for {domain}")
+                            if not extracted_data_wrapper:
+                                LOG.warning(f"TIER 1: No extracted_data field for {domain}")
                                 if attempt < max_retries:
                                     continue
                                 return None, "Scrapfly extraction returned no data"
+
+                            # Get the actual data object from within extracted_data
+                            extracted_data = extracted_data_wrapper.get("data", {})
+
+                            if not extracted_data:
+                                LOG.warning(f"TIER 1: extracted_data.data is empty for {domain}")
+                                if attempt < max_retries:
+                                    continue
+                                return None, "Scrapfly extraction data is empty"
 
                             # Get article text from extraction
                             text = extracted_data.get("text", "").strip()

@@ -5747,7 +5747,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                "system": system_prompt,
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -5813,7 +5813,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                "system": system_prompt,
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -5950,20 +5950,14 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
 
             headers = {
                 "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2024-10-22",  # Updated for prompt caching
+                "anthropic-version": "2023-06-01",
                 "content-type": "application/json"
             }
 
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 512,
-                "system": [
-                    {
-                        "type": "text",
-                        "text": system_prompt,
-                        "cache_control": {"type": "ephemeral"}  # Cache system instructions
-                    }
-                ],
+                "system": system_prompt,
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -6197,7 +6191,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                "system": system_prompt,
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -8128,13 +8122,7 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
-            "system": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
-                }
-            ],
+            "system": system_prompt,
             "messages": [
                 {
                     "role": "user",
@@ -8318,13 +8306,7 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "system": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
-                }
-            ],
+            "system": system_prompt,
             "messages": [{"role": "user", "content": user_content}]
         }
 
@@ -8475,13 +8457,7 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "system": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
-                }
-            ],
+            "system": system_prompt,
             "messages": [{"role": "user", "content": user_content}]
         }
 
@@ -11150,13 +11126,7 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 10000,
-            "system": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"}  # Cache system instructions
-                }
-            ],
+            "system": system_prompt,
             "messages": [
                 {
                     "role": "user",
@@ -11356,20 +11326,14 @@ Be direct, specific, and opinionated.
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2024-10-22",  # Prompt caching version
+            "anthropic-version": "2023-06-01",
             "content-type": "application/json"
         }
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 300,
             "temperature": 0.5,
-            "system": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"}  # Cache system instructions (~1000 tokens)
-                }
-            ],
+            "system": system_prompt,
             "messages": [{"role": "user", "content": user_content}]
         }
 
@@ -11492,7 +11456,7 @@ async def generate_what_matters(
     return ""
 
 
-def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
+async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
     """Generate executive summaries using Claude (primary) with OpenAI fallback"""
     if not ANTHROPIC_API_KEY and not OPENAI_API_KEY:
         LOG.warning("⚠️ EXECUTIVE SUMMARY: No API keys configured - skipping")
@@ -11523,7 +11487,7 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
             LOG.info(f"✅ EXECUTIVE SUMMARY ({model_used}) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
 
             # Generate "What Matters" summary (2-3 sentences)
-            what_matters = asyncio.run(generate_what_matters(ticker, company_name, ai_analysis_summary))
+            what_matters = await generate_what_matters(ticker, company_name, ai_analysis_summary)
 
             # Save to database with model tracking
             article_ids = [a.get("id") for a in all_articles if a.get("id")]
@@ -12005,7 +11969,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         return False
 
 
-def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
+async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
                               show_ai_analysis: bool = True, show_descriptions: bool = True,
                               flagged_article_ids: List[int] = None) -> str:
     """Enhanced digest with metadata display removed but keeping all badges/emojis
@@ -12019,7 +11983,7 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
     """
 
     # Generate summaries using Claude (primary) with OpenAI fallback
-    openai_summaries = generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name, actually uses Claude→OpenAI fallback
+    openai_summaries = await generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name, actually uses Claude→OpenAI fallback
 
     # Format ticker list with company names
     ticker_display_list = []
@@ -12320,7 +12284,7 @@ def render_structured_summary_html(sections: list) -> str:
     return ''.join(html_parts)
 
 
-def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
+async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
                                                show_ai_analysis: bool = True,
                                                show_descriptions: bool = True,
                                                flagged_article_ids: List[int] = None) -> Dict[str, Dict[str, List[Dict]]]:
@@ -12501,7 +12465,7 @@ def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[s
         }
 
     # Use the enhanced digest function with flagged article IDs for sorting
-    html = build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
+    html = await build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
                                       show_ai_analysis, show_descriptions, flagged_article_ids)
 
     # Enhanced subject with ticker list (company names) - UPDATED HEADER
@@ -15727,7 +15691,7 @@ async def cron_digest(
 
         # Use the existing enhanced digest function that sends emails
         LOG.info("Calling enhanced digest function...")
-        result = fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
+        result = await fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
 
         # The function returns a detailed result dict, let's pass it through with additional metadata
         if isinstance(result, dict):
@@ -15915,7 +15879,7 @@ async def admin_export_user_csv(request: Request):
 
 
 @APP.post("/admin/force-digest")
-def force_digest(request: Request, body: ForceDigestRequest):
+async def force_digest(request: Request, body: ForceDigestRequest):
     """Force digest with existing articles (for testing) - Enhanced with AI analysis"""
     require_admin(request)
     
@@ -15965,9 +15929,9 @@ def force_digest(request: Request, body: ForceDigestRequest):
     
     if total_articles == 0:
         return {"status": "no_articles", "message": "No articles found in database"}
-    
+
     # FIXED: Extract HTML from tuple and add empty text attachment
-    html = build_enhanced_digest_html(articles_by_ticker, 7)
+    html = await build_enhanced_digest_html(articles_by_ticker, 7)
     tickers_str = ', '.join(articles_by_ticker.keys())
     subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
     success = send_email(subject, html)

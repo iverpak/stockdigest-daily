@@ -12720,7 +12720,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                     <td align="right" style="vertical-align: top; width: 35%;">
                                         <div style="display: inline-block; background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); text-align: right;">
                                             <div style="font-size: 14px; font-weight: 500; opacity: 0.7; margin-bottom: 4px; color: #ffffff;">{current_date}</div>
-                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; margin-bottom: 8px; color: #ffffff;">Last Close</div>
+                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-bottom: 8px; color: #ffffff;">Last Close</div>
                                             <div style="font-size: 36px; font-weight: 700; line-height: 1; margin-bottom: 8px; color: #ffffff;">{stock_price}</div>
                                             <div style="font-size: 16px; color: {price_change_color}; font-weight: 600;">{price_change_pct}</div>
                                         </div>

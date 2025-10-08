@@ -8850,6 +8850,19 @@ async def perform_ai_triage_with_fallback_async(
             else:
                 both_failed_count += 1
 
+            # Add score fields based on which API was used (1=High, 2=Medium, 3=Low)
+            for item in result:
+                if api_used == "claude":
+                    item["claude_score"] = item.get("scrape_priority", 0)  # Use priority directly (1=High, 2=Med, 3=Low)
+                    item["openai_score"] = 0  # OpenAI didn't score this
+                elif api_used == "openai":
+                    item["openai_score"] = item.get("scrape_priority", 0)  # Use priority directly
+                    item["claude_score"] = 0  # Claude didn't score this
+                else:
+                    # Both failed
+                    item["openai_score"] = 0
+                    item["claude_score"] = 0
+
             # Map results back to original indices and add to selected_results
             if op["type"] == "company":
                 selected_results["company"].extend(result)
@@ -11731,17 +11744,17 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if enhanced_article["is_ai_selected"]:
                         header_badges.append('<span class="flagged-badge">🚩 Flagged</span>')
 
-                    # 5. OpenAI Score - 0-3 scoring
+                    # 5. OpenAI Score - 1=High, 2=Medium, 3=Low, 0=None
                     openai_score = enhanced_article.get("openai_score", 0)
-                    if openai_score >= 3:
+                    if openai_score == 1:
                         openai_class = "openai-high"
                         openai_level = "OpenAI: High"
                         openai_emoji = "🔥"
-                    elif openai_score >= 2:
+                    elif openai_score == 2:
                         openai_class = "openai-medium"
                         openai_level = "OpenAI: Medium"
                         openai_emoji = "⚡"
-                    elif openai_score >= 1:
+                    elif openai_score >= 3:
                         openai_class = "openai-low"
                         openai_level = "OpenAI: Low"
                         openai_emoji = "🔋"
@@ -11751,17 +11764,17 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         openai_emoji = "○"
                     header_badges.append(f'<span class="ai-triage {openai_class}">{openai_emoji} {openai_level}</span>')
 
-                    # 6. Claude Score - 0-3 scoring
+                    # 6. Claude Score - 1=High, 2=Medium, 3=Low, 0=None
                     claude_score = enhanced_article.get("claude_score", 0)
-                    if claude_score >= 3:
+                    if claude_score == 1:
                         claude_class = "claude-high"
                         claude_level = "Claude: High"
                         claude_emoji = "🏆"
-                    elif claude_score >= 2:
+                    elif claude_score == 2:
                         claude_class = "claude-medium"
                         claude_level = "Claude: Medium"
                         claude_emoji = "💎"
-                    elif claude_score >= 1:
+                    elif claude_score >= 3:
                         claude_class = "claude-low"
                         claude_level = "Claude: Low"
                         claude_emoji = "💡"
@@ -12770,7 +12783,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Content -->
                     <tr>
-                        <td class="content-padding" style="padding: 0 24px 24px 24px;">
+                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
 
                             <!-- Executive Summary -->
                             {summary_html}

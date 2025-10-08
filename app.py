@@ -302,8 +302,8 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "changeme-admin-token")
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Anthropic Claude Configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")

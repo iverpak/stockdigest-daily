@@ -3404,16 +3404,18 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                             try:
                                 result = json.loads(response_text) if response_text else None
                             except json.JSONDecodeError as e:
+                                preview = response_text[:500] if response_text else "(empty response)"
                                 LOG.error(f"SCRAPFLY: JSON decode error for {domain}: {e}")
-                                LOG.error(f"SCRAPFLY: Response preview: {response_text[:500]}")
+                                LOG.error(f"SCRAPFLY: Response preview: {preview}")
                                 if attempt < max_retries:
                                     continue
                                 break
 
                             # Check if result is valid
                             if not result or not isinstance(result, dict):
+                                preview = response_text[:500] if response_text else "(empty response)"
                                 LOG.warning(f"SCRAPFLY: Invalid JSON response for {domain} (got {type(result).__name__})")
-                                LOG.warning(f"SCRAPFLY: Response preview: {response_text[:500]}")
+                                LOG.warning(f"SCRAPFLY: Response preview: {preview}")
                                 if attempt < max_retries:
                                     continue
                                 break

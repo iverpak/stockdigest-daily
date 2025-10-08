@@ -5969,7 +5969,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
                     result = await response.json()
-                    LOG.error(f"Claude response for {ticker}: {str(result)[:500]}")
+                    LOG.info(f"Claude response for {ticker}: {str(result)[:500]}")
                     content = result.get("content", [{}])[0].get("text", "")
 
                     if not content:
@@ -6089,7 +6089,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
                     result = await response.json()
-                    LOG.error(f"OpenAI response for {ticker}: {str(result)[:500]}")
+                    LOG.info(f"OpenAI response for {ticker}: {str(result)[:500]}")
                     content = result.get("text", "")
 
                     if not content:

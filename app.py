@@ -9694,11 +9694,11 @@ class TickerManager:
         if not force_refresh:
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT ticker, name, industry_keywords, competitors, ai_generated
+                    SELECT ticker, company_name, industry_keywords, competitors, ai_generated
                     FROM ticker_reference WHERE ticker = %s AND active = TRUE
                 """, (ticker,))
                 config = cur.fetchone()
-                
+
                 if config:
                     # Process competitors back to structured format
                     competitors = []
@@ -9708,9 +9708,9 @@ class TickerManager:
                             competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
                         else:
                             competitors.append({"name": comp_str, "ticker": None})
-                    
+
                     return {
-                        "company_name": config.get("name", ticker),
+                        "company_name": config.get("company_name", ticker),
                         "industry_keywords": config.get("industry_keywords", []),
                         "competitors": competitors
                     }

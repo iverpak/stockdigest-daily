@@ -263,6 +263,59 @@
             letter-spacing: 0.5px;
             margin-top: 8px;
         }
+
+        /* Bulk Selection Styles */
+        .user-checkbox {
+            margin-right: 12px;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .user-card-content {
+            flex: 1;
+        }
+
+        .user-select-wrapper {
+            display: flex;
+            align-items: start;
+        }
+
+        .bulk-actions {
+            position: sticky;
+            bottom: 0;
+            background: #ffffff;
+            border-top: 2px solid #e5e7eb;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 -4px 8px rgba(0,0,0,0.1);
+        }
+
+        .bulk-actions-hidden {
+            display: none;
+        }
+
+        .selection-info {
+            font-size: 14px;
+            color: #374151;
+            font-weight: 600;
+        }
+
+        .btn-primary {
+            background: #1e40af;
+            color: #ffffff;
+        }
+
+        .btn-primary:hover {
+            background: #1e3a8a;
+        }
+
+        .btn-primary:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -332,6 +385,17 @@
                 </div>
             </div>
         </div>
+
+        <!-- Bulk Actions Bar -->
+        <div id="bulk-actions-bar" class="bulk-actions bulk-actions-hidden">
+            <div class="selection-info">
+                <span id="selection-count">0 users selected</span>
+                <span id="ticker-count" style="margin-left: 16px; color: #6b7280;"></span>
+            </div>
+            <button class="btn btn-primary" id="generate-reports-btn" onclick="generateUserReports()" disabled>
+                📊 Generate Reports
+            </button>
+        </div>
     </div>
 
     <script>
@@ -350,29 +414,33 @@
 
         function createUserCard(user) {
             const statusClass = `status-${user.status}`;
+            const canSelect = user.status === 'active'; // Only active users can be selected
 
             return `
-                <div class="user-card" data-user-id="${user.id}">
-                    <div class="user-header">
-                        <div class="user-info">
-                            <h3>${user.name}</h3>
-                            <p>${user.email}</p>
-                        </div>
-                        <span class="status-badge ${statusClass}">${user.status}</span>
-                    </div>
+                <div class="user-card" data-user-id="${user.id}" data-email="${user.email}">
+                    <div class="user-select-wrapper">
+                        ${canSelect ? `<input type="checkbox" class="user-checkbox" data-email="${user.email}" data-tickers="${user.ticker1},${user.ticker2},${user.ticker3}" onchange="updateBulkActions()">` : '<div style="width: 30px;"></div>'}
+                        <div class="user-card-content">
+                            <div class="user-header">
+                                <div class="user-info">
+                                    <h3>${user.name}</h3>
+                                    <p>${user.email}</p>
+                                </div>
+                                <span class="status-badge ${statusClass}">${user.status}</span>
+                            </div>
 
-                    <div class="ticker-list">
-                        <span class="ticker-badge">${user.ticker1}</span>
-                        <span class="ticker-badge">${user.ticker2}</span>
-                        <span class="ticker-badge">${user.ticker3}</span>
-                    </div>
+                            <div class="ticker-list">
+                                <span class="ticker-badge">${user.ticker1}</span>
+                                <span class="ticker-badge">${user.ticker2}</span>
+                                <span class="ticker-badge">${user.ticker3}</span>
+                            </div>
 
-                    <div class="user-meta">
-                        <span>📅 Signed up: ${formatDate(user.created_at)}</span>
-                        ${user.terms_accepted_at ? `<span>✅ Terms: ${formatDate(user.terms_accepted_at)}</span>` : ''}
-                    </div>
+                            <div class="user-meta">
+                                <span>📅 Signed up: ${formatDate(user.created_at)}</span>
+                                ${user.terms_accepted_at ? `<span>✅ Terms: ${formatDate(user.terms_accepted_at)}</span>` : ''}
+                            </div>
 
-                    <div class="actions">
+                            <div class="actions">
                         ${user.status === 'pending' ? `
                             <button class="btn btn-success" onclick="approveUser('${user.email}')">✅ Approve</button>
                             <button class="btn btn-danger" onclick="rejectUser('${user.email}')">❌ Reject</button>
@@ -388,6 +456,8 @@
                         ${user.status === 'cancelled' ? `
                             <button class="btn btn-secondary" onclick="reactivateUser('${user.email}')">🔄 Reactivate</button>
                         ` : ''}
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -535,6 +605,83 @@
                 }
             } catch (error) {
                 alert('Failed to reactivate user');
+            }
+        }
+
+        // Bulk selection tracking
+        function updateBulkActions() {
+            const checkboxes = document.querySelectorAll('.user-checkbox:checked');
+            const count = checkboxes.length;
+
+            // Collect unique tickers from selected users
+            const uniqueTickers = new Set();
+            checkboxes.forEach(cb => {
+                const tickers = cb.dataset.tickers.split(',').filter(t => t.trim());
+                tickers.forEach(t => uniqueTickers.add(t.trim()));
+            });
+
+            // Update UI
+            const bulkActionsBar = document.getElementById('bulk-actions-bar');
+            const selectionCount = document.getElementById('selection-count');
+            const tickerCount = document.getElementById('ticker-count');
+            const generateBtn = document.getElementById('generate-reports-btn');
+
+            if (count > 0) {
+                bulkActionsBar.classList.remove('bulk-actions-hidden');
+                selectionCount.textContent = `${count} user${count > 1 ? 's' : ''} selected`;
+                tickerCount.textContent = `(${uniqueTickers.size} unique ticker${uniqueTickers.size > 1 ? 's' : ''})`;
+                generateBtn.disabled = false;
+            } else {
+                bulkActionsBar.classList.add('bulk-actions-hidden');
+                generateBtn.disabled = true;
+            }
+        }
+
+        async function generateUserReports() {
+            const checkboxes = document.querySelectorAll('.user-checkbox:checked');
+            const selectedEmails = Array.from(checkboxes).map(cb => cb.dataset.email);
+
+            if (selectedEmails.length === 0) {
+                alert('No users selected');
+                return;
+            }
+
+            // Collect ticker info for confirmation
+            const uniqueTickers = new Set();
+            checkboxes.forEach(cb => {
+                const tickers = cb.dataset.tickers.split(',').filter(t => t.trim());
+                tickers.forEach(t => uniqueTickers.add(t.trim()));
+            });
+
+            const confirmMsg = `Generate Reports for ${selectedEmails.length} User${selectedEmails.length > 1 ? 's' : ''}?\n\n` +
+                `This will process ${uniqueTickers.size} unique ticker${uniqueTickers.size > 1 ? 's' : ''}.\n` +
+                `Tickers: ${Array.from(uniqueTickers).join(', ')}\n\n` +
+                `Processing takes ~${Math.ceil(uniqueTickers.size / 3 * 10)}-${Math.ceil(uniqueTickers.size / 3 * 15)} minutes.\n\n` +
+                `Continue?`;
+
+            if (!confirm(confirmMsg)) return;
+
+            try {
+                const response = await fetch('/api/generate-user-reports', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, user_emails: selectedEmails})
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    alert(`✅ ${result.message}\n\nProcessing ${result.ticker_count} unique tickers from ${result.user_count} users.\n\nCheck /admin/queue in 10-20 minutes.`);
+
+                    // Clear selections
+                    checkboxes.forEach(cb => cb.checked = false);
+                    updateBulkActions();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                console.error('Failed to generate reports:', error);
+                alert('Failed to generate reports. Check console for details.');
             }
         }
 

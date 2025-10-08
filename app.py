@@ -17421,6 +17421,142 @@ async def approve_all_cancelled_api(request: Request):
         LOG.error(f"Failed to approve cancelled emails: {e}")
         return {"status": "error", "message": str(e)}
 
+@APP.post("/api/generate-user-reports")
+async def generate_user_reports_api(request: Request):
+    """Generate reports for selected users only (bulk processing)"""
+    body = await request.json()
+    token = body.get('token')
+    user_emails = body.get('user_emails', [])
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    if not user_emails:
+        return {"status": "error", "message": "No users selected"}
+
+    try:
+        # Load tickers for selected users only
+        ticker_recipients = {}
+
+        with db() as conn, conn.cursor() as cur:
+            # Use parameterized query to fetch selected users
+            placeholders = ','.join(['%s'] * len(user_emails))
+            cur.execute(f"""
+                SELECT name, email, ticker1, ticker2, ticker3
+                FROM beta_users
+                WHERE email IN ({placeholders})
+                AND status = 'active'
+                ORDER BY created_at
+            """, user_emails)
+            users = cur.fetchall()
+
+            if not users:
+                return {
+                    "status": "error",
+                    "message": "No active users found with selected emails"
+                }
+
+            LOG.info(f"Found {len(users)} selected users")
+
+            # Deduplicate tickers across selected users
+            for user in users:
+                email = user['email']
+                tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
+
+                for ticker in tickers:
+                    if ticker:
+                        ticker = ticker.upper().strip()
+                        if ticker not in ticker_recipients:
+                            ticker_recipients[ticker] = []
+
+                        # Deduplicate emails
+                        if email not in ticker_recipients[ticker]:
+                            ticker_recipients[ticker].append(email)
+
+            LOG.info(f"Dedup complete: {len(ticker_recipients)} unique tickers from {len(users)} users")
+
+        # Trigger background processing
+        trigger_background_rerun(ticker_recipients)
+
+        tickers_list = list(ticker_recipients.keys())
+        LOG.info(f"📊 Generate reports triggered for {len(users)} users: {len(ticker_recipients)} unique tickers")
+
+        return {
+            "status": "success",
+            "user_count": len(users),
+            "ticker_count": len(ticker_recipients),
+            "tickers": tickers_list,
+            "message": f"Processing {len(ticker_recipients)} unique tickers from {len(users)} selected users. Check back in 10-20 minutes."
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to generate user reports: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/generate-all-reports")
+async def generate_all_reports_api(request: Request):
+    """Generate reports for ALL active users (manual trigger equivalent to: python app.py process)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        # Load all active beta users (same as process_daily_workflow)
+        ticker_recipients = load_active_beta_users()
+
+        if not ticker_recipients:
+            return {
+                "status": "error",
+                "message": "No active beta users found"
+            }
+
+        # Trigger background processing
+        trigger_background_rerun(ticker_recipients)
+
+        tickers_list = list(ticker_recipients.keys())
+        LOG.info(f"📊 Generate all reports triggered: {len(ticker_recipients)} unique tickers")
+
+        return {
+            "status": "success",
+            "ticker_count": len(ticker_recipients),
+            "tickers": tickers_list,
+            "message": f"Processing {len(ticker_recipients)} unique tickers from all active users. This will take approximately 30-60 minutes."
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to generate all reports: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/clear-all-reports")
+async def clear_all_reports_api(request: Request):
+    """Clear all queue entries (manual trigger equivalent to: python app.py cleanup)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Delete all email queue entries
+            cur.execute("DELETE FROM email_queue")
+            deleted_count = cur.rowcount
+            conn.commit()
+
+        LOG.info(f"🗑️ Cleared all reports: {deleted_count} entries deleted")
+
+        return {
+            "status": "success",
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} queue entries"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to clear all reports: {e}")
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/emergency-stop")
 async def emergency_stop_api(request: Request):
     """Emergency stop - cancel all pending sends"""

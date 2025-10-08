@@ -293,17 +293,23 @@
 
         <!-- Global Actions -->
         <div class="global-actions">
+            <button class="btn btn-primary" onclick="generateAllReports()">
+                📊 GENERATE ALL REPORTS
+            </button>
             <button class="btn btn-success" onclick="sendAllReady()">
                 ✉️ SEND ALL READY EMAILS
+            </button>
+            <button class="btn btn-primary" onclick="rerunQueue()">
+                🔄 RE-RUN QUEUE
             </button>
             <button class="btn btn-primary" onclick="rerunAllFailed()">
                 🔄 RE-RUN ALL FAILED
             </button>
-            <button class="btn btn-primary" onclick="rerunAllTickers()">
-                🔄 RE-RUN ALL TICKERS
-            </button>
             <button class="btn btn-warning" onclick="approveAllCancelled()">
                 ✅ APPROVE ALL CANCELLED
+            </button>
+            <button class="btn btn-secondary" onclick="clearAllReports()">
+                🗑️ CLEAR ALL REPORTS
             </button>
             <button class="btn btn-danger" onclick="emergencyStop()">
                 🛑 EMERGENCY STOP ALL
@@ -455,8 +461,8 @@
             }
         }
 
-        async function rerunAllTickers() {
-            if (!confirm('Re-run ALL tickers? This will reprocess everything.')) return;
+        async function rerunQueue() {
+            if (!confirm('⚠️ Re-run Queue?\n\nThis will REPROCESS all tickers currently in queue (ready, failed, cancelled).\n\nThis overwrites existing emails.\n\nContinue?')) return;
 
             try {
                 const response = await fetch('/api/rerun-all-tickers', {
@@ -467,13 +473,86 @@
 
                 const result = await response.json();
                 if (result.status === 'success') {
-                    alert(`✅ Re-running ${result.ticker_count} tickers`);
+                    alert(`✅ Re-running ${result.ticker_count} tickers from queue.\n\nProcessing takes ~${Math.ceil(result.ticker_count / 3 * 10)}-${Math.ceil(result.ticker_count / 3 * 15)} minutes.\n\nCheck back soon.`);
                     fetchQueueStatus();
                 } else {
                     alert('Error: ' + result.message);
                 }
             } catch (error) {
-                alert('Failed to re-run tickers');
+                alert('Failed to re-run queue');
+            }
+        }
+
+        async function generateAllReports() {
+            try {
+                const response = await fetch('/api/generate-all-reports', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    const confirmMsg = `⚠️ Generate All Reports?\n\n` +
+                        `This will process ${result.ticker_count} unique tickers from all active users.\n\n` +
+                        `Tickers: ${result.tickers.slice(0, 10).join(', ')}${result.tickers.length > 10 ? '...' : ''}\n\n` +
+                        `Processing takes ~${Math.ceil(result.ticker_count / 3 * 10)}-${Math.ceil(result.ticker_count / 3 * 15)} minutes.\n\n` +
+                        `Continue?`;
+
+                    if (!confirm(confirmMsg)) return;
+
+                    alert(`✅ ${result.message}\n\nProcessing ${result.ticker_count} tickers in background.\n\nRefresh this page in 30-60 minutes.`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to generate reports');
+            }
+        }
+
+        async function clearAllReports() {
+            try {
+                // First get current queue counts for confirmation
+                const statusResponse = await fetch(`/api/queue-status?token=${token}`);
+                const queueData = await statusResponse.json();
+
+                const total = queueData.ready + queueData.processing + queueData.failed + queueData.cancelled + queueData.sent;
+
+                if (total === 0) {
+                    alert('Queue is already empty.');
+                    return;
+                }
+
+                const confirmMsg = `⚠️ Delete All ${total} Queue Entries?\n\n` +
+                    `This will permanently delete:\n` +
+                    `- ${queueData.ready} ready emails\n` +
+                    `- ${queueData.processing} processing\n` +
+                    `- ${queueData.failed} failed emails\n` +
+                    `- ${queueData.cancelled} cancelled emails\n` +
+                    `- ${queueData.sent} sent emails\n\n` +
+                    `This cannot be undone.\n\n` +
+                    `Continue?`;
+
+                if (!confirm(confirmMsg)) return;
+
+                const response = await fetch('/api/clear-all-reports', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    alert(`✅ Deleted ${result.deleted_count} queue entries.`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to clear reports');
             }
         }
 

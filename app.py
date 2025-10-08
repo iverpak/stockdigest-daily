@@ -9857,10 +9857,13 @@ INDUSTRY KEYWORDS (exactly 3):
 - Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
 
 COMPETITORS (exactly 3):
-- Must be direct business competitors, not just same-sector companies
+- Must be DIRECT business competitors where the MAJORITY of both companies' revenues/operations compete in the same markets with similar products or services
+- NOT companies with only minor product overlap (e.g., Autodesk is NOT a Figma competitor despite both having design tools)
+- NOT companies in the same sector but serving different customers or markets
 - Prefer publicly traded companies with tickers when possible
-- Format as structured objects with 'name' and 'ticker' fields
 - For private companies: Include name but omit or set ticker to empty string
+- Company names should be the common/brand name ONLY (e.g., "Canva" not "Canva Pty Ltd", "Adobe" not "Adobe Inc")
+- Format as structured objects with 'name' and 'ticker' fields
 - Verify ticker is correct Yahoo Finance format (if provided)
 - Exclude: Subsidiaries, companies acquired in last 2 years
 
@@ -10022,11 +10025,15 @@ INDUSTRY KEYWORDS (exactly 3):
 - Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
 
 COMPETITORS (exactly 3):
-- Must be direct business competitors, not just same-sector companies
-- Must be currently publicly traded (check acquisition status)
+- Must be DIRECT business competitors where the MAJORITY of both companies' revenues/operations compete in the same markets with similar products or services
+- NOT companies with only minor product overlap (e.g., Autodesk is NOT a Figma competitor despite both having design tools)
+- NOT companies in the same sector but serving different customers or markets
+- Prefer publicly traded companies with tickers when possible
+- For private companies: Include name but omit or set ticker to empty string
+- Company names should be the common/brand name ONLY (e.g., "Canva" not "Canva Pty Ltd", "Adobe" not "Adobe Inc")
 - Format as structured objects with 'name' and 'ticker' fields
-- Verify ticker is correct and current Yahoo Finance format
-- Exclude: Private companies, subsidiaries, companies acquired in last 2 years
+- Verify ticker is correct and current Yahoo Finance format (if provided)
+- Exclude: Subsidiaries, companies acquired in last 2 years
 
 Generate response in valid JSON format with all required fields. Be concise and precise."""
 

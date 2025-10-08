@@ -6124,7 +6124,7 @@ async def score_industry_article_relevance(
     industry_keyword: str,
     title: str,
     scraped_content: str,
-    threshold: float = 4.0
+    threshold: float = 6.0
 ) -> Dict:
     """
     Main wrapper for industry article relevance scoring.
@@ -6136,7 +6136,7 @@ async def score_industry_article_relevance(
         industry_keyword: Industry keyword being evaluated (e.g., "Cloud Computing")
         title: Article title
         scraped_content: Full article text
-        threshold: Minimum score to accept (default 4.0, rejects ≤4)
+        threshold: Minimum score to accept (default 6.0, rejects ≤6)
 
     Returns:
         {
@@ -12921,19 +12921,19 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     summary_html = build_executive_summary_html(sections)
     articles_html = build_articles_html(articles_by_category)
 
-    # Build "What Matters" HTML (conditional with spacer fallback)
+    # Build "What Matters" HTML (conditional with adjusted overlap and styling)
     if what_matters and what_matters.strip():
         what_matters_html = f'''
-            <div class="whats-driving-box" style="margin: -25px 0 24px 0; padding: 22px 26px; background-color: #ffffff; border-top: 3px solid #1e40af; border-radius: 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);">
-                <div style="font-size: 10px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #e5e7eb;">What Matters</div>
-                <p style="margin: 0; font-size: 15px; line-height: 1.7; color: #111827; font-weight: 500;">
-                    {what_matters}
-                </p>
-            </div>
-        '''
+        <div class="whats-driving-box" style="margin: -50px 0 26px 0; padding: 18px 22px; background-color: #ffffff; border-top: 3px solid #1e40af; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);">
+            <div style="font-size: 10px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 11px; padding-bottom: 9px; border-bottom: 1px solid #e5e7eb;">What Matters</div>
+            <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #374151; font-weight: 500;">
+                {what_matters}
+            </p>
+        </div>
+    '''
     else:
-        # Spacer to maintain consistent spacing when What Matters is absent
-        what_matters_html = '<div style="height: 24px;"></div>'
+        # No spacer needed - content starts naturally
+        what_matters_html = ''
 
     # Build inline HTML with legal disclaimers
     html = f'''<!DOCTYPE html>
@@ -12945,10 +12945,10 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     <style>
         @media only screen and (max-width: 600px) {{
             .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px !important; }}
+            .header-padding {{ padding: 16px 20px 40px 20px !important; }}
             .price-box {{ padding: 8px 10px !important; }}
             .company-name {{ font-size: 20px !important; }}
-            .whats-driving-box {{ margin: -25px 16px 24px 16px !important; padding: 18px 20px !important; }}
+            .whats-driving-box {{ margin: -36px 16px 24px 16px !important; padding: 18px 20px !important; }}
         }}
     </style>
 </head>
@@ -12958,24 +12958,31 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
         <tr>
             <td align="center" style="padding: 40px 20px;">
 
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: hidden;">
+                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
 
                     <!-- Header -->
                     <tr>
-                        <td class="header-padding" style="padding: 20px 24px 35px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                        <td class="header-padding" style="padding: 18px 24px 55px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <!-- Top row - Meta labels -->
                                 <tr>
-                                    <td style="width: 65%; vertical-align: top;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
-                                        <h1 class="company-name" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; color: #ffffff;">{company_name}</h1>
-                                        <div style="margin-top: 6px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
+                                    <td style="width: 58%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
                                     </td>
-                                    <td align="right" style="vertical-align: top; width: 35%;">
-                                        <div style="display: inline-block; background-color: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); text-align: right;">
-                                            <div style="font-size: 14px; font-weight: 500; opacity: 0.7; margin-bottom: 4px; color: #ffffff;">{current_date}</div>
-                                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; margin-bottom: 8px; color: #ffffff;">Last Close</div>
-                                            <div style="font-size: 36px; font-weight: 700; line-height: 1; margin-bottom: 8px; color: #ffffff;">{stock_price}</div>
-                                            <div style="font-size: 16px; color: {price_change_color}; font-weight: 600;">{price_change_pct}</div>
+                                    <td align="right" style="width: 42%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • Last Close</div>
+                                    </td>
+                                </tr>
+                                <!-- Bottom row - Main content aligned on baseline -->
+                                <tr>
+                                    <td style="width: 58%; vertical-align: bottom; padding-bottom: 4px;">
+                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
+                                        <div style="margin-top: 8px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
+                                    </td>
+                                    <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
+                                        <div style="display: inline-block; text-align: right;">
+                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
+                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 4px;">{price_change_pct}</div>
                                         </div>
                                     </td>
                                 </tr>

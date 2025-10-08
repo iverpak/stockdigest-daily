@@ -3397,11 +3397,23 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                 async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
                     if response.status == 200:
                         try:
-                            result = await response.json()
+                            # Read response text first for debugging
+                            response_text = await response.text()
+
+                            # Try to parse as JSON
+                            try:
+                                result = json.loads(response_text) if response_text else None
+                            except json.JSONDecodeError as e:
+                                LOG.error(f"SCRAPFLY: JSON decode error for {domain}: {e}")
+                                LOG.error(f"SCRAPFLY: Response preview: {response_text[:500]}")
+                                if attempt < max_retries:
+                                    continue
+                                break
 
                             # Check if result is valid
                             if not result or not isinstance(result, dict):
                                 LOG.warning(f"SCRAPFLY: Invalid JSON response for {domain} (got {type(result).__name__})")
+                                LOG.warning(f"SCRAPFLY: Response preview: {response_text[:500]}")
                                 if attempt < max_retries:
                                     continue
                                 break

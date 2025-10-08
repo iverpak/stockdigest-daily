@@ -12921,18 +12921,17 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     summary_html = build_executive_summary_html(sections)
     articles_html = build_articles_html(articles_by_category)
 
-    # Build "What Matters" HTML (conditional with adjusted overlap and styling)
+    # Build "What Matters" HTML (matches Major Developments heading style)
     if what_matters and what_matters.strip():
         what_matters_html = f'''
-        <div class="whats-driving-box" style="margin: -50px 0 26px 0; padding: 18px 22px; background-color: #ffffff; border-top: 3px solid #1e40af; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);">
-            <div style="font-size: 10px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 11px; padding-bottom: 9px; border-bottom: 1px solid #e5e7eb;">What Matters</div>
-            <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #374151; font-weight: 500;">
+        <div style="margin: 0 0 24px 0;">
+            <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">What Matters</h2>
+            <p style="margin: 0; font-size: 14.5px; line-height: 1.6; color: #374151; font-weight: 500;">
                 {what_matters}
             </p>
         </div>
     '''
     else:
-        # No spacer needed - content starts naturally
         what_matters_html = ''
 
     # Build inline HTML with legal disclaimers
@@ -12945,10 +12944,9 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     <style>
         @media only screen and (max-width: 600px) {{
             .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px 40px 20px !important; }}
+            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
             .price-box {{ padding: 8px 10px !important; }}
             .company-name {{ font-size: 20px !important; }}
-            .whats-driving-box {{ margin: -36px 16px 24px 16px !important; padding: 18px 20px !important; }}
         }}
     </style>
 </head>
@@ -12962,7 +12960,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Header -->
                     <tr>
-                        <td class="header-padding" style="padding: 18px 24px 55px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <!-- Top row - Meta labels -->
                                 <tr>

@@ -3421,8 +3421,14 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                                 break
 
                             # Extract article data from Scrapfly's extraction
-                            extracted_data = result.get("result", {}).get("extracted_data", {})
-                            article_data = extracted_data.get("article", {})
+                            # Note: .get() returns None if key exists but value is null, so use 'or {}' to default
+                            extracted_data = result.get("result", {}).get("extracted_data")
+
+                            if extracted_data is None:
+                                LOG.warning(f"SCRAPFLY: Extraction returned null for {domain} - extraction may not be supported on your plan")
+
+                            extracted_data = extracted_data or {}
+                            article_data = extracted_data.get("article") or {}
 
                             # Get clean text directly from Scrapfly (no newspaper3k!)
                             clean_text = article_data.get("text", "").strip()

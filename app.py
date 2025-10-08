@@ -1052,6 +1052,9 @@ def ensure_schema():
 
                 CREATE INDEX IF NOT EXISTS idx_exec_summ_ticker_date ON executive_summaries(ticker, summary_date DESC);
 
+                -- Add what_matters column to executive_summaries table (Oct 2025)
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS what_matters TEXT;
+
                 -- Beta users table for landing page signups
                 CREATE TABLE IF NOT EXISTS beta_users (
                     id SERIAL PRIMARY KEY,
@@ -1200,7 +1203,8 @@ def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str,
 
 def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
                           article_ids: List[int], company_count: int,
-                          industry_count: int, competitor_count: int) -> None:
+                          industry_count: int, competitor_count: int,
+                          what_matters: str = "") -> None:
     """
     Store/update executive summary for ticker on current date.
     Overwrites if run multiple times same day.
@@ -1213,6 +1217,7 @@ def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
         company_count: Number of company articles analyzed
         industry_count: Number of industry articles analyzed
         competitor_count: Number of competitor articles analyzed
+        what_matters: 2-3 sentence "What Matters" summary (optional)
     """
     with db() as conn, conn.cursor() as cur:
         article_ids_json = json.dumps(article_ids)
@@ -1220,8 +1225,8 @@ def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
         cur.execute("""
             INSERT INTO executive_summaries
                 (ticker, summary_date, summary_text, ai_provider, article_ids,
-                 company_articles_count, industry_articles_count, competitor_articles_count)
-            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s)
+                 company_articles_count, industry_articles_count, competitor_articles_count, what_matters)
+            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (ticker, summary_date)
             DO UPDATE SET
                 summary_text = EXCLUDED.summary_text,
@@ -1230,11 +1235,12 @@ def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
                 company_articles_count = EXCLUDED.company_articles_count,
                 industry_articles_count = EXCLUDED.industry_articles_count,
                 competitor_articles_count = EXCLUDED.competitor_articles_count,
+                what_matters = EXCLUDED.what_matters,
                 generated_at = NOW()
         """, (ticker, summary_text, ai_provider, article_ids_json,
-              company_count, industry_count, competitor_count))
+              company_count, industry_count, competitor_count, what_matters))
 
-        LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, {len(article_ids)} articles)")
+        LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, {len(article_ids)} articles, what_matters: {len(what_matters)} chars)")
 
 # NEW FEED ARCHITECTURE V2 - Category per Relationship Functions
 def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None,
@@ -11269,6 +11275,223 @@ def generate_executive_summary_with_fallback(ticker: str, categories: Dict[str, 
     return None, "none"
 
 
+async def generate_what_matters_claude(
+    ticker: str,
+    company_name: str,
+    executive_summary: str
+) -> Optional[str]:
+    """Generate 2-3 sentence 'What Matters' summary using Claude with prompt caching"""
+    if not ANTHROPIC_API_KEY or not executive_summary or len(executive_summary.strip()) < 100:
+        return None
+
+    system_prompt = f"""You are writing the opening paragraph for a stock intelligence brief read by investors at market open.
+
+GOAL: Answer "What happened in the last 24-48 hours that moves the needle for {ticker}, and should I be worried or excited?"
+
+OUTPUT: Exactly 2-3 sentences, ~50-70 words total.
+
+STRUCTURE:
+Sentence 1: What just happened (last 24-48 hours) that actually matters
+Sentence 2: Why it matters - the key tension, risk, or opportunity
+Sentence 3 (optional): The "but" that qualifies sentence 1-2
+
+RULES:
+1. Lead with RECENCY - prioritize developments marked with dates from last 1-2 days
+2. Focus on MATERIALITY - ignore noise, find the needle-mover
+3. Be DIRECT - no hedging ("may," "could," "appears to")
+4. Show TENSION - always include the risk/opportunity trade-off
+5. Use NUMBERS - specific figures beat vague terms
+6. Be OPINIONATED - "this is make-or-break" not "this is interesting"
+
+LEAD WITH (priority order):
+1. Major catalyst in last 24-48 hours
+2. Competitive development that shifts positioning (last 2-3 days)
+3. Ongoing story with new data point (last week)
+
+EXAMPLES:
+
+✅ GOOD:
+"Dan Schulman named CEO yesterday replacing Vestberg, but stock dropped 5% despite reaffirmed guidance—investors focused on Q2's weak 300K subscriber adds vs. T-Mobile's 1.7M. New leadership inherits execution gap, not just strategy problem."
+
+"ChatGPT integration announced yesterday triggered 15% rally, giving 800M users direct access to Figma's tools—biggest catalyst since IPO. Critical test of whether AI execution can justify 277x P/E after last month's 26% earnings disappointment."
+
+"Stock near $145 all-time high after DOE fuel facility selection, but trails 23x book value with analyst targets spanning $14-$150. Valuation assumes flawless execution on 2027-2028 deployment with no revenue visibility yet."
+
+❌ BAD:
+"The company made several announcements this week that could impact its business going forward. Investors are evaluating these developments as the company continues to navigate a challenging environment."
+
+EDGE CASES:
+
+If NO catalyst in last 24-48 hours:
+"No major catalyst in last 24 hours; key story remains [most important unresolved issue with latest data point]."
+
+If MULTIPLE catalysts:
+Pick the ONE that most affects investment thesis. Mention second only if it reinforces/contradicts first.
+
+FINAL CHECK:
+- Can investor understand the situation in 10 seconds? ✓
+- Clear "worried" or "excited" signal? ✓
+- Specific numbers, not vague terms? ✓
+- 50-70 words (2-3 sentences)? ✓
+
+Generate the summary now.
+"""
+
+    user_content = f"""TARGET: {company_name} ({ticker})
+
+<executive_summary>
+{executive_summary}
+</executive_summary>
+
+Write a 2-3 sentence "What Matters" summary.
+
+Focus on:
+1. What happened in last 24-48 hours (recent dates)
+2. Why it matters (risk or opportunity)
+3. The key tension or "but"
+
+Be direct, specific, and opinionated.
+"""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2024-10-22",  # Prompt caching version
+            "content-type": "application/json"
+        }
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 300,
+            "temperature": 0.5,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}  # Cache system instructions (~1000 tokens)
+                }
+            ],
+            "messages": [{"role": "user", "content": user_content}]
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    summary = result.get("content", [{}])[0].get("text", "").strip()
+                    word_count = len(summary.split())
+                    LOG.info(f"[{ticker}] What Matters generated via Claude: {word_count} words, {len(summary)} chars")
+                    return summary
+                else:
+                    LOG.error(f"[{ticker}] Claude What Matters API error {response.status}")
+                    return None
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Failed to generate Claude What Matters: {e}")
+        return None
+
+
+async def generate_what_matters_openai(
+    ticker: str,
+    company_name: str,
+    executive_summary: str
+) -> Optional[str]:
+    """Generate 2-3 sentence 'What Matters' summary using OpenAI (fallback)"""
+    if not OPENAI_API_KEY or not executive_summary or len(executive_summary.strip()) < 100:
+        return None
+
+    system_prompt = f"""You are writing the opening paragraph for a stock intelligence brief read by investors at market open.
+
+Answer: "What happened in the last 24-48 hours that moves the needle for {ticker}?"
+
+Output exactly 2-3 sentences (~50-70 words total).
+
+Structure:
+1. What just happened (last 24-48 hours)
+2. Why it matters (risk or opportunity)
+3. Optional "but" that qualifies the above
+
+Rules:
+- Lead with RECENCY (last 1-2 days prioritized)
+- Focus on MATERIALITY (ignore noise)
+- Be DIRECT (no hedging)
+- Show TENSION (risk/opportunity trade-off)
+- Use NUMBERS (specific figures)
+- Be OPINIONATED
+
+If no catalyst in last 24-48 hours: "No major catalyst in last 24 hours; key story remains [issue]."
+"""
+
+    user_content = f"""TARGET: {company_name} ({ticker})
+
+<executive_summary>
+{executive_summary[:4000]}
+</executive_summary>
+
+Write a 2-3 sentence "What Matters" summary. Be direct, specific, and opinionated.
+"""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            "temperature": 0.5,
+            "max_tokens": 300
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    summary = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    word_count = len(summary.split())
+                    LOG.info(f"[{ticker}] What Matters generated via OpenAI: {word_count} words, {len(summary)} chars")
+                    return summary
+                else:
+                    LOG.error(f"[{ticker}] OpenAI What Matters API error {response.status}")
+                    return None
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Failed to generate OpenAI What Matters: {e}")
+        return None
+
+
+async def generate_what_matters(
+    ticker: str,
+    company_name: str,
+    executive_summary: str
+) -> str:
+    """
+    Generate 2-3 sentence 'What Matters' summary with Claude (primary) → OpenAI (fallback).
+    Returns summary text or empty string if both fail.
+    """
+    if not executive_summary or len(executive_summary.strip()) < 100:
+        LOG.warning(f"[{ticker}] Executive summary too short for What Matters generation")
+        return ""
+
+    # Try Claude first
+    summary = await generate_what_matters_claude(ticker, company_name, executive_summary)
+    if summary:
+        return summary
+
+    # Fallback to OpenAI
+    LOG.warning(f"[{ticker}] Claude What Matters unavailable, trying OpenAI fallback")
+    summary = await generate_what_matters_openai(ticker, company_name, executive_summary)
+    if summary:
+        return summary
+
+    # Both failed
+    LOG.error(f"[{ticker}] Both Claude and OpenAI failed to generate What Matters")
+    return ""
+
+
 def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dict]]]) -> Dict[str, Dict[str, str]]:
     """Generate executive summaries using Claude (primary) with OpenAI fallback"""
     if not ANTHROPIC_API_KEY and not OPENAI_API_KEY:
@@ -11299,18 +11522,22 @@ def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, List[Dic
             ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
             LOG.info(f"✅ EXECUTIVE SUMMARY ({model_used}) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
 
+            # Generate "What Matters" summary (2-3 sentences)
+            what_matters = asyncio.run(generate_what_matters(ticker, company_name, ai_analysis_summary))
+
             # Save to database with model tracking
             article_ids = [a.get("id") for a in all_articles if a.get("id")]
             company_count = len([a for a in categories.get("company", []) if a.get("ai_summary")])
             industry_count = len([a for a in categories.get("industry", []) if a.get("ai_summary")])
             competitor_count = len([a for a in categories.get("competitor", []) if a.get("ai_summary")])
             save_executive_summary(ticker, ai_analysis_summary, model_used.lower(), article_ids,
-                                 company_count, industry_count, competitor_count)
+                                 company_count, industry_count, competitor_count, what_matters)
         else:
             LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: No summary generated (both APIs failed)")
 
         summaries[ticker] = {
             "ai_analysis_summary": ai_analysis_summary or "",
+            "what_matters": what_matters if ai_analysis_summary else "",  # Only include if exec summary exists
             "company_name": company_name,
             "industry_articles_analyzed": len([a for a in categories.get("industry", []) if a.get("ai_summary")]),
             "model_used": model_used  # Track which AI model generated the summary
@@ -11909,6 +12136,14 @@ def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict
             html.append("</div>")
 
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
+
+        # Display "What Matters" summary (if available)
+        what_matters = openai_summaries.get(ticker, {}).get("what_matters", "")
+        if what_matters:
+            html.append("<div class='company-summary'>")
+            html.append("<div class='summary-title'>🎯 What Matters (Quick Summary)</div>")
+            html.append(f"<div style='color: #34495e; line-height: 1.6; margin: 10px 0; font-size: 14px;'>{what_matters}</div>")
+            html.append("</div>")
 
         # Display executive summary (Claude primary, OpenAI fallback)
         openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
@@ -12509,18 +12744,20 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                 price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
                 price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
 
-    # Fetch executive summary from database
+    # Fetch executive summary and what_matters from database
     executive_summary_text = ""
+    what_matters = ""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT summary_text FROM executive_summaries
+            SELECT summary_text, what_matters FROM executive_summaries
             WHERE ticker = %s AND summary_date = CURRENT_DATE
             ORDER BY generated_at DESC LIMIT 1
         """, (ticker,))
         result = cur.fetchone()
         if result:
             executive_summary_text = result['summary_text']
-            LOG.info(f"Retrieved executive summary for {ticker} ({len(executive_summary_text)} chars)")
+            what_matters = result['what_matters'] or ""
+            LOG.info(f"Retrieved executive summary for {ticker} ({len(executive_summary_text)} chars, what_matters: {len(what_matters)} chars)")
         else:
             LOG.warning(f"No executive summary found for {ticker}")
 
@@ -12683,6 +12920,20 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
     summary_html = build_executive_summary_html(sections)
     articles_html = build_articles_html(articles_by_category)
 
+    # Build "What Matters" HTML (conditional with spacer fallback)
+    if what_matters and what_matters.strip():
+        what_matters_html = f'''
+            <div class="whats-driving-box" style="margin: -25px 0 24px 0; padding: 22px 26px; background-color: #ffffff; border-top: 3px solid #1e40af; border-radius: 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);">
+                <div style="font-size: 10px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #e5e7eb;">What Matters</div>
+                <p style="margin: 0; font-size: 15px; line-height: 1.7; color: #111827; font-weight: 500;">
+                    {what_matters}
+                </p>
+            </div>
+        '''
+    else:
+        # Spacer to maintain consistent spacing when What Matters is absent
+        what_matters_html = '<div style="height: 24px;"></div>'
+
     # Build inline HTML with legal disclaimers
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -12696,6 +12947,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
             .header-padding {{ padding: 16px 20px !important; }}
             .price-box {{ padding: 8px 10px !important; }}
             .company-name {{ font-size: 20px !important; }}
+            .whats-driving-box {{ margin: -25px 16px 24px 16px !important; padding: 18px 20px !important; }}
         }}
     </style>
 </head>
@@ -12709,7 +12961,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Header -->
                     <tr>
-                        <td class="header-padding" style="padding: 20px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
+                        <td class="header-padding" style="padding: 20px 24px 35px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 65%; vertical-align: top;">
@@ -12732,7 +12984,10 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 
                     <!-- Content -->
                     <tr>
-                        <td class="content-padding" style="padding: 24px;">
+                        <td class="content-padding" style="padding: 0 24px 24px 24px;">
+
+                            <!-- What Matters - Overlapping Box (conditional) -->
+                            {what_matters_html}
 
                             <!-- Executive Summary -->
                             {summary_html}

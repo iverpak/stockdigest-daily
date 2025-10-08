@@ -12274,6 +12274,315 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     return html
 
 
+def generate_user_intelligence_report_html(
+    ticker: str,
+    hours: int = 24,
+    flagged_article_ids: List[int] = None
+) -> Dict[str, str]:
+    """
+    Generate Email #3 HTML without sending it (for daily workflow queue)
+    Returns: {"html": "...", "subject": "...", "company_name": "..."}
+    """
+    LOG.info(f"Generating Email #3 HTML for queue: {ticker}")
+
+    # Fetch ticker config
+    config = get_ticker_config(ticker)
+    if not config:
+        LOG.error(f"No config found for {ticker}")
+        return None
+
+    company_name = config.get("company_name", ticker)
+    sector = config.get("sector")
+    sector_display = f" • {sector}" if sector and sector.strip() else ""
+
+    # Fetch stock price from ticker_reference (cached)
+    stock_price = "$0.00"
+    price_change_pct = "+0.00%"
+    price_change_color = "#4ade80"
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT financial_last_price, financial_price_change_pct
+            FROM ticker_reference
+            WHERE ticker = %s
+        """, (ticker,))
+        price_data = cur.fetchone()
+
+        if price_data and price_data['financial_last_price']:
+            stock_price = f"${price_data['financial_last_price']:.2f}"
+            if price_data['financial_price_change_pct'] is not None:
+                pct = price_data['financial_price_change_pct']
+                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+    # Fetch executive summary from database
+    executive_summary_text = ""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT summary_text FROM executive_summaries
+            WHERE ticker = %s AND summary_date = CURRENT_DATE
+            ORDER BY generated_at DESC LIMIT 1
+        """, (ticker,))
+        result = cur.fetchone()
+        if result:
+            executive_summary_text = result['summary_text']
+        else:
+            LOG.warning(f"No executive summary found for {ticker}")
+
+    # Parse executive summary into sections
+    sections = parse_executive_summary_sections(executive_summary_text)
+
+    # Fetch flagged articles
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    articles_by_category = {"company": [], "industry": [], "competitor": []}
+
+    with db() as conn, conn.cursor() as cur:
+        if flagged_article_ids:
+            cur.execute("""
+                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
+                       ta.category, ta.search_keyword, ta.competitor_ticker,
+                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND a.id = ANY(%s)
+                AND (a.published_at >= %s OR a.published_at IS NULL)
+                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+                ORDER BY a.published_at DESC NULLS LAST
+            """, (ticker, flagged_article_ids, cutoff))
+        else:
+            cur.execute("""
+                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
+                       ta.category, ta.search_keyword, ta.competitor_ticker,
+                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND (a.published_at >= %s OR a.published_at IS NULL)
+                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+                ORDER BY a.published_at DESC NULLS LAST
+            """, (ticker, cutoff))
+
+        articles = cur.fetchall()
+
+        for article in articles:
+            category = article['category']
+            if category in articles_by_category:
+                articles_by_category[category].append(article)
+
+    # Sort articles by priority
+    for category in articles_by_category:
+        articles_by_category[category] = sort_articles_by_priority(
+            articles_by_category[category],
+            flagged_article_ids or []
+        )
+
+    # Calculate metrics
+    analyzed_count = sum(len(arts) for arts in articles_by_category.values())
+    paywall_count = sum(
+        1 for articles in articles_by_category.values()
+        for a in articles
+        if is_paywall_article(a.get('domain', ''))
+    )
+
+    # Current date
+    eastern = pytz.timezone('US/Eastern')
+    current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
+
+    # Build HTML sections
+    summary_html = build_executive_summary_html(sections)
+    articles_html = build_articles_html(articles_by_category)
+
+    # Analysis message
+    lookback_days = hours // 24 if hours >= 24 else 1
+    analysis_message = f"Analysis based on {analyzed_count} articles from the past {lookback_days} {'days' if lookback_days > 1 else 'day'}."
+    if paywall_count > 0:
+        analysis_message += f" {paywall_count} {'article' if paywall_count == 1 else 'articles'} behind paywalls (titles shown)."
+
+    # CRITICAL: Use placeholder for unsubscribe token (will be replaced during send)
+    unsubscribe_url = "{{UNSUBSCRIBE_TOKEN}}"
+
+    # Build HTML
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{ticker} Intelligence Report</title>
+    <style>
+        @media only screen and (max-width: 600px) {{
+            .content-padding {{ padding: 16px !important; }}
+            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
+            .price-box {{ padding: 8px 10px !important; }}
+            .company-name {{ font-size: 20px !important; }}
+        }}
+    </style>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+
+                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
+
+                    <!-- Header -->
+                    <tr>
+                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="width: 58%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
+                                    </td>
+                                    <td align="right" style="width: 42%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • Last Close</div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="width: 58%; vertical-align: bottom; padding-bottom: 4px;">
+                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
+                                        <div style="margin-top: 8px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
+                                    </td>
+                                    <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
+                                        <div style="display: inline-block; text-align: right;">
+                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
+                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
+
+                            <!-- Executive Summary -->
+                            {summary_html}
+
+                            <!-- Transition to Sources -->
+                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+                                    {analysis_message}
+                                </p>
+                            </div>
+
+                            <!-- Divider -->
+                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
+
+                            <!-- Source Articles -->
+                            <div style="margin-bottom: 0;">
+                                <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
+                                {articles_html}
+                            </div>
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td>
+                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
+
+                                        <!-- Legal Disclaimer -->
+                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
+                                            This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
+                                        </div>
+
+                                        <!-- Links -->
+                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
+                                        </div>
+
+                                        <!-- Copyright -->
+                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 8px; color: #ffffff;">
+                                            © 2025 StockDigest. All rights reserved.
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>'''
+
+    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
+
+    return {
+        "html": html,
+        "subject": subject,
+        "company_name": company_name,
+        "article_count": analyzed_count
+    }
+
+
+def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, flagged_article_ids: List[int] = None):
+    """Save Email #3 to email_queue table for daily workflow"""
+    LOG.info(f"[{ticker}] 💾 Saving Email #3 to queue for {len(recipients)} recipients")
+
+    # Generate HTML
+    email_data = generate_user_intelligence_report_html(ticker, hours, flagged_article_ids)
+    if not email_data:
+        LOG.error(f"[{ticker}] ❌ Failed to generate email HTML")
+        return False
+
+    html = email_data['html']
+    subject = email_data['subject']
+    company_name = email_data['company_name']
+    article_count = email_data['article_count']
+
+    # Save to email_queue table
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO email_queue (
+                ticker, company_name, recipients, email_html, email_subject,
+                article_count, status, is_production, heartbeat, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (ticker) DO UPDATE
+            SET company_name = EXCLUDED.company_name,
+                recipients = EXCLUDED.recipients,
+                email_html = EXCLUDED.email_html,
+                email_subject = EXCLUDED.email_subject,
+                article_count = EXCLUDED.article_count,
+                status = 'ready',
+                is_production = EXCLUDED.is_production,
+                heartbeat = NOW(),
+                updated_at = NOW()
+        """, (ticker, company_name, recipients, html, subject, article_count, 'ready', True))
+        conn.commit()
+
+    LOG.info(f"[{ticker}] ✅ Email #3 saved to queue (status=ready)")
+
+    # Send preview to admin
+    try:
+        preview_subject = f"[PREVIEW] {subject}"
+        send_email(preview_subject, html, to=DIGEST_TO)
+        LOG.info(f"[{ticker}] ✅ Preview sent to admin")
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ Failed to send preview to admin: {e}")
+
+    return True
+
+
 def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                    flagged_article_ids: List[int] = None,
                                    recipient_email: str = None) -> Dict:
@@ -13052,21 +13361,40 @@ async def process_ticker_job(job: dict):
 
         # EMAIL #3: USER INTELLIGENCE REPORT (no AI analysis, no descriptions)
         update_job_status(job_id, phase='user_report', progress=97)
-        LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3: User Intelligence Report...")
+
+        # Check mode to determine Email #3 behavior
+        mode = config.get('mode', 'test')
+        recipients = config.get('recipients', [])
 
         try:
-            user_report_result = send_user_intelligence_report(
-                hours=int(minutes/60),
-                tickers=[ticker],
-                flagged_article_ids=flagged_article_ids,  # Filter to same articles as Email #2
-                recipient_email=DIGEST_TO  # TODO: Replace with actual user email from beta_users
-            )
-            if user_report_result:
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 sent successfully")
-                if isinstance(user_report_result, dict):
-                    LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
+            if mode == 'daily':
+                # DAILY WORKFLOW: Save Email #3 to queue for admin review
+                LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Email #3 to queue ({len(recipients)} recipients)...")
+                success = save_email_to_queue(
+                    ticker=ticker,
+                    recipients=recipients,
+                    hours=int(minutes/60),
+                    flagged_article_ids=flagged_article_ids
+                )
+                if success:
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 saved to queue (status=ready)")
+                else:
+                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to save Email #3 to queue")
             else:
-                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 returned no result")
+                # TEST WORKFLOW: Send Email #3 immediately to admin
+                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 immediately (test mode)...")
+                user_report_result = send_user_intelligence_report(
+                    hours=int(minutes/60),
+                    tickers=[ticker],
+                    flagged_article_ids=flagged_article_ids,
+                    recipient_email=DIGEST_TO
+                )
+                if user_report_result:
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 sent successfully")
+                    if isinstance(user_report_result, dict):
+                        LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
+                else:
+                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 returned no result")
         except Exception as e:
             LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #3 failed: {e}")
             # Continue to GitHub commit even if Email #3 fails (Option A)
@@ -17437,7 +17765,7 @@ async def approve_all_cancelled_api(request: Request):
 
 @APP.post("/api/generate-user-reports")
 async def generate_user_reports_api(request: Request):
-    """Generate reports for selected users only (bulk processing)"""
+    """Generate reports for selected users only (bulk processing) - uses existing job queue"""
     body = await request.json()
     token = body.get('token')
     user_emails = body.get('user_emails', [])
@@ -17449,7 +17777,7 @@ async def generate_user_reports_api(request: Request):
         return {"status": "error", "message": "No users selected"}
 
     try:
-        # Load tickers for selected users only
+        # Load tickers for selected users only and build ticker → recipients mapping
         ticker_recipients = {}
 
         with db() as conn, conn.cursor() as cur:
@@ -17472,35 +17800,65 @@ async def generate_user_reports_api(request: Request):
 
             LOG.info(f"Found {len(users)} selected users")
 
-            # Deduplicate tickers across selected users
+            # Deduplicate tickers and build recipient mapping
             for user in users:
                 email = user['email']
                 tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
-
                 for ticker in tickers:
                     if ticker:
                         ticker = ticker.upper().strip()
                         if ticker not in ticker_recipients:
                             ticker_recipients[ticker] = []
-
-                        # Deduplicate emails
                         if email not in ticker_recipients[ticker]:
                             ticker_recipients[ticker].append(email)
 
             LOG.info(f"Dedup complete: {len(ticker_recipients)} unique tickers from {len(users)} users")
 
-        # Trigger background processing
-        trigger_background_rerun(ticker_recipients)
+        # Submit to existing job queue system
+        tickers_list = sorted(list(ticker_recipients.keys()))
 
-        tickers_list = list(ticker_recipients.keys())
-        LOG.info(f"📊 Generate reports triggered for {len(users)} users: {len(ticker_recipients)} unique tickers")
+        with db() as conn, conn.cursor() as cur:
+            # Create batch record
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (len(tickers_list), 'admin_ui', json.dumps({
+                "minutes": 1440,
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily"  # CRITICAL: Daily workflow mode
+            })))
+
+            batch_id = cur.fetchone()['batch_id']
+
+            # Create individual jobs with mode='daily' and recipients
+            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            for ticker in tickers_list:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id, ticker, config, timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (batch_id, ticker, json.dumps({
+                    "minutes": 1440,
+                    "batch_size": 3,
+                    "triage_batch_size": 3,
+                    "mode": "daily",  # CRITICAL: Daily workflow mode
+                    "recipients": ticker_recipients[ticker]  # CRITICAL: Recipients for Email #3
+                }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"📊 Batch {batch_id} created for {len(users)} users: {len(tickers_list)} unique tickers (mode=daily)")
 
         return {
             "status": "success",
+            "batch_id": str(batch_id),
             "user_count": len(users),
-            "ticker_count": len(ticker_recipients),
+            "ticker_count": len(tickers_list),
             "tickers": tickers_list,
-            "message": f"Processing {len(ticker_recipients)} unique tickers from {len(users)} selected users. Check back in 10-20 minutes."
+            "message": f"Processing {len(tickers_list)} unique tickers from {len(users)} selected users. Check back in 10-20 minutes."
         }
 
     except Exception as e:
@@ -17509,7 +17867,7 @@ async def generate_user_reports_api(request: Request):
 
 @APP.post("/api/generate-all-reports")
 async def generate_all_reports_api(request: Request):
-    """Generate reports for ALL active users (manual trigger equivalent to: python app.py process)"""
+    """Generate reports for ALL active users - uses existing job queue"""
     body = await request.json()
     token = body.get('token')
 
@@ -17526,17 +17884,50 @@ async def generate_all_reports_api(request: Request):
                 "message": "No active beta users found"
             }
 
-        # Trigger background processing
-        trigger_background_rerun(ticker_recipients)
+        # Submit to existing job queue system
+        tickers_list = sorted(list(ticker_recipients.keys()))
 
-        tickers_list = list(ticker_recipients.keys())
-        LOG.info(f"📊 Generate all reports triggered: {len(ticker_recipients)} unique tickers")
+        with db() as conn, conn.cursor() as cur:
+            # Create batch record
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (len(tickers_list), 'admin_ui', json.dumps({
+                "minutes": 1440,
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily"  # CRITICAL: Daily workflow mode
+            })))
+
+            batch_id = cur.fetchone()['batch_id']
+
+            # Create individual jobs with mode='daily' and recipients
+            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            for ticker in tickers_list:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id, ticker, config, timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (batch_id, ticker, json.dumps({
+                    "minutes": 1440,
+                    "batch_size": 3,
+                    "triage_batch_size": 3,
+                    "mode": "daily",  # CRITICAL: Daily workflow mode
+                    "recipients": ticker_recipients[ticker]  # CRITICAL: Recipients for Email #3
+                }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"📊 Batch {batch_id} created for all active users: {len(tickers_list)} unique tickers (mode=daily)")
 
         return {
             "status": "success",
-            "ticker_count": len(ticker_recipients),
+            "batch_id": str(batch_id),
+            "ticker_count": len(tickers_list),
             "tickers": tickers_list,
-            "message": f"Processing {len(ticker_recipients)} unique tickers from all active users. This will take approximately 30-60 minutes."
+            "message": f"Processing {len(tickers_list)} unique tickers from all active users. This will take approximately 30-60 minutes."
         }
 
     except Exception as e:
@@ -18229,7 +18620,7 @@ def cleanup_old_queue_entries():
 
 def process_daily_workflow():
     """
-    7:00 AM: Process all active beta users.
+    7:00 AM: Process all active beta users via job queue system.
     Generates emails and queues for 8:30 AM send.
     """
     LOG.info("="*80)
@@ -18244,13 +18635,45 @@ def process_daily_workflow():
             LOG.warning("No active beta users found")
             return
 
-        # Process all tickers
-        results = asyncio.run(process_all_tickers_daily(ticker_recipients))
+        # Submit to existing job queue system (same as admin UI buttons)
+        tickers_list = sorted(list(ticker_recipients.keys()))
 
-        # Send admin notification
-        send_admin_notification(results)
+        with db() as conn, conn.cursor() as cur:
+            # Create batch record
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (len(tickers_list), 'cron_job', json.dumps({
+                "minutes": 1440,
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily"  # CRITICAL: Daily workflow mode
+            })))
 
-        LOG.info("✅ Daily workflow complete")
+            batch_id = cur.fetchone()['batch_id']
+
+            # Create individual jobs with mode='daily' and recipients
+            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            for ticker in tickers_list:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id, ticker, config, timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (batch_id, ticker, json.dumps({
+                    "minutes": 1440,
+                    "batch_size": 3,
+                    "triage_batch_size": 3,
+                    "mode": "daily",  # CRITICAL: Daily workflow mode
+                    "recipients": ticker_recipients[ticker]  # CRITICAL: Recipients for Email #3
+                }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"✅ Batch {batch_id} created for {len(tickers_list)} unique tickers (mode=daily)")
+        LOG.info(f"   Jobs will be processed by background worker")
+        LOG.info("✅ Daily workflow complete (jobs submitted to queue)")
 
     except Exception as e:
         LOG.error(f"❌ Daily workflow failed: {e}")

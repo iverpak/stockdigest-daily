@@ -5977,7 +5977,15 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
                     try:
-                        parsed = json.loads(content)
+                        # Strip markdown code blocks if present (Claude wraps JSON in ```json...```)
+                        content_clean = content.strip()
+                        if content_clean.startswith("```"):
+                            # Remove first line (```json) and last line (```)
+                            lines = content_clean.split("\n")
+                            if len(lines) >= 3:
+                                content_clean = "\n".join(lines[1:-1])
+
+                        parsed = json.loads(content_clean)
                         score = float(parsed.get("score", 0.0))
                         reason = parsed.get("reason", "No reason provided")
 
@@ -6047,15 +6055,30 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                 "Content-Type": "application/json"
             }
 
+            # Define JSON schema for structured output
+            relevance_schema = {
+                "type": "object",
+                "properties": {
+                    "score": {"type": "number"},
+                    "reason": {"type": "string"}
+                },
+                "required": ["score", "reason"],
+                "additionalProperties": False
+            }
+
             data = {
                 "model": OPENAI_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 256,
-                "response_format": {"type": "json_object"}
+                "input": f"{system_prompt}\n\n{user_content}",
+                "max_output_tokens": 256,
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "relevance_score",
+                        "schema": relevance_schema,
+                        "strict": True
+                    }
+                },
+                "truncation": "auto"
             }
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
@@ -6067,7 +6090,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
 
                     result = await response.json()
                     LOG.error(f"OpenAI response for {ticker}: {str(result)[:500]}")
-                    content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    content = result.get("text", "")
 
                     if not content:
                         LOG.error(f"OpenAI returned empty content for {ticker}. Full response: {result}")

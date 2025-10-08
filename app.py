@@ -5964,11 +5964,17 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
                 async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
                     if response.status != 200:
-                        LOG.error(f"Claude relevance scoring error {response.status} for {ticker}")
+                        error_text = await response.text()
+                        LOG.error(f"Claude relevance scoring error {response.status} for {ticker}: {error_text[:500]}")
                         return None
 
                     result = await response.json()
+                    LOG.debug(f"Claude response for {ticker}: {str(result)[:500]}")
                     content = result.get("content", [{}])[0].get("text", "")
+
+                    if not content:
+                        LOG.error(f"Claude returned empty content for {ticker}. Full response: {result}")
+                        return None
 
                     try:
                         parsed = json.loads(content)
@@ -5982,7 +5988,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
 
                         return {"score": score, "reason": reason}
                     except (json.JSONDecodeError, ValueError) as e:
-                        LOG.error(f"Failed to parse Claude relevance score for {ticker}: {e}")
+                        LOG.error(f"Failed to parse Claude relevance score for {ticker}: {e}. Content: '{content[:200]}'")
                         return None
 
         except Exception as e:
@@ -6055,11 +6061,17 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
                 async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
                     if response.status != 200:
-                        LOG.error(f"OpenAI relevance scoring error {response.status} for {ticker}")
+                        error_text = await response.text()
+                        LOG.error(f"OpenAI relevance scoring error {response.status} for {ticker}: {error_text[:500]}")
                         return None
 
                     result = await response.json()
+                    LOG.debug(f"OpenAI response for {ticker}: {str(result)[:500]}")
                     content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+                    if not content:
+                        LOG.error(f"OpenAI returned empty content for {ticker}. Full response: {result}")
+                        return None
 
                     try:
                         parsed = json.loads(content)
@@ -6073,7 +6085,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
 
                         return {"score": score, "reason": reason}
                     except (json.JSONDecodeError, ValueError) as e:
-                        LOG.error(f"Failed to parse OpenAI relevance score for {ticker}: {e}")
+                        LOG.error(f"Failed to parse OpenAI relevance score for {ticker}: {e}. Content: '{content[:200]}'")
                         return None
 
         except Exception as e:

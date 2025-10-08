@@ -42,7 +42,8 @@ from urllib3.util.retry import Retry
 
 from collections import defaultdict
 
-from playwright.async_api import async_playwright
+# REMOVED: Playwright no longer used (Scrapfly-only as of Oct 2025)
+# from playwright.async_api import async_playwright
 import asyncio
 import signal
 from contextlib import contextmanager
@@ -85,7 +86,8 @@ TICKER_PROCESSING_LOCK = asyncio.Lock()
 SCRAPE_BATCH_SIZE = int(os.getenv("SCRAPE_BATCH_SIZE", "5"))
 OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "5"))
 CLAUDE_MAX_CONCURRENCY = int(os.getenv("CLAUDE_MAX_CONCURRENCY", "5"))  # Claude concurrency
-PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "5"))
+# REMOVED: Playwright no longer used (Scrapfly-only as of Oct 2025)
+# PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "5"))
 SCRAPFLY_MAX_CONCURRENCY = int(os.getenv("SCRAPFLY_MAX_CONCURRENCY", "5"))
 TRIAGE_MAX_CONCURRENCY = int(os.getenv("TRIAGE_MAX_CONCURRENCY", "5"))
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))  # Parallel ticker processing
@@ -94,7 +96,8 @@ MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))  # Parallel tic
 # These work in both sync and async contexts (with minor blocking during acquisition)
 OPENAI_SEM = BoundedSemaphore(OPENAI_MAX_CONCURRENCY)
 CLAUDE_SEM = BoundedSemaphore(CLAUDE_MAX_CONCURRENCY)
-PLAYWRIGHT_SEM = BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENCY)
+# REMOVED: Playwright no longer used (Scrapfly-only as of Oct 2025)
+# PLAYWRIGHT_SEM = BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENCY)
 SCRAPFLY_SEM = BoundedSemaphore(SCRAPFLY_MAX_CONCURRENCY)
 TRIAGE_SEM = BoundedSemaphore(TRIAGE_MAX_CONCURRENCY)
 
@@ -3307,205 +3310,17 @@ def create_scraping_session():
     return session
 
 # ============================================================================
-# PLAYWRIGHT SCRAPING - COMMENTED OUT (2025-10-06)
+# PLAYWRIGHT REMOVED (Oct 2025) - Replaced with Scrapfly-only scraping
 # ============================================================================
-# REASON: Playwright can hang indefinitely on problematic domains (e.g., theglobeandmail.com)
-#         causing entire ticker processing to stall with no timeout protection.
-# REPLACED WITH: Scrapfly as Tier 2 (faster, more reliable, handles anti-bot better)
-# TO REVERT: Uncomment this function and restore Tier 2 Playwright block in
-#            safe_content_scraper_with_3tier_fallback_async() below
-# COST IMPACT: Minimal (~$0.01-0.02 per ticker with Scrapfly as Tier 2)
-# ============================================================================
-"""
-async def extract_article_content_with_playwright(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
-    # Memory-optimized article extraction using Playwright with enhanced content cleaning (ASYNC VERSION)
-    try:
-        # Check for known paywall domains first
-        if normalize_domain(domain) in PAYWALL_DOMAINS:
-            return None, f"Paywall domain: {domain}"
-
-        LOG.info(f"PLAYWRIGHT: Starting browser for {domain}")
-
-        async with async_playwright() as p:
-            # Launch browser with memory optimization
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor',
-                    '--memory-pressure-off',
-                    '--disable-background-timer-throttling',
-                    '--disable-renderer-backgrounding',
-                    '--disable-extensions',
-                    '--disable-plugins',
-                    '--disable-images',
-                    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                ]
-            )
-
-            LOG.info(f"PLAYWRIGHT: Browser launched, navigating to {url}")
-
-            # Create new page with smaller viewport to save memory
-            page = await browser.new_page(
-                viewport={'width': 1280, 'height': 720},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
-
-            # Set additional headers to look more human
-            await page.set_extra_http_headers({
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            })
-
-            try:
-                # REDUCED TIMEOUT - 15 seconds instead of 30
-                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                LOG.info(f"PLAYWRIGHT: Page loaded for {domain}, extracting content...")
-
-                # Shorter wait for dynamic content
-                await page.wait_for_timeout(1000)
-
-                # Try multiple content extraction methods
-                raw_content = None
-                extraction_method = None
-
-                # Method 1: Try article tag first
-                try:
-                    article_element = await page.query_selector('article')
-                    if article_element:
-                        raw_content = await article_element.inner_text()
-                        extraction_method = "article tag"
-                except Exception:
-                    pass
-
-                # Method 2: Try main content selectors
-                if not raw_content or len(raw_content.strip()) < 200:
-                    selectors = [
-                        '[role="main"]',
-                        'main',
-                        '.article-content',
-                        '.story-content',
-                        '.entry-content',
-                        '.post-content',
-                        '.content',
-                        '[data-module="ArticleBody"]'
-                    ]
-                    for selector in selectors:
-                        try:
-                            element = await page.query_selector(selector)
-                            if element:
-                                temp_content = await element.inner_text()
-                                if temp_content and len(temp_content.strip()) > 200:
-                                    raw_content = temp_content
-                                    extraction_method = f"selector: {selector}"
-                                    break
-                        except Exception:
-                            continue
-
-                # Method 3: Smart body text extraction (removes navigation/ads)
-                if not raw_content or len(raw_content.strip()) < 200:
-                    try:
-                        raw_content = await page.evaluate('''
-                            () => {
-                                // Remove unwanted elements
-                                const unwanted = document.querySelectorAll(`
-                                    script, style, nav, header, footer, aside,
-                                    .advertisement, .ads, .ad, .sidebar,
-                                    .navigation, .nav, .menu, .social,
-                                    [class*="ad"], [class*="sidebar"], [class*="nav"]
-                                `);
-                                unwanted.forEach(el => el.remove());
-
-                                // Try to find main content area
-                                const candidates = [
-                                    document.querySelector('main'),
-                                    document.querySelector('[role="main"]'),
-                                    document.querySelector('.main-content'),
-                                    document.querySelector('.content'),
-                                    document.body
-                                ];
-
-                                for (let candidate of candidates) {
-                                    if (candidate && candidate.innerText && candidate.innerText.length > 200) {
-                                        return candidate.innerText;
-                                    }
-                                }
-
-                                return document.body ? document.body.innerText : '';
-                            }
-                        ''')
-                        extraction_method = "smart body extraction"
-                    except Exception:
-                        try:
-                            raw_content = await page.evaluate("() => document.body ? document.body.innerText : ''")
-                            extraction_method = "fallback body text"
-                        except Exception:
-                            raw_content = None
-
-            except Exception as e:
-                LOG.warning(f"PLAYWRIGHT: Navigation/extraction failed for {domain}: {str(e)}")
-                raw_content = None
-            finally:
-                # Always close browser to free memory
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
-
-            if not raw_content or len(raw_content.strip()) < 100:
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Insufficient raw content extracted")
-                return None, "Insufficient content extracted"
-
-            # ENHANCED CONTENT CLEANING
-            cleaned_content = clean_scraped_content(raw_content, url, domain)
-
-            if not cleaned_content or len(cleaned_content.strip()) < 100:
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Content too short after cleaning")
-                return None, "Content too short after cleaning"
-
-            # Enhanced content validation on cleaned content
-            is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
-            if not is_valid:
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> {validation_msg}")
-                return None, validation_msg
-
-            # Check for common error pages or blocking messages on cleaned content
-            content_lower = cleaned_content.lower()
-            error_indicators = [
-                "403 forbidden", "access denied", "captcha", "robot", "bot detection",
-                "please verify you are human", "cloudflare", "rate limit", "blocked",
-                "security check", "unusual traffic"
-            ]
-
-            if any(indicator in content_lower for indicator in error_indicators):
-                LOG.warning(f"PLAYWRIGHT FAILED: {domain} -> Error page detected")
-                return None, "Error page or blocking detected"
-
-            LOG.info(f"PLAYWRIGHT SUCCESS: {domain} -> {len(cleaned_content)} chars extracted and cleaned via {extraction_method}")
-            return cleaned_content.strip(), None
-
-    except Exception as e:
-        error_msg = f"Playwright extraction failed: {str(e)}"
-        LOG.error(f"PLAYWRIGHT ERROR: {domain} -> {error_msg}")
-        return None, error_msg
-    finally:
-        # Add this cleanup
-        import gc
-        gc.collect()
-"""
+# Playwright caused indefinite hangs and required 100MB+ overhead per ticker.
+# Scrapfly Extraction API handles all sites reliably with clean text output.
 # ============================================================================
 
 
 async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    Async Scrapfly scraping with improved text extraction, content cleaning, and video URL filtering.
+    Scrapfly-only scraping with Extraction API for clean article text.
+    No newspaper3k - Scrapfly handles extraction server-side.
     """
     global scrapfly_stats, enhanced_scraping_stats
 
@@ -3520,18 +3335,17 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
 
     # EARLY FILTER: Reject video URLs before any processing
     if "video.media.yql.yahoo.com" in url:
-        LOG.warning(f"ASYNC SCRAPFLY: Rejecting video URL: {url}")
+        LOG.warning(f"SCRAPFLY: Rejecting video URL: {url}")
         return None, "Video URL not supported"
 
-    # Local list for anti-bot domains
-    LOCAL_SCRAPFLY_ANTIBOT = {
+    # Domains requiring anti-bot protection
+    ANTIBOT_DOMAINS = {
         "simplywall.st", "seekingalpha.com", "zacks.com", "benzinga.com",
         "cnbc.com", "investing.com", "gurufocus.com", "fool.com",
         "insidermonkey.com", "nasdaq.com", "markets.financialcontent.com",
         "thefly.com", "streetinsider.com", "accesswire.com",
         "247wallst.com", "barchart.com", "telecompaper.com",
         "news.stocktradersdaily.com", "sharewise.com"
-        # Removed video.media.yql.yahoo.com since we filter it out earlier
     }
 
     for attempt in range(max_retries + 1):
@@ -3544,10 +3358,10 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
 
             if attempt > 0:
                 delay = 2 ** attempt
-                LOG.info(f"ASYNC SCRAPFLY RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
+                LOG.info(f"SCRAPFLY RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
                 await asyncio.sleep(delay)
 
-            LOG.info(f"ASYNC SCRAPFLY: Starting scrape for {domain} (attempt {attempt + 1})")
+            LOG.info(f"SCRAPFLY: Starting extraction for {domain} (attempt {attempt + 1})")
 
             # Update usage stats
             scrapfly_stats["requests_made"] += 1
@@ -3556,80 +3370,95 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
             enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
 
             host = _host(url)
-            
-            # Build Scrapfly params - CONVERT BOOLEANS TO STRINGS
+
+            # Build Scrapfly params with Extraction API
             params = {
                 "key": SCRAPFLY_API_KEY,
                 "url": url,
-                "render_js": "false",  # Convert boolean to string
+                "extract": json.dumps({
+                    "article": {
+                        "selector": "auto",  # Auto-detect article
+                        "output": {
+                            "title": True,
+                            "text": True,    # Get clean text (no HTML)
+                            "date": True,
+                            "author": True
+                        }
+                    }
+                }),
                 "country": "us",
-                "cache": "false",      # Convert boolean to string
             }
-            
-            # Toggle anti-bot/JS only for local list, but not for video URLs
-            if any(_matches(host, d) for d in LOCAL_SCRAPFLY_ANTIBOT) and "video.media" not in host:
-                params["asp"] = "true"        # Convert boolean to string
-                params["render_js"] = "true"  # Convert boolean to string
+
+            # Enable anti-bot/JS rendering for known tough domains
+            if any(_matches(host, d) for d in ANTIBOT_DOMAINS) and "video.media" not in host:
+                params["asp"] = "true"
+                params["render_js"] = "true"
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
                     if response.status == 200:
                         try:
                             result = await response.json()
-                            html_content = result.get("result", {}).get("content", "") or ""
+
+                            # Extract article data from Scrapfly's extraction
+                            extracted_data = result.get("result", {}).get("extracted_data", {})
+                            article_data = extracted_data.get("article", {})
+
+                            # Get clean text directly from Scrapfly (no newspaper3k!)
+                            clean_text = article_data.get("text", "").strip()
+
+                            if not clean_text:
+                                # Fallback: try raw content if extraction failed
+                                html_content = result.get("result", {}).get("content", "")
+                                if html_content:
+                                    LOG.warning(f"SCRAPFLY: Extraction empty, trying newspaper3k fallback for {domain}")
+                                    article = newspaper.Article(url)
+                                    article.set_html(html_content)
+                                    article.parse()
+                                    clean_text = article.text.strip()
+
+                            if not clean_text or len(clean_text) < 100:
+                                LOG.warning(f"SCRAPFLY: Insufficient content for {domain} (attempt {attempt + 1})")
+                                continue
+
+                            # Minimal cleaning (Scrapfly already did heavy lifting)
+                            cleaned_content = clean_scraped_content(clean_text, url, domain)
+
+                            if not cleaned_content or len(cleaned_content) < 100:
+                                LOG.warning(f"SCRAPFLY: Content too short after minimal cleaning for {domain}")
+                                continue
+
+                            # Relaxed validation (Scrapfly content is already clean)
+                            is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
+                            if not is_valid:
+                                LOG.warning(f"SCRAPFLY: Content validation failed for {domain}: {validation_msg}")
+                                continue  # Try again instead of breaking
+
+                            # Success stats
+                            scrapfly_stats["successful"] += 1
+                            scrapfly_stats["by_domain"][domain]["successes"] += 1
+                            enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
+
+                            LOG.info(f"SCRAPFLY SUCCESS: {domain} -> {len(cleaned_content)} chars (extraction API)")
+                            return cleaned_content, None
+
                         except Exception as json_error:
-                            LOG.warning(f"ASYNC SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
-                            html_content = await response.text() or ""
-
-                        # Extract text from HTML
-                        raw_content = ""
-                        if html_content:
-                            try:
-                                article = newspaper.Article(url)
-                                article.set_html(html_content)
-                                article.parse()
-                                raw_content = article.text or ""
-                            except Exception as e:
-                                LOG.warning(f"ASYNC SCRAPFLY: Newspaper parse failed for {domain}: {e}")
-                                raw_content = html_content
-
-                        if not raw_content or len(raw_content.strip()) < 100:
-                            LOG.warning(f"ASYNC SCRAPFLY: Insufficient raw content for {domain} (attempt {attempt + 1})")
-                            continue
-
-                        cleaned_content = clean_scraped_content(raw_content, url, domain)
-                        if not cleaned_content or len(cleaned_content.strip()) < 100:
-                            LOG.warning(f"ASYNC SCRAPFLY: Content too short after cleaning for {domain}")
-                            continue
-
-                        is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
-                        if not is_valid:
-                            LOG.warning(f"ASYNC SCRAPFLY: Content validation failed for {domain}: {validation_msg}")
+                            LOG.warning(f"SCRAPFLY: JSON parsing failed for {domain}: {json_error}")
+                            if attempt < max_retries:
+                                continue
                             break
-
-                        # Success stats
-                        scrapfly_stats["successful"] += 1
-                        scrapfly_stats["by_domain"][domain]["successes"] += 1
-                        enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
-
-                        raw_len = len(str(raw_content))
-                        clean_len = len(cleaned_content)
-                        reduction = ((raw_len - clean_len) / raw_len * 100) if raw_len > 0 else 0.0
-                        LOG.info(f"ASYNC SCRAPFLY SUCCESS: {domain} -> {clean_len} chars (cleaned from {raw_len}, {reduction:.1f}% reduction)")
-                        return cleaned_content, None
 
                     elif response.status == 422:
                         error_text = await response.text()
-                        # Check if this is a video URL causing the error
                         if "video.media" in url:
-                            LOG.warning(f"ASYNC SCRAPFLY: Video URL caused 422 error, skipping: {url}")
+                            LOG.warning(f"SCRAPFLY: Video URL caused 422 error, skipping: {url}")
                             return None, "Video URL not supported"
                         else:
-                            LOG.warning(f"ASYNC SCRAPFLY: 422 invalid parameters for {domain} body: {error_text[:500]}")
+                            LOG.warning(f"SCRAPFLY: 422 invalid parameters for {domain} body: {error_text[:500]}")
                         break
 
                     elif response.status == 429:
-                        LOG.warning(f"ASYNC SCRAPFLY: 429 rate limited for {domain} (attempt {attempt + 1})")
+                        LOG.warning(f"SCRAPFLY: 429 rate limited for {domain} (attempt {attempt + 1})")
                         if attempt < max_retries:
                             await asyncio.sleep(5)
                             continue
@@ -3638,7 +3467,7 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
                         error_text = await response.text()
                         req_id = response.headers.get("x-request-id") or response.headers.get("cf-ray")
                         LOG.warning(
-                            f"ASYNC SCRAPFLY: HTTP {response.status} for {domain} "
+                            f"SCRAPFLY: HTTP {response.status} for {domain} "
                             f"(attempt {attempt + 1}) id={req_id} body: {error_text[:500]}"
                         )
                         if attempt < max_retries:
@@ -3646,14 +3475,14 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
 
         except Exception as e:
             if "video.media" in url:
-                LOG.warning(f"ASYNC SCRAPFLY: Video URL caused exception, skipping: {url}")
+                LOG.warning(f"SCRAPFLY: Video URL caused exception, skipping: {url}")
                 return None, "Video URL not supported"
-            LOG.warning(f"ASYNC SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
+            LOG.warning(f"SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
             if attempt < max_retries:
                 continue
 
     scrapfly_stats["failed"] += 1
-    return None, f"Async Scrapfly failed after {max_retries + 1} attempts"
+    return None, f"Scrapfly failed after {max_retries + 1} attempts"
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
@@ -3679,135 +3508,53 @@ def get_referrer_for_domain(url, domain):
 
 def clean_scraped_content(content: str, url: str = "", domain: str = "") -> str:
     """
-    Conservative content cleaning that removes obvious junk while preserving article content
+    Minimal content cleaning for Scrapfly Extraction API output.
+    Scrapfly already removes HTML, ads, navigation - we just need light sanitization.
+
+    IMPORTANT: Preserves financial data (numbers, percentages, financial codes).
     """
     if not content:
         return ""
-    
+
     original_length = len(content)
 
-    # Stage 0: Remove NULL bytes and control characters FIRST
+    # Stage 1: Remove NULL bytes and control characters
     content = clean_null_bytes(content)
-    
-    # Stage 1: Remove obvious binary/encoded data
-    # Remove sequences that look like binary data or encoding artifacts
-    content = re.sub(r'[Â¿Â½]{3,}.*?[Â¿Â½]{3,}', '', content)
     content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]+', '', content)
-    content = re.sub(r'[A-Za-z0-9+/]{50,}={0,2}', '', content)
-    
-    # Stage 2: Remove HTML/CSS/JavaScript remnants
-    # Remove HTML tags that newspaper3k might have missed
-    content = re.sub(r'<[^>]+>', '', content)
-    content = re.sub(r'&[a-zA-Z0-9#]+;', ' ', content)  # HTML entities
-    
-    # Remove CSS-like patterns
-    content = re.sub(r'\{[^}]*\}', '', content)  # CSS rules
-    content = re.sub(r'@media[^{]*\{[^}]*\}', '', content)  # Media queries
-    content = re.sub(r'font-[a-z-]+:[^;]+;', '', content)  # CSS font properties
-    content = re.sub(r'text-[a-z-]+:[^;]+;', '', content)  # CSS text properties
-    content = re.sub(r'color:[^;]+;', '', content)  # CSS colors
-    content = re.sub(r'margin[^;]*:[^;]+;', '', content)  # CSS margins
-    content = re.sub(r'padding[^;]*:[^;]+;', '', content)  # CSS padding
-    
-    # Remove class and data attributes
-    content = re.sub(r'class="[^"]*"', '', content)
-    content = re.sub(r'data-[a-z-]+="[^"]*"', '', content)
-    
-    # Stage 3: Remove technical metadata
-    # Remove image metadata
-    content = re.sub(r'EXIF[^.]*\.', '', content)
-    content = re.sub(r'sRGB\.IEC[^.]*\.', '', content)
-    content = re.sub(r'Adobe RGB[^.]*\.', '', content)
-    content = re.sub(r'Photoshop[^.]*\.', '', content)
-    
-    # Remove file paths and technical specs
-    content = re.sub(r'/[A-Z]+/[A-Z0-9]+', '', content)  # File paths like /MARCH/MARCH30
-    content = re.sub(r'[A-Z]{2,}\d+[A-Z]*\d*', '', content)  # Technical codes like RTAO, RGB
-    content = re.sub(r'\d{8,}', '', content)  # Long number sequences
-    
-    # Stage 4: Remove navigation and UI elements
-    navigation_patterns = [
-        r'Home\s*>\s*[^.]*',  # Breadcrumbs
-        r'Share on [A-Za-z]+',  # Social sharing
-        r'Tweet this',
-        r'Follow us on',
-        r'Subscribe to',
-        r'Sign up for',
-        r'Newsletter',
-        r'Related Articles?',
-        r'More from',
-        r'Continue reading',
-        r'Read more',
-        r'Click here',
-        r'Advertisement',
-        r'Sponsored Content',
-        r'Exit Content Preview',
+
+    # Stage 2: Remove encoding artifacts (rarely needed with Scrapfly)
+    content = re.sub(r'[Â¿Â½]{3,}', '', content)  # Binary encoding artifacts
+
+    # Stage 3: Clean up any leftover HTML entities (Scrapfly usually handles this)
+    content = re.sub(r'&[a-zA-Z0-9#]+;', ' ', content)
+
+    # Stage 4: Remove obvious boilerplate phrases (minimal)
+    boilerplate_patterns = [
+        r'Advertisement\s*',
+        r'Sponsored Content\s*',
+        r'Continue Reading\s*',
     ]
-    
-    for pattern in navigation_patterns:
+
+    for pattern in boilerplate_patterns:
         content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-    
-    # Stage 5: Remove cookie and consent text
-    cookie_patterns = [
-        r'We use cookies[^.]*\.',
-        r'Accept all cookies[^.]*\.',
-        r'Cookie policy[^.]*\.',
-        r'Privacy policy[^.]*\.',
-        r'By continuing to use[^.]*\.',
-        r'This site uses cookies[^.]*\.',
-    ]
-    
-    for pattern in cookie_patterns:
-        content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-    
-    # Stage 6: Clean up whitespace but preserve paragraph structure
-    content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Reduce excessive line breaks
-    content = re.sub(r'[ \t]+', ' ', content)  # Normalize spaces
-    content = re.sub(r'\n +', '\n', content)  # Remove leading spaces on lines
-    content = re.sub(r' +\n', '\n', content)  # Remove trailing spaces on lines
-    
-    # Stage 7: Remove obviously broken sentences/paragraphs
-    lines = content.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        # Skip lines that are mostly special characters or numbers
-        if len(re.sub(r'[a-zA-Z\s]', '', line)) > len(line) * 0.5:
-            continue
-            
-        # Skip very short fragments that don't end properly
-        if len(line) < 20 and not line.endswith(('.', '!', '?', ':')):
-            continue
-            
-        # Skip lines that look like technical data
-        if re.search(r'^[A-Z]{3,}[0-9]', line):  # Technical codes
-            continue
-            
-        if re.search(r'^\d+px|em|rem|%', line):  # CSS measurements
-            continue
-            
-        # Keep lines that look like real sentences
-        cleaned_lines.append(line)
-    
-    # Reconstruct content with proper paragraph breaks
-    content = '\n\n'.join(cleaned_lines)
-    
+
+    # Stage 5: Normalize whitespace (preserve paragraphs)
+    content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Max 2 consecutive line breaks
+    content = re.sub(r'[ \t]+', ' ', content)  # Normalize spaces/tabs to single space
+    content = re.sub(r'\n +', '\n', content)  # Remove leading spaces
+    content = re.sub(r' +\n', '\n', content)  # Remove trailing spaces
+
     # Final cleanup
     content = content.strip()
+    content = clean_null_bytes(content)  # Final NULL byte check
 
-    # Final NULL byte check
-    content = clean_null_bytes(content)
-    
     # Log cleaning effectiveness
     final_length = len(content)
     reduction = ((original_length - final_length) / original_length * 100) if original_length > 0 else 0
-    
-    LOG.debug(f"Content cleaning: {original_length} → {final_length} chars ({reduction:.1f}% reduction)")
-    
+
+    if reduction > 20:  # Only log if significant reduction
+        LOG.debug(f"Minimal cleaning: {original_length} → {final_length} chars ({reduction:.1f}% reduction)")
+
     return content
 
 def get_domain_strategy(domain):
@@ -4049,12 +3796,13 @@ def safe_content_scraper(url: str, domain: str, scraped_domains: set) -> Tuple[O
     except Exception as e:
         return None, f"Scraping error: {str(e)}"
 
-async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
+async def safe_content_scraper_with_scrapfly_only_async(url: str, domain: str, category: str, keyword: str, scraped_domains: set) -> Tuple[Optional[str], str]:
     """
-    Async 3-tier content scraper: requests → Playwright → Scrapfly with comprehensive tracking
+    Scrapfly-only content scraper with Extraction API.
+    No Tier 1 requests, no Playwright - Scrapfly handles everything.
     """
     global enhanced_scraping_stats
-    
+
     # Check limits first
     if not _check_scraping_limit(category, keyword):
         if category == "company":
@@ -4065,114 +3813,50 @@ async def safe_content_scraper_with_3tier_fallback_async(url: str, domain: str, 
         elif category == "competitor":
             keyword_count = scraping_stats["competitor_scraped_by_keyword"].get(keyword, 0)
             return None, f"Competitor '{keyword}' limit reached ({keyword_count}/{scraping_stats['limits']['competitor_per_keyword']})"
-    
+
     enhanced_scraping_stats["total_attempts"] += 1
 
-    # Check if domain should skip TIER 1 (known JavaScript-heavy domains)
-    if domain in SKIP_TIER1_DOMAINS:
-        LOG.info(f"⚡ SKIP TIER 1: {domain} (known JavaScript-heavy domain, going to Scrapfly)")
-        error = "Skipped TIER 1 (JavaScript-heavy domain)"
-    else:
-        # TIER 1: Try standard requests-based scraping
-        LOG.info(f"ASYNC TIER 1 (Requests): Attempting {domain}")
-        enhanced_scraping_stats["by_method"]["requests"]["attempts"] += 1
+    # SCRAPFLY-ONLY: No tier fallback needed
+    if not SCRAPFLY_API_KEY:
+        LOG.error("SCRAPFLY: API key not configured")
+        enhanced_scraping_stats["total_failures"] += 1
+        return None, "Scrapfly API key not configured"
 
-        # Use thread pool for sync requests call
-        import asyncio
-        loop = asyncio.get_event_loop()
+    LOG.info(f"SCRAPFLY: Starting extraction for {domain}")
 
-        try:
-            content, error = await loop.run_in_executor(None, safe_content_scraper, url, domain, scraped_domains)
+    try:
+        scrapfly_content, scrapfly_error = await scrape_with_scrapfly_async(url, domain)
 
-            if content:
-                enhanced_scraping_stats["requests_success"] += 1
-                enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
-                update_scraping_stats(category, keyword, True)
-                return content, f"ASYNC TIER 1 SUCCESS: {len(content)} chars via requests"
-        except Exception as e:
-            error = str(e)
+        if scrapfly_content:
+            enhanced_scraping_stats["scrapfly_success"] += 1
+            update_scraping_stats(category, keyword, True)
+            return scrapfly_content, f"SCRAPFLY SUCCESS: {len(scrapfly_content)} chars (extraction API)"
+        else:
+            # Scrapfly failed
+            enhanced_scraping_stats["total_failures"] += 1
+            return None, f"SCRAPFLY FAILED: {scrapfly_error}"
 
-        LOG.info(f"ASYNC TIER 1 FAILED: {domain} - {error}")
-
-    # ============================================================================
-    # TIER 2: PLAYWRIGHT - COMMENTED OUT (2025-10-06)
-    # Replaced with Scrapfly below for reliability (no hangs, better anti-bot)
-    # To revert: Uncomment this block and rename Scrapfly back to Tier 3
-    # ============================================================================
-    """
-    # TIER 2: Try Playwright fallback
-    LOG.info(f"ASYNC TIER 2 (Playwright): Attempting {domain}")
-    enhanced_scraping_stats["by_method"]["playwright"]["attempts"] += 1
-
-    async with async_playwright_sem:
-        try:
-            playwright_content, playwright_error = await extract_article_content_with_playwright(url, domain)
-
-            if playwright_content:
-                enhanced_scraping_stats["playwright_success"] += 1
-                enhanced_scraping_stats["by_method"]["playwright"]["successes"] += 1
-                update_scraping_stats(category, keyword, True)
-                return playwright_content, f"ASYNC TIER 2 SUCCESS: {len(playwright_content)} chars via Playwright"
-        except Exception as e:
-            playwright_error = str(e)
-
-    LOG.info(f"ASYNC TIER 2 FAILED: {domain} - {playwright_error}")
-    """
-    playwright_error = "Playwright disabled (commented out)"
-    # ============================================================================
-
-    # TIER 2: Try Scrapfly fallback (PROMOTED from Tier 3 on 2025-10-06)
-    if SCRAPFLY_API_KEY:
-        LOG.info(f"ASYNC TIER 2 (Scrapfly): Attempting {domain}")
-
-        # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
-        # with SCRAPFLY_SEM:
-        if True:  # Maintain indentation
-            try:
-                scrapfly_content, scrapfly_error = await scrape_with_scrapfly_async(url, domain)
-
-                if scrapfly_content:
-                    enhanced_scraping_stats["scrapfly_success"] += 1
-                    update_scraping_stats(category, keyword, True)
-                    return scrapfly_content, f"ASYNC TIER 2 SUCCESS: {len(scrapfly_content)} chars via Scrapfly"
-            except Exception as e:
-                scrapfly_error = str(e)
-
-        LOG.info(f"ASYNC TIER 2 FAILED: {domain} - {scrapfly_error}")
-    else:
-        LOG.info(f"ASYNC TIER 2 SKIPPED: Scrapfly API key not configured")
-        scrapfly_error = "not configured"
-
-    # All tiers failed
-    enhanced_scraping_stats["total_failures"] += 1
-    return None, f"ALL ASYNC TIERS FAILED - Tier 1 (Requests): {error}, Tier 2 (Scrapfly): {scrapfly_error if SCRAPFLY_API_KEY else 'not configured'}"
+    except Exception as e:
+        LOG.error(f"SCRAPFLY: Unexpected error for {domain}: {e}")
+        enhanced_scraping_stats["total_failures"] += 1
+        return None, f"SCRAPFLY ERROR: {str(e)}"
 
 def log_enhanced_scraping_stats():
-    """Log comprehensive scraping statistics across all methods"""
+    """Log Scrapfly-only scraping statistics"""
     total = enhanced_scraping_stats["total_attempts"]
     if total == 0:
-        LOG.info("ENHANCED SCRAPING: No attempts made")
+        LOG.info("SCRAPING STATS: No attempts made")
         return
-    
-    requests_success = enhanced_scraping_stats["requests_success"]
-    playwright_success = enhanced_scraping_stats["playwright_success"]
+
     scrapfly_success = enhanced_scraping_stats["scrapfly_success"]
-    total_success = requests_success + playwright_success + scrapfly_success
-    
-    overall_rate = (total_success / total) * 100
-    
-    LOG.info("=== ENHANCED SCRAPING FINAL STATS ===")
-    LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total})")
-    LOG.info(f"  TIER 1 (Requests): {requests_success} successes / {enhanced_scraping_stats['by_method']['requests']['attempts']} attempts")
-    LOG.info(f"  TIER 2 (Scrapfly): {scrapfly_success} successes / {enhanced_scraping_stats['by_method']['scrapfly']['attempts']} attempts")
-    if enhanced_scraping_stats['by_method']['playwright']['attempts'] > 0:
-        LOG.info(f"  [DISABLED] Playwright: {playwright_success} successes / {enhanced_scraping_stats['by_method']['playwright']['attempts']} attempts")
-    
-    # Calculate tier-specific success rates
-    for method, stats in enhanced_scraping_stats["by_method"].items():
-        if stats["attempts"] > 0:
-            rate = (stats["successes"] / stats["attempts"]) * 100
-            LOG.info(f"  {method.upper()} RATE: {rate:.1f}%")
+    success_rate = (scrapfly_success / total) * 100
+
+    LOG.info("=" * 60)
+    LOG.info("SCRAPFLY SCRAPING STATS (Extraction API)")
+    LOG.info("=" * 60)
+    LOG.info(f"SUCCESS RATE: {success_rate:.1f}% ({scrapfly_success}/{total})")
+    LOG.info(f"COST ESTIMATE: ${scrapfly_stats['cost_estimate']:.2f}")
+    LOG.info("=" * 60)
 
 
 def log_scrapfly_stats():
@@ -4507,7 +4191,7 @@ async def scrape_single_article_async(article: Dict, category: str, metadata: Di
             scrape_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
             
             if scrape_domain not in PAYWALL_DOMAINS and scrape_domain not in PROBLEMATIC_SCRAPE_DOMAINS:
-                content, status = await safe_content_scraper_with_3tier_fallback_async(
+                content, status = await safe_content_scraper_with_scrapfly_only_async(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
                 

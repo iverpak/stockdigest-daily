@@ -9694,24 +9694,38 @@ class TickerManager:
         if not force_refresh:
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT ticker, company_name, industry_keywords, competitors, ai_generated
+                    SELECT ticker, company_name,
+                           industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                           competitor_1_name, competitor_1_ticker,
+                           competitor_2_name, competitor_2_ticker,
+                           competitor_3_name, competitor_3_ticker,
+                           ai_generated
                     FROM ticker_reference WHERE ticker = %s AND active = TRUE
                 """, (ticker,))
                 config = cur.fetchone()
 
                 if config:
-                    # Process competitors back to structured format
+                    # Reconstruct industry_keywords array from individual columns
+                    industry_keywords = []
+                    for i in range(1, 4):
+                        kw = config.get(f"industry_keyword_{i}")
+                        if kw:
+                            industry_keywords.append(kw)
+
+                    # Reconstruct competitors array from individual columns
                     competitors = []
-                    for comp_str in config.get("competitors", []):
-                        match = re.search(r'^(.+?)\s*\(([A-Z]{1,8}(?:\.[A-Z]{1,4})?(?:-[A-Z])?)\)$', comp_str)
-                        if match:
-                            competitors.append({"name": match.group(1).strip(), "ticker": match.group(2)})
-                        else:
-                            competitors.append({"name": comp_str, "ticker": None})
+                    for i in range(1, 4):
+                        comp_name = config.get(f"competitor_{i}_name")
+                        comp_ticker = config.get(f"competitor_{i}_ticker")
+                        if comp_name:
+                            competitors.append({
+                                "name": comp_name,
+                                "ticker": comp_ticker if comp_ticker else None
+                            })
 
                     return {
                         "company_name": config.get("company_name", ticker),
-                        "industry_keywords": config.get("industry_keywords", []),
+                        "industry_keywords": industry_keywords,
                         "competitors": competitors
                     }
         

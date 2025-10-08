@@ -1,3 +1,4 @@
+# Production dependencies - Scrapfly-only scraping (no Playwright)
 fastapi==0.115.0
 uvicorn==0.30.6
 psycopg[binary,pool]==3.2.10
@@ -6,10 +7,8 @@ requests==2.32.3
 beautifulsoup4==4.12.3
 jinja2==3.1.4
 pytz==2024.1
-newspaper3k>=0.2.8  # Used as fallback only if Scrapfly extraction fails
+newspaper3k>=0.2.8  # Fallback parser for Scrapfly extraction
 lxml_html_clean
-# REMOVED: playwright==1.40.0 (Scrapfly-only as of Oct 2025)
-# REMOVED: greenlet>=3.2.4 (was playwright dependency)
 openai>=1.0.0
 anthropic>=0.34.0
 python-multipart

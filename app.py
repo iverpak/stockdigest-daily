@@ -3372,6 +3372,7 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
             scrapfly_stats["requests_made"] += 1
             scrapfly_stats["cost_estimate"] += 0.0003
             scrapfly_stats["by_domain"][domain]["attempts"] += 1
+            enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
 
             # Build params for Web Scraping API without extraction
             params = {
@@ -3429,6 +3430,12 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
                                     continue
                                 return None, f"Validation failed: {validation_msg}"
 
+                            # Track tier success
+                            scrapfly_stats["successful"] += 1
+                            scrapfly_stats["by_domain"][domain]["successes"] += 1
+                            enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
+                            enhanced_scraping_stats["scrapfly_success"] += 1
+
                             LOG.info(f"✅ SCRAPFLY SUCCESS: {domain} -> {len(cleaned_content)} chars")
                             return cleaned_content, None
 
@@ -3467,6 +3474,8 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
                 continue
             return None, str(e)
 
+    # If we got here, all retries failed
+    scrapfly_stats["failed"] += 1
     return None, f"Scrapfly HTML fetch failed after {max_retries + 1} attempts"
 
 
@@ -3477,8 +3486,13 @@ async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str
     Cost: $0
     Success rate: ~70% (works for simple sites without anti-bot)
     """
+    global enhanced_scraping_stats
+
     try:
         LOG.info(f"FREE SCRAPER: Starting for {domain}")
+
+        # Track tier attempts
+        enhanced_scraping_stats["by_method"]["requests"]["attempts"] += 1
 
         # Check paywall domains
         if normalize_domain(domain) in PAYWALL_DOMAINS:
@@ -3527,6 +3541,10 @@ async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str
                     LOG.warning(f"FREE: Validation failed for {domain}: {validation_msg}")
                     return None, f"Validation failed: {validation_msg}"
 
+                # Track tier success
+                enhanced_scraping_stats["by_method"]["requests"]["successes"] += 1
+                enhanced_scraping_stats["requests_success"] += 1
+
                 LOG.info(f"✅ FREE SUCCESS: {domain} -> {len(cleaned_content)} chars")
                 return cleaned_content, None
 
@@ -3547,7 +3565,12 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
 
     Returns: (content, error_message)
     """
+    global enhanced_scraping_stats
+
     LOG.info(f"SCRAPFLY: Starting extraction for {domain}")
+
+    # Track total scraping attempt
+    enhanced_scraping_stats["total_attempts"] += 1
 
     # Try Tier 1: Free scraping FIRST
     content, error1 = await scrape_with_requests_free(url, domain)
@@ -3567,9 +3590,11 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
 
         LOG.warning(f"⚠️ TIER 2 (Scrapfly) failed for {domain}: {error2}")
         LOG.error(f"❌ ALL TIERS FAILED for {domain} - Free: {error1}, Scrapfly: {error2}")
+        enhanced_scraping_stats["total_failures"] += 1
         return None, f"All methods failed (Free: {error1}, Scrapfly: {error2})"
     else:
         LOG.error(f"❌ Scraping failed for {domain} - Free tier failed and no Scrapfly key configured")
+        enhanced_scraping_stats["total_failures"] += 1
         return None, f"Free scraping failed: {error1}"
 
 
@@ -3753,17 +3778,14 @@ def log_scraping_success_rates():
     
     # Log prominent success rate summary with per-tier percentages
     LOG.info("=" * 60)
-    LOG.info("SCRAPING SUCCESS RATES")
+    LOG.info("SCRAPING SUCCESS RATES (2-Tier Architecture)")
     LOG.info("=" * 60)
-    LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
-    LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% of tier attempts ({requests_success}/{requests_attempts})")
-    LOG.info(f"TIER 2 (Scrapfly): {scrapfly_rate:.1f}% of tier attempts ({scrapfly_success}/{scrapfly_attempts})")
-    if playwright_attempts > 0:
-        LOG.info(f"[DISABLED] Playwright: {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
-
+    LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts} total articles)")
+    LOG.info(f"TIER 1 (Free):     {requests_rate:.1f}% ({requests_success}/{requests_attempts} attempted)")
+    LOG.info(f"TIER 2 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts} attempted)")
     if scrapfly_attempts > 0:
         LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
-    
+
     LOG.info("=" * 60)
 
 def validate_scraped_content(content, url, domain):
@@ -15170,13 +15192,11 @@ async def cron_ingest(
             scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
 
             LOG.info("=" * 60)
-            LOG.info("SCRAPING SUCCESS RATES")
+            LOG.info("SCRAPING SUCCESS RATES (2-Tier Architecture)")
             LOG.info("=" * 60)
-            LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts})")
-            LOG.info(f"TIER 1 (Requests): {requests_rate:.1f}% ({requests_success}/{requests_attempts})")
-            LOG.info(f"TIER 2 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts})")
-            if playwright_attempts > 0:
-                LOG.info(f"[DISABLED] Playwright: {playwright_rate:.1f}% ({playwright_success}/{playwright_attempts})")
+            LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts} total articles)")
+            LOG.info(f"TIER 1 (Free):     {requests_rate:.1f}% ({requests_success}/{requests_attempts} attempted)")
+            LOG.info(f"TIER 2 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts} attempted)")
             if scrapfly_stats["requests_made"] > 0:
                 LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
             LOG.info("=" * 60)

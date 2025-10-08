@@ -8207,9 +8207,15 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
                                 "repeat_key": ""
                             })
 
-                # Cap at target
+                # Sort by priority (1=HIGH, 2=MEDIUM, 3=LOW), then by recency
+                selected_articles.sort(key=lambda x: (
+                    x["scrape_priority"],  # Sort ascending: 1, 2, 3 (HIGH→MEDIUM→LOW)
+                    -articles[x["id"]].get("published_at", datetime.min).timestamp() if articles[x["id"]].get("published_at") else 0
+                ))
+
+                # Cap at target after sorting (LOW-priority articles cut first)
                 if len(selected_articles) > target_cap:
-                    LOG.warning(f"Claude selected {len(selected_articles)}, capping to {target_cap}")
+                    LOG.warning(f"Claude selected {len(selected_articles)}, capping to top {target_cap} by priority")
                     selected_articles = selected_articles[:target_cap]
 
                 LOG.info(f"Claude triage company: selected {len(selected_articles)}/{len(articles)} articles")
@@ -8371,9 +8377,18 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
                                 "repeat_key": ""
                             })
 
+                # Sort by priority (1=HIGH, 2=MEDIUM, 3=LOW), then by recency
+                selected_articles.sort(key=lambda x: (
+                    x["scrape_priority"],  # Sort ascending: 1, 2, 3 (HIGH→MEDIUM→LOW)
+                    -articles[x["id"]].get("published_at", datetime.min).timestamp() if articles[x["id"]].get("published_at") else 0
+                ))
+
+                # Cap at target after sorting (LOW-priority articles cut first)
                 if len(selected_articles) > target_cap:
+                    LOG.warning(f"Claude industry selected {len(selected_articles)}, capping to top {target_cap} by priority")
                     selected_articles = selected_articles[:target_cap]
 
+                LOG.info(f"Claude triage industry: selected {len(selected_articles)}/{len(articles)} articles")
                 return selected_articles
 
     except Exception as e:
@@ -8522,9 +8537,18 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
                                 "repeat_key": ""
                             })
 
+                # Sort by priority (1=HIGH, 2=MEDIUM, 3=LOW), then by recency
+                selected_articles.sort(key=lambda x: (
+                    x["scrape_priority"],  # Sort ascending: 1, 2, 3 (HIGH→MEDIUM→LOW)
+                    -articles[x["id"]].get("published_at", datetime.min).timestamp() if articles[x["id"]].get("published_at") else 0
+                ))
+
+                # Cap at target after sorting (LOW-priority articles cut first)
                 if len(selected_articles) > target_cap:
+                    LOG.warning(f"Claude competitor selected {len(selected_articles)}, capping to top {target_cap} by priority")
                     selected_articles = selected_articles[:target_cap]
 
+                LOG.info(f"Claude triage competitor: selected {len(selected_articles)}/{len(articles)} articles")
                 return selected_articles
 
     except Exception as e:
@@ -8641,14 +8665,14 @@ async def merge_triage_scores(
 
     return result
 
-async def perform_ai_triage_with_dual_scoring_async(
+async def perform_ai_triage_with_fallback_async(
     articles_by_category: Dict[str, List[Dict]],
     ticker: str,
     triage_batch_size: int = 5  # Updated default to 5
 ) -> Dict[str, List[Dict]]:
     """
-    Dual scoring triage: OpenAI + Claude run concurrently, results merged by combined score.
-    Replaces perform_ai_triage_with_batching_async with dual API support.
+    Claude-first triage with OpenAI fallback: Claude runs first, OpenAI only on error.
+    Replaces dual scoring with sequential fallback for cost savings and simplicity.
     """
     selected_results = {"company": [], "industry": [], "competitor": []}
 
@@ -8671,9 +8695,9 @@ async def perform_ai_triage_with_dual_scoring_async(
         elif comp_name:
             peers.append(comp_name)
 
-    LOG.info(f"=== DUAL SCORING TRIAGE (OpenAI + Claude): batch_size={triage_batch_size} ===")
+    LOG.info(f"=== TRIAGE WITH FALLBACK (Claude primary, OpenAI fallback): batch_size={triage_batch_size} ===")
 
-    # Collect ALL dual-triage operations
+    # Collect ALL triage operations
     all_triage_operations = []
 
     # Company operations
@@ -8742,10 +8766,15 @@ async def perform_ai_triage_with_dual_scoring_async(
             })
 
     total_operations = len(all_triage_operations)
-    LOG.info(f"Total dual-triage operations: {total_operations}")
+    LOG.info(f"Total triage operations: {total_operations}")
 
     if total_operations == 0:
         return selected_results
+
+    # Track API usage statistics
+    claude_success_count = 0
+    openai_fallback_count = 0
+    both_failed_count = 0
 
     # Process operations in batches
     for batch_start in range(0, total_operations, triage_batch_size):
@@ -8754,80 +8783,76 @@ async def perform_ai_triage_with_dual_scoring_async(
         batch_num = (batch_start // triage_batch_size) + 1
         total_batches = (total_operations + triage_batch_size - 1) // triage_batch_size
 
-        LOG.info(f"BATCH {batch_num}/{total_batches}: Processing {len(batch)} operations (OpenAI + Claude concurrent):")
+        LOG.info(f"BATCH {batch_num}/{total_batches}: Processing {len(batch)} operations (Claude primary, OpenAI fallback):")
         for op in batch:
             LOG.info(f"  - {op['type']}: {op['key']} ({len(op['articles'])} articles)")
 
-        # Create dual tasks for each operation (OpenAI + Claude in parallel)
+        # Create fallback tasks for each operation (Claude → OpenAI on error)
         batch_tasks = []
         for op in batch:
-            async def run_dual_triage(operation):
-                # Run OpenAI and Claude concurrently with semaphore control
-                openai_task = None
-                claude_task = None
+            async def run_triage_with_fallback(operation):
+                """Try Claude first, fallback to OpenAI on error"""
+                result = []
+                api_used = None
 
-                if OPENAI_API_KEY:
-                    async def run_openai():
-                        # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
-                        # with OPENAI_SEM:
-                        if True:  # Maintain indentation
-                            return await operation["openai_func"](*operation["openai_args"])
-                    openai_task = run_openai()
-
+                # Try Claude first
                 if ANTHROPIC_API_KEY:
-                    async def run_claude():
-                        # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
-                        # with CLAUDE_SEM:
-                        if True:  # Maintain indentation
-                            return await operation["claude_func"](*operation["claude_args"])
-                    claude_task = run_claude()
+                    try:
+                        claude_result = await operation["claude_func"](*operation["claude_args"])
+                        if claude_result is not None:  # Success (even if empty list)
+                            api_used = "claude"
+                            result = claude_result
+                            LOG.info(f"  ✓ Claude succeeded for {operation['type']}/{operation['key']}: {len(result)} articles")
+                            return result, api_used
+                        else:
+                            LOG.warning(f"  ⚠️ Claude returned None for {operation['type']}/{operation['key']}, falling back to OpenAI")
+                    except Exception as e:
+                        LOG.warning(f"  ⚠️ Claude failed for {operation['type']}/{operation['key']}: {e}, falling back to OpenAI")
 
-                # Wait for both to complete
-                tasks_to_run = [t for t in [openai_task, claude_task] if t]
-                results = await asyncio.gather(*tasks_to_run, return_exceptions=True)
+                # Fallback to OpenAI
+                if OPENAI_API_KEY:
+                    try:
+                        openai_result = await operation["openai_func"](*operation["openai_args"])
+                        api_used = "openai"
+                        result = openai_result if openai_result is not None else []
+                        LOG.info(f"  ✓ OpenAI fallback succeeded for {operation['type']}/{operation['key']}: {len(result)} articles")
+                        return result, api_used
+                    except Exception as e:
+                        LOG.error(f"  ❌ OpenAI fallback failed for {operation['type']}/{operation['key']}: {e}")
 
-                # Extract results
-                openai_result = results[0] if OPENAI_API_KEY and len(results) > 0 else []
-                claude_result = results[1] if ANTHROPIC_API_KEY and len(results) > 1 else (results[0] if not OPENAI_API_KEY and len(results) > 0 else [])
+                # Both failed
+                LOG.error(f"  ❌ Both Claude and OpenAI failed for {operation['type']}/{operation['key']}")
+                return [], None
 
-                # Handle exceptions
-                if isinstance(openai_result, Exception):
-                    LOG.error(f"OpenAI triage failed for {operation['type']}/{operation['key']}: {openai_result}")
-                    openai_result = []
-                if isinstance(claude_result, Exception):
-                    LOG.error(f"Claude triage failed for {operation['type']}/{operation['key']}: {claude_result}")
-                    claude_result = []
-
-                # Merge scores
-                merged = await merge_triage_scores(
-                    openai_result,
-                    claude_result,
-                    operation["articles"],
-                    operation["target_cap"],
-                    operation["type"],
-                    operation["key"]
-                )
-
-                return merged
-
-            task = run_dual_triage(op)
+            task = run_triage_with_fallback(op)
             batch_tasks.append((op, task))
 
         # Execute batch concurrently
         batch_results = await asyncio.gather(*[task for _, task in batch_tasks], return_exceptions=True)
 
-        # Process results
-        for i, result in enumerate(batch_results):
+        # Process results and track API usage
+        for i, result_tuple in enumerate(batch_results):
             op = batch_tasks[i][0]
 
-            if isinstance(result, Exception):
-                LOG.error(f"Dual triage failed for {op['type']}/{op['key']}: {result}")
+            if isinstance(result_tuple, Exception):
+                LOG.error(f"Triage failed for {op['type']}/{op['key']}: {result_tuple}")
+                both_failed_count += 1
                 continue
+
+            # Unpack result and API used
+            result, api_used = result_tuple
+
+            # Track API usage
+            if api_used == "claude":
+                claude_success_count += 1
+            elif api_used == "openai":
+                openai_fallback_count += 1
+            else:
+                both_failed_count += 1
 
             # Map results back to original indices and add to selected_results
             if op["type"] == "company":
                 selected_results["company"].extend(result)
-                LOG.info(f"  ✓ Company: selected {len(result)} articles")
 
             elif op["type"] == "industry":
                 # Map back to original indices
@@ -8835,7 +8860,6 @@ async def perform_ai_triage_with_dual_scoring_async(
                     original_idx = op["index_mapping"][selected_item["id"]]["original_idx"]
                     selected_item["id"] = original_idx
                 selected_results["industry"].extend(result)
-                LOG.info(f"  ✓ Industry '{op['key']}': selected {len(result)} articles")
 
             elif op["type"] == "competitor":
                 # Map back to original indices
@@ -8843,18 +8867,18 @@ async def perform_ai_triage_with_dual_scoring_async(
                     original_idx = op["index_mapping"][selected_item["id"]]["original_idx"]
                     selected_item["id"] = original_idx
                 selected_results["competitor"].extend(result)
-                LOG.info(f"  ✓ Competitor '{op['key']}': selected {len(result)} articles")
 
         LOG.info(f"BATCH {batch_num} COMPLETE")
 
-    LOG.info(f"DUAL SCORING TRIAGE COMPLETE:")
+    LOG.info(f"TRIAGE WITH FALLBACK COMPLETE:")
     LOG.info(f"  Company: {len(selected_results['company'])} selected")
     LOG.info(f"  Industry: {len(selected_results['industry'])} selected")
     LOG.info(f"  Competitor: {len(selected_results['competitor'])} selected")
+    LOG.info(f"  API Usage: Claude primary: {claude_success_count}/{total_operations} | OpenAI fallback: {openai_fallback_count}/{total_operations} | Both failed: {both_failed_count}/{total_operations}")
 
     return selected_results
 
-# ===== END DUAL SCORING LOGIC =====
+# ===== END FALLBACK TRIAGE LOGIC =====
 
 async def perform_ai_triage_with_batching_async(
     articles_by_category: Dict[str, List[Dict]],
@@ -12736,7 +12760,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                     <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
                                         <div style="display: inline-block; text-align: right;">
                                             <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
-                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 4px;">{price_change_pct}</div>
+                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>
                                         </div>
                                     </td>
                                 </tr>
@@ -15138,8 +15162,8 @@ async def cron_ingest(
             memory_monitor.take_snapshot(f"TRIAGE_START_{ticker}")
             
             with resource_cleanup_context("ai_triage"):
-                # Use dual scoring triage (OpenAI + Claude)
-                selected_results = await perform_ai_triage_with_dual_scoring_async(articles_by_ticker[ticker], ticker, triage_batch_size)
+                # Use fallback triage (Claude primary, OpenAI fallback)
+                selected_results = await perform_ai_triage_with_fallback_async(articles_by_ticker[ticker], ticker, triage_batch_size)
                 triage_results[ticker] = selected_results
 
             memory_monitor.take_snapshot(f"TRIAGE_COMPLETE_{ticker}")

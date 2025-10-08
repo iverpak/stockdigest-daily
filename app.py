@@ -3338,165 +3338,19 @@ ANTIBOT_DOMAINS = {
 }
 
 
-async def scrape_with_scrapfly_scrape_and_extract(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
-    """
-    TIER 1: Scrapfly Web Scraping API WITH built-in extraction
-    Uses GET /scrape endpoint with extraction_model parameter.
-    Scrapfly fetches the page AND extracts article data in one call.
-    Cost: ~$0.002 per article (1 API credit for scrape + 5 for extraction_model = 6 total)
-    Success rate: ~90-95% (expected)
-    """
-    global scrapfly_stats, enhanced_scraping_stats
-
-    # EARLY FILTER: Reject video URLs before any processing
-    if "video.media.yql.yahoo.com" in url:
-        LOG.warning(f"TIER 1: Rejecting video URL: {url}")
-        return None, "Video URL not supported"
-
-    for attempt in range(max_retries + 1):
-        try:
-            if not SCRAPFLY_API_KEY:
-                return None, "Scrapfly API key not configured"
-
-            if normalize_domain(domain) in PAYWALL_DOMAINS:
-                return None, f"Paywall domain: {domain}"
-
-            if attempt > 0:
-                delay = 2 ** attempt
-                LOG.info(f"TIER 1 RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
-                await asyncio.sleep(delay)
-
-            LOG.info(f"TIER 1 (Scrapfly Scrape+Extract): Starting for {domain} (attempt {attempt + 1})")
-
-            # Update usage stats (6 credits = ~$0.002)
-            scrapfly_stats["requests_made"] += 1
-            scrapfly_stats["cost_estimate"] += 0.002
-            scrapfly_stats["by_domain"][domain]["attempts"] += 1
-            enhanced_scraping_stats["by_method"]["scrapfly"]["attempts"] += 1
-
-            # Build params for Web Scraping API with extraction
-            params = {
-                "key": SCRAPFLY_API_KEY,
-                "url": url,
-                "extraction_model": "article",  # Use built-in article extraction model
-                "country": "us"
-            }
-
-            # Enable anti-bot protection for known tough domains
-            host = _host(url)
-            if any(_matches(host, d) for d in ANTIBOT_DOMAINS) and "video.media" not in host:
-                params["asp"] = "true"
-                params["render_js"] = "true"
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
-                    if response.status == 200:
-                        try:
-                            result = await response.json()
-
-                            # Extract the extracted data from response (correct field name!)
-                            extracted_data_wrapper = result.get("result", {}).get("extracted_data")
-
-                            if not extracted_data_wrapper:
-                                LOG.warning(f"TIER 1: No extracted_data field for {domain}")
-                                if attempt < max_retries:
-                                    continue
-                                return None, "Scrapfly extraction returned no data"
-
-                            # Get the actual data object from within extracted_data
-                            extracted_data = extracted_data_wrapper.get("data", {})
-
-                            if not extracted_data:
-                                LOG.warning(f"TIER 1: extracted_data.data is empty for {domain}")
-                                if attempt < max_retries:
-                                    continue
-                                return None, "Scrapfly extraction data is empty"
-
-                            # Get article text from extraction
-                            text = extracted_data.get("text", "").strip()
-                            title = extracted_data.get("title", "")
-
-                            if not text or len(text) < 100:
-                                LOG.warning(f"TIER 1: Extraction empty for {domain} (got {len(text)} chars)")
-                                if attempt < max_retries:
-                                    continue
-                                return None, "Scrapfly extraction returned insufficient content"
-
-                            # Minimal cleaning
-                            cleaned_content = clean_scraped_content(text, url, domain)
-
-                            if not cleaned_content or len(cleaned_content) < 100:
-                                LOG.warning(f"TIER 1: Content too short after cleaning for {domain}")
-                                if attempt < max_retries:
-                                    continue
-                                return None, "Content too short after cleaning"
-
-                            # Validation
-                            is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
-                            if not is_valid:
-                                LOG.warning(f"TIER 1: Validation failed for {domain}: {validation_msg}")
-                                if attempt < max_retries:
-                                    continue
-                                return None, f"Validation failed: {validation_msg}"
-
-                            # Success!
-                            scrapfly_stats["successful"] += 1
-                            scrapfly_stats["by_domain"][domain]["successes"] += 1
-                            enhanced_scraping_stats["by_method"]["scrapfly"]["successes"] += 1
-
-                            LOG.info(f"✅ TIER 1 SUCCESS: {domain} -> {len(cleaned_content)} chars (Scrapfly scrape+extract)")
-                            return cleaned_content, None
-
-                        except Exception as e:
-                            LOG.error(f"TIER 1: Error processing response for {domain}: {e}")
-                            if attempt < max_retries:
-                                continue
-                            return None, f"Processing error: {str(e)}"
-
-                    elif response.status == 402:
-                        LOG.error(f"TIER 1: Payment required (quota exceeded) for {domain}")
-                        return None, "Scrapfly quota exceeded"
-
-                    elif response.status == 422:
-                        error_text = await response.text()
-                        LOG.warning(f"TIER 1: 422 invalid parameters for {domain}: {error_text[:500]}")
-                        return None, "Invalid parameters"
-
-                    elif response.status == 429:
-                        LOG.warning(f"TIER 1: Rate limited for {domain}")
-                        if attempt < max_retries:
-                            await asyncio.sleep(5)
-                            continue
-                        return None, "Rate limited"
-
-                    else:
-                        error_text = await response.text()
-                        LOG.warning(f"TIER 1: HTTP {response.status} for {domain}: {error_text[:500]}")
-                        if attempt < max_retries:
-                            continue
-                        return None, f"HTTP {response.status}"
-
-        except Exception as e:
-            LOG.warning(f"TIER 1: Request error for {domain} (attempt {attempt + 1}): {e}")
-            if attempt < max_retries:
-                continue
-            return None, str(e)
-
-    scrapfly_stats["failed"] += 1
-    return None, f"Scrapfly scrape+extract failed after {max_retries + 1} attempts"
-
-
 async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    TIER 2: Scrapfly Web Scraping API WITHOUT extraction + newspaper3k parsing
-    Uses GET /scrape endpoint to fetch HTML, then we parse with newspaper3k.
+    TIER 2: Scrapfly Web Scraping API + newspaper3k parsing
+    Uses GET /scrape endpoint to fetch HTML (bypasses anti-bot), then we parse with newspaper3k.
     Cost: ~$0.0003 per article (1 API credit for basic scrape)
     Success rate: ~85% (Scrapfly handles anti-bot, newspaper3k parses)
+
+    This tier is ONLY called when free scraping fails (anti-bot protection, JavaScript sites, etc.)
     """
     global scrapfly_stats, enhanced_scraping_stats
 
     if "video.media.yql.yahoo.com" in url:
-        LOG.warning(f"TIER 2: Rejecting video URL: {url}")
+        LOG.warning(f"SCRAPFLY: Rejecting video URL: {url}")
         return None, "Video URL not supported"
 
     for attempt in range(max_retries + 1):
@@ -3509,10 +3363,10 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
 
             if attempt > 0:
                 delay = 2 ** attempt
-                LOG.info(f"TIER 2 RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
+                LOG.info(f"SCRAPFLY RETRY {attempt}/{max_retries} for {domain} after {delay}s delay")
                 await asyncio.sleep(delay)
 
-            LOG.info(f"TIER 2 (Scrapfly HTML): Starting for {domain} (attempt {attempt + 1})")
+            LOG.info(f"SCRAPFLY: Attempting {domain} (attempt {attempt + 1})")
 
             # Update usage stats (1 credit = ~$0.0003)
             scrapfly_stats["requests_made"] += 1
@@ -3540,7 +3394,7 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
                             html_content = result.get("result", {}).get("content", "")
 
                             if not html_content or len(html_content) < 500:
-                                LOG.warning(f"TIER 2: Insufficient HTML for {domain} ({len(html_content)} bytes)")
+                                LOG.warning(f"SCRAPFLY: Insufficient HTML for {domain} ({len(html_content)} bytes)")
                                 if attempt < max_retries:
                                     continue
                                 return None, "Insufficient HTML"
@@ -3553,7 +3407,7 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
                             text = article.text.strip()
 
                             if not text or len(text) < 100:
-                                LOG.warning(f"TIER 2: newspaper3k extraction empty for {domain} ({len(text)} chars)")
+                                LOG.warning(f"SCRAPFLY: newspaper3k extraction empty for {domain} ({len(text)} chars)")
                                 if attempt < max_retries:
                                     continue
                                 return None, "Extraction returned insufficient content"
@@ -3562,7 +3416,7 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
                             cleaned_content = clean_scraped_content(text, url, domain)
 
                             if not cleaned_content or len(cleaned_content) < 100:
-                                LOG.warning(f"TIER 2: Content too short after cleaning for {domain}")
+                                LOG.warning(f"SCRAPFLY: Content too short after cleaning for {domain}")
                                 if attempt < max_retries:
                                     continue
                                 return None, "Content too short after cleaning"
@@ -3570,31 +3424,31 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
                             # Validation
                             is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
                             if not is_valid:
-                                LOG.warning(f"TIER 2: Validation failed for {domain}: {validation_msg}")
+                                LOG.warning(f"SCRAPFLY: Validation failed for {domain}: {validation_msg}")
                                 if attempt < max_retries:
                                     continue
                                 return None, f"Validation failed: {validation_msg}"
 
-                            LOG.info(f"✅ TIER 2 SUCCESS: {domain} -> {len(cleaned_content)} chars (Scrapfly HTML + newspaper3k)")
+                            LOG.info(f"✅ SCRAPFLY SUCCESS: {domain} -> {len(cleaned_content)} chars")
                             return cleaned_content, None
 
                         except Exception as e:
-                            LOG.warning(f"TIER 2: Error processing for {domain}: {e}")
+                            LOG.warning(f"SCRAPFLY: Error processing for {domain}: {e}")
                             if attempt < max_retries:
                                 continue
                             return None, str(e)
 
                     elif response.status == 402:
-                        LOG.error(f"TIER 2: Payment required for {domain}")
+                        LOG.error(f"SCRAPFLY: Payment required for {domain}")
                         return None, "Scrapfly quota exceeded"
 
                     elif response.status == 422:
                         error_text = await response.text()
-                        LOG.warning(f"TIER 2: 422 for {domain}: {error_text[:500]}")
+                        LOG.warning(f"SCRAPFLY: 422 for {domain}: {error_text[:500]}")
                         return None, "Invalid parameters"
 
                     elif response.status == 429:
-                        LOG.warning(f"TIER 2: Rate limited for {domain}")
+                        LOG.warning(f"SCRAPFLY: Rate limited for {domain}")
                         if attempt < max_retries:
                             await asyncio.sleep(5)
                             continue
@@ -3602,13 +3456,13 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
 
                     else:
                         error_text = await response.text()
-                        LOG.warning(f"TIER 2: HTTP {response.status} for {domain}: {error_text[:500]}")
+                        LOG.warning(f"SCRAPFLY: HTTP {response.status} for {domain}: {error_text[:500]}")
                         if attempt < max_retries:
                             continue
                         return None, f"HTTP {response.status}"
 
         except Exception as e:
-            LOG.warning(f"TIER 2: Request error for {domain} (attempt {attempt + 1}): {e}")
+            LOG.warning(f"SCRAPFLY: Request error for {domain} (attempt {attempt + 1}): {e}")
             if attempt < max_retries:
                 continue
             return None, str(e)
@@ -3618,13 +3472,13 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
 
 async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    TIER 2: Free scraping fallback
+    TIER 1: Free scraping (FIRST tier - tries this before paid Scrapfly)
     Uses direct HTTP request + newspaper3k parser.
     Cost: $0
     Success rate: ~70% (works for simple sites without anti-bot)
     """
     try:
-        LOG.info(f"TIER 2 (Free): Starting scraping for {domain}")
+        LOG.info(f"FREE SCRAPER: Starting for {domain}")
 
         # Check paywall domains
         if normalize_domain(domain) in PAYWALL_DOMAINS:
@@ -3640,13 +3494,13 @@ async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str
 
             async with session.get(url, headers=headers) as response:
                 if response.status != 200:
-                    LOG.warning(f"TIER 2: HTTP {response.status} for {domain}")
+                    LOG.warning(f"FREE: HTTP {response.status} for {domain}")
                     return None, f"HTTP {response.status}"
 
                 html = await response.text()
 
                 if not html or len(html) < 500:
-                    LOG.warning(f"TIER 2: Insufficient HTML for {domain} ({len(html)} bytes)")
+                    LOG.warning(f"FREE: Insufficient HTML for {domain} ({len(html)} bytes)")
                     return None, "Insufficient HTML"
 
                 # Use newspaper3k to parse
@@ -3657,69 +3511,66 @@ async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str
                 text = article.text.strip()
 
                 if not text or len(text) < 100:
-                    LOG.warning(f"TIER 2: newspaper3k extraction empty for {domain} ({len(text)} chars)")
+                    LOG.warning(f"FREE: newspaper3k extraction empty for {domain} ({len(text)} chars)")
                     return None, "Extraction returned insufficient content"
 
                 # Minimal cleaning
                 cleaned_content = clean_scraped_content(text, url, domain)
 
                 if not cleaned_content or len(cleaned_content) < 100:
-                    LOG.warning(f"TIER 2: Content too short after cleaning for {domain}")
+                    LOG.warning(f"FREE: Content too short after cleaning for {domain}")
                     return None, "Content too short after cleaning"
 
                 # Validation
                 is_valid, validation_msg = validate_scraped_content(cleaned_content, url, domain)
                 if not is_valid:
-                    LOG.warning(f"TIER 2: Validation failed for {domain}: {validation_msg}")
+                    LOG.warning(f"FREE: Validation failed for {domain}: {validation_msg}")
                     return None, f"Validation failed: {validation_msg}"
 
-                LOG.info(f"✅ TIER 2 SUCCESS: {domain} -> {len(cleaned_content)} chars (free)")
+                LOG.info(f"✅ FREE SUCCESS: {domain} -> {len(cleaned_content)} chars")
                 return cleaned_content, None
 
     except Exception as e:
-        LOG.warning(f"TIER 2: Error for {domain}: {e}")
+        LOG.warning(f"FREE: Error for {domain}: {e}")
         return None, str(e)
 
 
 async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2) -> Tuple[Optional[str], Optional[str]]:
     """
-    3-TIER SCRAPING ARCHITECTURE:
+    2-TIER SCRAPING ARCHITECTURE (REVERTED TO OLD STRUCTURE):
 
-    Tier 1: Scrapfly Web Scraping API + Extraction (scrape+extract in one call)
+    Tier 1: Free requests + newspaper3k (handles ~70% of sites, $0 cost)
       ↓ If fails
-    Tier 2: Scrapfly Web Scraping API + newspaper3k (Scrapfly HTML, we parse)
-      ↓ If fails
-    Tier 3: Free requests + newspaper3k (completely free)
+    Tier 2: Scrapfly Web Scraping API + newspaper3k (anti-bot bypass, $0.0003 cost)
+
+    This minimizes Scrapfly API calls and stays well under the 5/min concurrency limit.
 
     Returns: (content, error_message)
     """
-    # Try Tier 1: Scrapfly scrape + extraction
-    content, error1 = await scrape_with_scrapfly_scrape_and_extract(url, domain, max_retries)
+    LOG.info(f"SCRAPFLY: Starting extraction for {domain}")
+
+    # Try Tier 1: Free scraping FIRST
+    content, error1 = await scrape_with_requests_free(url, domain)
 
     if content:
         return content, None
 
-    LOG.warning(f"⚠️ TIER 1 failed for {domain}: {error1}")
-    LOG.info(f"🔄 Falling back to TIER 2 (Scrapfly HTML only) for {domain}")
+    LOG.warning(f"⚠️ TIER 1 (Free) failed for {domain}: {error1}")
+    LOG.info(f"🔄 Falling back to TIER 2 (Scrapfly) for {domain}")
 
-    # Try Tier 2: Scrapfly HTML + newspaper3k
-    content, error2 = await scrape_with_scrapfly_html_only(url, domain, max_retries)
+    # Try Tier 2: Scrapfly (only for tough sites)
+    if SCRAPFLY_API_KEY:
+        content, error2 = await scrape_with_scrapfly_html_only(url, domain, max_retries)
 
-    if content:
-        return content, None
+        if content:
+            return content, None
 
-    LOG.warning(f"⚠️ TIER 2 failed for {domain}: {error2}")
-    LOG.info(f"🔄 Falling back to TIER 3 (free) for {domain}")
-
-    # Try Tier 3: Free scraping
-    content, error3 = await scrape_with_requests_free(url, domain)
-
-    if content:
-        return content, None
-
-    # All tiers failed
-    LOG.error(f"❌ ALL 3 TIERS FAILED for {domain} - T1: {error1}, T2: {error2}, T3: {error3}")
-    return None, f"All methods failed (T1: {error1}, T2: {error2}, T3: {error3})"
+        LOG.warning(f"⚠️ TIER 2 (Scrapfly) failed for {domain}: {error2}")
+        LOG.error(f"❌ ALL TIERS FAILED for {domain} - Free: {error1}, Scrapfly: {error2}")
+        return None, f"All methods failed (Free: {error1}, Scrapfly: {error2})"
+    else:
+        LOG.error(f"❌ Scraping failed for {domain} - Free tier failed and no Scrapfly key configured")
+        return None, f"Free scraping failed: {error1}"
 
 
 def get_random_user_agent():

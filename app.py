@@ -1061,7 +1061,7 @@ def ensure_schema():
                     ticker2 VARCHAR(10) NOT NULL,
                     ticker3 VARCHAR(10) NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
-                    status VARCHAR(50) DEFAULT 'active',
+                    status VARCHAR(50) DEFAULT 'pending',
                     terms_version VARCHAR(10) DEFAULT '1.0',
                     terms_accepted_at TIMESTAMPTZ,
                     privacy_version VARCHAR(10) DEFAULT '1.0',
@@ -1103,6 +1103,30 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_email ON unsubscribe_tokens(user_email);
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
+
+                -- Daily Email Queue: Workflow for beta user emails
+                CREATE TABLE IF NOT EXISTS email_queue (
+                    ticker VARCHAR(10) PRIMARY KEY,
+                    company_name VARCHAR(255),
+                    recipients TEXT[],  -- PostgreSQL array of email addresses
+                    email_html TEXT,    -- Contains {{UNSUBSCRIBE_TOKEN}} placeholder
+                    email_subject VARCHAR(500),
+                    article_count INTEGER,
+                    status VARCHAR(50) NOT NULL DEFAULT 'queued',
+                    error_message TEXT,
+                    is_production BOOLEAN DEFAULT TRUE,
+                    heartbeat TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    sent_at TIMESTAMPTZ,
+                    CONSTRAINT valid_status CHECK (status IN ('queued', 'processing', 'ready', 'failed', 'sent', 'cancelled'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_email_queue_status ON email_queue(status);
+                CREATE INDEX IF NOT EXISTS idx_email_queue_sent_at ON email_queue(sent_at);
+                CREATE INDEX IF NOT EXISTS idx_email_queue_created_at ON email_queue(created_at);
+                CREATE INDEX IF NOT EXISTS idx_email_queue_is_production ON email_queue(is_production);
+                CREATE INDEX IF NOT EXISTS idx_email_queue_heartbeat ON email_queue(heartbeat) WHERE status = 'processing';
             """)
 
     LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS")
@@ -13557,6 +13581,42 @@ def timeout_watchdog_loop():
     LOG.info("⏰ Timeout watchdog stopped")
 
 # Start workers on app startup
+def email_queue_watchdog_loop():
+    """
+    Email queue watchdog - monitors for stalled jobs.
+    Runs every 60 seconds and marks jobs with stale heartbeat as failed.
+    """
+    LOG.info("🐕 Email queue watchdog started (checks every 60s, kills after 5min stale heartbeat)")
+
+    while True:
+        try:
+            time.sleep(60)  # Check every minute
+
+            with db() as conn, conn.cursor() as cur:
+                # Find jobs with stale heartbeat (no update in 5 minutes)
+                cur.execute("""
+                    UPDATE email_queue
+                    SET status = 'failed',
+                        error_message = 'Processing stalled (no heartbeat for 5 minutes)',
+                        updated_at = NOW()
+                    WHERE status = 'processing'
+                    AND (heartbeat IS NULL OR heartbeat < NOW() - INTERVAL '5 minutes')
+                    RETURNING ticker
+                """)
+
+                stalled = cur.fetchall()
+
+                if stalled:
+                    conn.commit()
+                    LOG.warning(f"⚠️ Email queue watchdog killed {len(stalled)} stalled jobs:")
+                    for row in stalled:
+                        LOG.info(f"   → {row['ticker']}")
+
+        except Exception as e:
+            LOG.error(f"❌ Email queue watchdog error: {e}")
+            # Continue running despite errors
+
+
 @APP.on_event("startup")
 async def startup_event():
     """Initialize job queue system on startup"""
@@ -13646,7 +13706,48 @@ async def startup_event():
         LOG.error(f"❌ Failed to reclaim orphaned jobs: {e}")
         LOG.error(f"   Stacktrace: {traceback.format_exc()}")
 
+    # Email Queue Recovery: Mark stuck processing jobs as failed
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, heartbeat
+                FROM email_queue
+                WHERE status = 'processing'
+            """)
+            stuck_emails = cur.fetchall()
+
+            if stuck_emails:
+                LOG.warning(f"⚠️ Found {len(stuck_emails)} email queue jobs in 'processing' state")
+
+                # Mark as failed (server restarted during processing)
+                cur.execute("""
+                    UPDATE email_queue
+                    SET status = 'failed',
+                        error_message = 'Server restarted during processing',
+                        updated_at = NOW()
+                    WHERE status = 'processing'
+                    RETURNING ticker
+                """)
+
+                failed = cur.fetchall()
+                if failed:
+                    LOG.warning(f"🔄 Marked {len(failed)} email queue jobs as failed:")
+                    for row in failed:
+                        LOG.info(f"   → {row['ticker']}")
+
+                conn.commit()
+            else:
+                LOG.info("✅ No stuck email queue jobs found - clean startup")
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to recover email queue: {e}")
+        LOG.error(f"   Stacktrace: {traceback.format_exc()}")
+
     start_job_worker()
+
+    # Start email queue watchdog in separate thread
+    email_watchdog_thread = threading.Thread(target=email_queue_watchdog_loop, daemon=True, name="EmailQueueWatchdog")
+    email_watchdog_thread.start()
 
     # Start timeout watchdog in separate thread
     timeout_thread = threading.Thread(target=timeout_watchdog_loop, daemon=True, name="TimeoutWatchdog")
@@ -17099,6 +17200,1161 @@ async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
         }
 
 # ------------------------------------------------------------------------------
+# ADMIN DASHBOARD ENDPOINTS
+# ------------------------------------------------------------------------------
+
+def check_admin_token(token: str) -> bool:
+    """Validate admin token from query param or header"""
+    admin_token = os.getenv('ADMIN_TOKEN')
+    return token == admin_token if admin_token else False
+
+@APP.get("/admin")
+def admin_dashboard(request: Request, token: str = Query(...)):
+    """Admin dashboard landing page"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin.html", {
+        "request": request,
+        "token": token
+    })
+
+@APP.get("/admin/users")
+def admin_users_page(request: Request, token: str = Query(...)):
+    """Beta user management page"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_users.html", {
+        "request": request,
+        "token": token
+    })
+
+@APP.get("/admin/queue")
+def admin_queue_page(request: Request, token: str = Query(...)):
+    """Email queue management page"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_queue.html", {
+        "request": request,
+        "token": token
+    })
+
+# Admin API endpoints
+@APP.get("/api/admin/stats")
+def get_admin_stats(token: str = Query(...)):
+    """Get dashboard stats"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Count pending users
+            cur.execute("SELECT COUNT(*) as count FROM beta_users WHERE status = 'pending'")
+            pending_users = cur.fetchone()['count']
+
+            # Count active users
+            cur.execute("SELECT COUNT(*) as count FROM beta_users WHERE status = 'active'")
+            active_users = cur.fetchone()['count']
+
+            # Count ready emails
+            cur.execute("SELECT COUNT(*) as count FROM email_queue WHERE status = 'ready' AND sent_at IS NULL")
+            ready_emails = cur.fetchone()['count']
+
+            # Count sent today
+            cur.execute("SELECT COUNT(*) as count FROM email_queue WHERE status = 'sent' AND sent_at >= CURRENT_DATE")
+            sent_today = cur.fetchone()['count']
+
+            return {
+                "status": "success",
+                "pending_users": pending_users,
+                "active_users": active_users,
+                "ready_emails": ready_emails,
+                "sent_today": sent_today
+            }
+    except Exception as e:
+        LOG.error(f"Failed to get admin stats: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/admin/users")
+def get_all_users(token: str = Query(...)):
+    """Get all beta users"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, email, ticker1, ticker2, ticker3, status,
+                       created_at, terms_accepted_at, privacy_accepted_at
+                FROM beta_users
+                ORDER BY
+                    CASE status
+                        WHEN 'pending' THEN 1
+                        WHEN 'active' THEN 2
+                        WHEN 'paused' THEN 3
+                        WHEN 'cancelled' THEN 4
+                    END,
+                    created_at DESC
+            """)
+            users = cur.fetchall()
+
+            return {
+                "status": "success",
+                "users": users
+            }
+    except Exception as e:
+        LOG.error(f"Failed to get users: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/approve-user")
+async def approve_user(request: Request):
+    """Approve a pending user"""
+    body = await request.json()
+    token = body.get('token')
+    email = body.get('email')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE beta_users
+                SET status = 'active'
+                WHERE email = %s
+            """, (email,))
+            conn.commit()
+
+            LOG.info(f"✅ Approved user: {email}")
+            return {"status": "success", "message": f"Approved {email}"}
+    except Exception as e:
+        LOG.error(f"Failed to approve user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/reject-user")
+async def reject_user(request: Request):
+    """Reject a pending user"""
+    body = await request.json()
+    token = body.get('token')
+    email = body.get('email')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE beta_users
+                SET status = 'cancelled'
+                WHERE email = %s
+            """, (email,))
+            conn.commit()
+
+            LOG.info(f"❌ Rejected user: {email}")
+            return {"status": "success", "message": f"Rejected {email}"}
+    except Exception as e:
+        LOG.error(f"Failed to reject user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/pause-user")
+async def pause_user(request: Request):
+    """Pause an active user"""
+    body = await request.json()
+    token = body.get('token')
+    email = body.get('email')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE beta_users
+                SET status = 'paused'
+                WHERE email = %s
+            """, (email,))
+            conn.commit()
+
+            LOG.info(f"⏸️ Paused user: {email}")
+            return {"status": "success", "message": f"Paused {email}"}
+    except Exception as e:
+        LOG.error(f"Failed to pause user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/cancel-user")
+async def cancel_user(request: Request):
+    """Cancel a user (same as unsubscribe)"""
+    body = await request.json()
+    token = body.get('token')
+    email = body.get('email')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE beta_users
+                SET status = 'cancelled'
+                WHERE email = %s
+            """, (email,))
+            conn.commit()
+
+            LOG.info(f"🗑️ Cancelled user: {email}")
+            return {"status": "success", "message": f"Cancelled {email}"}
+    except Exception as e:
+        LOG.error(f"Failed to cancel user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/reactivate-user")
+async def reactivate_user(request: Request):
+    """Reactivate a paused or cancelled user"""
+    body = await request.json()
+    token = body.get('token')
+    email = body.get('email')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE beta_users
+                SET status = 'active'
+                WHERE email = %s
+            """, (email,))
+            conn.commit()
+
+            LOG.info(f"▶️ Reactivated user: {email}")
+            return {"status": "success", "message": f"Reactivated {email}"}
+    except Exception as e:
+        LOG.error(f"Failed to reactivate user: {e}")
+        return {"status": "error", "message": str(e)}
+
+# Email Queue API endpoints
+@APP.get("/api/queue-status")
+def get_queue_status(token: str = Query(...)):
+    """Get email queue status"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get stats
+            cur.execute("""
+                SELECT status, COUNT(*) as count
+                FROM email_queue
+                GROUP BY status
+            """)
+            stats_rows = cur.fetchall()
+            stats = {row['status']: row['count'] for row in stats_rows}
+
+            # Get all tickers
+            cur.execute("""
+                SELECT ticker, company_name, recipients, email_subject,
+                       article_count, status, error_message, heartbeat,
+                       created_at, updated_at, sent_at
+                FROM email_queue
+                ORDER BY
+                    CASE status
+                        WHEN 'processing' THEN 1
+                        WHEN 'ready' THEN 2
+                        WHEN 'failed' THEN 3
+                        WHEN 'sent' THEN 4
+                        WHEN 'cancelled' THEN 5
+                    END,
+                    ticker
+            """)
+            tickers = cur.fetchall()
+
+            return {
+                "status": "success",
+                "stats": {
+                    "ready": stats.get('ready', 0),
+                    "failed": stats.get('failed', 0),
+                    "processing": stats.get('processing', 0),
+                    "sent": stats.get('sent', 0),
+                    "cancelled": stats.get('cancelled', 0)
+                },
+                "tickers": tickers
+            }
+    except Exception as e:
+        LOG.error(f"Failed to get queue status: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/send-all-ready")
+async def send_all_ready_api(request: Request):
+    """Send all ready emails"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    result = send_all_ready_emails_impl()
+    return result
+
+@APP.post("/api/rerun-ticker")
+async def rerun_ticker_api(request: Request):
+    """Rerun single ticker - to be implemented"""
+    body = await request.json()
+    token = body.get('token')
+    ticker = body.get('ticker')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    # TODO: Implement rerun logic
+    return {"status": "success", "ticker": ticker, "message": "Not yet implemented"}
+
+@APP.post("/api/rerun-all-failed")
+async def rerun_all_failed_api(request: Request):
+    """Rerun all failed tickers - to be implemented"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    # TODO: Implement rerun all failed logic
+    return {"status": "success", "ticker_count": 0, "message": "Not yet implemented"}
+
+@APP.post("/api/rerun-all-tickers")
+async def rerun_all_tickers_api(request: Request):
+    """Rerun all tickers - to be implemented"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    # TODO: Implement rerun all logic
+    return {"status": "success", "ticker_count": 0, "message": "Not yet implemented"}
+
+@APP.post("/api/approve-all-cancelled")
+async def approve_all_cancelled_api(request: Request):
+    """Approve all cancelled emails"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE email_queue
+                SET status = 'ready', updated_at = NOW()
+                WHERE status = 'cancelled'
+            """)
+            approved_count = cur.rowcount
+            conn.commit()
+
+            LOG.info(f"✅ Approved {approved_count} cancelled emails")
+            return {
+                "status": "success",
+                "approved_count": approved_count,
+                "message": f"Approved {approved_count} emails"
+            }
+    except Exception as e:
+        LOG.error(f"Failed to approve cancelled emails: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/emergency-stop")
+async def emergency_stop_api(request: Request):
+    """Emergency stop - cancel all pending sends"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE email_queue
+                SET status = 'cancelled', updated_at = NOW()
+                WHERE status IN ('ready', 'processing')
+            """)
+            cancelled_count = cur.rowcount
+            conn.commit()
+
+            LOG.warning(f"🛑 EMERGENCY STOP: Cancelled {cancelled_count} emails")
+            return {
+                "status": "success",
+                "cancelled_count": cancelled_count,
+                "message": f"Emergency stop: {cancelled_count} emails cancelled"
+            }
+    except Exception as e:
+        LOG.error(f"Emergency stop failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cancel-ticker")
+async def cancel_ticker_api(request: Request):
+    """Cancel individual ticker"""
+    body = await request.json()
+    token = body.get('token')
+    ticker = body.get('ticker')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE email_queue
+                SET status = 'cancelled', updated_at = NOW()
+                WHERE ticker = %s AND status = 'ready'
+            """, (ticker,))
+            conn.commit()
+
+            LOG.info(f"❌ Cancelled ticker: {ticker}")
+            return {"status": "success", "ticker": ticker, "message": f"Cancelled {ticker}"}
+    except Exception as e:
+        LOG.error(f"Failed to cancel ticker: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/view-email/{ticker}")
+def view_email_api(ticker: str, token: str = Query(...)):
+    """View email HTML preview"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT email_html
+                FROM email_queue
+                WHERE ticker = %s
+            """, (ticker,))
+            row = cur.fetchone()
+
+            if not row or not row['email_html']:
+                return HTMLResponse("Email not found", status_code=404)
+
+            return HTMLResponse(row['email_html'])
+    except Exception as e:
+        LOG.error(f"Failed to view email: {e}")
+        return HTMLResponse(f"Error: {str(e)}", status_code=500)
+
+# ------------------------------------------------------------------------------
+# DAILY WORKFLOW PROCESSING FUNCTIONS
+# ------------------------------------------------------------------------------
+
+def load_active_beta_users() -> Dict[str, List[str]]:
+    """
+    Load active beta users and deduplicate tickers.
+    Returns: {ticker: [list of recipient emails]}
+    """
+    LOG.info("Loading active beta users...")
+
+    ticker_recipients = {}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, email, ticker1, ticker2, ticker3
+                FROM beta_users
+                WHERE status = 'active'
+                ORDER BY created_at
+            """)
+            users = cur.fetchall()
+
+            LOG.info(f"Found {len(users)} active beta users")
+
+            for user in users:
+                email = user['email']
+                tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
+
+                for ticker in tickers:
+                    if ticker:
+                        ticker = ticker.upper().strip()
+                        if ticker not in ticker_recipients:
+                            ticker_recipients[ticker] = []
+
+                        # Deduplicate emails
+                        if email not in ticker_recipients[ticker]:
+                            ticker_recipients[ticker].append(email)
+
+            LOG.info(f"Dedup complete: {len(ticker_recipients)} unique tickers")
+            for ticker, emails in ticker_recipients.items():
+                LOG.info(f"  {ticker}: {len(emails)} recipients")
+
+            return ticker_recipients
+
+    except Exception as e:
+        LOG.error(f"Failed to load beta users: {e}")
+        return {}
+
+
+def generate_email_html_for_queue(ticker: str, recipient_email: str = None) -> Dict:
+    """
+    Generate Email #3 HTML with {{UNSUBSCRIBE_TOKEN}} placeholder.
+    Similar to send_user_intelligence_report but returns HTML instead of sending.
+    """
+    LOG.info(f"Generating email HTML for {ticker}")
+
+    # Fetch ticker config
+    config = get_ticker_config(ticker)
+    if not config:
+        return {"status": "error", "message": f"No config found for {ticker}"}
+
+    company_name = config.get("company_name", ticker)
+
+    # Fetch executive summary
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT summary_text FROM executive_summaries
+            WHERE ticker = %s AND summary_date = CURRENT_DATE
+            ORDER BY generated_at DESC LIMIT 1
+        """, (ticker,))
+        result = cur.fetchone()
+
+        if not result:
+            LOG.warning(f"No executive summary found for {ticker}")
+            return {"status": "error", "message": f"No executive summary for {ticker}"}
+
+        summary_text = result['summary_text']
+
+    # Get flagged article IDs
+    flagged_article_ids = []
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT a.id
+            FROM articles a
+            JOIN ticker_articles ta ON a.id = ta.article_id
+            WHERE ta.ticker = %s
+            AND ta.relevance_score >= 7
+            AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+            AND a.published_at >= CURRENT_DATE - INTERVAL '24 hours'
+        """, (ticker,))
+        flagged_article_ids = [row['id'] for row in cur.fetchall()]
+
+    # Use placeholder email for token
+    placeholder_email = "PLACEHOLDER@stockdigest.app"
+
+    # Generate HTML using existing function but intercept before sending
+    # We'll temporarily modify send_email to capture HTML
+    original_send_email = globals()['send_email']
+    captured_html = None
+    captured_subject = None
+
+    def capture_email(subject, html, to=None, bcc=None):
+        nonlocal captured_html, captured_subject
+        captured_html = html
+        captured_subject = subject
+        return True  # Pretend it sent
+
+    # Temporarily replace send_email
+    globals()['send_email'] = capture_email
+
+    try:
+        # Call the email generation function
+        result = send_user_intelligence_report(
+            hours=24,
+            tickers=[ticker],
+            flagged_article_ids=flagged_article_ids if flagged_article_ids else None,
+            recipient_email=placeholder_email
+        )
+
+        # Replace the generated token with placeholder
+        if captured_html:
+            # Find and replace any actual token with placeholder
+            import re
+            # Replace unsubscribe URLs with placeholder
+            captured_html = re.sub(
+                r'unsubscribe\?token=[a-zA-Z0-9_-]+',
+                'unsubscribe?token={{UNSUBSCRIBE_TOKEN}}',
+                captured_html
+            )
+
+        return {
+            "status": "success",
+            "html": captured_html,
+            "subject": captured_subject,
+            "company_name": company_name,
+            "article_count": result.get('articles_analyzed', 0)
+        }
+
+    finally:
+        # Restore original send_email
+        globals()['send_email'] = original_send_email
+
+
+async def process_ticker_for_daily_workflow(ticker: str, recipients: List[str]) -> Dict:
+    """
+    Process single ticker for daily workflow.
+    Runs ingest + digest phases, generates Email #3, saves to queue.
+    """
+    LOG.info(f"[{ticker}] 🚀 Starting daily workflow processing")
+
+    start_time = time.time()
+
+    try:
+        # Update email_queue status to 'processing'
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO email_queue (ticker, recipients, status, created_at, updated_at, heartbeat)
+                VALUES (%s, %s, 'processing', NOW(), NOW(), NOW())
+                ON CONFLICT (ticker) DO UPDATE
+                SET status = 'processing',
+                    updated_at = NOW(),
+                    heartbeat = NOW(),
+                    error_message = NULL
+            """, (ticker, recipients))
+            conn.commit()
+
+        # Phase 1: Ingest (0-60%)
+        LOG.info(f"[{ticker}] 📥 Phase 1: Ingest")
+
+        # Initialize feeds
+        metadata = ticker_manager.get_or_create_metadata(ticker)
+        create_feeds_for_ticker_new_architecture(ticker, metadata)
+
+        # Run ingest (this sends Email #1)
+        ingest_result = await asyncio.to_thread(
+            cron_ingest,
+            None,  # request
+            1440,  # minutes (24 hours)
+            [ticker]  # tickers
+        )
+
+        if ingest_result.get('status') == 'error':
+            raise Exception(f"Ingest failed: {ingest_result.get('message')}")
+
+        # Update heartbeat
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE email_queue
+                SET heartbeat = NOW()
+                WHERE ticker = %s
+            """, (ticker,))
+            conn.commit()
+
+        # Phase 2: Digest (60-95%)
+        LOG.info(f"[{ticker}] 📝 Phase 2: Digest")
+
+        # Run digest (this sends Email #2 and generates executive summary)
+        digest_result = await asyncio.to_thread(
+            cron_digest,
+            None,  # request
+            1440,  # minutes
+            [ticker]  # tickers
+        )
+
+        if digest_result.get('status') == 'error':
+            raise Exception(f"Digest failed: {digest_result.get('message')}")
+
+        # Update heartbeat
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE email_queue
+                SET heartbeat = NOW()
+                WHERE ticker = %s
+            """, (ticker,))
+            conn.commit()
+
+        # Phase 3: Generate Email #3 HTML (95-97%)
+        LOG.info(f"[{ticker}] 📧 Phase 3: Generate Email #3 HTML")
+
+        email_result = await asyncio.to_thread(
+            generate_email_html_for_queue,
+            ticker,
+            recipients[0] if recipients else None
+        )
+
+        if email_result.get('status') == 'error':
+            raise Exception(f"Email generation failed: {email_result.get('message')}")
+
+        # Save to queue with 'ready' status
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE email_queue
+                SET company_name = %s,
+                    email_html = %s,
+                    email_subject = %s,
+                    article_count = %s,
+                    status = 'ready',
+                    updated_at = NOW(),
+                    heartbeat = NOW()
+                WHERE ticker = %s
+            """, (
+                email_result['company_name'],
+                email_result['html'],
+                email_result['subject'],
+                email_result['article_count'],
+                ticker
+            ))
+            conn.commit()
+
+        # Send preview to admin
+        admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+        preview_subject = email_result['subject']  # No [PREVIEW] prefix
+
+        send_email(preview_subject, email_result['html'], to=admin_email)
+        LOG.info(f"[{ticker}] 📬 Preview sent to {admin_email}")
+
+        duration = time.time() - start_time
+        LOG.info(f"[{ticker}] ✅ Daily workflow complete ({duration:.1f}s)")
+
+        return {
+            "status": "success",
+            "ticker": ticker,
+            "duration": duration
+        }
+
+    except Exception as e:
+        duration = time.time() - start_time
+        error_msg = str(e)
+
+        LOG.error(f"[{ticker}] ❌ Daily workflow failed: {error_msg}")
+        LOG.error(f"[{ticker}] Traceback: {traceback.format_exc()}")
+
+        # Mark as failed in queue
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE email_queue
+                SET status = 'failed',
+                    error_message = %s,
+                    updated_at = NOW()
+                WHERE ticker = %s
+            """, (error_msg, ticker))
+            conn.commit()
+
+        return {
+            "status": "failed",
+            "ticker": ticker,
+            "error": error_msg,
+            "duration": duration
+        }
+
+
+async def process_all_tickers_daily(ticker_recipients: Dict[str, List[str]]) -> Dict:
+    """
+    Process all tickers concurrently (3 at a time).
+    """
+    LOG.info(f"Processing {len(ticker_recipients)} tickers (max 3 concurrent)")
+
+    semaphore = asyncio.Semaphore(3)  # Max 3 concurrent
+
+    async def process_with_semaphore(ticker, recipients):
+        async with semaphore:
+            # Add timeout of 10 minutes per ticker
+            try:
+                return await asyncio.wait_for(
+                    process_ticker_for_daily_workflow(ticker, recipients),
+                    timeout=600  # 10 minutes
+                )
+            except asyncio.TimeoutError:
+                LOG.error(f"[{ticker}] ⏱️ Timeout after 10 minutes")
+
+                # Mark as failed
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE email_queue
+                        SET status = 'failed',
+                            error_message = 'Processing timeout (10 minutes)',
+                            updated_at = NOW()
+                        WHERE ticker = %s
+                    """, (ticker,))
+                    conn.commit()
+
+                return {
+                    "status": "failed",
+                    "ticker": ticker,
+                    "error": "timeout"
+                }
+
+    # Create tasks for all tickers
+    tasks = [
+        process_with_semaphore(ticker, recipients)
+        for ticker, recipients in ticker_recipients.items()
+    ]
+
+    # Run all tasks
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Count successes and failures
+    successes = sum(1 for r in results if isinstance(r, dict) and r.get('status') == 'success')
+    failures = sum(1 for r in results if isinstance(r, dict) and r.get('status') == 'failed')
+
+    LOG.info(f"✅ Processing complete: {successes} succeeded, {failures} failed")
+
+    return {
+        "status": "success",
+        "total": len(ticker_recipients),
+        "succeeded": successes,
+        "failed": failures,
+        "results": results
+    }
+
+
+def send_admin_notification(results: Dict):
+    """Send admin notification after processing completes"""
+    LOG.info("Sending admin notification...")
+
+    total = results['total']
+    succeeded = results['succeeded']
+    failed = results['failed']
+
+    # Get failed tickers
+    failed_tickers = []
+    for r in results['results']:
+        if isinstance(r, dict) and r.get('status') == 'failed':
+            failed_tickers.append({
+                'ticker': r.get('ticker'),
+                'error': r.get('error', 'unknown')
+            })
+
+    failed_list_html = ""
+    if failed_tickers:
+        for ft in failed_tickers:
+            failed_list_html += f"<li>{ft['ticker']} - {ft['error']}</li>"
+        failed_list_html = f"<ul>{failed_list_html}</ul>"
+    else:
+        failed_list_html = "<p>None</p>"
+
+    admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+    admin_token = os.getenv('ADMIN_TOKEN', '')
+    dashboard_url = f"https://stockdigest.app/admin/queue?token={admin_token}"
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; padding: 20px; border-radius: 8px; }}
+            .stat {{ display: inline-block; margin: 10px 20px 10px 0; }}
+            .stat-value {{ font-size: 32px; font-weight: bold; }}
+            .stat-label {{ font-size: 12px; opacity: 0.8; }}
+            .success {{ color: #10b981; }}
+            .danger {{ color: #ef4444; }}
+            .btn {{ display: inline-block; background: #1e40af; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Queue Ready - {datetime.now().strftime('%B %d, %Y')}</h1>
+                <p>Processing completed at {datetime.now().strftime('%I:%M %p')} ET</p>
+            </div>
+
+            <div style="margin: 20px 0;">
+                <div class="stat">
+                    <div class="stat-value success">✅ {succeeded}</div>
+                    <div class="stat-label">Ready</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value danger">❌ {failed}</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+            </div>
+
+            <a href="{dashboard_url}" class="btn">Review Dashboard →</a>
+
+            <p style="margin-top: 20px; color: #6b7280; font-size: 14px;">
+                Auto-send scheduled: 8:30 AM
+            </p>
+
+            <h3>Failed Tickers</h3>
+            {failed_list_html}
+        </div>
+    </body>
+    </html>
+    """
+
+    subject = f"[ADMIN] Queue Ready - {datetime.now().strftime('%B %d, %Y')}"
+    send_email(subject, html, to=admin_email)
+    LOG.info(f"Admin notification sent to {admin_email}")
+
+
+def send_email_with_dry_run(subject: str, html: str, to, bcc=None) -> bool:
+    """
+    Email sending wrapper with DRY_RUN mode support.
+    In DRY_RUN mode, all emails redirect to admin.
+    """
+    dry_run = os.getenv('DRY_RUN', 'false').lower() == 'true'
+    admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+
+    if dry_run:
+        LOG.warning(f"🧪 DRY_RUN: Redirecting email to {admin_email}")
+        LOG.warning(f"   Original TO: {to}")
+        LOG.warning(f"   Original BCC: {bcc}")
+
+        # Override recipients
+        actual_to = admin_email
+        actual_bcc = None
+        subject = f"[DRY RUN] {subject}"
+    else:
+        actual_to = to
+        actual_bcc = bcc
+
+    return send_email(subject, html, to=actual_to, bcc=actual_bcc)
+
+
+def send_all_ready_emails_impl() -> Dict:
+    """
+    Send all emails with status='ready' that haven't been sent yet.
+    Replaces {{UNSUBSCRIBE_TOKEN}} placeholder with unique token per recipient.
+    """
+    LOG.info("=== SENDING ALL READY EMAILS ===")
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get all ready emails not yet sent
+            cur.execute("""
+                SELECT ticker, company_name, recipients, email_html, email_subject, article_count
+                FROM email_queue
+                WHERE status = 'ready'
+                AND sent_at IS NULL
+                AND is_production = TRUE
+                AND created_at >= CURRENT_DATE
+                ORDER BY ticker
+            """)
+
+            emails = cur.fetchall()
+
+            if not emails:
+                LOG.info("No emails to send")
+                return {
+                    'status': 'success',
+                    'sent_count': 0,
+                    'message': 'No emails ready to send'
+                }
+
+            sent_count = 0
+            failed_tickers = []
+            admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+
+            for email in emails:
+                ticker = email['ticker']
+                recipients = email['recipients']
+
+                try:
+                    # Send to each recipient with unique unsubscribe token
+                    for recipient in recipients:
+                        # Generate unique unsubscribe token for this recipient
+                        token = get_or_create_unsubscribe_token(recipient)
+
+                        # Replace placeholder with real token
+                        final_html = email['email_html'].replace(
+                            '{{UNSUBSCRIBE_TOKEN}}',
+                            token if token else ''
+                        )
+
+                        # Send email
+                        success = send_email_with_dry_run(
+                            subject=email['email_subject'],
+                            html=final_html,
+                            to=recipient,
+                            bcc=admin_email
+                        )
+
+                        if not success:
+                            raise Exception(f"Failed to send to {recipient}")
+
+                        LOG.info(f"✅ Sent {ticker} to {recipient}")
+
+                    # Mark as sent
+                    cur.execute("""
+                        UPDATE email_queue
+                        SET status = 'sent', sent_at = NOW()
+                        WHERE ticker = %s
+                    """, (ticker,))
+                    conn.commit()
+
+                    sent_count += 1
+                    LOG.info(f"✅ {ticker} sent to {len(recipients)} recipients")
+
+                except Exception as e:
+                    failed_tickers.append(ticker)
+                    LOG.error(f"❌ Failed to send {ticker}: {e}")
+
+            LOG.info(f"Send complete: {sent_count} sent, {len(failed_tickers)} failed")
+
+            return {
+                'status': 'success',
+                'sent_count': sent_count,
+                'failed_count': len(failed_tickers),
+                'failed_tickers': failed_tickers
+            }
+
+    except Exception as e:
+        LOG.error(f"Send all ready emails failed: {e}")
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+
+# ------------------------------------------------------------------------------
+# CRON JOB HELPER FUNCTIONS
+# ------------------------------------------------------------------------------
+
+def cleanup_old_queue_entries():
+    """
+    6:00 AM: Delete old email queue entries (safety measure).
+    Prevents stale test emails from being sent.
+    """
+    LOG.info("🧹 Cleaning up old queue entries...")
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM email_queue
+                WHERE created_at < CURRENT_DATE
+                OR (is_production = FALSE AND created_at < NOW() - INTERVAL '1 day')
+            """)
+            deleted = cur.rowcount
+            conn.commit()
+
+        LOG.info(f"✅ Cleanup complete: {deleted} old entries deleted")
+
+    except Exception as e:
+        LOG.error(f"❌ Cleanup failed: {e}")
+        raise
+
+
+def process_daily_workflow():
+    """
+    7:00 AM: Process all active beta users.
+    Generates emails and queues for 8:30 AM send.
+    """
+    LOG.info("="*80)
+    LOG.info("=== DAILY WORKFLOW START ===")
+    LOG.info("="*80)
+
+    try:
+        # Load beta users
+        ticker_recipients = load_active_beta_users()
+
+        if not ticker_recipients:
+            LOG.warning("No active beta users found")
+            return
+
+        # Process all tickers
+        results = asyncio.run(process_all_tickers_daily(ticker_recipients))
+
+        # Send admin notification
+        send_admin_notification(results)
+
+        LOG.info("✅ Daily workflow complete")
+
+    except Exception as e:
+        LOG.error(f"❌ Daily workflow failed: {e}")
+        LOG.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+
+def auto_send_cron_job():
+    """
+    8:30 AM: Auto-send all ready emails to users.
+    Only runs if admin hasn't manually sent already.
+    """
+    LOG.info("="*80)
+    LOG.info("=== 8:30 AM AUTO-SEND ===")
+    LOG.info("="*80)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Check if there are any ready emails not yet sent
+            cur.execute("""
+                SELECT COUNT(*) as count
+                FROM email_queue
+                WHERE status = 'ready'
+                AND sent_at IS NULL
+                AND is_production = TRUE
+                AND created_at >= CURRENT_DATE
+            """)
+
+            count = cur.fetchone()['count']
+
+            if count == 0:
+                LOG.info("No emails to send (admin may have sent manually)")
+                return
+
+            LOG.info(f"Auto-sending {count} ready emails")
+
+            # Use same function as manual send
+            result = send_all_ready_emails_impl()
+
+            # Generate stats report
+            # generate_stats_report()  # TODO: Implement stats report
+
+            LOG.info(f"✅ Auto-send complete: {result['sent_count']} sent")
+
+    except Exception as e:
+        LOG.error(f"❌ Auto-send failed: {e}")
+        raise
+
+
+def export_beta_users_csv():
+    """
+    11:59 PM: Export beta users to CSV for backup.
+    Optionally commit to GitHub.
+    """
+    LOG.info("📄 Exporting beta users to CSV...")
+
+    try:
+        import csv
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime('%Y%m%d')
+        filename = f'beta_users_{timestamp}.csv'
+
+        # Create backups directory if needed
+        os.makedirs('/tmp/backups', exist_ok=True)
+        filepath = f'/tmp/backups/{filename}'
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, email, ticker1, ticker2, ticker3, status,
+                       created_at, terms_accepted_at, privacy_accepted_at
+                FROM beta_users
+                ORDER BY created_at DESC
+            """)
+
+            rows = cur.fetchall()
+
+        # Write CSV
+        with open(filepath, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'name', 'email', 'ticker1', 'ticker2', 'ticker3',
+                'status', 'created_at', 'terms_accepted_at', 'privacy_accepted_at'
+            ])
+
+            for row in rows:
+                writer.writerow([
+                    row['name'],
+                    row['email'],
+                    row['ticker1'],
+                    row['ticker2'],
+                    row['ticker3'],
+                    row['status'],
+                    row['created_at'],
+                    row['terms_accepted_at'],
+                    row['privacy_accepted_at']
+                ])
+
+        LOG.info(f"✅ CSV export complete: {len(rows)} users → {filepath}")
+
+        # TODO: Optionally commit to GitHub
+        # github_commit_csv(filepath, filename)
+
+        return filepath
+
+    except Exception as e:
+        LOG.error(f"❌ CSV export failed: {e}")
+        raise
+
+
+# ------------------------------------------------------------------------------
 # CLI Support for PowerShell Commands
 # ------------------------------------------------------------------------------
 @APP.post("/cli/run")
@@ -17130,6 +18386,26 @@ def cli_run(request: Request, body: CLIRequest):
 # Main
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "10000"))
-    uvicorn.run(APP, host="0.0.0.0", port=port)
+    import sys
+
+    # Check if we're running a cron function
+    if len(sys.argv) > 1:
+        func_name = sys.argv[1]
+
+        if func_name == "cleanup":
+            cleanup_old_queue_entries()
+        elif func_name == "process":
+            process_daily_workflow()
+        elif func_name == "send":
+            auto_send_cron_job()
+        elif func_name == "export":
+            export_beta_users_csv()
+        else:
+            print(f"Unknown function: {func_name}")
+            print("Available functions: cleanup, process, send, export")
+            sys.exit(1)
+    else:
+        # Normal server startup
+        import uvicorn
+        port = int(os.getenv("PORT", "10000"))
+        uvicorn.run(APP, host="0.0.0.0", port=port)

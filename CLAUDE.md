@@ -41,6 +41,40 @@ uvicorn app:APP --reload --host 0.0.0.0 --port 8000
 
 The new job queue system decouples long-running processing from HTTP requests, eliminating 520 timeout errors. Processing happens server-side with real-time status polling.
 
+### Daily Workflow Automation (NEW - October 2025)
+
+**IMPORTANT:** See **[DAILY_WORKFLOW.md](DAILY_WORKFLOW.md)** for complete documentation.
+
+**Beta User Email System** - Automated daily email delivery to beta users with admin review queue:
+
+```bash
+# Cron job functions (run via: python app.py <function>)
+python app.py cleanup   # 6:00 AM - Delete old queue entries
+python app.py process   # 7:00 AM - Process all active beta users
+python app.py send      # 8:30 AM - Auto-send emails to users
+python app.py export    # 11:59 PM - Backup beta users to CSV
+```
+
+**Key Features:**
+- Reads `beta_users` table (status='active')
+- Deduplicates tickers across users
+- Processes 3 concurrent tickers (ingest→digest→email generation)
+- Queues emails for admin review at `/admin/queue`
+- Auto-sends at 8:30 AM (or manual send anytime)
+- Unique unsubscribe tokens per recipient
+- DRY_RUN mode for safe testing
+
+**Admin Dashboard:**
+- `/admin` - Stats overview and navigation
+- `/admin/users` - Beta user approval interface
+- `/admin/queue` - Email queue management with 5 global action buttons
+
+**Safety Systems:**
+- Startup recovery (marks stuck jobs as failed)
+- Heartbeat monitoring (updates every 30s during processing)
+- Watchdog thread (kills stalled jobs after 5 min)
+- DRY_RUN mode (redirects all emails to admin for testing)
+
 ## Project Architecture
 
 ### Core Application Structure
@@ -72,6 +106,12 @@ The new job queue system decouples long-running processing from HTTP requests, e
   - Security tracking: IP address, user agent, timestamps
   - One token per user, reusable until unsubscribed
   - CASL/CAN-SPAM compliant
+- **Email queue table (`email_queue`)** - NEW (Oct 2025): Daily workflow email queue
+  - Stores Email #3 HTML with {{UNSUBSCRIBE_TOKEN}} placeholder
+  - Recipients array (multiple users per ticker)
+  - Status workflow: processing → ready → sent
+  - Heartbeat monitoring and watchdog protection
+  - See [DAILY_WORKFLOW.md](DAILY_WORKFLOW.md) for details
 
 #### Content Pipeline
 

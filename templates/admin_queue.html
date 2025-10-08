@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Queue - StockDigest Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #ffffff;
+            padding: 24px 32px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .header-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+        }
+
+        .header-nav a {
+            color: rgba(255,255,255,0.9);
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+
+        .header-nav a:hover {
+            color: #ffffff;
+        }
+
+        .countdown {
+            font-size: 14px;
+            background: rgba(255,255,255,0.1);
+            padding: 8px 16px;
+            border-radius: 6px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .stat-value.success { color: #10b981; }
+        .stat-value.danger { color: #ef4444; }
+        .stat-value.warning { color: #f59e0b; }
+        .stat-value.info { color: #1e40af; }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .global-actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 32px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: #ffffff;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn-primary {
+            background: #1e40af;
+            color: #ffffff;
+        }
+
+        .btn-primary:hover {
+            background: #1e3a8a;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: #ffffff;
+        }
+
+        .btn-warning:hover {
+            background: #d97706;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: #ffffff;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .ticker-card {
+            background: #ffffff;
+            padding: 24px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 16px;
+            transition: transform 0.2s;
+        }
+
+        .ticker-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+
+        .ticker-card.ready {
+            border-left: 4px solid #10b981;
+        }
+
+        .ticker-card.failed {
+            border-left: 4px solid #ef4444;
+        }
+
+        .ticker-card.processing {
+            border-left: 4px solid #f59e0b;
+        }
+
+        .ticker-card.sent {
+            border-left: 4px solid #1e40af;
+            opacity: 0.7;
+        }
+
+        .ticker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 16px;
+        }
+
+        .ticker-info h3 {
+            font-size: 20px;
+            color: #111827;
+            margin-bottom: 4px;
+        }
+
+        .ticker-info p {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-ready {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status-processing {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-sent {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .status-cancelled {
+            background: #f3f4f6;
+            color: #4b5563;
+        }
+
+        .ticker-meta {
+            font-size: 14px;
+            color: #6b7280;
+            margin-bottom: 16px;
+        }
+
+        .ticker-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .empty-state {
+            background: #ffffff;
+            padding: 60px 24px;
+            border-radius: 8px;
+            text-align: center;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📧 Email Queue</h1>
+        <div class="header-meta">
+            <div class="header-nav">
+                <a href="/admin?token={{ token }}">← Back to Dashboard</a>
+            </div>
+            <div class="countdown" id="countdown">Auto-send in: --</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value success" id="ready-count">-</div>
+                <div class="stat-label">Ready to Send</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value danger" id="failed-count">-</div>
+                <div class="stat-label">Failed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value warning" id="processing-count">-</div>
+                <div class="stat-label">Processing</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value info" id="sent-count">-</div>
+                <div class="stat-label">Sent</div>
+            </div>
+        </div>
+
+        <!-- Global Actions -->
+        <div class="global-actions">
+            <button class="btn btn-success" onclick="sendAllReady()">
+                ✉️ SEND ALL READY EMAILS
+            </button>
+            <button class="btn btn-primary" onclick="rerunAllFailed()">
+                🔄 RE-RUN ALL FAILED
+            </button>
+            <button class="btn btn-primary" onclick="rerunAllTickers()">
+                🔄 RE-RUN ALL TICKERS
+            </button>
+            <button class="btn btn-warning" onclick="approveAllCancelled()">
+                ✅ APPROVE ALL CANCELLED
+            </button>
+            <button class="btn btn-danger" onclick="emergencyStop()">
+                🛑 EMERGENCY STOP ALL
+            </button>
+        </div>
+
+        <!-- Ticker List -->
+        <div id="ticker-list">
+            <div class="empty-state">
+                <p>Loading queue...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const token = '{{ token }}';
+
+        function updateCountdown() {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 30, 0);
+
+            if (now > today) {
+                document.getElementById('countdown').textContent = 'Auto-send time passed';
+            } else {
+                const diff = today - now;
+                const hours = Math.floor(diff / 3600000);
+                const minutes = Math.floor((diff % 3600000) / 60000);
+                document.getElementById('countdown').textContent =
+                    `Auto-send in: ${hours}h ${minutes}m`;
+            }
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function createTickerCard(ticker) {
+            const statusClass = ticker.status;
+            const badgeClass = `status-${ticker.status}`;
+
+            return `
+                <div class="ticker-card ${statusClass}">
+                    <div class="ticker-header">
+                        <div class="ticker-info">
+                            <h3>${ticker.ticker} - ${ticker.company_name || 'Unknown'}</h3>
+                            <p>Recipients: ${ticker.recipients ? ticker.recipients.join(', ') : 'None'}</p>
+                        </div>
+                        <span class="status-badge ${badgeClass}">${ticker.status.toUpperCase()}</span>
+                    </div>
+
+                    <div class="ticker-meta">
+                        ${ticker.article_count !== null ? `Articles: ${ticker.article_count} | ` : ''}
+                        ${ticker.status === 'failed' ? `Error: ${ticker.error_message || 'Unknown error'}<br>` : ''}
+                        ${ticker.status === 'processing' ? `Heartbeat: ${formatDate(ticker.heartbeat)}<br>` : ''}
+                        Updated: ${formatDate(ticker.updated_at)}
+                        ${ticker.sent_at ? ` | Sent: ${formatDate(ticker.sent_at)}` : ''}
+                    </div>
+
+                    <div class="ticker-actions">
+                        ${ticker.status === 'ready' || ticker.status === 'sent' ? `
+                            <button class="btn btn-primary btn-small" onclick="viewEmail('${ticker.ticker}')">
+                                👁️ View
+                            </button>
+                        ` : ''}
+                        <button class="btn btn-warning btn-small" onclick="rerunTicker('${ticker.ticker}')">
+                            🔄 Re-run
+                        </button>
+                        ${ticker.status === 'ready' ? `
+                            <button class="btn btn-danger btn-small" onclick="cancelTicker('${ticker.ticker}')">
+                                ❌ Cancel
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        async function fetchQueueStatus() {
+            try {
+                const response = await fetch(`/api/queue-status?token=${token}`);
+                const data = await response.json();
+
+                // Update stats
+                document.getElementById('ready-count').textContent = data.stats.ready || 0;
+                document.getElementById('failed-count').textContent = data.stats.failed || 0;
+                document.getElementById('processing-count').textContent = data.stats.processing || 0;
+                document.getElementById('sent-count').textContent = data.stats.sent || 0;
+
+                // Update ticker list
+                const tickerList = document.getElementById('ticker-list');
+                if (data.tickers && data.tickers.length > 0) {
+                    tickerList.innerHTML = data.tickers.map(createTickerCard).join('');
+                } else {
+                    tickerList.innerHTML = '<div class="empty-state"><p>No emails in queue</p></div>';
+                }
+            } catch (error) {
+                console.error('Failed to fetch queue status:', error);
+            }
+        }
+
+        async function sendAllReady() {
+            if (!confirm('Send all ready emails now?')) return;
+
+            try {
+                const response = await fetch('/api/send-all-ready', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Sent ${result.sent_count} emails`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to send emails');
+            }
+        }
+
+        async function rerunAllFailed() {
+            if (!confirm('Re-run all failed tickers?')) return;
+
+            try {
+                const response = await fetch('/api/rerun-all-failed', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Re-running ${result.ticker_count} tickers`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to re-run tickers');
+            }
+        }
+
+        async function rerunAllTickers() {
+            if (!confirm('Re-run ALL tickers? This will reprocess everything.')) return;
+
+            try {
+                const response = await fetch('/api/rerun-all-tickers', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Re-running ${result.ticker_count} tickers`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to re-run tickers');
+            }
+        }
+
+        async function approveAllCancelled() {
+            if (!confirm('Approve all cancelled emails? They will be marked as ready to send.')) return;
+
+            try {
+                const response = await fetch('/api/approve-all-cancelled', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Approved ${result.approved_count} emails`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to approve emails');
+            }
+        }
+
+        async function emergencyStop() {
+            if (!confirm('EMERGENCY STOP: Cancel all pending sends?')) return;
+
+            try {
+                const response = await fetch('/api/emergency-stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`🛑 Cancelled ${result.cancelled_count} emails`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to emergency stop');
+            }
+        }
+
+        function viewEmail(ticker) {
+            window.open(`/api/view-email/${ticker}?token=${token}`, '_blank');
+        }
+
+        async function rerunTicker(ticker) {
+            if (!confirm(`Re-run ${ticker}?`)) return;
+
+            try {
+                const response = await fetch('/api/rerun-ticker', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, ticker})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ ${ticker} queued for reprocessing`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to re-run ticker');
+            }
+        }
+
+        async function cancelTicker(ticker) {
+            if (!confirm(`Cancel ${ticker}? It will not send at 8:30 AM.`)) return;
+
+            try {
+                const response = await fetch('/api/cancel-ticker', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, ticker})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ ${ticker} cancelled`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to cancel ticker');
+            }
+        }
+
+        // Initial load
+        fetchQueueStatus();
+        updateCountdown();
+
+        // Auto-refresh
+        setInterval(fetchQueueStatus, 30000);
+        setInterval(updateCountdown, 60000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockDigest - Admin Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #ffffff;
+            padding: 24px 32px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background: #ffffff;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            color: #1e40af;
+            margin-bottom: 8px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .nav-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+
+        .nav-card {
+            background: #ffffff;
+            padding: 32px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            text-decoration: none;
+            color: inherit;
+            transition: transform 0.2s, box-shadow 0.2s;
+            border-left: 4px solid #1e40af;
+        }
+
+        .nav-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+
+        .nav-card h2 {
+            font-size: 20px;
+            color: #1e40af;
+            margin-bottom: 12px;
+            font-weight: 700;
+        }
+
+        .nav-card p {
+            font-size: 14px;
+            color: #6b7280;
+            line-height: 1.6;
+            margin-bottom: 16px;
+        }
+
+        .nav-card .btn {
+            display: inline-block;
+            background: #1e40af;
+            color: #ffffff;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        .nav-card:hover .btn {
+            background: #1e3a8a;
+        }
+
+        .alert {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 16px 20px;
+            border-radius: 6px;
+            margin-bottom: 24px;
+        }
+
+        .alert h3 {
+            color: #92400e;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .alert p {
+            color: #78350f;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6b7280;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>StockDigest Admin Dashboard</h1>
+        <p id="current-time">Loading...</p>
+    </div>
+
+    <div class="container">
+        <!-- Stats Overview -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="pending-users">-</div>
+                <div class="stat-label">Pending Approvals</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="active-users">-</div>
+                <div class="stat-label">Active Users</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="ready-emails">-</div>
+                <div class="stat-label">Ready to Send</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="sent-today">-</div>
+                <div class="stat-label">Sent Today</div>
+            </div>
+        </div>
+
+        <!-- Alert for pending items -->
+        <div class="alert" id="pending-alert" style="display: none;">
+            <h3>⚠️ Action Required</h3>
+            <p id="alert-message">You have pending items requiring attention.</p>
+        </div>
+
+        <!-- Navigation Cards -->
+        <div class="nav-cards">
+            <a href="/admin/users?token={{ token }}" class="nav-card">
+                <h2>👥 Beta User Management</h2>
+                <p>Review and approve new beta signups, manage active users, and view user ticker assignments.</p>
+                <span class="btn">Manage Users →</span>
+            </a>
+
+            <a href="/admin/queue?token={{ token }}" class="nav-card">
+                <h2>📧 Email Queue</h2>
+                <p>Review today's email queue, send emails to users, and manage the daily workflow.</p>
+                <span class="btn">View Queue →</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>StockDigest Admin Dashboard | <a href="mailto:stockdigest.research@gmail.com" style="color: #1e40af;">Contact Support</a></p>
+    </div>
+
+    <script>
+        // Update current time
+        function updateTime() {
+            const now = new Date();
+            const options = {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: 'America/Toronto'
+            };
+            document.getElementById('current-time').textContent =
+                now.toLocaleString('en-US', options) + ' ET';
+        }
+        updateTime();
+        setInterval(updateTime, 60000);
+
+        // Fetch stats
+        async function fetchStats() {
+            try {
+                const token = '{{ token }}';
+                const response = await fetch(`/api/admin/stats?token=${token}`);
+                const data = await response.json();
+
+                // Update stats
+                document.getElementById('pending-users').textContent = data.pending_users;
+                document.getElementById('active-users').textContent = data.active_users;
+                document.getElementById('ready-emails').textContent = data.ready_emails;
+                document.getElementById('sent-today').textContent = data.sent_today;
+
+                // Show alert if there are pending items
+                if (data.pending_users > 0 || data.ready_emails > 0) {
+                    const alert = document.getElementById('pending-alert');
+                    const message = document.getElementById('alert-message');
+
+                    let alertText = '';
+                    if (data.pending_users > 0) {
+                        alertText += `${data.pending_users} user${data.pending_users > 1 ? 's' : ''} awaiting approval. `;
+                    }
+                    if (data.ready_emails > 0) {
+                        alertText += `${data.ready_emails} email${data.ready_emails > 1 ? 's' : ''} ready to send.`;
+                    }
+
+                    message.textContent = alertText;
+                    alert.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Failed to fetch stats:', error);
+            }
+        }
+
+        // Initial load
+        fetchStats();
+
+        // Refresh every 30 seconds
+        setInterval(fetchStats, 30000);
+    </script>
+</body>
+</html>

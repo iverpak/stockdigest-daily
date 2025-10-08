@@ -9,6 +9,7 @@ pytz==2024.1
 newspaper3k>=0.2.8
 lxml_html_clean
 playwright==1.40.0
+greenlet>=3.2.4  # Pin newer version for Python 3.13 compatibility
 openai>=1.0.0
 anthropic>=0.34.0
 python-multipart

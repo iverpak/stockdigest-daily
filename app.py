@@ -17496,9 +17496,29 @@ async def send_all_ready_api(request: Request):
     result = send_all_ready_emails_impl()
     return result
 
+def trigger_background_rerun(ticker_recipients: Dict[str, List[str]]):
+    """
+    Helper function to trigger background processing for tickers.
+    Runs in a separate thread to avoid blocking API response.
+    """
+    def run_in_thread():
+        try:
+            LOG.info(f"🔄 Background rerun started for {len(ticker_recipients)} tickers")
+            results = asyncio.run(process_all_tickers_daily(ticker_recipients))
+            LOG.info(f"✅ Background rerun complete: {results['succeeded']} succeeded, {results['failed']} failed")
+        except Exception as e:
+            LOG.error(f"❌ Background rerun failed: {e}")
+            LOG.error(f"Traceback: {traceback.format_exc()}")
+
+    # Start thread
+    thread = threading.Thread(target=run_in_thread, daemon=True)
+    thread.start()
+    LOG.info(f"🚀 Background thread started for {len(ticker_recipients)} tickers")
+
+
 @APP.post("/api/rerun-ticker")
 async def rerun_ticker_api(request: Request):
-    """Rerun single ticker - to be implemented"""
+    """Rerun single ticker"""
     body = await request.json()
     token = body.get('token')
     ticker = body.get('ticker')
@@ -17506,32 +17526,135 @@ async def rerun_ticker_api(request: Request):
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    # TODO: Implement rerun logic
-    return {"status": "success", "ticker": ticker, "message": "Not yet implemented"}
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        # Get recipients from email_queue
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT recipients FROM email_queue WHERE ticker = %s
+            """, (ticker,))
+            row = cur.fetchone()
+
+            if not row or not row['recipients']:
+                return {"status": "error", "message": f"Ticker {ticker} not found in queue"}
+
+            recipients = row['recipients']
+
+        # Trigger background processing
+        ticker_recipients = {ticker: recipients}
+        trigger_background_rerun(ticker_recipients)
+
+        LOG.info(f"[{ticker}] 🔄 Re-run triggered by admin")
+        return {
+            "status": "success",
+            "ticker": ticker,
+            "message": "Processing started. Check dashboard in 2-3 minutes."
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to rerun ticker {ticker}: {e}")
+        return {"status": "error", "message": str(e)}
+
 
 @APP.post("/api/rerun-all-failed")
 async def rerun_all_failed_api(request: Request):
-    """Rerun all failed tickers - to be implemented"""
+    """Rerun all failed tickers"""
     body = await request.json()
     token = body.get('token')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    # TODO: Implement rerun all failed logic
-    return {"status": "success", "ticker_count": 0, "message": "Not yet implemented"}
+    try:
+        # Get all failed tickers with their recipients
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, recipients
+                FROM email_queue
+                WHERE status = 'failed'
+                ORDER BY ticker
+            """)
+            failed_rows = cur.fetchall()
+
+        if not failed_rows:
+            return {
+                "status": "success",
+                "ticker_count": 0,
+                "message": "No failed tickers to rerun"
+            }
+
+        # Build ticker_recipients dict
+        ticker_recipients = {
+            row['ticker']: row['recipients']
+            for row in failed_rows
+        }
+
+        # Trigger background processing
+        trigger_background_rerun(ticker_recipients)
+
+        tickers_list = list(ticker_recipients.keys())
+        LOG.info(f"🔄 Re-run all failed triggered: {tickers_list}")
+
+        return {
+            "status": "success",
+            "ticker_count": len(ticker_recipients),
+            "tickers": tickers_list,
+            "message": f"Processing {len(ticker_recipients)} failed tickers. Check dashboard in 5-10 minutes."
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to rerun all failed tickers: {e}")
+        return {"status": "error", "message": str(e)}
+
 
 @APP.post("/api/rerun-all-tickers")
 async def rerun_all_tickers_api(request: Request):
-    """Rerun all tickers - to be implemented"""
+    """Rerun all tickers regardless of status"""
     body = await request.json()
     token = body.get('token')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    # TODO: Implement rerun all logic
-    return {"status": "success", "ticker_count": 0, "message": "Not yet implemented"}
+    try:
+        # Get ALL tickers with their recipients
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, recipients
+                FROM email_queue
+                ORDER BY ticker
+            """)
+            all_rows = cur.fetchall()
+
+        if not all_rows:
+            return {
+                "status": "success",
+                "ticker_count": 0,
+                "message": "No tickers in queue to rerun"
+            }
+
+        # Build ticker_recipients dict
+        ticker_recipients = {
+            row['ticker']: row['recipients']
+            for row in all_rows
+        }
+
+        # Trigger background processing
+        trigger_background_rerun(ticker_recipients)
+
+        LOG.info(f"🔄 Re-run ALL tickers triggered: {len(ticker_recipients)} tickers")
+
+        return {
+            "status": "success",
+            "ticker_count": len(ticker_recipients),
+            "message": f"Processing all {len(ticker_recipients)} tickers. This will take approximately 10-15 minutes."
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to rerun all tickers: {e}")
+        return {"status": "error", "message": str(e)}
 
 @APP.post("/api/approve-all-cancelled")
 async def approve_all_cancelled_api(request: Request):

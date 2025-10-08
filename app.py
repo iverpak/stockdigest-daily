@@ -17823,8 +17823,7 @@ async def process_ticker_for_daily_workflow(ticker: str, recipients: List[str]) 
         create_feeds_for_ticker_new_architecture(ticker, metadata)
 
         # Run ingest (this sends Email #1)
-        ingest_result = await asyncio.to_thread(
-            cron_ingest,
+        ingest_result = await cron_ingest(
             None,  # request
             1440,  # minutes (24 hours)
             [ticker]  # tickers
@@ -17846,8 +17845,7 @@ async def process_ticker_for_daily_workflow(ticker: str, recipients: List[str]) 
         LOG.info(f"[{ticker}] 📝 Phase 2: Digest")
 
         # Run digest (this sends Email #2 and generates executive summary)
-        digest_result = await asyncio.to_thread(
-            cron_digest,
+        digest_result = await cron_digest(
             None,  # request
             1440,  # minutes
             [ticker]  # tickers

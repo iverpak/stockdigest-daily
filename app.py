@@ -12720,8 +12720,9 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
         unsubscribe_url = "https://stockdigest.app/unsubscribe"
         LOG.warning("No recipient_email provided for Email #3, unsubscribe link will be generic")
 
-    # Current date
-    current_date = datetime.now().strftime("%b %d, %Y")
+    # Current date in Eastern Time
+    eastern = pytz.timezone('US/Eastern')
+    current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
 
     # Build HTML sections using helper functions
     summary_html = build_executive_summary_html(sections)

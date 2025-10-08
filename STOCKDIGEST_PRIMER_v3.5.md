@@ -514,7 +514,7 @@ The job queue system **decouples long-running ticker processing from HTTP reques
 - `POST /jobs/cancel/{job_id}` - Cancel a running job
 - `GET /jobs/history` - Job execution history
 
-### Admin Endpoints (39 endpoints - require X-Admin-Token header)
+### Admin Endpoints (42 endpoints - require X-Admin-Token header)
 
 **Initialization & Setup:**
 - `POST /admin/init` - Initialize ticker feeds and sync reference data
@@ -532,6 +532,11 @@ The job queue system **decouples long-running ticker processing from HTTP reques
 - `GET /admin/ticker-metadata/{ticker}` - Retrieve ticker configuration
 - `POST /admin/update-ticker-metadata` - Update ticker configuration
 - `POST /admin/reset-digest-flags` - Reset digest sent flags
+
+**Beta User Workflow (NEW - Oct 2025):**
+- `POST /api/generate-user-reports` - Generate reports for selected users (bulk processing)
+- `POST /api/generate-all-reports` - Generate reports for all active users (= `python app.py process`)
+- `POST /api/clear-all-reports` - Delete all email queue entries (= `python app.py cleanup`)
 
 **Article Management:**
 - `POST /admin/flag-article` - Manually flag article as important

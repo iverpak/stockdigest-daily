@@ -66,8 +66,8 @@ python app.py export    # 11:59 PM - Backup beta users to CSV
 
 **Admin Dashboard:**
 - `/admin` - Stats overview and navigation
-- `/admin/users` - Beta user approval interface
-- `/admin/queue` - Email queue management with 5 global action buttons
+- `/admin/users` - Beta user approval interface with bulk selection (Oct 2025)
+- `/admin/queue` - Email queue management with 7 global action buttons (Oct 2025)
 
 **Safety Systems:**
 - Startup recovery (marks stuck jobs as failed)
@@ -244,6 +244,9 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `POST /admin/wipe-database`: Complete database reset
 - `GET /admin/ticker-metadata/{ticker}`: Retrieve ticker configuration
 - **`POST /admin/export-user-csv`**: Export beta users to CSV for daily processing
+- **`POST /api/generate-user-reports`**: Generate reports for selected users (bulk processing) - Oct 2025
+- **`POST /api/generate-all-reports`**: Generate reports for all active users (= `python app.py process`) - Oct 2025
+- **`POST /api/clear-all-reports`**: Delete all email queue entries (= `python app.py cleanup`) - Oct 2025
 
 #### Legacy Automation Endpoints (Direct HTTP)
 - `POST /cron/ingest`: RSS feed processing and article discovery (⚠️ Subject to HTTP timeouts)

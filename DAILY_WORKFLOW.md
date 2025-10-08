@@ -142,6 +142,12 @@ status VARCHAR(50) DEFAULT 'pending'
 **URL:** `https://stockdigest.app/admin/users?token=YOUR_ADMIN_TOKEN`
 
 **Features:**
+- **Bulk Selection** (NEW - Oct 2025)
+  - Checkboxes on all active users
+  - Select multiple users for batch processing
+  - Real-time ticker counting: "X users selected (Y unique tickers)"
+  - Sticky bulk actions bar appears when users selected
+  - 📊 "Generate Reports" button with confirmation dialog
 - **Pending Approvals Section** - Review new signups
   - Approve button → Sets status='active'
   - Reject button → Sets status='cancelled'
@@ -163,18 +169,21 @@ status VARCHAR(50) DEFAULT 'pending'
 
 **Features:**
 - **Stats Grid** - Ready, Failed, Processing, Sent counts
-- **5 Global Buttons:**
+- **7 Global Buttons:**
+  - 📊 GENERATE ALL REPORTS - Manual trigger (= `python app.py process`)
   - ✉️ SEND ALL READY EMAILS - Send immediately
-  - 🔄 RE-RUN ALL FAILED - Retry failures
-  - 🔄 RE-RUN ALL TICKERS - Regenerate everything
-  - ✅ APPROVE ALL CANCELLED - Restore cancelled
-  - 🛑 EMERGENCY STOP ALL - Cancel all sends
+  - 🔄 RE-RUN QUEUE - Reprocess all queue entries (ready, failed, cancelled)
+  - 🔄 RE-RUN ALL FAILED - Retry only failed tickers
+  - ✅ APPROVE ALL CANCELLED - Restore cancelled emails
+  - 🗑️ CLEAR ALL REPORTS - Delete all queue entries (= `python app.py cleanup`)
+  - 🛑 EMERGENCY STOP ALL - Cancel all ready sends
 - **Per-Ticker Cards:**
   - 👁️ View - Preview email HTML
   - 🔄 Re-run - Reprocess ticker
   - ❌ Cancel - Remove from queue
 - **Auto-send countdown** - Shows time until 8:30 AM
 - **Auto-refresh** - Every 30 seconds
+- **Confirmation dialogs** - All buttons show impact counts and time estimates
 
 ---
 
@@ -882,9 +891,18 @@ https://stockdigest.app/admin?token=YOUR_ADMIN_TOKEN
 4. Click "Reactivate" - should change back to 'active'
 5. Click "Cancel" - should change to 'cancelled'
 
+**Test Bulk Selection (NEW):**
+1. Go to `/admin/users`
+2. Check boxes next to 2 active users (including your test account)
+3. Sticky bar appears showing "2 users selected (X unique tickers)"
+4. Click "📊 Generate Reports"
+5. Confirm dialog shows ticker list and time estimate
+6. Wait 10-15 minutes
+7. Go to `/admin/queue` - should see unique tickers with status='ready'
+
 **Test Queue Management:**
-1. Run `python app.py process` again
-2. Go to `/admin/queue`
+1. **Option A:** Run `python app.py process` from terminal
+2. **Option B:** Click "📊 GENERATE ALL REPORTS" in `/admin/queue`
 3. Click "View" on a ticker - should open email preview
 4. Click "Re-run" on a ticker - should reprocess (watch logs)
 5. Click "Cancel" on a ticker - should change status to 'cancelled'
@@ -893,10 +911,16 @@ https://stockdigest.app/admin?token=YOUR_ADMIN_TOKEN
 8. Click "APPROVE ALL CANCELLED" - should restore all
 
 **Test Sending:**
-1. Click "SEND ALL READY EMAILS"
+1. Click "✉️ SEND ALL READY EMAILS"
 2. Should send all emails to YOU (DRY_RUN)
 3. Verify BCC works (you should receive all)
 4. Check status changed to 'sent'
+
+**Test Cleanup (NEW):**
+1. Click "🗑️ CLEAR ALL REPORTS"
+2. Confirm dialog shows breakdown by status
+3. All queue entries deleted
+4. Ready for next test run
 
 ---
 

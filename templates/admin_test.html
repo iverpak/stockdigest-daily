@@ -77,13 +77,6 @@
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 12px;
-            margin-bottom: 12px;
-        }
-
-        .form-grid-row2 {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
             margin-bottom: 24px;
         }
 
@@ -366,9 +359,6 @@
                     <label>Ticker 3</label>
                     <input type="text" id="ticker3" placeholder="VST" value="VST">
                 </div>
-            </div>
-
-            <div class="form-grid-row2">
                 <div class="form-group">
                     <label>Ticker 4</label>
                     <input type="text" id="ticker4" placeholder="CEG" value="">
@@ -376,6 +366,10 @@
                 <div class="form-group">
                     <label>Ticker 5</label>
                     <input type="text" id="ticker5" placeholder="MO" value="">
+                </div>
+                <div class="form-group">
+                    <label>Ticker 6</label>
+                    <input type="text" id="ticker6" placeholder="AAPL" value="">
                 </div>
             </div>
 
@@ -433,7 +427,8 @@
                 document.getElementById('ticker2').value.trim().toUpperCase(),
                 document.getElementById('ticker3').value.trim().toUpperCase(),
                 document.getElementById('ticker4').value.trim().toUpperCase(),
-                document.getElementById('ticker5').value.trim().toUpperCase()
+                document.getElementById('ticker5').value.trim().toUpperCase(),
+                document.getElementById('ticker6').value.trim().toUpperCase()
             ].filter(t => t.length > 0);
 
             if (tickers.length === 0) {

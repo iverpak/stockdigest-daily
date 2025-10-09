@@ -4412,12 +4412,8 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                     clean_content = clean_null_bytes(result["scraped_content"]) if result["scraped_content"] else None
                     clean_summary = clean_null_bytes(result["ai_summary"]) if result["ai_summary"] else None
 
-                    # First ensure article exists and get its ID
-                    article_id = insert_article_if_new(
-                        article.get("url_hash"), article.get("url"), article.get("title"),
-                        article.get("description"), article.get("domain"),
-                        article.get("published_at"), article.get("resolved_url")
-                    )
+                    # Articles already exist - use their IDs directly
+                    article_id = article.get("id")
 
                     # Update article with scraped content and error status
                     if article_id:
@@ -4444,12 +4440,8 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                     # Update with scraping failure
                     article = articles_batch[result["article_idx"]]
 
-                    # First ensure article exists and get its ID
-                    article_id = insert_article_if_new(
-                        article.get("url_hash"), article.get("url"), article.get("title"),
-                        article.get("description"), article.get("domain"),
-                        article.get("published_at"), article.get("resolved_url")
-                    )
+                    # Articles already exist - use their IDs directly
+                    article_id = article.get("id")
 
                     # Update article with scraping failure
                     if article_id:
@@ -13313,10 +13305,13 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
         if flagged_article_ids:
             LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Phase 4: Scraping {len(flagged_article_ids)} flagged articles...")
 
-            # Get flagged articles that need scraping (resolved but not yet scraped)
+            # Get flagged articles that need scraping
+            # NOTE: Articles with resolved_url = NULL are included (happens when resolution failed)
+            # The scraper will fall back to the original URL, which may fail but won't crash
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT a.id, a.url, a.resolved_url, a.title, a.description, a.domain,
+                    SELECT a.id, a.url, a.url_hash, a.resolved_url, a.title, a.description,
+                           a.domain, a.published_at,
                            ta.category, ta.search_keyword, ta.competitor_ticker
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id

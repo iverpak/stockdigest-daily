@@ -829,10 +829,6 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
 
-                -- Add source_url column for Yahoo Finance chain tracking (Google → Yahoo → Original)
-                -- Added: Oct 2025 for deferred Google News URL resolution
-                ALTER TABLE articles ADD COLUMN IF NOT EXISTS source_url TEXT;
-
                 -- Add financial data columns to ticker_reference if they don't exist
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_last_price NUMERIC(15, 2);
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_price_change_pct NUMERIC(10, 4);
@@ -13148,10 +13144,7 @@ async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> Option
     """
     try:
         if not SCRAPFLY_API_KEY:
-            LOG.warning(f"[{ticker}]    ⚠️ ScrapFly API key not configured")
             return None
-
-        LOG.info(f"[{ticker}]    🔄 Trying ScrapFly redirect resolution (ASP + JS rendering)...")
 
         # Build params with anti-bot bypass for Google News
         # ASP (Anti-Scraping Protection) + JS rendering specifically recommended for Google
@@ -13167,32 +13160,14 @@ async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> Option
             async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
                 if response.status == 200:
                     result = await response.json()
-
-                    # ScrapFly returns the final URL after all redirects
                     final_url = result.get("result", {}).get("url")
 
                     if final_url and "news.google.com" not in final_url:
-                        LOG.info(f"[{ticker}]    ✅ ScrapFly resolved: {final_url[:80]}")
                         return final_url
-                    else:
-                        LOG.warning(f"[{ticker}]    ❌ ScrapFly didn't redirect (still Google News)")
-                        return None
 
-                elif response.status == 402:
-                    LOG.error(f"[{ticker}]    ❌ ScrapFly quota exceeded")
-                    return None
-
-                elif response.status == 429:
-                    LOG.warning(f"[{ticker}]    ⚠️ ScrapFly rate limited")
-                    return None
-
-                else:
-                    error_text = await response.text()
-                    LOG.warning(f"[{ticker}]    ❌ ScrapFly HTTP {response.status}: {error_text[:200]}")
-                    return None
+                return None
 
     except Exception as e:
-        LOG.error(f"[{ticker}]    ❌ ScrapFly error: {str(e)[:100]}")
         return None
 
 async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: List[int]):
@@ -13245,90 +13220,73 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
         article_id = article['id']
         url = article['url']
         title = article['title']
-        existing_domain = article['domain']  # Domain from title extraction during ingestion
-
-        LOG.info(f"[{ticker}] 🔍 [{idx}/{total}] Resolving: {url[:100]}...")
-        LOG.info(f"[{ticker}]    Existing domain from ingestion: {existing_domain}")
+        existing_domain = article['domain']
 
         resolved_url = None
+        resolution_method = None
 
         try:
-            # METHOD 1: Try Advanced API resolution first
-            LOG.info(f"[{ticker}]    🔄 Trying Advanced API...")
+            # METHOD 1: Try Advanced API resolution first (silent)
             resolved_url = domain_resolver._resolve_google_news_url_advanced(url)
-
             if resolved_url:
-                LOG.info(f"[{ticker}]    ✅ Advanced API success: {resolved_url[:80]}")
-            else:
-                # METHOD 2: Try direct HTTP redirect
-                LOG.info(f"[{ticker}]    ❌ Advanced API failed, trying Direct HTTP...")
+                resolution_method = "Tier 1 (Advanced API)"
+
+            # METHOD 2: Try direct HTTP redirect (silent)
+            if not resolved_url:
                 try:
                     response = requests.get(url, timeout=10, allow_redirects=True, headers={
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                     })
                     final_url = response.url
-
                     if final_url != url and "news.google.com" not in final_url:
                         resolved_url = final_url
-                        LOG.info(f"[{ticker}]    ✅ Direct HTTP success: {resolved_url[:80]}")
-                    else:
-                        LOG.info(f"[{ticker}]    ❌ Direct HTTP didn't redirect (still Google News)")
-                except Exception as e:
-                    LOG.info(f"[{ticker}]    ❌ Direct HTTP failed: {str(e)[:100]}")
+                        resolution_method = "Tier 2 (Direct HTTP)"
+                except:
+                    pass
 
-            # METHOD 3: Try ScrapFly resolution (paid but very reliable)
+            # METHOD 3: Try ScrapFly resolution (silent)
             if not resolved_url:
-                LOG.info(f"[{ticker}]    ❌ Both free methods failed, trying ScrapFly (paid)...")
                 resolved_url = await resolve_google_news_url_with_scrapfly(url, ticker)
+                if resolved_url:
+                    resolution_method = "Tier 3 (ScrapFly)"
 
-            # If all methods failed, keep Google News URL with existing domain
+            # If all methods failed, skip
             if not resolved_url:
                 failed_count += 1
-                LOG.warning(f"[{ticker}] ❌ [{idx}/{total}] All 3 resolution methods failed - keeping Google News URL with domain '{existing_domain}'")
                 continue
 
-            # STEP 2: Check if resolved to Yahoo Finance → Extract original source
+            # Check if resolved to Yahoo Finance → Extract original source
             is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
                 "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
             ])
 
             if is_yahoo_finance:
-                LOG.info(f"[{ticker}] 🔄 [{idx}/{total}] Google → Yahoo detected, extracting original source...")
                 yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
-
                 if yahoo_original:
-                    # SUCCESS: Google → Yahoo → Original chain
                     final_resolved_url = yahoo_original
                     final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
-                    final_source_url = resolved_url  # Yahoo URL becomes source
                     yahoo_chain_count += 1
-                    LOG.info(f"[{ticker}] ✅ [{idx}/{total}] YAHOO CHAIN: {resolved_url[:60]} → {yahoo_original[:60]}")
                 else:
-                    # FALLBACK: Keep Yahoo URL (Yahoo articles are easy to scrape)
                     final_resolved_url = resolved_url
                     final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
-                    final_source_url = None
-                    LOG.warning(f"[{ticker}] ⚠️ [{idx}/{total}] Yahoo extraction failed, keeping Yahoo URL")
             else:
-                # Direct resolution (Google → Article)
                 final_resolved_url = resolved_url
                 final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
-                final_source_url = None
 
-            # STEP 3: Update database with final resolved URLs
+            # Update database (no source_url)
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
                     UPDATE articles
-                    SET resolved_url = %s, domain = %s, source_url = %s
+                    SET resolved_url = %s, domain = %s
                     WHERE id = %s
-                """, (final_resolved_url, final_domain, final_source_url, article_id))
+                """, (final_resolved_url, final_domain, article_id))
 
             resolved_count += 1
-            LOG.info(f"[{ticker}] ✅ [{idx}/{total}] SUCCESS: Article {article_id} → {final_domain}")
+            LOG.info(f"[{ticker}] ✅ [{idx}/{total}] {resolution_method} → {final_domain}")
 
         except Exception as e:
             failed_count += 1
-            LOG.error(f"[{ticker}] ❌ [{idx}/{total}] ERROR: {str(e)[:100]}")
+            LOG.error(f"[{ticker}] ❌ [{idx}/{total}] Resolution failed: {str(e)[:100]}")
 
     # Summary
     LOG.info(f"[{ticker}] {'='*60}")

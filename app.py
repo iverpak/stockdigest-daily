@@ -2183,9 +2183,20 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
             FROM ticker_reference
             WHERE ticker = %s
         """, (ticker,))
-        
-        result = cur.fetchone()
-        LOG.info(f"[DB_DEBUG] Raw database result for '{ticker}': {result}")
+
+        # Comprehensive error logging for coroutine debugging
+        try:
+            result = cur.fetchone()
+            LOG.info(f"[DB_DEBUG] Raw database result for '{ticker}': {result}")
+            LOG.info(f"[DB_DEBUG] Result type: {type(result)}")
+        except Exception as e:
+            LOG.error(f"[DB_DEBUG] ❌ fetchone() failed with {type(e).__name__}: {e}")
+            LOG.error(f"[DB_DEBUG] Cursor type: {type(cur)}")
+            LOG.error(f"[DB_DEBUG] Connection type: {type(conn)}")
+            import traceback
+            LOG.error(f"[DB_DEBUG] Traceback:\n{traceback.format_exc()}")
+            raise  # Re-raise to surface the error
+
         if not result:
             LOG.warning(f"⚠️ No config found for {ticker} - using fallback config (Google News only)")
             # Return fallback config instead of None to prevent crashes
@@ -9750,7 +9761,13 @@ class TickerManager:
     @staticmethod
     def store_metadata(ticker: str, metadata: Dict):
         """Store enhanced ticker metadata in ticker_reference table only"""
-        
+
+        # CRITICAL GUARD: Never store fallback data (company_name == ticker)
+        # This prevents overwriting good CSV data with AI fallback data
+        if metadata and metadata.get("company_name") == ticker:
+            LOG.warning(f"⚠️ Refusing to store fallback metadata for {ticker} (company_name == ticker). This prevents database corruption.")
+            return
+
         # Handle None or invalid metadata
         if not metadata or not isinstance(metadata, dict):
             LOG.warning(f"Invalid or missing metadata for {ticker}, creating fallback")
@@ -12557,118 +12574,17 @@ def generate_email_html_core(
         "article_count": analyzed_count
     }
 
-
-def generate_user_intelligence_report_html(
-    ticker: str,
-    hours: int = 24,
-    flagged_article_ids: List[int] = None
-) -> Dict[str, str]:
-    """
-    Generate Email #3 HTML without sending it (for daily workflow queue)
-    Returns: {"html": "...", "subject": "...", "company_name": "..."}
-    """
-    LOG.info(f"Generating Email #3 HTML for queue: {ticker}")
-
-    # Fetch ticker config
-    config = get_ticker_config(ticker)
-    if not config:
-        LOG.error(f"No config found for {ticker}")
-        return None
-
-    company_name = config.get("company_name", ticker)
-    sector = config.get("sector")
-    sector_display = f" • {sector}" if sector and sector.strip() else ""
-
-    # Fetch stock price from ticker_reference (cached)
-    stock_price = "$0.00"
-    price_change_pct = "+0.00%"
-    price_change_color = "#4ade80"
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT financial_last_price, financial_price_change_pct
-            FROM ticker_reference
-            WHERE ticker = %s
-        """, (ticker,))
-        price_data = cur.fetchone()
-
-        if price_data and price_data['financial_last_price']:
-            stock_price = f"${price_data['financial_last_price']:.2f}"
-            if price_data['financial_price_change_pct'] is not None:
-                pct = price_data['financial_price_change_pct']
-                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
-
-    # Fetch executive summary from database
-    executive_summary_text = ""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT summary_text FROM executive_summaries
-            WHERE ticker = %s AND summary_date = CURRENT_DATE
-            ORDER BY generated_at DESC LIMIT 1
-        """, (ticker,))
-        result = cur.fetchone()
-        if result:
-            executive_summary_text = result['summary_text']
-        else:
-            LOG.warning(f"No executive summary found for {ticker}")
-
-    # Parse executive summary into sections
-    sections = parse_executive_summary_sections(executive_summary_text)
-
-    # Fetch flagged articles
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    articles_by_category = {"company": [], "industry": [], "competitor": []}
-
-    with db() as conn, conn.cursor() as cur:
-        if flagged_article_ids:
-            cur.execute("""
-                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker,
-                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND a.id = ANY(%s)
-                AND (a.published_at >= %s OR a.published_at IS NULL)
-                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, flagged_article_ids, cutoff))
-        else:
-            cur.execute("""
-                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker,
-                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND (a.published_at >= %s OR a.published_at IS NULL)
-                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, cutoff))
-
-        articles = cur.fetchall()
-
-        for article in articles:
-            category = article['category']
-            if category in articles_by_category:
-                articles_by_category[category].append(article)
-
-    # PRODUCTION wrapper: Call core function with placeholder (recipient_email=None)
-    return generate_email_html_core(
-        ticker=ticker,
-        hours=hours,
-        flagged_article_ids=flagged_article_ids,
-        recipient_email=None  # Uses placeholder {{UNSUBSCRIBE_TOKEN}}
-    )
-
-
 def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, flagged_article_ids: List[int] = None):
     """Save Email #3 to email_queue table for daily workflow"""
     LOG.info(f"[{ticker}] 💾 Saving Email #3 to queue for {len(recipients)} recipients")
 
-    # Generate HTML
-    email_data = generate_user_intelligence_report_html(ticker, hours, flagged_article_ids)
+    # Generate HTML using unified core function
+    email_data = generate_email_html_core(
+        ticker=ticker,
+        hours=hours,
+        flagged_article_ids=flagged_article_ids,
+        recipient_email=None  # Use placeholder {{UNSUBSCRIBE_TOKEN}} for production
+    )
     if not email_data:
         LOG.error(f"[{ticker}] ❌ Failed to generate email HTML")
         return False
@@ -12693,6 +12609,7 @@ def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, fla
                 email_subject = EXCLUDED.email_subject,
                 article_count = EXCLUDED.article_count,
                 status = 'ready',
+                error_message = NULL,
                 is_production = EXCLUDED.is_production,
                 heartbeat = NOW(),
                 updated_at = NOW()
@@ -18759,7 +18676,6 @@ def send_all_ready_emails_impl() -> Dict:
                 WHERE status = 'ready'
                 AND sent_at IS NULL
                 AND is_production = TRUE
-                AND created_at >= CURRENT_DATE
                 ORDER BY ticker
             """)
 

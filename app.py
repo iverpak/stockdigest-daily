@@ -13130,14 +13130,72 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
         LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
         raise
 
+async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> Optional[str]:
+    """
+    Use ScrapFly to resolve Google News redirects by fetching the final URL
+
+    This is a LIGHTWEIGHT resolution-only function - we just need the final URL,
+    not the content. ScrapFly follows redirects and returns the final URL.
+
+    Cost: ~$0.001 per request (1 credit for basic scrape without rendering)
+    Success rate: ~95% (ScrapFly handles Google redirects well)
+    """
+    try:
+        if not SCRAPFLY_API_KEY:
+            LOG.warning(f"[{ticker}]    ⚠️ ScrapFly API key not configured")
+            return None
+
+        LOG.info(f"[{ticker}]    🔄 Trying ScrapFly redirect resolution...")
+
+        # Build params for lightweight resolution (no JS rendering needed for redirects)
+        params = {
+            "key": SCRAPFLY_API_KEY,
+            "url": url,
+            "country": "us",
+            # Don't need asp or render_js for simple redirects - saves credits
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
+                if response.status == 200:
+                    result = await response.json()
+
+                    # ScrapFly returns the final URL after all redirects
+                    final_url = result.get("result", {}).get("url")
+
+                    if final_url and "news.google.com" not in final_url:
+                        LOG.info(f"[{ticker}]    ✅ ScrapFly resolved: {final_url[:80]}")
+                        return final_url
+                    else:
+                        LOG.warning(f"[{ticker}]    ❌ ScrapFly didn't redirect (still Google News)")
+                        return None
+
+                elif response.status == 402:
+                    LOG.error(f"[{ticker}]    ❌ ScrapFly quota exceeded")
+                    return None
+
+                elif response.status == 429:
+                    LOG.warning(f"[{ticker}]    ⚠️ ScrapFly rate limited")
+                    return None
+
+                else:
+                    error_text = await response.text()
+                    LOG.warning(f"[{ticker}]    ❌ ScrapFly HTTP {response.status}: {error_text[:200]}")
+                    return None
+
+    except Exception as e:
+        LOG.error(f"[{ticker}]    ❌ ScrapFly error: {str(e)[:100]}")
+        return None
+
 async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: List[int]):
     """
     Resolve Google News URLs for flagged articles only (after triage, before digest)
 
     Resolution methods (NO title extraction - domain already extracted during ingestion):
-    1. Advanced API resolution (Google internal API)
-    2. Direct HTTP redirect (follow redirects)
-    3. If both fail: Keep Google News URL with existing domain from DB
+    1. Advanced API resolution (Google internal API) - Free, fast when works
+    2. Direct HTTP redirect (follow redirects) - Free, works for simple redirects
+    3. ScrapFly resolution (paid) - ~$0.001/URL, 95% success rate
+    4. If all fail: Keep Google News URL with existing domain from DB
 
     Then check if resolved to Yahoo Finance:
     - If Yahoo: Extract original source (Google → Yahoo → Original chain)
@@ -13210,10 +13268,15 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
                 except Exception as e:
                     LOG.info(f"[{ticker}]    ❌ Direct HTTP failed: {str(e)[:100]}")
 
-            # If both methods failed, keep Google News URL with existing domain
+            # METHOD 3: Try ScrapFly resolution (paid but very reliable)
+            if not resolved_url:
+                LOG.info(f"[{ticker}]    ❌ Both free methods failed, trying ScrapFly (paid)...")
+                resolved_url = await resolve_google_news_url_with_scrapfly(url, ticker)
+
+            # If all methods failed, keep Google News URL with existing domain
             if not resolved_url:
                 failed_count += 1
-                LOG.warning(f"[{ticker}] ❌ [{idx}/{total}] Both resolution methods failed - keeping Google News URL with domain '{existing_domain}'")
+                LOG.warning(f"[{ticker}] ❌ [{idx}/{total}] All 3 resolution methods failed - keeping Google News URL with domain '{existing_domain}'")
                 continue
 
             # STEP 2: Check if resolved to Yahoo Finance → Extract original source

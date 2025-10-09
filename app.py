@@ -13134,25 +13134,29 @@ async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> Option
     """
     Use ScrapFly to resolve Google News redirects by fetching the final URL
 
-    This is a LIGHTWEIGHT resolution-only function - we just need the final URL,
-    not the content. ScrapFly follows redirects and returns the final URL.
+    Uses ASP (Anti-Scraping Protection) + JS rendering to handle Google's anti-bot measures.
+    ScrapFly follows redirects and returns the final URL after executing any JavaScript.
 
-    Cost: ~$0.001 per request (1 credit for basic scrape without rendering)
-    Success rate: ~95% (ScrapFly handles Google redirects well)
+    Cost: ~$0.005-0.010 per request (higher due to ASP + JS rendering)
+    Success rate: ~95% (ScrapFly designed specifically for Google scraping)
+
+    Reference: https://scrapfly.io/blog/how-to-scrape-google-search/
     """
     try:
         if not SCRAPFLY_API_KEY:
             LOG.warning(f"[{ticker}]    ⚠️ ScrapFly API key not configured")
             return None
 
-        LOG.info(f"[{ticker}]    🔄 Trying ScrapFly redirect resolution...")
+        LOG.info(f"[{ticker}]    🔄 Trying ScrapFly redirect resolution (ASP + JS rendering)...")
 
-        # Build params for lightweight resolution (no JS rendering needed for redirects)
+        # Build params with anti-bot bypass for Google News
+        # ASP (Anti-Scraping Protection) + JS rendering specifically recommended for Google
         params = {
             "key": SCRAPFLY_API_KEY,
             "url": url,
             "country": "us",
-            # Don't need asp or render_js for simple redirects - saves credits
+            "asp": "true",        # Anti-bot bypass (handles Google's anti-scraping)
+            "render_js": "true",  # JavaScript execution (required for redirects)
         }
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
@@ -13194,7 +13198,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     Resolution methods (NO title extraction - domain already extracted during ingestion):
     1. Advanced API resolution (Google internal API) - Free, fast when works
     2. Direct HTTP redirect (follow redirects) - Free, works for simple redirects
-    3. ScrapFly resolution (paid) - ~$0.001/URL, 95% success rate
+    3. ScrapFly resolution (paid) - ~$0.005-0.010/URL, 95% success rate (ASP + JS rendering)
     4. If all fail: Keep Google News URL with existing domain from DB
 
     Then check if resolved to Yahoo Finance:

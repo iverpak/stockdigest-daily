@@ -4679,48 +4679,67 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 LOG.debug(f"INSIDER TRADING BLOCKED: {title[:50]}...")
                 continue
 
-            # COMPREHENSIVE URL RESOLUTION
+            # FEED-TYPE-AWARE URL RESOLUTION
             final_resolved_url = None
             final_domain = None
             final_source_url = None
-            
-            # Step 1: Basic resolution using domain resolver
-            resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
-            
-            if not resolved_url or not domain:
-                stats["blocked_spam"] += 1
-                continue
-            
-            # Step 2: Check if this is a Yahoo Finance URL (direct or redirected)
-            is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
-                "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
-            ])
-            
-            # Step 3: Handle Yahoo Finance resolution
-            if is_yahoo_finance:
-                LOG.info(f"YAHOO RESOLUTION: Attempting to resolve {resolved_url}")
-                yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
-                
-                if yahoo_original:
-                    # Successfully resolved Yahoo Finance to original source
-                    final_resolved_url = yahoo_original
-                    final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
-                    final_source_url = resolved_url  # Yahoo URL becomes the source
-                    LOG.info(f"YAHOO SUCCESS: {resolved_url} → {yahoo_original}")
-                else:
-                    # Couldn't resolve Yahoo Finance, use Yahoo URL
-                    final_resolved_url = resolved_url
-                    final_domain = domain
-                    final_source_url = source_url
-                    LOG.warning(f"YAHOO FAILED: Could not resolve {resolved_url}")
-            else:
-                # Not a Yahoo Finance URL, use standard resolution
+
+            # Determine feed type by checking feed URL (once per feed, not per article)
+            feed_url = feed.get("url", "")
+            is_yahoo_feed = "finance.yahoo.com" in feed_url
+            is_google_feed = "news.google.com" in feed_url
+
+            if is_yahoo_feed:
+                # YAHOO FEED: Resolve immediately (existing logic)
+                resolved_url, domain, source_url = domain_resolver._handle_yahoo_finance(url)
+
+                if not resolved_url or not domain:
+                    stats["blocked_spam"] += 1
+                    continue
+
                 final_resolved_url = resolved_url
                 final_domain = domain
                 final_source_url = source_url
-            
-            # Step 4: Generate hash for deduplication based on FINAL resolved URL
-            url_hash = get_url_hash(url, final_resolved_url)
+                LOG.info(f"YAHOO FEED RESOLVED: {url[:60]} → {final_domain}")
+
+            elif is_google_feed:
+                # GOOGLE FEED: Defer resolution until after triage
+                # Extract domain from title for spam check and deduplication
+                clean_title, source_name = extract_source_from_title_smart(title)
+
+                if source_name and not domain_resolver._is_spam_source(source_name):
+                    domain = domain_resolver._resolve_publication_to_domain(source_name)
+
+                    if domain and domain_resolver._is_spam_domain(domain):
+                        stats["blocked_spam"] += 1
+                        LOG.info(f"SPAM REJECTED: Google News → {domain} (from title: {title[:40]})")
+                        continue
+                else:
+                    # Could not extract valid domain from title - skip this article
+                    stats["blocked_spam"] += 1
+                    LOG.warning(f"GOOGLE NEWS: Could not extract domain from title: {title[:60]}")
+                    continue
+
+                # Store with NULL resolved_url (will resolve after triage)
+                final_resolved_url = None  # Deferred resolution
+                final_domain = domain
+                final_source_url = None
+                LOG.info(f"GOOGLE FEED DEFERRED: {title[:60]} → {domain}")
+
+            else:
+                # Direct URL or unknown feed type - use standard resolution
+                resolved_url, domain, source_url = domain_resolver._handle_direct_url(url)
+
+                if not resolved_url or not domain:
+                    stats["blocked_spam"] += 1
+                    continue
+
+                final_resolved_url = resolved_url
+                final_domain = domain
+                final_source_url = source_url
+
+            # Generate hash for deduplication (supports both resolved URLs and Google News title-based)
+            url_hash = get_url_hash(url, final_resolved_url, final_domain, title)
             
             try:
                 with db() as conn, conn.cursor() as cur:
@@ -4844,11 +4863,11 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                         
                         # Enhanced logging
                         resolution_info = ""
-                        if is_yahoo_finance and yahoo_original:
-                            resolution_info = f" (Yahoo→{get_or_create_formal_domain_name(final_domain)})"
-                        elif final_source_url:
+                        if final_source_url:
                             resolution_info = f" (via {get_or_create_formal_domain_name(normalize_domain(urlparse(final_source_url).netloc))})"
-                        
+                        elif not final_resolved_url and is_google_feed:
+                            resolution_info = f" (Google News - deferred resolution)"
+
                         LOG.info(f"Inserted [{category}] from {get_or_create_formal_domain_name(final_domain)}: {title[:60]}... ({processing_type}, {content_info}){resolution_info}")
                         
             except Exception as e:
@@ -4942,42 +4961,67 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     LOG.debug(f"INSIDER TRADING BLOCKED: {title[:50]}...")
                     continue
                 
-                # COMPREHENSIVE URL RESOLUTION
-                try:
-                    resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
-                    
-                    # CHECK FOR YAHOO REJECTION
-                    if not resolved_url or not domain:
-                        if "yahoo.com" in url.lower():
-                            stats["yahoo_rejected"] += 1
-                            LOG.debug(f"YAHOO REJECTED: {title[:50]}...")
-                        else:
-                            stats["blocked_spam"] += 1
-                        continue
-                except Exception as e:
-                    LOG.warning(f"URL resolution failed for {url}: {e}")
-                    stats["blocked_spam"] += 1
-                    continue
-                
-                # Handle Yahoo Finance resolution
-                final_resolved_url = resolved_url
-                final_domain = domain
-                final_source_url = source_url
-                
-                # Check if this is a Yahoo Finance URL
-                is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
-                    "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
-                ])
-                
-                if is_yahoo_finance:
+                # FEED-TYPE-AWARE URL RESOLUTION (same as main ingestion)
+                final_resolved_url = None
+                final_domain = None
+                final_source_url = None
+
+                # Determine feed type
+                feed_url = feed.get("url", "")
+                is_yahoo_feed = "finance.yahoo.com" in feed_url
+                is_google_feed = "news.google.com" in feed_url
+
+                if is_yahoo_feed:
+                    # YAHOO FEED: Resolve immediately
                     try:
-                        yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
-                        if yahoo_original:
-                            final_resolved_url = yahoo_original
-                            final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
-                            final_source_url = resolved_url
+                        resolved_url, domain, source_url = domain_resolver._handle_yahoo_finance(url)
+
+                        if not resolved_url or not domain:
+                            stats["yahoo_rejected"] += 1
+                            continue
+
+                        final_resolved_url = resolved_url
+                        final_domain = domain
+                        final_source_url = source_url
                     except Exception as e:
-                        LOG.warning(f"Yahoo source extraction failed for {resolved_url}: {e}")
+                        LOG.warning(f"Yahoo resolution failed for {url}: {e}")
+                        stats["yahoo_rejected"] += 1
+                        continue
+
+                elif is_google_feed:
+                    # GOOGLE FEED: Defer resolution
+                    clean_title, source_name = extract_source_from_title_smart(title)
+
+                    if source_name and not domain_resolver._is_spam_source(source_name):
+                        domain = domain_resolver._resolve_publication_to_domain(source_name)
+
+                        if domain and domain_resolver._is_spam_domain(domain):
+                            stats["blocked_spam"] += 1
+                            continue
+                    else:
+                        stats["blocked_spam"] += 1
+                        continue
+
+                    final_resolved_url = None  # Deferred
+                    final_domain = domain
+                    final_source_url = None
+
+                else:
+                    # Direct URL
+                    try:
+                        resolved_url, domain, source_url = domain_resolver._handle_direct_url(url)
+
+                        if not resolved_url or not domain:
+                            stats["blocked_spam"] += 1
+                            continue
+
+                        final_resolved_url = resolved_url
+                        final_domain = domain
+                        final_source_url = source_url
+                    except Exception as e:
+                        LOG.warning(f"URL resolution failed for {url}: {e}")
+                        stats["blocked_spam"] += 1
+                        continue
 
                 # CHECK SPAM DOMAINS AFTER RESOLUTION
                 if final_domain and final_domain in SPAM_DOMAINS:
@@ -4985,8 +5029,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     LOG.debug(f"SPAM DOMAIN BLOCKED: {final_domain} - {title[:50]}...")
                     continue
 
-                # Generate hash for deduplication
-                url_hash = get_url_hash(url, final_resolved_url)
+                # Generate hash for deduplication (supports both resolved URLs and Google News)
+                url_hash = get_url_hash(url, final_resolved_url, final_domain, title)
                 
                 # CHECK FOR DUPLICATES WITHIN THIS RUN FIRST
                 if url_hash in processed_hashes:
@@ -9188,17 +9232,56 @@ def determine_article_category_for_ticker(article_row: dict, viewing_ticker: str
         LOG.warning(f"Error determining category for {viewing_ticker}: {e}")
         return article_row.get("category", "company")
 
-def get_url_hash(url: str, resolved_url: str = None) -> str:
-    """Generate hash for URL deduplication, using resolved URL if available"""
-    # Use resolved URL if available (this is the key part)
-    primary_url = resolved_url or url
-    url_lower = primary_url.lower()
+def extract_title_words_normalized(title: str, num_words: int = 10) -> str:
+    """
+    Extract first N words from title, normalized and concatenated (no spaces)
+    Used for Google News deduplication when resolved URL not available
 
-    # Remove common parameters
-    url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url_lower)
-    url_clean = url_clean.rstrip('/')
+    Example: "Tesla Stock Rises 5% After Earnings" → "teslastockrises5afterearnings"
+    """
+    if not title:
+        return ""
 
-    return hashlib.md5(url_clean.encode()).hexdigest()
+    # Remove all non-alphanumeric characters except spaces
+    clean_title = re.sub(r'[^a-zA-Z0-9\s]', '', title.lower())
+
+    # Split into words, take first N
+    words = clean_title.split()[:num_words]
+
+    # Join without spaces
+    return ''.join(words)
+
+def get_url_hash(url: str, resolved_url: str = None, domain: str = None, title: str = None) -> str:
+    """
+    Generate hash for URL deduplication
+
+    For Yahoo/Direct URLs with resolved_url: Use resolved URL (existing behavior)
+    For Google News without resolved_url: Use domain + first 10 words of title
+    Fallback: Use URL itself
+    """
+    # Standard deduplication for resolved URLs (Yahoo, Direct URLs)
+    if resolved_url and "news.google.com" not in url:
+        url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', resolved_url.lower())
+        url_clean = url_clean.rstrip('/')
+        return hashlib.md5(url_clean.encode()).hexdigest()
+
+    # Google News deduplication (when resolved_url is NULL)
+    elif "news.google.com" in url and domain and title:
+        title_words = extract_title_words_normalized(title, num_words=10)
+
+        if not title_words:
+            # Fallback: use URL if title extraction fails
+            return hashlib.md5(url.encode()).hexdigest()
+
+        # Combine domain + title words (e.g., "reuters.comteslastockrises5after")
+        dedupe_key = f"{domain}{title_words}"
+        return hashlib.md5(dedupe_key.encode()).hexdigest()
+
+    # Fallback: use URL
+    else:
+        url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url.lower())
+        url_clean = url_clean.rstrip('/')
+        return hashlib.md5(url_clean.encode()).hexdigest()
 
 def normalize_domain(domain: str) -> str:
     """Enhanced domain normalization for consistent storage"""
@@ -13047,6 +13130,114 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
         LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
         raise
 
+async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: List[int]):
+    """
+    Resolve Google News URLs for flagged articles only (after triage, before digest)
+
+    This function replicates the EXACT SAME resolution chain used during ingestion:
+    - Google News URL → (Advanced API / Direct / Title extraction)
+    - If resolved URL is Yahoo Finance → Extract original source
+    - Store final resolved URL in database
+
+    Benefits:
+    - Only resolves 20-30 URLs (flagged articles) vs 150 URLs (all articles)
+    - Spread out over time (no burst of concurrent requests)
+    - Natural request pattern (like a human clicking links)
+    """
+    LOG.info(f"[{ticker}] 🔗 Phase 1.5: Resolving Google News URLs for flagged articles...")
+
+    # Get unresolved Google News articles
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, url, title
+            FROM articles
+            WHERE id = ANY(%s)
+            AND url LIKE '%news.google.com%'
+            AND resolved_url IS NULL
+        """, (flagged_article_ids,))
+
+        unresolved = cur.fetchall()
+
+    if not unresolved:
+        LOG.info(f"[{ticker}] ✅ No Google News URLs need resolution (all already resolved or no Google News articles)")
+        return
+
+    total = len(unresolved)
+    LOG.info(f"[{ticker}] 📋 Found {total} unresolved Google News URLs")
+    LOG.info(f"[{ticker}] 🔄 Starting resolution process...")
+
+    resolved_count = 0
+    failed_count = 0
+    yahoo_chain_count = 0  # Track Google → Yahoo → Final chains
+
+    for idx, article in enumerate(unresolved, 1):
+        article_id = article['id']
+        url = article['url']
+        title = article['title']
+
+        LOG.info(f"[{ticker}] 🔍 [{idx}/{total}] Resolving: {url[:100]}...")
+
+        try:
+            # STEP 1: Resolve Google News URL (uses existing _handle_google_news with detailed logging)
+            resolved_url, domain, source_url = domain_resolver._handle_google_news(url, title)
+
+            if not resolved_url or not domain:
+                failed_count += 1
+                LOG.warning(f"[{ticker}] ❌ [{idx}/{total}] Resolution returned None")
+                continue
+
+            # STEP 2: Check if resolved to Yahoo Finance (EXACT SAME LOGIC AS INGESTION!)
+            is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
+                "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
+            ])
+
+            if is_yahoo_finance:
+                LOG.info(f"[{ticker}] 🔄 [{idx}/{total}] Google → Yahoo detected, extracting original source...")
+                yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
+
+                if yahoo_original:
+                    # SUCCESS: Google → Yahoo → Original
+                    final_resolved_url = yahoo_original
+                    final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
+                    final_source_url = resolved_url  # Yahoo URL becomes source
+                    yahoo_chain_count += 1
+                    LOG.info(f"[{ticker}] ✅ [{idx}/{total}] YAHOO CHAIN: {resolved_url[:60]} → {yahoo_original[:60]}")
+                else:
+                    # FALLBACK: Keep Yahoo URL
+                    final_resolved_url = resolved_url
+                    final_domain = domain
+                    final_source_url = source_url
+                    LOG.warning(f"[{ticker}] ⚠️ [{idx}/{total}] Yahoo extraction failed, keeping Yahoo URL")
+            else:
+                # Direct resolution (Google → Article)
+                final_resolved_url = resolved_url
+                final_domain = domain
+                final_source_url = source_url
+
+            # STEP 3: Update database with final resolved URLs
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE articles
+                    SET resolved_url = %s, domain = %s, source_url = %s
+                    WHERE id = %s
+                """, (final_resolved_url, final_domain, final_source_url, article_id))
+
+            resolved_count += 1
+            LOG.info(f"[{ticker}] ✅ [{idx}/{total}] SUCCESS: Article {article_id} → {final_domain}")
+
+        except Exception as e:
+            failed_count += 1
+            LOG.error(f"[{ticker}] ❌ [{idx}/{total}] ERROR: {str(e)[:100]}")
+
+    # Summary
+    LOG.info(f"[{ticker}] {'='*60}")
+    LOG.info(f"[{ticker}] 📊 Resolution Summary:")
+    LOG.info(f"[{ticker}]    Total processed: {total}")
+    LOG.info(f"[{ticker}]    ✅ Succeeded: {resolved_count} ({resolved_count/total*100:.1f}%)")
+    LOG.info(f"[{ticker}]    ❌ Failed: {failed_count} ({failed_count/total*100:.1f}%)")
+    LOG.info(f"[{ticker}]    🔗 Google→Yahoo→Final chains: {yahoo_chain_count}")
+    LOG.info(f"[{ticker}] {'='*60}")
+
 async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
     """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary"""
     try:
@@ -13308,6 +13499,17 @@ async def process_ticker_job(job: dict):
                 LOG.info(f"[{ticker}] 📋 [JOB {job_id}] Retrieved {len(flagged_article_ids)} flagged article IDs from ingest phase")
             else:
                 LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles found in config after ingest")
+
+        # PHASE 1.5: Resolve Google News URLs for flagged articles (NEW!)
+        update_job_status(job_id, phase='resolution_start', progress=62)
+        LOG.info(f"[{ticker}] 🔗 [JOB {job_id}] Phase 1.5: Google News URL resolution starting...")
+
+        if flagged_article_ids:
+            await resolve_flagged_google_news_urls(ticker, flagged_article_ids)
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles to resolve")
+
+        update_job_status(job_id, phase='resolution_complete', progress=64)
 
         # PHASE 2: Digest (already implemented in /cron/digest)
         update_job_status(job_id, phase='digest_start', progress=65)

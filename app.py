@@ -17448,30 +17448,9 @@ async def send_all_ready_api(request: Request):
 
     result = send_all_ready_emails_impl()
     return result
-
-def trigger_background_rerun(ticker_recipients: Dict[str, List[str]]):
-    """
-    Helper function to trigger background processing for tickers.
-    Runs in a separate thread to avoid blocking API response.
-    """
-    def run_in_thread():
-        try:
-            LOG.info(f"🔄 Background rerun started for {len(ticker_recipients)} tickers")
-            results = asyncio.run(process_all_tickers_daily(ticker_recipients))
-            LOG.info(f"✅ Background rerun complete: {results['succeeded']} succeeded, {results['failed']} failed")
-        except Exception as e:
-            LOG.error(f"❌ Background rerun failed: {e}")
-            LOG.error(f"Traceback: {traceback.format_exc()}")
-
-    # Start thread
-    thread = threading.Thread(target=run_in_thread, daemon=True)
-    thread.start()
-    LOG.info(f"🚀 Background thread started for {len(ticker_recipients)} tickers")
-
-
 @APP.post("/api/rerun-ticker")
 async def rerun_ticker_api(request: Request):
-    """Rerun single ticker"""
+    """Rerun single ticker - uses unified job queue"""
     body = await request.json()
     token = body.get('token')
     ticker = body.get('ticker')
@@ -17495,14 +17474,44 @@ async def rerun_ticker_api(request: Request):
 
             recipients = row['recipients']
 
-        # Trigger background processing
-        ticker_recipients = {ticker: recipients}
-        trigger_background_rerun(ticker_recipients)
+        # Submit to job queue system
+        with db() as conn, conn.cursor() as cur:
+            # Create batch record
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (1, 'admin_ui_single', json.dumps({
+                "minutes": 1440,
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily"
+            })))
 
-        LOG.info(f"[{ticker}] 🔄 Re-run triggered by admin")
+            batch_id = cur.fetchone()['batch_id']
+
+            # Create single job
+            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, ticker, config, timeout_at
+                )
+                VALUES (%s, %s, %s, %s)
+            """, (batch_id, ticker, json.dumps({
+                "minutes": 1440,
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily",
+                "recipients": recipients
+            }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"[{ticker}] 🔄 Re-run triggered by admin (batch {batch_id})")
         return {
             "status": "success",
             "ticker": ticker,
+            "batch_id": str(batch_id),
             "message": "Processing started. Check dashboard in 2-3 minutes."
         }
 
@@ -18253,305 +18262,6 @@ def load_active_beta_users() -> Dict[str, List[str]]:
         LOG.error(f"Failed to load beta users: {e}")
         return {}
 
-
-def generate_email_html_for_queue(ticker: str, recipient_email: str = None) -> Dict:
-    """
-    Generate Email #3 HTML with {{UNSUBSCRIBE_TOKEN}} placeholder.
-    Similar to send_user_intelligence_report but returns HTML instead of sending.
-    """
-    LOG.info(f"Generating email HTML for {ticker}")
-
-    # Fetch ticker config
-    config = get_ticker_config(ticker)
-    if not config:
-        return {"status": "error", "message": f"No config found for {ticker}"}
-
-    company_name = config.get("company_name", ticker)
-
-    # Fetch executive summary
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT summary_text FROM executive_summaries
-            WHERE ticker = %s AND summary_date = CURRENT_DATE
-            ORDER BY generated_at DESC LIMIT 1
-        """, (ticker,))
-        result = cur.fetchone()
-
-        if not result:
-            LOG.warning(f"No executive summary found for {ticker}")
-            return {"status": "error", "message": f"No executive summary for {ticker}"}
-
-        summary_text = result['summary_text']
-
-    # Get flagged article IDs
-    flagged_article_ids = []
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT a.id
-            FROM articles a
-            JOIN ticker_articles ta ON a.id = ta.article_id
-            WHERE ta.ticker = %s
-            AND ta.relevance_score >= 7
-            AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-            AND a.published_at >= CURRENT_DATE - INTERVAL '24 hours'
-        """, (ticker,))
-        flagged_article_ids = [row['id'] for row in cur.fetchall()]
-
-    # Use placeholder email for token
-    placeholder_email = "PLACEHOLDER@stockdigest.app"
-
-    # Generate HTML using existing function but intercept before sending
-    # We'll temporarily modify send_email to capture HTML
-    original_send_email = globals()['send_email']
-    captured_html = None
-    captured_subject = None
-
-    def capture_email(subject, html, to=None, bcc=None):
-        nonlocal captured_html, captured_subject
-        captured_html = html
-        captured_subject = subject
-        return True  # Pretend it sent
-
-    # Temporarily replace send_email
-    globals()['send_email'] = capture_email
-
-    try:
-        # Call the email generation function
-        result = send_user_intelligence_report(
-            hours=24,
-            tickers=[ticker],
-            flagged_article_ids=flagged_article_ids if flagged_article_ids else None,
-            recipient_email=placeholder_email
-        )
-
-        # Replace the generated token with placeholder
-        if captured_html:
-            # Find and replace any actual token with placeholder
-            import re
-            # Replace unsubscribe URLs with placeholder
-            captured_html = re.sub(
-                r'unsubscribe\?token=[a-zA-Z0-9_-]+',
-                'unsubscribe?token={{UNSUBSCRIBE_TOKEN}}',
-                captured_html
-            )
-
-        return {
-            "status": "success",
-            "html": captured_html,
-            "subject": captured_subject,
-            "company_name": company_name,
-            "article_count": result.get('articles_analyzed', 0)
-        }
-
-    finally:
-        # Restore original send_email
-        globals()['send_email'] = original_send_email
-
-
-async def process_ticker_for_daily_workflow(ticker: str, recipients: List[str]) -> Dict:
-    """
-    Process single ticker for daily workflow.
-    Runs ingest + digest phases, generates Email #3, saves to queue.
-    """
-    LOG.info(f"[{ticker}] 🚀 Starting daily workflow processing")
-
-    start_time = time.time()
-
-    try:
-        # Update email_queue status to 'processing'
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO email_queue (ticker, recipients, status, created_at, updated_at, heartbeat)
-                VALUES (%s, %s, 'processing', NOW(), NOW(), NOW())
-                ON CONFLICT (ticker) DO UPDATE
-                SET status = 'processing',
-                    updated_at = NOW(),
-                    heartbeat = NOW(),
-                    error_message = NULL
-            """, (ticker, recipients))
-            conn.commit()
-
-        # Phase 1: Ingest (0-60%)
-        LOG.info(f"[{ticker}] 📥 Phase 1: Ingest")
-
-        # Initialize feeds
-        metadata = ticker_manager.get_or_create_metadata(ticker)
-        create_feeds_for_ticker_new_architecture(ticker, metadata)
-
-        # Run ingest (this sends Email #1)
-        ingest_result = await cron_ingest(
-            None,  # request
-            1440,  # minutes (24 hours)
-            [ticker]  # tickers
-        )
-
-        if ingest_result.get('status') == 'error':
-            raise Exception(f"Ingest failed: {ingest_result.get('message')}")
-
-        # Update heartbeat
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE email_queue
-                SET heartbeat = NOW()
-                WHERE ticker = %s
-            """, (ticker,))
-            conn.commit()
-
-        # Phase 2: Digest (60-95%)
-        LOG.info(f"[{ticker}] 📝 Phase 2: Digest")
-
-        # Run digest (this sends Email #2 and generates executive summary)
-        digest_result = await cron_digest(
-            None,  # request
-            1440,  # minutes
-            [ticker]  # tickers
-        )
-
-        if digest_result.get('status') == 'error':
-            raise Exception(f"Digest failed: {digest_result.get('message')}")
-
-        # Update heartbeat
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE email_queue
-                SET heartbeat = NOW()
-                WHERE ticker = %s
-            """, (ticker,))
-            conn.commit()
-
-        # Phase 3: Generate Email #3 HTML (95-97%)
-        LOG.info(f"[{ticker}] 📧 Phase 3: Generate Email #3 HTML")
-
-        email_result = await asyncio.to_thread(
-            generate_email_html_for_queue,
-            ticker,
-            recipients[0] if recipients else None
-        )
-
-        if email_result.get('status') == 'error':
-            raise Exception(f"Email generation failed: {email_result.get('message')}")
-
-        # Save to queue with 'ready' status
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE email_queue
-                SET company_name = %s,
-                    email_html = %s,
-                    email_subject = %s,
-                    article_count = %s,
-                    status = 'ready',
-                    updated_at = NOW(),
-                    heartbeat = NOW()
-                WHERE ticker = %s
-            """, (
-                email_result['company_name'],
-                email_result['html'],
-                email_result['subject'],
-                email_result['article_count'],
-                ticker
-            ))
-            conn.commit()
-
-        # Send preview to admin
-        admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
-        preview_subject = email_result['subject']  # No [PREVIEW] prefix
-
-        send_email(preview_subject, email_result['html'], to=admin_email)
-        LOG.info(f"[{ticker}] 📬 Preview sent to {admin_email}")
-
-        duration = time.time() - start_time
-        LOG.info(f"[{ticker}] ✅ Daily workflow complete ({duration:.1f}s)")
-
-        return {
-            "status": "success",
-            "ticker": ticker,
-            "duration": duration
-        }
-
-    except Exception as e:
-        duration = time.time() - start_time
-        error_msg = str(e)
-
-        LOG.error(f"[{ticker}] ❌ Daily workflow failed: {error_msg}")
-        LOG.error(f"[{ticker}] Traceback: {traceback.format_exc()}")
-
-        # Mark as failed in queue
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE email_queue
-                SET status = 'failed',
-                    error_message = %s,
-                    updated_at = NOW()
-                WHERE ticker = %s
-            """, (error_msg, ticker))
-            conn.commit()
-
-        return {
-            "status": "failed",
-            "ticker": ticker,
-            "error": error_msg,
-            "duration": duration
-        }
-
-
-async def process_all_tickers_daily(ticker_recipients: Dict[str, List[str]]) -> Dict:
-    """
-    Process all tickers concurrently (3 at a time).
-    """
-    LOG.info(f"Processing {len(ticker_recipients)} tickers (max 3 concurrent)")
-
-    semaphore = asyncio.Semaphore(3)  # Max 3 concurrent
-
-    async def process_with_semaphore(ticker, recipients):
-        async with semaphore:
-            # Add timeout of 10 minutes per ticker
-            try:
-                return await asyncio.wait_for(
-                    process_ticker_for_daily_workflow(ticker, recipients),
-                    timeout=600  # 10 minutes
-                )
-            except asyncio.TimeoutError:
-                LOG.error(f"[{ticker}] ⏱️ Timeout after 10 minutes")
-
-                # Mark as failed
-                with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        UPDATE email_queue
-                        SET status = 'failed',
-                            error_message = 'Processing timeout (10 minutes)',
-                            updated_at = NOW()
-                        WHERE ticker = %s
-                    """, (ticker,))
-                    conn.commit()
-
-                return {
-                    "status": "failed",
-                    "ticker": ticker,
-                    "error": "timeout"
-                }
-
-    # Create tasks for all tickers
-    tasks = [
-        process_with_semaphore(ticker, recipients)
-        for ticker, recipients in ticker_recipients.items()
-    ]
-
-    # Run all tasks
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Count successes and failures
-    successes = sum(1 for r in results if isinstance(r, dict) and r.get('status') == 'success')
-    failures = sum(1 for r in results if isinstance(r, dict) and r.get('status') == 'failed')
-
-    LOG.info(f"✅ Processing complete: {successes} succeeded, {failures} failed")
-
-    return {
-        "status": "success",
-        "total": len(ticker_recipients),
-        "succeeded": successes,
-        "failed": failures,
-        "results": results
-    }
 
 
 def send_admin_notification(results: Dict):

@@ -18587,10 +18587,11 @@ async def send_ticker_api(request: Request):
                 # Generate unique unsubscribe token for this recipient
                 unsubscribe_token = get_or_create_unsubscribe_token(recipient)
 
-                # Replace placeholder with real token
+                # Replace placeholder with full unsubscribe URL
+                unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}" if unsubscribe_token else "https://stockdigest.app/unsubscribe"
                 final_html = email['email_html'].replace(
                     '{{UNSUBSCRIBE_TOKEN}}',
-                    unsubscribe_token if unsubscribe_token else ''
+                    unsubscribe_url
                 )
 
                 # Send email
@@ -18850,10 +18851,11 @@ def send_all_ready_emails_impl() -> Dict:
                         # Generate unique unsubscribe token for this recipient
                         token = get_or_create_unsubscribe_token(recipient)
 
-                        # Replace placeholder with real token
+                        # Replace placeholder with full unsubscribe URL
+                        unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={token}" if token else "https://stockdigest.app/unsubscribe"
                         final_html = email['email_html'].replace(
                             '{{UNSUBSCRIBE_TOKEN}}',
-                            token if token else ''
+                            unsubscribe_url
                         )
 
                         # Send email

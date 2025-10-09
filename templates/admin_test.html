@@ -442,7 +442,7 @@
             const triageBatchSize = parseInt(document.getElementById('triage-batch-size').value) || 3;
 
             // Confirm
-            if (!confirm(`🚀 Run Test with ${tickers.length} tickers?\n\nTickers: ${tickers.join(', ')}\nLookback: ${minutes} minutes (${(minutes/60).toFixed(1)} hours)\n\nMode: TEST (emails sent immediately to admin)\n\nContinue?`)) {
+            if (!confirm(`🚀 Run Test with ${tickers.length} tickers?\n\nTickers: ${tickers.join(', ')}\nLookback: ${minutes} minutes (${(minutes/60).toFixed(1)} hours)\n\nMode: TEST (emails sent immediately to admin)\n\nThis will:\n1. Clean old feeds\n2. Reset digest flags\n3. Initialize feeds for each ticker\n4. Process and send emails\n\nContinue?`)) {
                 return;
             }
 
@@ -454,10 +454,87 @@
 
                 // Show progress section
                 document.getElementById('progress-section').classList.add('active');
-                document.getElementById('progress-title').textContent = '⏳ Submitting batch...';
 
-                // Submit batch
-                const response = await fetch('/jobs/submit', {
+                // === STEP 1: CLEAN FEEDS ===
+                document.getElementById('progress-title').textContent = '🧹 Step 1/4: Cleaning old feeds...';
+                document.getElementById('progress-stats').textContent = 'Removing old articles';
+
+                const cleanResponse = await fetch('/admin/clean-feeds', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': token
+                    },
+                    body: JSON.stringify({ tickers: tickers })
+                });
+
+                if (!cleanResponse.ok) {
+                    throw new Error(`Clean feeds failed: ${cleanResponse.statusText}`);
+                }
+                console.log('✅ Clean feeds: SUCCESS');
+
+                // === STEP 2: RESET DIGEST FLAGS ===
+                document.getElementById('progress-title').textContent = '🔄 Step 2/4: Resetting digest flags...';
+                document.getElementById('progress-stats').textContent = 'Clearing sent flags';
+
+                const resetResponse = await fetch('/admin/reset-digest-flags', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': token
+                    },
+                    body: JSON.stringify({ tickers: tickers })
+                });
+
+                if (!resetResponse.ok) {
+                    throw new Error(`Reset flags failed: ${resetResponse.statusText}`);
+                }
+                console.log('✅ Reset digest flags: SUCCESS');
+
+                // === STEP 3: INITIALIZE EACH TICKER INDIVIDUALLY ===
+                document.getElementById('progress-title').textContent = `⚙️ Step 3/4: Initializing ${tickers.length} tickers...`;
+
+                let totalFeedsCreated = 0;
+                for (let i = 0; i < tickers.length; i++) {
+                    const ticker = tickers[i];
+                    document.getElementById('progress-stats').textContent = `Initializing ${ticker} (${i+1}/${tickers.length})`;
+
+                    const initResponse = await fetch('/admin/init', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Admin-Token': token
+                        },
+                        body: JSON.stringify({
+                            tickers: [ticker],
+                            force_refresh: false
+                        })
+                    });
+
+                    if (!initResponse.ok) {
+                        throw new Error(`Init failed for ${ticker}: ${initResponse.statusText}`);
+                    }
+
+                    const initResult = await initResponse.json();
+                    if (initResult.results && initResult.results.length > 0) {
+                        const feedsForTicker = initResult.results.reduce((sum, r) => sum + (r.feeds_created || 0), 0);
+                        totalFeedsCreated += feedsForTicker;
+                        console.log(`✅ ${ticker}: ${feedsForTicker} feeds created`);
+                    }
+
+                    // Sleep 2 seconds between tickers (except after last one)
+                    if (i < tickers.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                }
+
+                console.log(`✅ Initialization complete: ${totalFeedsCreated} feeds created`);
+
+                // === STEP 4: SUBMIT JOB BATCH ===
+                document.getElementById('progress-title').textContent = '📦 Step 4/4: Submitting batch...';
+                document.getElementById('progress-stats').textContent = 'Starting server-side processing';
+
+                const submitResponse = await fetch('/jobs/submit', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -472,20 +549,22 @@
                     })
                 });
 
-                const result = await response.json();
+                const submitResult = await submitResponse.json();
 
-                if (result.status !== 'success') {
-                    throw new Error(result.message || 'Failed to submit batch');
+                if (submitResult.status !== 'success' && submitResult.status !== 'submitted') {
+                    throw new Error(submitResult.message || 'Failed to submit batch');
                 }
 
-                currentBatchId = result.batch_id;
+                currentBatchId = submitResult.batch_id;
                 document.getElementById('progress-title').textContent = `📦 Batch ${currentBatchId.substring(0, 8)}... (Test Mode)`;
+                console.log(`✅ ${submitResult.message}`);
 
                 // Start polling
                 pollBatchStatus();
                 pollInterval = setInterval(pollBatchStatus, 10000); // Poll every 10 seconds
 
             } catch (error) {
+                console.error('Test run error:', error);
                 alert('❌ Error: ' + error.message);
                 resetForm();
             }

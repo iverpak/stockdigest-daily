@@ -9522,10 +9522,10 @@ class DomainResolver:
     def _handle_google_news(self, url, title):
         """Handle Google News URL resolution with advanced and fallback methods"""
 
-        LOG.debug(f"🔍 [GOOGLE_NEWS] Attempting resolution for: {url[:100]}...")
+        LOG.info(f"🔍 [GOOGLE_NEWS] Attempting resolution for: {url[:100]}...")
 
         # Try advanced resolution first
-        LOG.debug(f"🔄 [GOOGLE_NEWS] Trying advanced API resolution...")
+        LOG.info(f"🔄 [GOOGLE_NEWS] Trying advanced API resolution...")
         advanced_url = self._resolve_google_news_url_advanced(url)
         if advanced_url:
             domain = normalize_domain(urlparse(advanced_url).netloc.lower())
@@ -9536,10 +9536,10 @@ class DomainResolver:
                 LOG.info(f"SPAM REJECTED: Advanced resolution found spam domain {domain}")
                 return None, None, None  # Reject entirely, don't fall back
         else:
-            LOG.debug(f"❌ [GOOGLE_NEWS] Advanced API resolution returned None")
+            LOG.info(f"❌ [GOOGLE_NEWS] Advanced API resolution returned None")
 
         # Fall back to direct resolution method
-        LOG.debug(f"🔄 [GOOGLE_NEWS] Trying direct HTTP redirect...")
+        LOG.info(f"🔄 [GOOGLE_NEWS] Trying direct HTTP redirect...")
         try:
             response = requests.get(url, timeout=10, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -9555,18 +9555,18 @@ class DomainResolver:
                     LOG.info(f"SPAM REJECTED: Direct resolution found spam domain {domain}")
                     return None, None, None  # Reject entirely
             else:
-                LOG.debug(f"❌ [GOOGLE_NEWS] Direct HTTP didn't redirect (final_url still Google News)")
+                LOG.info(f"❌ [GOOGLE_NEWS] Direct HTTP didn't redirect (final_url still Google News)")
         except Exception as e:
-            LOG.debug(f"❌ [GOOGLE_NEWS] Direct HTTP failed: {str(e)[:100]}")
+            LOG.info(f"❌ [GOOGLE_NEWS] Direct HTTP failed: {str(e)[:100]}")
 
         # Title extraction fallback - also check for spam
-        LOG.debug(f"🔄 [GOOGLE_NEWS] Trying title extraction from: '{title[:60] if title else 'NO TITLE'}...'")
+        LOG.info(f"🔄 [GOOGLE_NEWS] Trying title extraction from: '{title[:60] if title else 'NO TITLE'}...'")
         if title and not contains_non_latin_script(title):
             clean_title, source = extract_source_from_title_smart(title)
-            LOG.debug(f"   Title parser extracted source: '{source}'")
+            LOG.info(f"   Title parser extracted source: '{source}'")
             if source and not self._is_spam_source(source):
                 resolved_domain = self._resolve_publication_to_domain(source)
-                LOG.debug(f"   Domain resolver returned: '{resolved_domain}'")
+                LOG.info(f"   Domain resolver returned: '{resolved_domain}'")
                 if resolved_domain:
                     if not self._is_spam_domain(resolved_domain):
                         LOG.info(f"✅ [GOOGLE_NEWS] Title resolution: {source} -> {resolved_domain}")
@@ -9578,9 +9578,9 @@ class DomainResolver:
                     LOG.warning(f"❌ [GOOGLE_NEWS] Could not resolve publication '{source}' to domain")
                     return url, "google-news-unresolved", None
             else:
-                LOG.debug(f"❌ [GOOGLE_NEWS] Title extraction: No valid source extracted or spam source")
+                LOG.info(f"❌ [GOOGLE_NEWS] Title extraction: No valid source extracted or spam source")
         else:
-            LOG.debug(f"❌ [GOOGLE_NEWS] Title extraction: Title is empty or contains non-Latin script")
+            LOG.info(f"❌ [GOOGLE_NEWS] Title extraction: Title is empty or contains non-Latin script")
 
         LOG.warning(f"❌ [GOOGLE_NEWS] ALL 3 RESOLUTION METHODS FAILED for: {url[:100]}")
         return url, "google-news-unresolved", None

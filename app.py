@@ -13269,8 +13269,98 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     LOG.info(f"[{ticker}] {'='*60}")
 
 async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
-    """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary"""
+    """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary
+
+    NEW (Oct 2025): Scraping happens HERE in digest phase, AFTER Phase 1.5 URL resolution
+    """
     try:
+        # ============================================================================
+        # PHASE 4: CONTENT SCRAPING (MOVED FROM INGEST PHASE - Oct 2025)
+        # ============================================================================
+        # Now runs AFTER Phase 1.5 Google URL resolution, ensuring all URLs are resolved
+        # before scraping attempts
+        # ============================================================================
+
+        if flagged_article_ids:
+            LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Phase 4: Scraping {len(flagged_article_ids)} flagged articles...")
+
+            # Get flagged articles that need scraping (resolved but not yet scraped)
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT a.id, a.url, a.resolved_url, a.title, a.description, a.domain,
+                           ta.category, ta.search_keyword, ta.competitor_ticker
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE a.id = ANY(%s)
+                    AND ta.ticker = %s
+                    AND a.scraped_content IS NULL
+                    AND a.scraping_failed = FALSE
+                    ORDER BY a.published_at DESC NULLS LAST
+                """, (flagged_article_ids, ticker))
+
+                articles_to_scrape = cur.fetchall()
+
+            if articles_to_scrape:
+                LOG.info(f"[{ticker}] 🔍 Found {len(articles_to_scrape)} articles needing scraping")
+
+                # Get ticker metadata for AI analysis
+                config = get_ticker_config(ticker)
+                metadata = {
+                    "industry_keywords": config.get("industry_keywords", []) if config else [],
+                    "competitors": config.get("competitors", []) if config else [],
+                    "company_name": config.get("company_name", ticker) if config else ticker
+                }
+
+                # Process articles in batches using existing batch scraping logic
+                BATCH_SIZE = 5
+                total_scraped = 0
+                total_failed = 0
+
+                for i in range(0, len(articles_to_scrape), BATCH_SIZE):
+                    batch = articles_to_scrape[i:i + BATCH_SIZE]
+                    batch_num = (i // BATCH_SIZE) + 1
+                    total_batches = (len(articles_to_scrape) + BATCH_SIZE - 1) // BATCH_SIZE
+
+                    LOG.info(f"[{ticker}] 📦 Processing scraping batch {batch_num}/{total_batches} ({len(batch)} articles)")
+
+                    # Convert to format expected by process_article_batch_async
+                    batch_articles = [dict(row) for row in batch]
+                    batch_categories = [row['category'] for row in batch]
+
+                    try:
+                        # Use existing batch scraping function
+                        batch_results = await process_article_batch_async(
+                            batch_articles,
+                            batch_categories,
+                            metadata,
+                            ticker
+                        )
+
+                        # Count successes and failures
+                        for result in batch_results:
+                            if result["success"] and result.get("scraped_content"):
+                                total_scraped += 1
+                            else:
+                                total_failed += 1
+
+                        LOG.info(f"[{ticker}] ✅ Batch {batch_num}/{total_batches} complete: {total_scraped} scraped, {total_failed} failed")
+
+                    except Exception as e:
+                        LOG.error(f"[{ticker}] ❌ Batch {batch_num} scraping error: {e}")
+                        total_failed += len(batch)
+
+                LOG.info(f"[{ticker}] 📊 Scraping complete: {total_scraped} successful, {total_failed} failed")
+            else:
+                LOG.info(f"[{ticker}] ✅ All flagged articles already scraped (or scraping previously failed)")
+        else:
+            LOG.info(f"[{ticker}] ⚠️ No flagged articles to scrape")
+
+        # ============================================================================
+        # PHASE 5: EMAIL #2 GENERATION (CONTENT QA)
+        # ============================================================================
+        # Now that articles are scraped, generate Email #2 with AI summaries
+        # ============================================================================
+
         # CRITICAL: fetch_digest_articles_with_enhanced_content sends the Stock Intelligence Email
         # which includes the executive summary via generate_ai_final_summaries()
         fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')

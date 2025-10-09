@@ -575,22 +575,18 @@
         }
 
         async function cancelBatch() {
-            if (!currentBatchId) {
-                alert('❌ No active batch to cancel');
-                return;
-            }
-
-            if (!confirm(`🛑 Cancel all jobs in current batch?\n\nBatch: ${currentBatchId.substring(0, 8)}...\n\nThis will stop all running and queued jobs.\n\nContinue?`)) {
+            // Cancel ALL active jobs system-wide (matches PowerShell cancel_all_jobs.ps1)
+            if (!confirm(`🛑 Cancel ALL Active Jobs?\n\n⚠️ WARNING: This will cancel ALL running and queued jobs across ALL batches in the system.\n\nThis matches the behavior of cancel_all_jobs.ps1 script.\n\nContinue?`)) {
                 return;
             }
 
             try {
-                const response = await fetch(`/jobs/batch/${currentBatchId}/cancel`, {
+                const response = await fetch('/api/cancel-in-progress-runs', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'X-Admin-Token': token
-                    }
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ token: token })
                 });
 
                 if (!response.ok) {
@@ -599,23 +595,42 @@
 
                 const result = await response.json();
 
-                if (result.status === 'cancelled') {
-                    const tickers = result.tickers ? result.tickers.join(', ') : '';
-                    alert(`✅ Successfully cancelled ${result.jobs_cancelled} job(s)\n\nTickers: ${tickers}`);
-                    clearInterval(pollInterval);
-                    pollInterval = null;
-                    resetForm();
-                    // Refresh one final time to show cancelled status
-                    pollBatchStatus();
-                } else if (result.status === 'no_jobs_to_cancel') {
-                    alert(`ℹ️ ${result.message}\n\nBatch: ${currentBatchId.substring(0, 8)}...`);
+                if (result.status === 'success') {
+                    if (result.cancelled_jobs === 0) {
+                        alert(`ℹ️ No Active Jobs to Cancel\n\n${result.message}`);
+                    } else {
+                        const batchText = result.cancelled_batches === 1 ? 'batch' : 'batches';
+                        let message = `✅ Successfully Cancelled ALL Jobs\n\n`;
+                        message += `Jobs cancelled: ${result.cancelled_jobs}\n`;
+                        message += `Batches affected: ${result.cancelled_batches} ${batchText}\n\n`;
+
+                        if (result.affected_jobs && result.affected_jobs.length > 0) {
+                            message += `Cancelled tickers:\n`;
+                            const tickers = [...new Set(result.affected_jobs.map(j => j.ticker))];
+                            message += tickers.join(', ');
+                        }
+
+                        alert(message);
+
+                        // Stop polling current batch if running
+                        if (pollInterval) {
+                            clearInterval(pollInterval);
+                            pollInterval = null;
+                        }
+                        resetForm();
+
+                        // Refresh one final time to show cancelled status
+                        if (currentBatchId) {
+                            pollBatchStatus();
+                        }
+                    }
                 } else {
                     alert(`⚠️ ${result.message || 'Unexpected response from server'}`);
                 }
 
             } catch (error) {
                 console.error('Cancel error:', error);
-                alert(`❌ Failed to cancel batch\n\nError: ${error.message}\n\nCheck browser console for details.`);
+                alert(`❌ Failed to cancel jobs\n\nError: ${error.message}\n\nCheck browser console for details.`);
             }
         }
 

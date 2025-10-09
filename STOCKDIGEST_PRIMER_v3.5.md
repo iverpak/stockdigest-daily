@@ -499,6 +499,103 @@ The job queue system **decouples long-running ticker processing from HTTP reques
 ✅ **Automatic Retries** - Up to 2 retries on transient failures
 ✅ **Circuit Breaker** - Detects system failures, prevents cascading errors
 ✅ **Timeout Protection** - Jobs auto-killed after 45 minutes
+✅ **Dead Worker Detection** - Continuous reclaim thread prevents stuck jobs ⭐ **NEW - Oct 2025**
+
+### Dead Worker Detection System ⭐ **NEW - October 9, 2025**
+
+**CRITICAL FIX:** Prevents jobs from getting stuck forever during Render rolling deployments.
+
+#### The Problem
+
+During Render rolling deployments, 2 server instances run simultaneously:
+1. **NEW instance** receives job submission request
+2. **OLD instance** claims the job (due to load balancer routing)
+3. Render sends **SIGTERM** to OLD instance ~9 seconds later
+4. Job dies at 0.2 minutes old with `status='processing'`
+5. **Old behavior:** Startup recovery threshold was 5 minutes → Job stuck forever ❌
+
+#### The Solution: Layered Defense (4 Levels)
+
+**1. Startup Recovery (one-time, 3-min threshold)**
+- **Location:** Line 13806-13841
+- **Trigger:** Server restart (Render deployment, crash, manual restart)
+- Requeues jobs stuck >3 minutes at startup
+- Reduced from 5 minutes to catch jobs that died during rolling deployments
+
+**2. Job Queue Reclaim Thread (continuous, 3-min threshold)** ⭐ **NEW**
+- **Location:** Line 13665-13721
+- **Function:** `job_queue_reclaim_loop()`
+- **Check Frequency:** Every 60 seconds
+- **Detects:** Jobs with stale `last_updated` timestamp (>3 minutes)
+- **Action:** Automatically requeues stuck jobs for retry
+- **Starts:** Automatically on FastAPI startup (daemon thread)
+
+```python
+UPDATE ticker_processing_jobs
+SET status = 'queued',
+    started_at = NULL,
+    worker_id = NULL,
+    phase = 'reclaimed_dead_worker',
+    error_message = '... | Reclaimed: Dead worker detected (heartbeat stale >3min)'
+WHERE status = 'processing'
+AND last_updated < NOW() - INTERVAL '3 minutes'
+```
+
+**Key Features:**
+- Runs continuously (not just at startup like startup recovery)
+- Requeues jobs (not cancels them) for automatic retry
+- Logs detailed reclaim info: ticker, job_id, worker_id, phase, progress, stale duration
+- Works during rolling deployments when both instances are alive
+
+**3. Email Queue Watchdog Thread (continuous, 3-min threshold)**
+- **Location:** Line 13722-13754
+- **Function:** `email_queue_watchdog_loop()`
+- Marks email queue jobs as 'failed' if heartbeat stale >3 minutes
+- Protects production daily workflow processing
+
+**4. Timeout Watchdog Thread (continuous, 45-min limit)**
+- **Location:** Line 13625-13663
+- **Function:** `timeout_watchdog_loop()`
+- Marks jobs as 'timeout' if they exceed 45-minute limit
+- Last line of defense for abnormally long jobs
+
+#### Heartbeat System
+
+**Job Queue (`ticker_processing_jobs` table):**
+- **Field:** `last_updated` timestamp
+- **Update Frequency:** On every progress change via `update_job_status()` (Line 13158)
+- Automatically includes `last_updated = NOW()` in every update
+
+**Email Queue (`email_queue` table):**
+- **Field:** `heartbeat` timestamp
+- **Update Frequency:** After each phase (ingest, digest, email generation)
+- **Locations:** Lines 18529, 18551, 18581
+
+#### Expected Logs
+
+**Startup:**
+```
+🔧 Job worker started (worker_id: srv-xxx, max_concurrent_jobs: 4)
+🔄 Job queue reclaim thread started (checks every 60s, requeues after 3min stale heartbeat)
+🐕 Email queue watchdog started (checks every 60s, kills after 3min stale heartbeat)
+⏰ Timeout watchdog started
+✅ Job queue system initialized (3 watchdog threads running)
+```
+
+**When Dead Worker Detected:**
+```
+🔄 Job queue reclaim thread reclaimed 1 jobs with stale heartbeat:
+   → AMD (job_id: bf2e83d8..., worker: srv-d2t161odl3ps73fvfqv0-x98bg,
+      was digest_complete at 95%, stale for 3.1min)
+   → Job bf2e83d8... requeued in batch abc123
+```
+
+#### Bug Fixes (October 9, 2025)
+
+**Fix #1:** Added continuous job queue reclaim thread (Line 13665-13721)
+**Fix #2:** Reduced startup recovery threshold from 5 min → 3 min (Line 13817)
+**Fix #3:** Reduced email watchdog threshold from 5 min → 3 min (Line 13741)
+**Fix #4:** Fixed cancel endpoint schema error: `updated_at` → `last_updated` (Line 18257)
 
 ---
 

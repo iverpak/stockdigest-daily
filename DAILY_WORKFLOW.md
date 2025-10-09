@@ -665,29 +665,112 @@ if os.getenv('DRY_RUN', 'false').lower() == 'true':
 
 ## Safety Systems
 
+### Layered Defense Architecture (4 Levels)
+
+**UPDATED: October 9, 2025** - Enhanced dead worker detection for Render rolling deployments
+
+StockDigest uses a 4-layer defense system to ensure jobs never get stuck:
+
+1. **Startup Recovery** (one-time, 3-min threshold)
+2. **Job Queue Reclaim Thread** (continuous, 3-min threshold) ⭐ **NEW**
+3. **Email Watchdog Thread** (continuous, 3-min threshold)
+4. **Timeout Watchdog Thread** (continuous, 45-min limit)
+
+---
+
 ### 1. Startup Recovery
 
-**Location:** Line 13673-13708
-**Function:** `startup_event()` - Added email queue recovery
+**Location:** Line 13806-13841 (Job Queue), Line 13847-13882 (Email Queue)
+**Function:** `startup_event()` - Reclaims orphaned jobs from crashed workers
+**Trigger:** Server restart (Render deployment, crash, manual restart)
+**Threshold:** 3 minutes
 
-**Logic:**
+**Job Queue Recovery:**
 ```python
-# Mark stuck processing jobs as failed
+# Requeue jobs stuck >3 minutes (worker likely dead)
+UPDATE ticker_processing_jobs
+SET status = 'queued',
+    started_at = NULL,
+    worker_id = NULL,
+    phase = 'restart_recovery',
+    error_message = '... | Server restart detected, job reclaimed'
+WHERE status = 'processing'
+AND started_at < NOW() - INTERVAL '3 minutes'
+```
+
+**Email Queue Recovery:**
+```python
+# Mark stuck email jobs as failed (server restarted during processing)
 UPDATE email_queue
 SET status = 'failed',
     error_message = 'Server restarted during processing'
 WHERE status = 'processing'
 ```
 
-**Trigger:** Server restart (Render deployment, crash, etc.)
+**Why 3 minutes?** Balances fast recovery vs avoiding false positives during normal processing.
 
 ---
 
-### 2. Heartbeat System
+### 2. Job Queue Reclaim Thread ⭐ **NEW - Oct 2025**
 
-**Update Frequency:** After each phase (ingest, digest, email generation)
+**Location:** Line 13665-13721
+**Function:** `job_queue_reclaim_loop()`
+**Check Frequency:** Every 60 seconds
+**Threshold:** 3 minutes of stale `last_updated` timestamp
 
-**Update Logic:**
+**Purpose:** **CRITICAL - Prevents jobs from getting stuck forever during Render rolling deployments.**
+
+**The Problem:**
+During Render rolling deployments, 2 instances run simultaneously:
+1. NEW instance receives job submission request
+2. OLD instance claims the job (load balancer routing)
+3. Render sends SIGTERM to OLD instance 9 seconds later
+4. Job dies at 0.2 minutes old
+5. Startup recovery threshold was 5 minutes → Job stuck forever ❌
+
+**The Solution:**
+Continuous monitoring thread detects dead workers via stale heartbeat and requeues jobs:
+
+```python
+UPDATE ticker_processing_jobs
+SET status = 'queued',
+    started_at = NULL,
+    worker_id = NULL,
+    phase = 'reclaimed_dead_worker',
+    error_message = '... | Reclaimed: Dead worker detected (heartbeat stale >3min)'
+WHERE status = 'processing'
+AND last_updated < NOW() - INTERVAL '3 minutes'
+```
+
+**Key Features:**
+- Runs continuously (not just at startup)
+- Requeues jobs (not cancels them) for automatic retry
+- Logs detailed reclaim info: ticker, job_id, worker_id, phase, progress, stale duration
+- Started automatically in startup event (daemon thread)
+
+**Example Log Output:**
+```
+🔄 Job queue reclaim thread reclaimed 1 jobs with stale heartbeat:
+   → AMD (job_id: bf2e83d8..., worker: srv-d2t161odl3ps73fvfqv0-x98bg,
+      was digest_complete at 95%, stale for 3.1min)
+   → Job bf2e83d8... requeued in batch abc123
+```
+
+---
+
+### 3. Heartbeat System
+
+**For Job Queue (`ticker_processing_jobs`):**
+- **Update Frequency:** On every progress change via `update_job_status()`
+- **Field:** `last_updated` timestamp
+- **Location:** Line 13158 - automatically includes `last_updated = NOW()` in every update
+
+**For Email Queue (`email_queue`):**
+- **Update Frequency:** After each phase (ingest, digest, email generation)
+- **Field:** `heartbeat` timestamp
+- **Locations:** Lines 18529, 18551, 18581
+
+**Update Logic (Email Queue):**
 ```python
 with db() as conn, conn.cursor() as cur:
     cur.execute("""
@@ -697,31 +780,54 @@ with db() as conn, conn.cursor() as cur:
     """, (ticker,))
 ```
 
-**Purpose:** Watchdog uses heartbeat to detect stalled jobs.
+**Purpose:** Both watchdog threads use timestamps to detect stalled jobs.
 
 ---
 
-### 3. Watchdog Thread
+### 4. Email Queue Watchdog Thread
 
-**Location:** Line 13584-13617
+**Location:** Line 13722-13754
 **Function:** `email_queue_watchdog_loop()`
 **Check Frequency:** Every 60 seconds
-**Kill Threshold:** 5 minutes of no heartbeat
+**Threshold:** 3 minutes of stale heartbeat (UPDATED from 5 minutes)
 
 **Logic:**
 ```python
 UPDATE email_queue
 SET status = 'failed',
-    error_message = 'Processing stalled (no heartbeat for 5 minutes)'
+    error_message = 'Processing stalled (no heartbeat for 3 minutes)'
 WHERE status = 'processing'
-AND (heartbeat IS NULL OR heartbeat < NOW() - INTERVAL '5 minutes')
+AND (heartbeat IS NULL OR heartbeat < NOW() - INTERVAL '3 minutes')
 ```
 
 **Starts:** Automatically on FastAPI startup (daemon thread)
 
+**Purpose:** Detects stalled production jobs during daily workflow processing.
+
 ---
 
-### 4. Cleanup Safety
+### 5. Timeout Watchdog Thread
+
+**Location:** Line 13625-13663
+**Function:** `timeout_watchdog_loop()`
+**Check Frequency:** Every 60 seconds
+**Threshold:** 45 minutes (job-specific `timeout_at` field)
+
+**Logic:**
+```python
+UPDATE ticker_processing_jobs
+SET status = 'timeout',
+    error_message = 'Job exceeded timeout limit',
+    completed_at = NOW()
+WHERE status = 'processing'
+AND timeout_at < NOW()
+```
+
+**Purpose:** Catches jobs that run abnormally long (last line of defense).
+
+---
+
+### 6. Cleanup Safety
 
 **Function:** `cleanup_old_queue_entries()`
 **Purpose:** Prevents stale test emails from being sent
@@ -736,7 +842,7 @@ AND (heartbeat IS NULL OR heartbeat < NOW() - INTERVAL '5 minutes')
 
 ---
 
-### 5. DRY_RUN Mode
+### 7. DRY_RUN Mode
 
 **Environment Variable:** `DRY_RUN=true`
 

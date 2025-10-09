@@ -67,13 +67,21 @@ python app.py export    # 11:59 PM - Backup beta users to CSV
 **Admin Dashboard:**
 - `/admin` - Stats overview and navigation
 - `/admin/users` - Beta user approval interface with bulk selection (Oct 2025)
-- `/admin/queue` - Email queue management with 7 global action buttons (Oct 2025)
+- `/admin/queue` - Email queue management with 8 smart buttons and real-time counts (Oct 2025)
+- `/admin/test` - Web-based test runner (replaces PowerShell setup_job_queue.ps1) (Oct 2025)
 
 **Safety Systems:**
-- Startup recovery (marks stuck jobs as failed)
-- Heartbeat monitoring (updates every 30s during processing)
-- Watchdog thread (kills stalled jobs after 5 min)
+- Startup recovery (requeues jobs stuck >3min at startup)
+- **Job queue reclaim thread** (NEW - Oct 2025): Continuous monitoring, requeues jobs with stale heartbeat >3min
+- Heartbeat monitoring (updates on every progress change via `last_updated` field)
+- Email watchdog thread (marks email queue jobs failed after 3min stale heartbeat)
+- Timeout watchdog thread (marks jobs timeout after 45min)
 - DRY_RUN mode (redirects all emails to admin for testing)
+
+**CRITICAL - Dead Worker Detection (Oct 2025):**
+The job queue reclaim thread prevents jobs from getting stuck forever during Render rolling deployments.
+When OLD worker is killed mid-job (SIGTERM), the reclaim thread detects stale `last_updated` timestamp
+and automatically requeues the job for retry. Runs every 60 seconds, 3-minute threshold.
 
 ## Project Architecture
 
@@ -244,9 +252,20 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `POST /admin/wipe-database`: Complete database reset
 - `GET /admin/ticker-metadata/{ticker}`: Retrieve ticker configuration
 - **`POST /admin/export-user-csv`**: Export beta users to CSV for daily processing
-- **`POST /api/generate-user-reports`**: Generate reports for selected users (bulk processing) - Oct 2025
-- **`POST /api/generate-all-reports`**: Generate reports for all active users (= `python app.py process`) - Oct 2025
-- **`POST /api/clear-all-reports`**: Delete all email queue entries (= `python app.py cleanup`) - Oct 2025
+
+**Email Queue Management (Oct 2025):**
+- **`POST /api/generate-user-reports`**: Generate reports for selected users (bulk processing)
+- **`POST /api/generate-all-reports`**: Generate reports for all active users (= `python app.py process`)
+- **`POST /api/cancel-ready-emails`**: Cancel ready emails to prevent 8:30am auto-send (tracks previous_status)
+- **`POST /api/undo-cancel-ready-emails`**: Smart restore cancelled emails to previous status
+- **`POST /api/cancel-in-progress-runs`**: Cancel all ticker processing jobs (stops current runs)
+- **`POST /api/rerun-all-queue`**: Reprocess all tickers regardless of status (fresh emails)
+- **`POST /api/retry-failed-and-cancelled`**: Retry failed and cancelled tickers only (non-ready)
+- **`POST /api/send-all-ready`**: Send all ready emails immediately
+- **`POST /api/clear-all-reports`**: Delete all email queue entries (= `python app.py cleanup`)
+
+**Test Runner (Oct 2025):**
+- **`GET /admin/test`**: Web-based test runner page (replaces PowerShell script)
 
 #### Legacy Automation Endpoints (Direct HTTP)
 - `POST /cron/ingest`: RSS feed processing and article discovery (⚠️ Subject to HTTP timeouts)
@@ -931,7 +950,7 @@ POLYGON_API_KEY=your_api_key_here  # Get free key at polygon.io
 - `build_executive_summary_html(sections)` - Line 11785 (Helper: Render summary sections as HTML)
 - `build_articles_html(articles_by_category)` - Line 11818 (Helper: Render article links as HTML)
 - `parse_executive_summary_sections()` - Line 11733 (Parse AI summary into 6 sections)
-- `sort_articles_by_priority()` - Line 10278 (Article priority sorting)
+- `generate_email_html_core()` - Line 12278 (Core Email #3 generation - shared by test and production)
 - `save_executive_summary()` - Line 1050 (Executive summary database storage)
 - `generate_openai_executive_summary()` - Line 10069 (Executive summary AI prompt)
 

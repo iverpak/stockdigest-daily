@@ -103,9 +103,9 @@
         }
 
         .global-actions {
-            display: flex;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
-            flex-wrap: wrap;
             margin-bottom: 32px;
         }
 
@@ -113,6 +113,7 @@
             padding: 12px 20px;
             border: none;
             border-radius: 6px;
+            width: 100%;
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
@@ -387,27 +388,55 @@
                     return;
                 }
 
-                tickerList.innerHTML = data.tickers.map(ticker => `
-                    <div class="ticker-card">
-                        <div class="ticker-header">
-                            <div class="ticker-info">
-                                <h3>${ticker.ticker} - ${ticker.company_name || 'Unknown Company'}</h3>
-                                <p>${ticker.recipient_count || 0} recipients</p>
+                tickerList.innerHTML = data.tickers.map(ticker => {
+                    // Format recipient count (handle both array and count)
+                    let recipientCount = 0;
+                    if (ticker.recipients) {
+                        recipientCount = Array.isArray(ticker.recipients) ? ticker.recipients.length : ticker.recipient_count || 0;
+                    }
+
+                    // Build progress bar HTML for active jobs
+                    let progressBarHTML = '';
+                    if (ticker.source === 'job_queue' && ticker.status === 'processing') {
+                        const progress = ticker.progress || 0;
+                        const phase = ticker.phase || 'initializing';
+                        const minutes = ticker.minutes_running || 0;
+                        progressBarHTML = `
+                            <div style="margin: 12px 0;">
+                                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+                                    <span style="color: #1e40af; font-weight: 600;">${phase}</span>
+                                    <span style="color: #6b7280;">${progress}% • ${minutes.toFixed(1)} min</span>
+                                </div>
+                                <div style="background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden;">
+                                    <div style="background: linear-gradient(90deg, #1e40af 0%, #3b82f6 100%); height: 100%; width: ${progress}%; transition: width 0.3s;"></div>
+                                </div>
                             </div>
-                            <span class="status-badge status-${ticker.status}">${ticker.status}</span>
+                        `;
+                    }
+
+                    return `
+                        <div class="ticker-card">
+                            <div class="ticker-header">
+                                <div class="ticker-info">
+                                    <h3>${ticker.ticker} - ${ticker.company_name || 'Unknown Company'}</h3>
+                                    <p>${recipientCount} recipients ${ticker.source === 'job_queue' ? '• <span style="color: #1e40af;">LIVE PROCESSING</span>' : ''}</p>
+                                </div>
+                                <span class="status-badge status-${ticker.status}">${ticker.status}</span>
+                            </div>
+                            ${progressBarHTML}
+                            <div class="ticker-meta">
+                                ${ticker.article_count || 0} articles • Updated ${formatDate(ticker.updated_at)}
+                                ${ticker.error_message ? '<br><span style="color: #ef4444;">Error: ' + ticker.error_message + '</span>' : ''}
+                            </div>
+                            <div class="ticker-actions">
+                                ${ticker.status === 'ready' ? `<button class="btn btn-success btn-sm" onclick="sendTicker('${ticker.ticker}')">✉️ Send</button>` : ''}
+                                ${ticker.status === 'ready' ? `<button class="btn btn-warning btn-sm" onclick="cancelTicker('${ticker.ticker}')">❌ Cancel</button>` : ''}
+                                ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
+                                ${ticker.status !== 'processing' ? `<button class="btn btn-secondary btn-sm" onclick="viewEmail('${ticker.ticker}')">👁️ View</button>` : ''}
+                            </div>
                         </div>
-                        <div class="ticker-meta">
-                            ${ticker.article_count || 0} articles • Updated ${formatDate(ticker.updated_at)}
-                            ${ticker.error_message ? '<br><span style="color: #ef4444;">Error: ' + ticker.error_message + '</span>' : ''}
-                        </div>
-                        <div class="ticker-actions">
-                            ${ticker.status === 'ready' ? `<button class="btn btn-success btn-sm" onclick="sendTicker('${ticker.ticker}')">✉️ Send</button>` : ''}
-                            ${ticker.status === 'ready' ? `<button class="btn btn-warning btn-sm" onclick="cancelTicker('${ticker.ticker}')">❌ Cancel</button>` : ''}
-                            ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
-                            <button class="btn btn-secondary btn-sm" onclick="viewEmail('${ticker.ticker}')">👁️ View</button>
-                        </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             } catch (error) {
                 console.error('Failed to fetch queue status:', error);
             }
@@ -757,8 +786,8 @@
         fetchQueueStatus();
         updateCountdown();
 
-        // Auto-refresh
-        setInterval(fetchQueueStatus, 30000);
+        // Auto-refresh (5 seconds for real-time job progress)
+        setInterval(fetchQueueStatus, 5000);
         setInterval(updateCountdown, 60000);
     </script>
 </body>

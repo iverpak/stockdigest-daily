@@ -12275,6 +12275,289 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     return html
 
 
+def generate_email_html_core(
+    ticker: str,
+    hours: int = 24,
+    flagged_article_ids: List[int] = None,
+    recipient_email: str = None
+) -> Dict[str, any]:
+    """
+    CORE Email #3 generation function - shared by both test and production workflows.
+
+    Generates Premium Stock Intelligence Report HTML with executive summary and article links.
+    Articles are pre-sorted by SQL (ORDER BY published_at DESC) within each category.
+
+    Args:
+        ticker: Stock ticker symbol
+        hours: Lookback window in hours (default: 24)
+        flagged_article_ids: List of article IDs flagged by AI triage
+        recipient_email:
+            - If provided: Generate real unsubscribe token (for test/immediate send)
+            - If None: Use placeholder {{UNSUBSCRIBE_TOKEN}} (for production multi-recipient)
+
+    Returns:
+        {
+            "html": Full HTML email string,
+            "subject": Email subject line,
+            "company_name": Company name,
+            "article_count": Number of articles analyzed
+        }
+    """
+    LOG.info(f"Generating Email #3 for {ticker} (recipient: {recipient_email or 'placeholder'})")
+
+    # Fetch ticker config
+    config = get_ticker_config(ticker)
+    if not config:
+        LOG.error(f"No config found for {ticker}")
+        return None
+
+    company_name = config.get("company_name", ticker)
+    sector = config.get("sector")
+    sector_display = f" • {sector}" if sector and sector.strip() else ""
+
+    # Fetch stock price from ticker_reference (cached)
+    stock_price = "$0.00"
+    price_change_pct = "+0.00%"
+    price_change_color = "#4ade80"  # Green default
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT financial_last_price, financial_price_change_pct
+            FROM ticker_reference
+            WHERE ticker = %s
+        """, (ticker,))
+        price_data = cur.fetchone()
+
+        if price_data and price_data['financial_last_price']:
+            stock_price = f"${price_data['financial_last_price']:.2f}"
+            if price_data['financial_price_change_pct'] is not None:
+                pct = price_data['financial_price_change_pct']
+                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+    # Fetch executive summary from database
+    executive_summary_text = ""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT summary_text FROM executive_summaries
+            WHERE ticker = %s AND summary_date = CURRENT_DATE
+            ORDER BY generated_at DESC LIMIT 1
+        """, (ticker,))
+        result = cur.fetchone()
+        if result:
+            executive_summary_text = result['summary_text']
+        else:
+            LOG.warning(f"No executive summary found for {ticker}")
+
+    # Parse executive summary into sections
+    sections = parse_executive_summary_sections(executive_summary_text)
+
+    # Fetch flagged articles (already sorted by SQL)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    articles_by_category = {"company": [], "industry": [], "competitor": []}
+
+    with db() as conn, conn.cursor() as cur:
+        if flagged_article_ids:
+            cur.execute("""
+                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
+                       ta.category, ta.search_keyword, ta.competitor_ticker,
+                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND a.id = ANY(%s)
+                AND (a.published_at >= %s OR a.published_at IS NULL)
+                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+                ORDER BY a.published_at DESC NULLS LAST
+            """, (ticker, flagged_article_ids, cutoff))
+        else:
+            cur.execute("""
+                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
+                       ta.category, ta.search_keyword, ta.competitor_ticker,
+                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s
+                AND (a.published_at >= %s OR a.published_at IS NULL)
+                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+                ORDER BY a.published_at DESC NULLS LAST
+            """, (ticker, cutoff))
+
+        articles = cur.fetchall()
+
+        # Group articles by category (preserves SQL sort order: newest first)
+        for article in articles:
+            category = article['category']
+            if category in articles_by_category:
+                articles_by_category[category].append(article)
+
+    # Calculate metrics
+    analyzed_count = sum(len(arts) for arts in articles_by_category.values())
+    paywall_count = sum(
+        1 for articles in articles_by_category.values()
+        for a in articles
+        if is_paywall_article(a.get('domain', ''))
+    )
+
+    # Current date
+    eastern = pytz.timezone('US/Eastern')
+    current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
+
+    # Build HTML sections
+    summary_html = build_executive_summary_html(sections)
+    articles_html = build_articles_html(articles_by_category)
+
+    # Analysis message
+    lookback_days = hours // 24 if hours >= 24 else 1
+    analysis_message = f"Analysis based on {analyzed_count} articles from the past {lookback_days} {'days' if lookback_days > 1 else 'day'}."
+    if paywall_count > 0:
+        analysis_message += f" {paywall_count} {'article' if paywall_count == 1 else 'articles'} behind paywalls (titles shown)."
+
+    # Unsubscribe URL - real token for test, placeholder for production
+    if recipient_email:
+        # TEST MODE: Generate real token for immediate send
+        unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
+        if unsubscribe_token:
+            unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
+        else:
+            unsubscribe_url = "https://stockdigest.app/unsubscribe"
+            LOG.warning(f"No unsubscribe token for {recipient_email}, using generic link")
+    else:
+        # PRODUCTION MODE: Use placeholder for multi-recipient sending later
+        unsubscribe_url = "{{UNSUBSCRIBE_TOKEN}}"
+
+    # Build full HTML (same template for both test and production)
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{ticker} Intelligence Report</title>
+    <style>
+        @media only screen and (max-width: 600px) {{
+            .content-padding {{ padding: 16px !important; }}
+            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
+            .price-box {{ padding: 8px 10px !important; }}
+            .company-name {{ font-size: 20px !important; }}
+        }}
+    </style>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+
+                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
+
+                    <!-- Header -->
+                    <tr>
+                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="width: 58%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
+                                    </td>
+                                    <td align="right" style="width: 42%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • Last Close</div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="width: 58%; vertical-align: bottom; padding-bottom: 4px;">
+                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
+                                        <div style="margin-top: 8px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
+                                    </td>
+                                    <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
+                                        <div style="display: inline-block; text-align: right;">
+                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
+                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
+
+                            <!-- Executive Summary -->
+                            {summary_html}
+
+                            <!-- Transition to Sources -->
+                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+                                    {analysis_message}
+                                </p>
+                            </div>
+
+                            <!-- Divider -->
+                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
+
+                            <!-- Source Articles -->
+                            <div style="margin-bottom: 0;">
+                                <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
+                                {articles_html}
+                            </div>
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td>
+                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
+
+                                        <!-- Legal Disclaimer -->
+                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
+                                            This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
+                                        </div>
+
+                                        <!-- Links -->
+                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
+                                        </div>
+
+                                        <!-- Copyright -->
+                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
+                                            © 2025 StockDigest. All rights reserved.
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>'''
+
+    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
+
+    return {
+        "html": html,
+        "subject": subject,
+        "company_name": company_name,
+        "article_count": analyzed_count
+    }
+
+
 def generate_user_intelligence_report_html(
     ticker: str,
     hours: int = 24,
@@ -12371,168 +12654,13 @@ def generate_user_intelligence_report_html(
             if category in articles_by_category:
                 articles_by_category[category].append(article)
 
-    # Sort articles by priority
-    for category in articles_by_category:
-        articles_by_category[category] = sort_articles_by_priority(
-            articles_by_category[category],
-            flagged_article_ids or []
-        )
-
-    # Calculate metrics
-    analyzed_count = sum(len(arts) for arts in articles_by_category.values())
-    paywall_count = sum(
-        1 for articles in articles_by_category.values()
-        for a in articles
-        if is_paywall_article(a.get('domain', ''))
+    # PRODUCTION wrapper: Call core function with placeholder (recipient_email=None)
+    return generate_email_html_core(
+        ticker=ticker,
+        hours=hours,
+        flagged_article_ids=flagged_article_ids,
+        recipient_email=None  # Uses placeholder {{UNSUBSCRIBE_TOKEN}}
     )
-
-    # Current date
-    eastern = pytz.timezone('US/Eastern')
-    current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
-
-    # Build HTML sections
-    summary_html = build_executive_summary_html(sections)
-    articles_html = build_articles_html(articles_by_category)
-
-    # Analysis message
-    lookback_days = hours // 24 if hours >= 24 else 1
-    analysis_message = f"Analysis based on {analyzed_count} articles from the past {lookback_days} {'days' if lookback_days > 1 else 'day'}."
-    if paywall_count > 0:
-        analysis_message += f" {paywall_count} {'article' if paywall_count == 1 else 'articles'} behind paywalls (titles shown)."
-
-    # CRITICAL: Use placeholder for unsubscribe token (will be replaced during send)
-    unsubscribe_url = "{{UNSUBSCRIBE_TOKEN}}"
-
-    # Build HTML
-    html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{ticker} Intelligence Report</title>
-    <style>
-        @media only screen and (max-width: 600px) {{
-            .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
-            .price-box {{ padding: 8px 10px !important; }}
-            .company-name {{ font-size: 20px !important; }}
-        }}
-    </style>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
-
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td align="center" style="padding: 40px 20px;">
-
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
-
-                    <!-- Header -->
-                    <tr>
-                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
-                                    </td>
-                                    <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • Last Close</div>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="width: 58%; vertical-align: bottom; padding-bottom: 4px;">
-                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
-                                        <div style="margin-top: 8px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
-                                    </td>
-                                    <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
-                                        <div style="display: inline-block; text-align: right;">
-                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
-                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                    <!-- Content -->
-                    <tr>
-                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
-
-                            <!-- Executive Summary -->
-                            {summary_html}
-
-                            <!-- Transition to Sources -->
-                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    {analysis_message}
-                                </p>
-                            </div>
-
-                            <!-- Divider -->
-                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
-
-                            <!-- Source Articles -->
-                            <div style="margin-bottom: 0;">
-                                <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
-                                {articles_html}
-                            </div>
-
-                        </td>
-                    </tr>
-
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
-
-                                        <!-- Legal Disclaimer -->
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                            This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
-                                        </div>
-
-                                        <!-- Links -->
-                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
-                                        </div>
-
-                                        <!-- Copyright -->
-                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 8px; color: #ffffff;">
-                                            © 2025 StockDigest. All rights reserved.
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                </table>
-
-            </td>
-        </tr>
-    </table>
-
-</body>
-</html>'''
-
-    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
-
-    return {
-        "html": html,
-        "subject": subject,
-        "company_name": company_name,
-        "article_count": analyzed_count
-    }
 
 
 def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, flagged_article_ids: List[int] = None):
@@ -12588,368 +12716,44 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                    flagged_article_ids: List[int] = None,
                                    recipient_email: str = None) -> Dict:
     """
-    Email #3: Premium Stock Intelligence Report (Single Ticker)
-    - Modern HTML design with inline styles
-    - Stock price card in header
-    - Parsed executive summary sections
-    - Compressed article links
-    - Star indicators for FLAGGED + QUALITY articles
-    - Paywall badges for paywalled articles
-    - Dynamic time span calculation
+    TEST wrapper: Email #3 - Premium Stock Intelligence Report (Single Ticker).
+    Generates email with real unsubscribe token and sends immediately.
+
+    Used by test runs for immediate email delivery.
+    Production uses generate_user_intelligence_report_html() instead.
+
+    Returns: {"status": "sent" | "failed", "articles_analyzed": X, ...}
     """
-    LOG.info("=== EMAIL #3: PREMIUM STOCK INTELLIGENCE (USER REPORT) ===")
+    LOG.info("=== EMAIL #3: PREMIUM STOCK INTELLIGENCE (TEST MODE) ===")
 
     # Single ticker only
     if not tickers or len(tickers) == 0:
         return {"status": "error", "message": "No ticker specified"}
 
     ticker = tickers[0]  # Take first ticker only
-    LOG.info(f"Generating premium report for {ticker}")
+    LOG.info(f"[TEST] Generating premium report for {ticker} → {recipient_email or DIGEST_TO}")
 
-    # Fetch ticker config
-    config = get_ticker_config(ticker)
-    if not config:
-        return {"status": "error", "message": f"No config found for {ticker}"}
+    # Call core function with real token (recipient_email provided)
+    email_data = generate_email_html_core(
+        ticker=ticker,
+        hours=hours,
+        flagged_article_ids=flagged_article_ids,
+        recipient_email=recipient_email or DIGEST_TO  # Real token for test
+    )
 
-    company_name = config.get("company_name", ticker)
-    sector = config.get("sector")
+    if not email_data:
+        return {"status": "error", "message": "Failed to generate email HTML"}
 
-    # Format sector display (show "• Sector" only if sector exists and not empty/null)
-    sector_display = f" • {sector}" if sector and sector.strip() else ""
+    # Send email immediately (test mode)
+    success = send_email(email_data['subject'], email_data['html'], to=recipient_email or DIGEST_TO)
 
-    # Fetch stock price from ticker_reference (cached)
-    stock_price = "$0.00"
-    price_change_pct = "+0.00%"
-    price_change_color = "#4ade80"  # Green default
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT financial_last_price, financial_price_change_pct
-            FROM ticker_reference
-            WHERE ticker = %s
-        """, (ticker,))
-        price_data = cur.fetchone()
-
-        if price_data and price_data['financial_last_price']:
-            stock_price = f"${price_data['financial_last_price']:.2f}"
-            if price_data['financial_price_change_pct'] is not None:
-                pct = price_data['financial_price_change_pct']
-                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
-
-    # Fetch executive summary from database
-    executive_summary_text = ""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT summary_text FROM executive_summaries
-            WHERE ticker = %s AND summary_date = CURRENT_DATE
-            ORDER BY generated_at DESC LIMIT 1
-        """, (ticker,))
-        result = cur.fetchone()
-        if result:
-            executive_summary_text = result['summary_text']
-            LOG.info(f"Retrieved executive summary for {ticker} ({len(executive_summary_text)} chars)")
-        else:
-            LOG.warning(f"No executive summary found for {ticker}")
-
-    # Parse executive summary into sections
-    sections = parse_executive_summary_sections(executive_summary_text)
-
-    # Fetch flagged articles
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    articles_by_category = {"company": [], "industry": [], "competitor": []}
-
-    with db() as conn, conn.cursor() as cur:
-        if flagged_article_ids:
-            cur.execute("""
-                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker,
-                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND a.id = ANY(%s)
-                AND (a.published_at >= %s OR a.published_at IS NULL)
-                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, flagged_article_ids, cutoff))
-        else:
-            cur.execute("""
-                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker,
-                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND (a.published_at >= %s OR a.published_at IS NULL)
-                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, cutoff))
-
-        articles = cur.fetchall()
-        for article in articles:
-            category = article['category'] or 'company'
-            if category in articles_by_category:
-                articles_by_category[category].append(article)
-
-    # Flatten all articles from all categories
-    all_articles = []
-    for category_articles in articles_by_category.values():
-        all_articles.extend(category_articles)
-
-    # Split into analyzed vs paywall
-    analyzed_articles = [a for a in all_articles if not is_paywall_article(a.get('domain', ''))]
-    paywall_articles = [a for a in all_articles if is_paywall_article(a.get('domain', ''))]
-
-    analyzed_count = len(analyzed_articles)
-    paywall_count = len(paywall_articles)
-
-    # Calculate time span from analyzed articles only
-    dates = [a['published_at'] for a in analyzed_articles if a.get('published_at')]
-    if dates and len(dates) > 0:
-        oldest_date = min(dates)
-        newest_date = max(dates)
-        days_diff = (newest_date.date() - oldest_date.date()).days
-
-        if days_diff == 0:
-            time_span_text = "today"
-        elif days_diff == 1:
-            time_span_text = "the past day"
-        else:
-            time_span_text = f"the past {days_diff} days"
-    else:
-        time_span_text = "recent"
-
-    # Build analysis message
-    paywall_suffix = ""
-    if paywall_count > 0:
-        paywall_suffix = f" • {paywall_count} additional paywalled sources identified"
-
-    analysis_message = f"Analysis based on {analyzed_count} publicly available articles from {time_span_text}{paywall_suffix}"
-
-    LOG.info(f"Article counts - Analyzed: {analyzed_count}, Paywalled: {paywall_count}, Time span: {time_span_text}")
-
-    # Check if FLAGGED + QUALITY for star logic
-    def is_starred(article_id, domain):
-        is_flagged = article_id in (flagged_article_ids or [])
-        is_quality = normalize_domain(domain) in QUALITY_DOMAINS
-        return is_flagged and is_quality
-
-    # Build article sections HTML
-    def build_article_section(title, articles, category_label):
-        if not articles:
-            return ""
-
-        article_links = ""
-        for article in articles:
-            # Check if paywalled
-            is_paywalled = is_paywall_article(article.get('domain', ''))
-            paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
-
-            # Check if article is <24 hours old (same logic as executive summary)
-            is_new = is_within_24_hours(article.get('published_at'))
-            new_badge = '🆕 ' if is_new else ''
-
-            # Star for FLAGGED + QUALITY articles
-            star = '<span style="color: #f59e0b;">★</span> ' if is_starred(article['id'], article['domain']) else ''
-            domain_name = get_or_create_formal_domain_name(article['domain']) if article['domain'] else "Unknown Source"
-            date_str = format_date_short(article['published_at']) if article['published_at'] else "Recent"
-
-            article_links += f'''
-                <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article['resolved_url'] or '#'}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{new_badge}{article['title']}{paywall_badge}</a>
-                    <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
-                </div>
-            '''
-
-        return f'''
-            <div style="margin-bottom: 16px;">
-                <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
-                {article_links}
-            </div>
-        '''
-
-    # Build executive summary section HTML
-    def build_summary_section(title, bullets):
-        if not bullets:
-            return ""
-
-        bullet_html = ""
-        for bullet in bullets:
-            bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{bullet}</li>'
-
-        return f'''
-            <div style="margin-bottom: 20px;">
-                <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
-                <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
-                    {bullet_html}
-                </ul>
-            </div>
-        '''
-
-    # Count paywalled articles
-    paywalled_count = paywall_count
-    total_articles_count = analyzed_count
-    lookback_days = hours // 24 if hours >= 24 else 1
-
-    # Get or create unsubscribe token
-    if recipient_email:
-        unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
-        if unsubscribe_token:
-            unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
-        else:
-            # Email not in beta_users (admin/test email) - use generic link
-            unsubscribe_url = "https://stockdigest.app/unsubscribe"
-            LOG.warning(f"No unsubscribe token for {recipient_email} (not a beta user), using generic link")
-    else:
-        # Fallback for testing/admin emails without recipient
-        unsubscribe_url = "https://stockdigest.app/unsubscribe"
-        LOG.warning("No recipient_email provided for Email #3, unsubscribe link will be generic")
-
-    # Current date in Eastern Time
-    eastern = pytz.timezone('US/Eastern')
-    current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
-
-    # Build HTML sections using helper functions
-    summary_html = build_executive_summary_html(sections)
-    articles_html = build_articles_html(articles_by_category)
-
-    # Build inline HTML with legal disclaimers
-    html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{ticker} Intelligence Report</title>
-    <style>
-        @media only screen and (max-width: 600px) {{
-            .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
-            .price-box {{ padding: 8px 10px !important; }}
-            .company-name {{ font-size: 20px !important; }}
-        }}
-    </style>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
-
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td align="center" style="padding: 40px 20px;">
-
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
-
-                    <!-- Header -->
-                    <tr>
-                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <!-- Top row - Meta labels -->
-                                <tr>
-                                    <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
-                                    </td>
-                                    <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • Last Close</div>
-                                    </td>
-                                </tr>
-                                <!-- Bottom row - Main content aligned on baseline -->
-                                <tr>
-                                    <td style="width: 58%; vertical-align: bottom; padding-bottom: 4px;">
-                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
-                                        <div style="margin-top: 8px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
-                                    </td>
-                                    <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
-                                        <div style="display: inline-block; text-align: right;">
-                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
-                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                    <!-- Content -->
-                    <tr>
-                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
-
-                            <!-- Executive Summary -->
-                            {summary_html}
-
-                            <!-- Transition to Sources -->
-                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    {analysis_message}
-                                </p>
-                            </div>
-
-                            <!-- Divider -->
-                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
-
-                            <!-- Source Articles -->
-                            <div style="margin-bottom: 0;">
-                                <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
-                                {articles_html}
-                            </div>
-
-                        </td>
-                    </tr>
-
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
-
-                                        <!-- Legal Disclaimer -->
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                            This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
-                                        </div>
-
-                                        <!-- Links -->
-                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
-                                        </div>
-
-                                        <!-- Copyright -->
-                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 8px; color: #ffffff;">
-                                            © 2025 StockDigest. All rights reserved.
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                </table>
-
-            </td>
-        </tr>
-    </table>
-
-</body>
-</html>'''
-
-    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {total_articles_count} articles analyzed"
-    success = send_email(subject, html)
-
-    LOG.info(f"📧 Email #3 (Premium Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {DIGEST_TO}")
+    LOG.info(f"📧 Email #3 (Premium Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {recipient_email or DIGEST_TO}")
 
     return {
         "status": "sent" if success else "failed",
-        "articles_analyzed": analyzed_count,
-        "articles_paywalled": paywall_count,
-        "articles_total": analyzed_count + paywall_count,
+        "articles_analyzed": email_data['article_count'],
         "ticker": ticker,
-        "recipient": DIGEST_TO,
+        "recipient": recipient_email or DIGEST_TO,
         "email_type": "premium_stock_intelligence"
     }
 
@@ -13662,26 +13466,83 @@ def timeout_watchdog_loop():
     LOG.info("⏰ Timeout watchdog stopped")
 
 # Start workers on app startup
-def email_queue_watchdog_loop():
+def job_queue_reclaim_loop():
     """
-    Email queue watchdog - monitors for stalled jobs.
-    Runs every 60 seconds and marks jobs with stale heartbeat as failed.
+    Job queue reclaim thread - monitors for dead workers via stale heartbeat.
+    Runs every 60 seconds and requeues jobs with stale last_updated (>3 minutes).
+
+    CRITICAL: Prevents jobs from getting stuck forever during rolling deployments.
+    When Render kills OLD worker mid-job, this thread detects stale heartbeat and requeues.
     """
-    LOG.info("🐕 Email queue watchdog started (checks every 60s, kills after 5min stale heartbeat)")
+    LOG.info("🔄 Job queue reclaim thread started (checks every 60s, requeues after 3min stale heartbeat)")
 
     while True:
         try:
             time.sleep(60)  # Check every minute
 
             with db() as conn, conn.cursor() as cur:
-                # Find jobs with stale heartbeat (no update in 5 minutes)
+                # Find jobs with stale heartbeat (no update in 3 minutes = worker likely dead)
+                cur.execute("""
+                    UPDATE ticker_processing_jobs
+                    SET status = 'queued',
+                        started_at = NULL,
+                        worker_id = NULL,
+                        phase = 'reclaimed_dead_worker',
+                        progress = 0,
+                        error_message = COALESCE(error_message, '') || ' | Reclaimed: Dead worker detected (heartbeat stale >3min)',
+                        last_updated = NOW()
+                    WHERE status = 'processing'
+                    AND last_updated < NOW() - INTERVAL '3 minutes'
+                    RETURNING job_id, ticker, worker_id, phase AS old_phase, progress AS old_progress,
+                              EXTRACT(EPOCH FROM (NOW() - last_updated)) / 60 AS minutes_stale
+                """)
+
+                reclaimed = cur.fetchall()
+
+                if reclaimed:
+                    conn.commit()
+                    LOG.warning(f"🔄 Job queue reclaim thread reclaimed {len(reclaimed)} jobs with stale heartbeat:")
+                    for job in reclaimed:
+                        LOG.info(f"   → {job['ticker']} (job_id: {job['job_id']}, worker: {job['worker_id']}, "
+                                f"was {job['old_phase']} at {job['old_progress']}%, stale for {job['minutes_stale']:.1f}min)")
+
+                        # Update batch counters
+                        cur.execute("""
+                            SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
+                        """, (job['job_id'],))
+                        batch_result = cur.fetchone()
+
+                        if batch_result:
+                            # Note: Don't increment failed_jobs counter - job is being requeued for retry
+                            LOG.info(f"   → Job {job['job_id']} requeued in batch {batch_result['batch_id']}")
+
+                    conn.commit()
+
+        except Exception as e:
+            LOG.error(f"❌ Job queue reclaim thread error: {e}")
+            LOG.error(traceback.format_exc())
+            # Continue running despite errors
+
+def email_queue_watchdog_loop():
+    """
+    Email queue watchdog - monitors for stalled jobs.
+    Runs every 60 seconds and marks jobs with stale heartbeat as failed.
+    """
+    LOG.info("🐕 Email queue watchdog started (checks every 60s, kills after 3min stale heartbeat)")
+
+    while True:
+        try:
+            time.sleep(60)  # Check every minute
+
+            with db() as conn, conn.cursor() as cur:
+                # Find jobs with stale heartbeat (no update in 3 minutes)
                 cur.execute("""
                     UPDATE email_queue
                     SET status = 'failed',
-                        error_message = 'Processing stalled (no heartbeat for 5 minutes)',
+                        error_message = 'Processing stalled (no heartbeat for 3 minutes)',
                         updated_at = NOW()
                     WHERE status = 'processing'
-                    AND (heartbeat IS NULL OR heartbeat < NOW() - INTERVAL '5 minutes')
+                    AND (heartbeat IS NULL OR heartbeat < NOW() - INTERVAL '3 minutes')
                     RETURNING ticker
                 """)
 
@@ -13746,7 +13607,7 @@ async def startup_event():
                 for job in all_processing:
                     LOG.info(f"   → {job['ticker']} ({job['phase']}, {job['progress']}%, {job['minutes_running']:.1f}min, worker: {job['worker_id']})")
 
-            # Reclaim jobs that were processing but worker died (older than 5 minutes = definitely orphaned)
+            # Reclaim jobs that were processing but worker died (older than 3 minutes = definitely orphaned)
             cur.execute("""
                 UPDATE ticker_processing_jobs
                 SET status = 'queued',
@@ -13757,28 +13618,28 @@ async def startup_event():
                     last_updated = NOW(),
                     error_message = COALESCE(error_message, '') || ' | Server restart detected, job reclaimed'
                 WHERE status = 'processing'
-                AND started_at < NOW() - INTERVAL '5 minutes'
+                AND started_at < NOW() - INTERVAL '3 minutes'
                 RETURNING job_id, ticker, phase AS old_phase, progress AS old_progress
             """)
 
             orphaned = cur.fetchall()
             if orphaned:
-                LOG.warning(f"🔄 RECLAIMED {len(orphaned)} orphaned jobs (>5min old, server likely restarted):")
+                LOG.warning(f"🔄 RECLAIMED {len(orphaned)} orphaned jobs (>3min old, server likely restarted):")
                 for job in orphaned:
                     LOG.info(f"   → {job['ticker']} was at {job['old_phase']} ({job['old_progress']}%), now queued for retry")
 
-            # Also check for jobs processing <5 minutes (possible crash mid-job)
+            # Also check for jobs processing <3 minutes (possible crash mid-job)
             cur.execute("""
                 SELECT COUNT(*) as recent_count
                 FROM ticker_processing_jobs
                 WHERE status = 'processing'
-                AND started_at >= NOW() - INTERVAL '5 minutes'
+                AND started_at >= NOW() - INTERVAL '3 minutes'
             """)
             recent_result = cur.fetchone()
             if recent_result and recent_result['recent_count'] > 0:
-                LOG.warning(f"⚠️ {recent_result['recent_count']} jobs started <5min ago still marked 'processing'")
+                LOG.warning(f"⚠️ {recent_result['recent_count']} jobs started <3min ago still marked 'processing'")
                 LOG.warning("   These will NOT be reclaimed yet (might still be running on old worker)")
-                LOG.warning("   Timeout watchdog will mark them as 'timeout' if they exceed 45 minutes")
+                LOG.warning("   Job queue reclaim thread will requeue them if heartbeat becomes stale (>3min)")
 
             if not orphaned and not all_processing:
                 LOG.info("✅ No orphaned jobs found - clean startup")
@@ -13826,6 +13687,10 @@ async def startup_event():
 
     start_job_worker()
 
+    # Start job queue reclaim thread (monitors for dead workers via stale heartbeat)
+    job_reclaim_thread = threading.Thread(target=job_queue_reclaim_loop, daemon=True, name="JobQueueReclaimThread")
+    job_reclaim_thread.start()
+
     # Start email queue watchdog in separate thread
     email_watchdog_thread = threading.Thread(target=email_queue_watchdog_loop, daemon=True, name="EmailQueueWatchdog")
     email_watchdog_thread.start()
@@ -13834,7 +13699,7 @@ async def startup_event():
     timeout_thread = threading.Thread(target=timeout_watchdog_loop, daemon=True, name="TimeoutWatchdog")
     timeout_thread.start()
 
-    LOG.info("✅ Job queue system initialized")
+    LOG.info("✅ Job queue system initialized (3 watchdog threads running)")
 
 @APP.on_event("shutdown")
 async def shutdown_event():
@@ -17526,22 +17391,41 @@ async def reactivate_user(request: Request):
 # Email Queue API endpoints
 @APP.get("/api/queue-status")
 def get_queue_status(token: str = Query(...)):
-    """Get email queue status"""
+    """
+    Get unified queue status - combines active job processing AND email queue.
+
+    Shows:
+    - Active jobs from ticker_processing_jobs (mode='daily', status='processing')
+    - Completed emails from email_queue (ready/sent/failed/cancelled)
+
+    This provides end-to-end visibility from job start to email delivery.
+    """
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
         with db() as conn, conn.cursor() as cur:
-            # Get stats
+            # Query 1: Get active processing jobs (mode='daily')
             cur.execute("""
-                SELECT status, COUNT(*) as count
-                FROM email_queue
-                GROUP BY status
+                SELECT
+                    j.ticker,
+                    j.status as job_status,
+                    j.phase,
+                    j.progress,
+                    j.worker_id,
+                    j.started_at,
+                    j.last_updated,
+                    j.error_message,
+                    j.config->>'recipients' as recipients_json,
+                    EXTRACT(EPOCH FROM (NOW() - j.started_at)) / 60 AS minutes_running
+                FROM ticker_processing_jobs j
+                WHERE j.config->>'mode' = 'daily'
+                AND j.status IN ('queued', 'processing')
+                ORDER BY j.created_at
             """)
-            stats_rows = cur.fetchall()
-            stats = {row['status']: row['count'] for row in stats_rows}
+            active_jobs = cur.fetchall()
 
-            # Get all tickers
+            # Query 2: Get email queue (completed emails)
             cur.execute("""
                 SELECT ticker, company_name, recipients, email_subject,
                        article_count, status, error_message, heartbeat,
@@ -17557,21 +17441,83 @@ def get_queue_status(token: str = Query(...)):
                     END,
                     ticker
             """)
-            tickers = cur.fetchall()
+            email_queue_rows = cur.fetchall()
+
+            # Build unified ticker list
+            tickers_dict = {}
+
+            # Add email queue entries
+            for row in email_queue_rows:
+                tickers_dict[row['ticker']] = {
+                    "ticker": row['ticker'],
+                    "company_name": row.get('company_name'),
+                    "recipients": row.get('recipients'),
+                    "email_subject": row.get('email_subject'),
+                    "article_count": row.get('article_count'),
+                    "status": row['status'],  # ready, sent, failed, cancelled
+                    "error_message": row.get('error_message'),
+                    "heartbeat": row.get('heartbeat'),
+                    "created_at": row.get('created_at'),
+                    "updated_at": row.get('updated_at'),
+                    "sent_at": row.get('sent_at'),
+                    "source": "email_queue",
+                    "progress": None,  # Email queue doesn't have progress
+                    "phase": None
+                }
+
+            # Add active jobs (override if ticker exists in email_queue)
+            for job in active_jobs:
+                ticker = job['ticker']
+
+                # Parse recipients from JSON if available
+                recipients_json = job.get('recipients_json')
+                recipients = json.loads(recipients_json) if recipients_json else None
+
+                tickers_dict[ticker] = {
+                    "ticker": ticker,
+                    "company_name": None,  # Will be filled when email generated
+                    "recipients": recipients,
+                    "email_subject": None,
+                    "article_count": None,
+                    "status": "processing",  # Active job
+                    "error_message": job.get('error_message'),
+                    "heartbeat": job.get('last_updated'),
+                    "created_at": job.get('started_at'),
+                    "updated_at": job.get('last_updated'),
+                    "sent_at": None,
+                    "source": "job_queue",
+                    "progress": job.get('progress'),  # 0-100%
+                    "phase": job.get('phase'),  # e.g. "ingest_complete", "digest_start"
+                    "minutes_running": round(job.get('minutes_running', 0), 1) if job.get('minutes_running') else 0
+                }
+
+            # Convert dict to list and sort
+            tickers_list = list(tickers_dict.values())
+            tickers_list.sort(key=lambda x: (
+                1 if x['status'] == 'processing' else
+                2 if x['status'] == 'ready' else
+                3 if x['status'] == 'failed' else
+                4 if x['status'] == 'sent' else 5,
+                x['ticker']
+            ))
+
+            # Calculate stats
+            stats = {
+                "processing": sum(1 for t in tickers_list if t['status'] == 'processing'),
+                "ready": sum(1 for t in tickers_list if t['status'] == 'ready'),
+                "failed": sum(1 for t in tickers_list if t['status'] == 'failed'),
+                "sent": sum(1 for t in tickers_list if t['status'] == 'sent'),
+                "cancelled": sum(1 for t in tickers_list if t['status'] == 'cancelled')
+            }
 
             return {
                 "status": "success",
-                "stats": {
-                    "ready": stats.get('ready', 0),
-                    "failed": stats.get('failed', 0),
-                    "processing": stats.get('processing', 0),
-                    "sent": stats.get('sent', 0),
-                    "cancelled": stats.get('cancelled', 0)
-                },
-                "tickers": tickers
+                "stats": stats,
+                "tickers": tickers_list
             }
     except Exception as e:
         LOG.error(f"Failed to get queue status: {e}")
+        LOG.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/send-all-ready")
@@ -18197,7 +18143,7 @@ async def cancel_in_progress_runs_api(request: Request):
                     UPDATE ticker_processing_jobs
                     SET status = 'cancelled',
                         error_message = 'Cancelled by admin via UI',
-                        updated_at = NOW()
+                        last_updated = NOW()
                     WHERE batch_id = %s
                       AND status IN ('queued', 'processing')
                 """, (batch['batch_id'],))

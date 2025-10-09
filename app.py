@@ -11559,9 +11559,6 @@ def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | N
         LOG.info(f"Email sent successfully to {recipient}" + (f" (BCC: {bcc})" if bcc else ""))
         return True
 
-    except smtplib.SMTPTimeout as e:
-        LOG.error(f"SMTP timeout sending email: {e}")
-        return False
     except smtplib.SMTPException as e:
         LOG.error(f"SMTP error sending email: {e}")
         return False
@@ -13145,7 +13142,7 @@ async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> tuple[
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:100]}"
 
-async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: List[int]):
+async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: List[int]) -> List[int]:
     """
     Resolve Google News URLs for flagged articles only (after triage, before digest)
 
@@ -13164,6 +13161,9 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     - Spread out over time (no burst of concurrent requests)
     - Natural request pattern (like a human clicking links)
     - Domain from title already available for Email #1 and deduplication
+
+    Returns:
+    - Updated flagged_article_ids list with duplicates removed
     """
     LOG.info(f"[{ticker}] 🔗 Phase 1.5: Resolving Google News URLs for flagged articles...")
 
@@ -13296,35 +13296,41 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     # After resolution, check if multiple articles resolved to the SAME final URL
     # This catches: Google News → Source A, Yahoo Finance → Source A (same resolved_url)
     # Keep the best article, remove duplicates from flagged list
+    # NOTE: System uses ID lists (not database column) to track flagged articles
     # ============================================================================
     LOG.info(f"[{ticker}] 🔍 Checking for duplicate resolved URLs...")
 
+    # Return early if no flagged articles
+    if not flagged_article_ids:
+        LOG.info(f"[{ticker}] ✅ No flagged articles to deduplicate")
+        return flagged_article_ids
+
     with db() as conn, conn.cursor() as cur:
-        # Find flagged articles with duplicate resolved_url
+        # Find flagged articles with duplicate resolved_url (use ID list, not database column)
         cur.execute("""
             SELECT resolved_url, array_agg(a.id ORDER BY a.published_at DESC) as article_ids,
                    array_agg(a.domain ORDER BY a.published_at DESC) as domains,
                    array_agg(a.title ORDER BY a.published_at DESC) as titles
             FROM articles a
-            JOIN ticker_articles ta ON a.id = ta.article_id
-            WHERE ta.ticker = %s
-            AND ta.flagged = TRUE
+            WHERE a.id = ANY(%s)
             AND a.resolved_url IS NOT NULL
             GROUP BY resolved_url
             HAVING COUNT(*) > 1
-        """, (ticker,))
+        """, (flagged_article_ids,))
 
         duplicates = cur.fetchall()
 
         if duplicates:
             removed_count = 0
+            removed_ids = []
+
             for dup in duplicates:
                 resolved_url = dup['resolved_url']
                 article_ids = dup['article_ids']
                 domains = dup['domains']
                 titles = dup['titles']
 
-                # Keep first article (newest by published_at), unflag the rest
+                # Keep first article (newest by published_at), remove the rest from ID list
                 keep_id = article_ids[0]
                 remove_ids = article_ids[1:]
 
@@ -13333,19 +13339,17 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
                 for idx, remove_id in enumerate(remove_ids, 1):
                     LOG.info(f"[{ticker}]    ❌ Removing: ID {remove_id} ({domains[idx]}) - {titles[idx][:60]}...")
-
-                    # Unflag the duplicate (don't delete, just remove from flagged list)
-                    cur.execute("""
-                        UPDATE ticker_articles
-                        SET flagged = FALSE
-                        WHERE ticker = %s AND article_id = %s
-                    """, (ticker, remove_id))
-
+                    removed_ids.append(remove_id)
                     removed_count += 1
+
+            # Remove duplicates from Python list (not database - no flagged column exists)
+            flagged_article_ids = [aid for aid in flagged_article_ids if aid not in removed_ids]
 
             LOG.info(f"[{ticker}] ✅ Removed {removed_count} duplicate articles from flagged list")
         else:
             LOG.info(f"[{ticker}] ✅ No duplicate resolved URLs found")
+
+    return flagged_article_ids
 
 async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
     """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary
@@ -13707,18 +13711,9 @@ async def process_ticker_job(job: dict):
         LOG.info(f"[{ticker}] 🔗 [JOB {job_id}] Phase 1.5: Google News URL resolution starting...")
 
         if flagged_article_ids:
-            await resolve_flagged_google_news_urls(ticker, flagged_article_ids)
-
-            # Refresh flagged article IDs after deduplication
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT article_id FROM ticker_articles
-                    WHERE ticker = %s AND flagged = TRUE
-                    ORDER BY article_id
-                """, (ticker,))
-                flagged_article_ids = [row[0] for row in cur.fetchall()]
-
-            LOG.info(f"[{ticker}] 📋 [JOB {job_id}] After deduplication: {len(flagged_article_ids)} flagged articles remain")
+            # Resolve URLs and get deduplicated list back
+            flagged_article_ids = await resolve_flagged_google_news_urls(ticker, flagged_article_ids)
+            LOG.info(f"[{ticker}] 📋 [JOB {job_id}] After resolution & deduplication: {len(flagged_article_ids)} flagged articles remain")
         else:
             LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles to resolve")
 

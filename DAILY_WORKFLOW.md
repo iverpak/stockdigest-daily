@@ -139,7 +139,7 @@ status VARCHAR(50) DEFAULT 'pending'
 
 ## Admin Dashboard
 
-### Three Pages
+### Four Pages
 
 #### 1. Landing Page: `/admin`
 
@@ -148,7 +148,7 @@ status VARCHAR(50) DEFAULT 'pending'
 **Features:**
 - Real-time stats (pending users, active users, ready emails, sent today)
 - Alert banner for pending items
-- Navigation to users and queue pages
+- **4 Navigation cards:** Beta User Management, Email Queue, System Settings, Test Runner
 - Auto-refreshes every 30 seconds
 
 #### 2. Beta User Management: `/admin/users`
@@ -196,8 +196,37 @@ status VARCHAR(50) DEFAULT 'pending'
   - 🔄 Re-run - Reprocess ticker
   - ❌ Cancel - Remove from queue
 - **Auto-send countdown** - Shows time until 8:30 AM
-- **Auto-refresh** - Every 30 seconds
+- **Auto-refresh** - Every 5 seconds (real-time progress monitoring)
 - **Confirmation dialogs** - All buttons show impact counts and time estimates
+
+#### 4. System Settings: `/admin/settings` (NEW - Oct 2025)
+
+**URL:** `https://stockdigest.app/admin/settings?token=YOUR_ADMIN_TOKEN`
+
+**Features:**
+
+**Production Lookback Window:**
+- Configure article search window for production workflows
+- Range: 60 minutes (1 hour) to 10,080 minutes (7 days)
+- Default: 1440 minutes (1 day)
+- Type any value within range
+- Real-time validation
+- Applies to:
+  - `python app.py process` (7 AM cron)
+  - `/api/generate-all-reports` (admin button)
+  - `/api/generate-user-reports` (bulk selection)
+  - `/api/rerun-all-queue` (rerun all)
+  - `/api/retry-failed-and-cancelled` (retry failed)
+- **Note:** Test portal (`/admin/test`) has separate hardcoded settings
+
+**GitHub CSV Backup:**
+- **Manual Commit Button:** Backup `ticker_reference.csv` to GitHub on-demand
+- **Warning:** Triggers Render deployment (~2-3 min downtime)
+- **Automated Backup:** Daily cron at 6:30 AM EST (requires manual Render setup)
+
+**Current Value Display:**
+- Shows active lookback window in minutes and days
+- Updates immediately after changes
 
 ---
 
@@ -215,6 +244,35 @@ OR (is_production = FALSE AND created_at < NOW() - INTERVAL '1 day')
 ```
 
 **Safety:** Prevents yesterday's test emails from being sent today.
+
+---
+
+### 6:30 AM - GitHub CSV Backup (NEW - Oct 2025)
+
+**Function:** `commit_ticker_reference_to_github()`
+**Purpose:** Daily backup of ticker reference data + trigger controlled deployment
+
+```bash
+python app.py commit
+```
+
+**What It Does:**
+1. Exports `ticker_reference` table from PostgreSQL to CSV
+2. Commits `data/ticker_reference.csv` to GitHub (without `[skip render]`)
+3. Triggers Render deployment (~2-3 min)
+
+**Render Cron Configuration:**
+```
+Name: Daily GitHub Commit
+Schedule: 30 10 * * *  (6:30 AM EST = 10:30 AM UTC)
+Command: python app.py commit
+```
+
+**Benefits:**
+- One controlled deployment per day
+- Automated backups
+- Job runs no longer interrupted by inline commits
+- Manual backup available in `/admin/settings`
 
 ---
 

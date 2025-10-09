@@ -50,6 +50,7 @@ The new job queue system decouples long-running processing from HTTP requests, e
 ```bash
 # Cron job functions (run via: python app.py <function>)
 python app.py cleanup   # 6:00 AM - Delete old queue entries
+python app.py commit    # 6:30 AM - Daily GitHub CSV commit (triggers deployment)
 python app.py process   # 7:00 AM - Process all active beta users
 python app.py send      # 8:30 AM - Auto-send emails to users
 python app.py export    # 11:59 PM - Backup beta users to CSV
@@ -65,9 +66,10 @@ python app.py export    # 11:59 PM - Backup beta users to CSV
 - DRY_RUN mode for safe testing
 
 **Admin Dashboard:**
-- `/admin` - Stats overview and navigation
+- `/admin` - Stats overview and navigation (4 cards: Users, Queue, Settings, Test)
 - `/admin/users` - Beta user approval interface with bulk selection (Oct 2025)
 - `/admin/queue` - Email queue management with 8 smart buttons and real-time counts (Oct 2025)
+- `/admin/settings` - System configuration: Lookback window + GitHub CSV backup (Oct 2025)
 - `/admin/test` - Web-based test runner (replaces PowerShell setup_job_queue.ps1) (Oct 2025)
 
 **Safety Systems:**
@@ -252,6 +254,11 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `POST /admin/wipe-database`: Complete database reset
 - `GET /admin/ticker-metadata/{ticker}`: Retrieve ticker configuration
 - **`POST /admin/export-user-csv`**: Export beta users to CSV for daily processing
+
+**System Configuration Endpoints (NEW - Oct 2025):**
+- **`GET /api/get-lookback-window`**: Get current production lookback window
+- **`POST /api/set-lookback-window`**: Update production lookback window (60-10080 minutes)
+- **`POST /api/commit-ticker-csv`**: Manually commit ticker_reference.csv to GitHub (triggers deployment)
 
 **Email Queue Management (Oct 2025):**
 - **`POST /api/generate-user-reports`**: Generate reports for selected users (bulk processing)

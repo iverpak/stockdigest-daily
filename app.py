@@ -9437,41 +9437,54 @@ class DomainResolver:
             
             # Get the page content
             resp = requests.get(url, headers=headers, timeout=10)
+            LOG.info(f"🔍 [GOOGLE_NEWS] Initial fetch: status={resp.status_code}, content_length={len(resp.text)}")
             soup = BeautifulSoup(resp.text, 'html.parser')
-            
+
             # Find the c-wiz element with data-p attribute
             c_wiz = soup.select_one('c-wiz[data-p]')
             if not c_wiz:
+                LOG.info(f"❌ [GOOGLE_NEWS] No <c-wiz[data-p]> element found in HTML (page may have changed structure)")
                 return None
-                
+
             data_p = c_wiz.get('data-p')
             if not data_p:
+                LOG.info(f"❌ [GOOGLE_NEWS] <c-wiz> found but no data-p attribute")
                 return None
-                
+
+            LOG.info(f"✅ [GOOGLE_NEWS] Found data-p attribute (length={len(data_p)})")
+
             # Parse the embedded JSON
             obj = json.loads(data_p.replace('%.@.', '["garturlreq",'))
-            
+            LOG.info(f"✅ [GOOGLE_NEWS] Parsed data-p JSON successfully")
+
             # Prepare the payload for the internal API
             payload = {
                 'f.req': json.dumps([[['Fbv4je', json.dumps(obj[:-6] + obj[-2:]), 'null', 'generic']]])
             }
-            
+
             # Make the API call
             api_url = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
             response = requests.post(api_url, headers=headers, data=payload, timeout=10)
-            
+            LOG.info(f"🔍 [GOOGLE_NEWS] API call: status={response.status_code}, response_length={len(response.text)}")
+
             if response.status_code != 200:
+                LOG.info(f"❌ [GOOGLE_NEWS] API returned non-200 status: {response.status_code}")
                 return None
-                
+
             # Parse the response
             response_text = response.text.replace(")]}'", "")
             response_json = json.loads(response_text)
+            LOG.info(f"✅ [GOOGLE_NEWS] Parsed API response JSON (top-level length={len(response_json)})")
+
             array_string = response_json[0][2]
             article_url = json.loads(array_string)[1]
-            
+            LOG.info(f"✅ [GOOGLE_NEWS] Extracted article URL: {article_url[:100]}...")
+
             if article_url and len(article_url) > 10:  # Basic validation
-                LOG.info(f"Advanced Google News resolution: {article_url}")
+                LOG.info(f"✅ [GOOGLE_NEWS] Advanced API SUCCESS: {article_url}")
                 return article_url
+            else:
+                LOG.info(f"❌ [GOOGLE_NEWS] Article URL failed validation (length={len(article_url) if article_url else 0})")
                 
         except Exception as e:
             LOG.info(f"❌ [GOOGLE_NEWS] Advanced API exception: {str(e)[:200]}")

@@ -1140,9 +1140,9 @@ def ensure_schema():
                     updated_by VARCHAR(100)
                 );
 
-                -- Initialize default lookback window (7 days = 10080 minutes)
+                -- Initialize default lookback window (1 day = 1440 minutes)
                 INSERT INTO system_config (key, value, description, updated_by)
-                VALUES ('lookback_minutes', '10080', 'Article lookback window in minutes (7 days default)', 'system')
+                VALUES ('lookback_minutes', '1440', 'Article lookback window in minutes (1 day default)', 'system')
                 ON CONFLICT (key) DO NOTHING;
 
                 CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config(key);
@@ -3162,10 +3162,10 @@ def sync_ticker_references_from_github():
 def sync_ticker_references_to_github(commit_message: str = None):
     """Export database to CSV format (no GitHub commit)"""
     LOG.info("=== Exporting ticker references to CSV format ===")
-    
+
     # Export database to CSV
     export_result = export_ticker_references_to_csv()
-    
+
     return {
         "status": export_result["status"],
         "database_export": {
@@ -3174,6 +3174,75 @@ def sync_ticker_references_to_github(commit_message: str = None):
         },
         "message": f"Exported {export_result.get('ticker_count', 0)} ticker references to CSV format"
     }
+
+def commit_ticker_reference_to_github():
+    """
+    Daily cron job function: Export ticker_reference from database and commit to GitHub.
+    Called by: python app.py commit (Render cron at 6:30 AM EST)
+
+    Unlike incremental commits during job runs, this triggers a Render deployment.
+    """
+    LOG.info("🔄 ============================================")
+    LOG.info("🔄 DAILY GITHUB COMMIT - ticker_reference.csv")
+    LOG.info("🔄 ============================================")
+
+    try:
+        # Step 1: Export ticker_reference from database to CSV
+        LOG.info("📤 Step 1: Exporting ticker_reference from database...")
+        export_result = export_ticker_references_to_csv()
+
+        if export_result["status"] != "success":
+            LOG.error(f"❌ Export failed: {export_result.get('message', 'Unknown error')}")
+            return {
+                "status": "error",
+                "message": f"CSV export failed: {export_result.get('message')}",
+                "rows": 0
+            }
+
+        csv_content = export_result["csv_content"]
+        ticker_count = export_result.get("ticker_count", 0)
+        LOG.info(f"✅ Exported {ticker_count} tickers ({len(csv_content)} chars)")
+
+        # Step 2: Commit to GitHub (WITHOUT [skip render])
+        LOG.info("📤 Step 2: Committing to GitHub (triggers deployment)...")
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        commit_message = f"Daily ticker reference update - {timestamp}"
+
+        commit_result = commit_csv_to_github(csv_content, commit_message)
+
+        if commit_result["status"] != "success":
+            LOG.error(f"❌ GitHub commit failed: {commit_result.get('message', 'Unknown error')}")
+            return {
+                "status": "error",
+                "message": f"GitHub commit failed: {commit_result.get('message')}",
+                "rows": ticker_count
+            }
+
+        LOG.info(f"✅ GitHub commit successful")
+        LOG.info(f"   Commit SHA: {commit_result.get('commit_sha', 'N/A')[:8]}")
+        LOG.info(f"   Tickers: {ticker_count}")
+        LOG.info(f"   CSV size: {len(csv_content)} chars")
+        LOG.info(f"⚠️  Render deployment will start in ~10 seconds")
+
+        return {
+            "status": "success",
+            "message": "Ticker reference committed to GitHub successfully",
+            "rows": ticker_count,
+            "commit_sha": commit_result.get("commit_sha"),
+            "commit_url": commit_result.get("commit_url"),
+            "timestamp": timestamp
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Daily GitHub commit failed: {e}")
+        LOG.error(traceback.format_exc())
+        return {
+            "status": "error",
+            "message": f"Unexpected error: {str(e)}",
+            "rows": 0
+        }
 
 # 5. SELECTIVE TICKER UPDATE - Update specific tickers only
 def update_specific_tickers_on_github(tickers: list, commit_message: str = None):
@@ -8939,7 +9008,7 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
                     SELECT company_name FROM ticker_reference
-                    WHERE ticker = %s AND active = TRUE
+                    WHERE ticker = %s
                     LIMIT 1
                 """, (competitor_ticker,))
                 result = cur.fetchone()
@@ -17133,6 +17202,28 @@ def check_admin_token(token: str) -> bool:
     admin_token = os.getenv('ADMIN_TOKEN')
     return token == admin_token if admin_token else False
 
+def get_lookback_minutes() -> int:
+    """
+    Get configured lookback window from system_config table.
+    Used by production workflows (cron jobs and admin bulk actions).
+    Test portal (/admin/test) has separate hardcoded settings.
+
+    Returns:
+        int: Lookback window in minutes (default: 1440 = 1 day)
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT value FROM system_config WHERE key = 'lookback_minutes'")
+            row = cur.fetchone()
+            if row:
+                return int(row[0])
+            else:
+                LOG.warning("⚠️ No lookback_minutes in system_config, using default 1440 (1 day)")
+                return 1440  # 1 day default
+    except Exception as e:
+        LOG.error(f"Failed to fetch lookback_minutes: {e}, using default 1440")
+        return 1440  # 1 day default
+
 @APP.get("/admin")
 def admin_dashboard(request: Request, token: str = Query(...)):
     """Admin dashboard landing page"""
@@ -17173,6 +17264,17 @@ def admin_test_page(request: Request, token: str = Query(...)):
         return HTMLResponse("Unauthorized", status_code=401)
 
     return templates.TemplateResponse("admin_test.html", {
+        "request": request,
+        "token": token
+    })
+
+@APP.get("/admin/settings")
+def admin_settings_page(request: Request, token: str = Query(...)):
+    """Admin settings page - Lookback window and GitHub commit"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_settings.html", {
         "request": request,
         "token": token
     })
@@ -17546,7 +17648,7 @@ async def rerun_ticker_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (1, 'admin_ui_single', json.dumps({
-                "minutes": 1440,
+                "minutes": get_lookback_minutes(),
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"
@@ -17562,7 +17664,7 @@ async def rerun_ticker_api(request: Request):
                 )
                 VALUES (%s, %s, %s, %s)
             """, (batch_id, ticker, json.dumps({
-                "minutes": 1440,
+                "minutes": get_lookback_minutes(),
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily",
@@ -17627,7 +17729,7 @@ async def retry_failed_and_cancelled_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui_retry', json.dumps({
-                "minutes": 1440,
+                "minutes": get_lookback_minutes(),
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"
@@ -17644,7 +17746,7 @@ async def retry_failed_and_cancelled_api(request: Request):
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": 1440,
+                    "minutes": get_lookback_minutes(),
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",
@@ -17721,7 +17823,7 @@ async def rerun_all_queue_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui_rerun_all', json.dumps({
-                "minutes": 1440,
+                "minutes": get_lookback_minutes(),
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"
@@ -17738,7 +17840,7 @@ async def rerun_all_queue_api(request: Request):
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": 1440,
+                    "minutes": get_lookback_minutes(),
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",
@@ -17881,7 +17983,7 @@ async def generate_user_reports_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui', json.dumps({
-                "minutes": 1440,
+                "minutes": get_lookback_minutes(),
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"  # CRITICAL: Daily workflow mode
@@ -17898,7 +18000,7 @@ async def generate_user_reports_api(request: Request):
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": 1440,
+                    "minutes": get_lookback_minutes(),
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",  # CRITICAL: Daily workflow mode
@@ -17951,7 +18053,7 @@ async def generate_all_reports_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui', json.dumps({
-                "minutes": 1440,
+                "minutes": get_lookback_minutes(),
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"  # CRITICAL: Daily workflow mode
@@ -17968,7 +18070,7 @@ async def generate_all_reports_api(request: Request):
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": 1440,
+                    "minutes": get_lookback_minutes(),
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",  # CRITICAL: Daily workflow mode
@@ -18017,6 +18119,118 @@ async def clear_all_reports_api(request: Request):
 
     except Exception as e:
         LOG.error(f"Failed to clear all reports: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/commit-ticker-csv")
+async def commit_ticker_csv_api(request: Request):
+    """
+    Manually commit ticker_reference.csv to GitHub.
+    Triggers Render deployment (~2-3 min downtime).
+    Admin-only endpoint.
+    """
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🔄 Manual GitHub commit requested via admin dashboard")
+        result = commit_ticker_reference_to_github()
+
+        if result['status'] == 'success':
+            LOG.info(f"✅ Manual commit successful: {result.get('commit_sha', 'N/A')[:8]}")
+            return {
+                "status": "success",
+                "message": result['message'],
+                "rows": result['rows'],
+                "commit_sha": result.get('commit_sha'),
+                "commit_url": result.get('commit_url'),
+                "timestamp": result.get('timestamp')
+            }
+        else:
+            LOG.error(f"❌ Manual commit failed: {result.get('message')}")
+            return {
+                "status": "error",
+                "message": result.get('message', 'Unknown error'),
+                "rows": result.get('rows', 0)
+            }
+
+    except Exception as e:
+        LOG.error(f"Manual GitHub commit failed: {e}")
+        LOG.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/get-lookback-window")
+async def get_lookback_window_api(token: str = Query(...)):
+    """Get current production lookback window from system_config"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        minutes = get_lookback_minutes()
+        hours = minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        label = f"{days} days" if days > 0 else f"{int(hours)} hours"
+
+        return {
+            "status": "success",
+            "minutes": minutes,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get lookback window: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/set-lookback-window")
+async def set_lookback_window_api(
+    token: str = Query(...),
+    minutes: int = Query(...)
+):
+    """Update production lookback window in system_config"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    # Validation: 1 hour to 7 days
+    if minutes < 60:
+        return {
+            "status": "error",
+            "message": "Lookback must be at least 60 minutes (1 hour)"
+        }
+
+    if minutes > 10080:
+        return {
+            "status": "error",
+            "message": "Lookback cannot exceed 10,080 minutes (7 days)"
+        }
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE system_config
+                SET value = %s,
+                    updated_at = NOW(),
+                    updated_by = 'admin_dashboard'
+                WHERE key = 'lookback_minutes'
+            """, (str(minutes),))
+            conn.commit()
+
+        hours = minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        label = f"{days} days" if days > 0 else f"{int(hours)} hours"
+
+        LOG.info(f"✅ Production lookback window updated to {minutes} minutes ({label}) via admin dashboard")
+
+        return {
+            "status": "success",
+            "message": f"Lookback window updated to {label}",
+            "minutes": minutes,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to update lookback window: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/cancel-ready-emails")
@@ -18583,7 +18797,7 @@ def process_daily_workflow():
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'cron_job', json.dumps({
-                "minutes": 1440,
+                "minutes": get_lookback_minutes(),
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"  # CRITICAL: Daily workflow mode
@@ -18600,7 +18814,7 @@ def process_daily_workflow():
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": 1440,
+                    "minutes": get_lookback_minutes(),
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",  # CRITICAL: Daily workflow mode
@@ -18767,9 +18981,21 @@ if __name__ == "__main__":
             auto_send_cron_job()
         elif func_name == "export":
             export_beta_users_csv()
+        elif func_name == "commit":
+            # Daily GitHub commit (triggers deployment)
+            result = commit_ticker_reference_to_github()
+            if result['status'] == 'success':
+                print(f"✅ {result['message']}")
+                print(f"   Rows: {result['rows']}")
+                print(f"   Commit: {result.get('commit_sha', 'N/A')[:8]}")
+                print(f"   URL: {result.get('commit_url', 'N/A')}")
+                sys.exit(0)
+            else:
+                print(f"❌ Error: {result['message']}")
+                sys.exit(1)
         else:
             print(f"Unknown function: {func_name}")
-            print("Available functions: cleanup, process, send, export")
+            print("Available functions: cleanup, process, send, export, commit")
             sys.exit(1)
     else:
         # Normal server startup

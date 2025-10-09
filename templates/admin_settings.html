@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockDigest - Admin Settings</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #1e293b;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .breadcrumb {
+            color: #64748b;
+            font-size: 14px;
+        }
+
+        .breadcrumb a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+
+        .settings-card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .settings-card h2 {
+            color: #1e293b;
+            font-size: 20px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .setting-group {
+            margin-bottom: 25px;
+        }
+
+        .setting-label {
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .setting-description {
+            color: #64748b;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        input[type="number"] {
+            flex: 1;
+            max-width: 200px;
+            padding: 10px 14px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .current-value {
+            background: #f1f5f9;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #475569;
+        }
+
+        .current-value strong {
+            color: #1e293b;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-secondary {
+            background: #64748b;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(100, 116, 139, 0.3);
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .status-message {
+            margin-top: 10px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            display: none;
+            white-space: pre-line;
+        }
+
+        .status-message.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+            display: block;
+        }
+
+        .status-message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
+            display: block;
+        }
+
+        .warning-box {
+            background: #fef3c7;
+            border: 2px solid #fbbf24;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 15px;
+            color: #78350f;
+        }
+
+        .warning-box strong {
+            color: #92400e;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .info-box {
+            background: #dbeafe;
+            border: 2px solid #3b82f6;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 15px;
+            color: #1e40af;
+        }
+
+        .info-box strong {
+            color: #1e3a8a;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚙️ System Settings</h1>
+            <div class="breadcrumb">
+                <a href="/admin?token={{ token }}">Dashboard</a> / Settings
+            </div>
+        </div>
+
+        <!-- Production Lookback Window -->
+        <div class="settings-card">
+            <h2>📅 Production Lookback Window</h2>
+
+            <div class="setting-group">
+                <label class="setting-label">Default Article Lookback Period</label>
+                <div class="setting-description">
+                    Controls how far back to search for articles in production workflows (daily cron jobs and admin bulk actions).
+                    <br><strong>Note:</strong> Test portal (/admin/test) has separate settings.
+                </div>
+
+                <div class="current-value" id="current-lookback-display">
+                    <strong>Current:</strong> Loading...
+                </div>
+
+                <div class="input-group" style="margin-top: 15px;">
+                    <input type="number"
+                           id="lookback-minutes"
+                           placeholder="1440"
+                           min="60"
+                           max="10080"
+                           step="60">
+                    <span style="color: #64748b;">minutes</span>
+                    <button class="btn btn-primary" onclick="updateLookbackWindow()">
+                        💾 Save Lookback Window
+                    </button>
+                </div>
+
+                <div id="lookback-status" class="status-message"></div>
+
+                <div class="warning-box">
+                    <strong>⚠️ Limits:</strong> Minimum 60 minutes (1 hour), Maximum 10,080 minutes (7 days)
+                    <br><strong>Common values:</strong> 1440 = 1 day, 2880 = 2 days, 4320 = 3 days, 10080 = 7 days
+                </div>
+            </div>
+        </div>
+
+        <!-- GitHub Commit -->
+        <div class="settings-card">
+            <h2>🔄 GitHub Data Backup</h2>
+
+            <div class="setting-group">
+                <label class="setting-label">Manual CSV Commit</label>
+                <div class="setting-description">
+                    Commit current ticker_reference.csv to GitHub repository.
+                    <br><strong>⚠️ Warning:</strong> This will trigger a Render deployment (~2-3 minutes downtime).
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-secondary" onclick="commitCSV()">
+                        🔄 Commit to GitHub
+                    </button>
+                </div>
+
+                <div id="commit-status" class="status-message"></div>
+
+                <div class="info-box">
+                    <strong>ℹ️ Automated Backup:</strong> A cron job automatically commits the CSV every day at 6:30 AM EST.
+                    <br>Use this button only if you need an immediate backup.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get token from URL
+        function getToken() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('token');
+        }
+
+        // Load current lookback window on page load
+        async function loadCurrentLookback() {
+            try {
+                const response = await fetch(`/api/get-lookback-window?token=${getToken()}`);
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    document.getElementById('current-lookback-display').innerHTML =
+                        `<strong>Current:</strong> ${data.minutes} minutes (${data.label})`;
+                    document.getElementById('lookback-minutes').value = data.minutes;
+                } else {
+                    document.getElementById('current-lookback-display').innerHTML =
+                        `<strong>Current:</strong> Error loading`;
+                }
+            } catch (error) {
+                console.error('Failed to load lookback window:', error);
+                document.getElementById('current-lookback-display').innerHTML =
+                    `<strong>Current:</strong> Error loading`;
+            }
+        }
+
+        // Update lookback window
+        async function updateLookbackWindow() {
+            const minutes = parseInt(document.getElementById('lookback-minutes').value);
+            const statusDiv = document.getElementById('lookback-status');
+
+            // Validation
+            if (!minutes || minutes < 60) {
+                showStatus(statusDiv, 'error', '❌ Lookback must be at least 60 minutes (1 hour)');
+                return;
+            }
+
+            if (minutes > 10080) {
+                showStatus(statusDiv, 'error', '❌ Lookback cannot exceed 10,080 minutes (7 days)');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/set-lookback-window?token=${getToken()}&minutes=${minutes}`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showStatus(statusDiv, 'success', `✅ ${data.message}`);
+                    document.getElementById('current-lookback-display').innerHTML =
+                        `<strong>Current:</strong> ${data.minutes} minutes (${data.label})`;
+                } else {
+                    showStatus(statusDiv, 'error', `❌ Error: ${data.message || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showStatus(statusDiv, 'error', `❌ Failed to update: ${error.message}`);
+            }
+        }
+
+        // Commit CSV to GitHub
+        async function commitCSV() {
+            if (!confirm('⚠️ Commit ticker_reference.csv to GitHub?\n\nThis will trigger a Render deployment (~2-3 min downtime).')) {
+                return;
+            }
+
+            const statusDiv = document.getElementById('commit-status');
+            showStatus(statusDiv, 'success', '🔄 Committing to GitHub...');
+
+            try {
+                const response = await fetch(`/api/commit-ticker-csv`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        token: getToken()
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showStatus(statusDiv, 'success',
+                        `✅ ${data.message}\n` +
+                        `Rows: ${data.rows}\n` +
+                        `Commit: ${data.commit_sha ? data.commit_sha.substring(0, 8) : 'N/A'}\n` +
+                        `Deployment will start in ~10 seconds.`
+                    );
+                } else {
+                    showStatus(statusDiv, 'error', `❌ Error: ${data.message}`);
+                }
+            } catch (error) {
+                showStatus(statusDiv, 'error', `❌ Failed to commit: ${error.message}`);
+            }
+        }
+
+        // Show status message
+        function showStatus(element, type, message) {
+            element.className = `status-message ${type}`;
+            element.textContent = message;
+            element.style.display = 'block';
+
+            if (type === 'success') {
+                setTimeout(() => {
+                    element.style.display = 'none';
+                }, 5000);
+            }
+        }
+
+        // Load on page load
+        document.addEventListener('DOMContentLoaded', loadCurrentLookback);
+    </script>
+</body>
+</html>

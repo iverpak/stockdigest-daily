@@ -5116,11 +5116,11 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         
                         # Clean all text fields to remove NULL bytes
                         clean_url = clean_null_bytes(url or "")
-                        clean_resolved_url = clean_null_bytes(final_resolved_url or "")
+                        clean_resolved_url = clean_null_bytes(final_resolved_url) if final_resolved_url else None
                         clean_title = clean_null_bytes(title or "")
                         clean_description = clean_null_bytes(display_content or "")
                         clean_search_keyword = clean_null_bytes(feed.get("search_keyword") or "")
-                        clean_source_url = clean_null_bytes(final_source_url or "")
+                        clean_source_url = clean_null_bytes(final_source_url) if final_source_url else None
                         clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
                         
                         # Insert article if new, then link to ticker

@@ -18243,6 +18243,81 @@ async def cancel_ticker_api(request: Request):
         LOG.error(f"Failed to cancel ticker: {e}")
         return {"status": "error", "message": str(e)}
 
+@APP.post("/api/send-ticker")
+async def send_ticker_api(request: Request):
+    """Send individual ticker email"""
+    body = await request.json()
+    token = body.get('token')
+    ticker = body.get('ticker')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get ready email for this ticker
+            cur.execute("""
+                SELECT ticker, company_name, recipients, email_html, email_subject, article_count
+                FROM email_queue
+                WHERE ticker = %s AND status = 'ready' AND sent_at IS NULL
+            """, (ticker,))
+
+            email = cur.fetchone()
+
+            if not email:
+                return {"status": "error", "message": f"No ready email found for {ticker}"}
+
+            recipients = email['recipients']
+            admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+
+            # Send to each recipient with unique unsubscribe token
+            for recipient in recipients:
+                # Generate unique unsubscribe token for this recipient
+                unsubscribe_token = get_or_create_unsubscribe_token(recipient)
+
+                # Replace placeholder with real token
+                final_html = email['email_html'].replace(
+                    '{{UNSUBSCRIBE_TOKEN}}',
+                    unsubscribe_token if unsubscribe_token else ''
+                )
+
+                # Send email
+                success = send_email_with_dry_run(
+                    subject=email['email_subject'],
+                    html=final_html,
+                    to=recipient,
+                    bcc=admin_email
+                )
+
+                if not success:
+                    raise Exception(f"Failed to send to {recipient}")
+
+                LOG.info(f"✅ Sent {ticker} to {recipient}")
+
+            # Mark as sent
+            cur.execute("""
+                UPDATE email_queue
+                SET status = 'sent', sent_at = NOW()
+                WHERE ticker = %s
+            """, (ticker,))
+            conn.commit()
+
+            LOG.info(f"✅ {ticker} sent to {len(recipients)} recipients")
+
+            return {
+                "status": "success",
+                "ticker": ticker,
+                "recipients_count": len(recipients),
+                "message": f"Sent {ticker} to {len(recipients)} recipients"
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to send ticker {ticker}: {e}")
+        return {"status": "error", "message": str(e)}
+
 @APP.get("/api/view-email/{ticker}")
 def view_email_api(ticker: str, token: str = Query(...)):
     """View email HTML preview"""

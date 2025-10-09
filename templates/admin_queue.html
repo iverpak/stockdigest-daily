@@ -312,7 +312,7 @@
             <button class="btn btn-primary" onclick="retryFailedAndCancelled()">
                 🔄 RETRY FAILED & CANCELLED <span class="btn-count" id="btn-retry-count">-</span>
             </button>
-            <button class="btn-danger" onclick="cancelReadyEmails()">
+            <button class="btn btn-danger" onclick="cancelReadyEmails()">
                 ⛔ CANCEL READY EMAILS <span class="btn-count" id="btn-cancel-ready-count">-</span>
             </button>
             <button class="btn btn-warning" onclick="undoCancelReadyEmails()">
@@ -413,18 +413,43 @@
             }
         }
 
-        function updateButtonCounts(data) {
+        async function updateButtonCounts(data) {
             const total = (data.ready || 0) + (data.processing || 0) + (data.failed || 0) + (data.cancelled || 0) + (data.sent || 0);
             const failedAndCancelled = (data.failed || 0) + (data.cancelled || 0);
 
-            document.getElementById('btn-generate-count').textContent = '15'; // Active users count
-            document.getElementById('btn-cancel-runs-count').textContent = '?'; // Will update from jobs API
+            // Static counts (calculated from queue status)
             document.getElementById('btn-rerun-all-count').textContent = total;
             document.getElementById('btn-retry-count').textContent = failedAndCancelled;
             document.getElementById('btn-cancel-ready-count').textContent = (data.ready || 0) + (data.processing || 0);
             document.getElementById('btn-undo-cancel-count').textContent = data.cancelled || 0;
             document.getElementById('btn-send-count').textContent = data.ready || 0;
             document.getElementById('btn-clear-count').textContent = total;
+
+            // Dynamic count #1: Active users (for Generate All Reports button)
+            try {
+                const usersResponse = await fetch(`/api/admin/users?token=${token}`);
+                const usersData = await usersResponse.json();
+                if (usersData.status === 'success') {
+                    const activeUserCount = usersData.users.filter(u => u.status === 'active').length;
+                    document.getElementById('btn-generate-count').textContent = activeUserCount;
+                }
+            } catch (error) {
+                console.error('Failed to fetch active users count:', error);
+                document.getElementById('btn-generate-count').textContent = '?';
+            }
+
+            // Dynamic count #2: Active jobs (for Cancel In Progress Runs button)
+            try {
+                const statsResponse = await fetch(`/jobs/stats`, {
+                    headers: {'X-Admin-Token': token}
+                });
+                const statsData = await statsResponse.json();
+                const activeJobs = (statsData.queued || 0) + (statsData.processing || 0);
+                document.getElementById('btn-cancel-runs-count').textContent = activeJobs;
+            } catch (error) {
+                console.error('Failed to fetch active jobs count:', error);
+                document.getElementById('btn-cancel-runs-count').textContent = '?';
+            }
         }
 
         async function generateAllReports() {

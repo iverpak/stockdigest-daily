@@ -13134,22 +13134,27 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     """
     Resolve Google News URLs for flagged articles only (after triage, before digest)
 
-    This function replicates the EXACT SAME resolution chain used during ingestion:
-    - Google News URL → (Advanced API / Direct / Title extraction)
-    - If resolved URL is Yahoo Finance → Extract original source
-    - Store final resolved URL in database
+    Resolution methods (NO title extraction - domain already extracted during ingestion):
+    1. Advanced API resolution (Google internal API)
+    2. Direct HTTP redirect (follow redirects)
+    3. If both fail: Keep Google News URL with existing domain from DB
+
+    Then check if resolved to Yahoo Finance:
+    - If Yahoo: Extract original source (Google → Yahoo → Original chain)
+    - If not Yahoo: Use resolved URL directly
 
     Benefits:
     - Only resolves 20-30 URLs (flagged articles) vs 150 URLs (all articles)
     - Spread out over time (no burst of concurrent requests)
     - Natural request pattern (like a human clicking links)
+    - Domain from title already available for Email #1 and deduplication
     """
     LOG.info(f"[{ticker}] 🔗 Phase 1.5: Resolving Google News URLs for flagged articles...")
 
     # Get unresolved Google News articles
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT id, url, title
+            SELECT id, url, title, domain
             FROM articles
             WHERE id = ANY(%s)
             AND url LIKE '%news.google.com%'
@@ -13164,7 +13169,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
     total = len(unresolved)
     LOG.info(f"[{ticker}] 📋 Found {total} unresolved Google News URLs")
-    LOG.info(f"[{ticker}] 🔄 Starting resolution process...")
+    LOG.info(f"[{ticker}] 🔄 Starting resolution process (Advanced API + Direct HTTP only)...")
 
     resolved_count = 0
     failed_count = 0
@@ -13174,19 +13179,44 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
         article_id = article['id']
         url = article['url']
         title = article['title']
+        existing_domain = article['domain']  # Domain from title extraction during ingestion
 
         LOG.info(f"[{ticker}] 🔍 [{idx}/{total}] Resolving: {url[:100]}...")
+        LOG.info(f"[{ticker}]    Existing domain from ingestion: {existing_domain}")
+
+        resolved_url = None
 
         try:
-            # STEP 1: Resolve Google News URL (uses existing _handle_google_news with detailed logging)
-            resolved_url, domain, source_url = domain_resolver._handle_google_news(url, title)
+            # METHOD 1: Try Advanced API resolution first
+            LOG.info(f"[{ticker}]    🔄 Trying Advanced API...")
+            resolved_url = domain_resolver._resolve_google_news_url_advanced(url)
 
-            if not resolved_url or not domain:
+            if resolved_url:
+                LOG.info(f"[{ticker}]    ✅ Advanced API success: {resolved_url[:80]}")
+            else:
+                # METHOD 2: Try direct HTTP redirect
+                LOG.info(f"[{ticker}]    ❌ Advanced API failed, trying Direct HTTP...")
+                try:
+                    response = requests.get(url, timeout=10, allow_redirects=True, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    })
+                    final_url = response.url
+
+                    if final_url != url and "news.google.com" not in final_url:
+                        resolved_url = final_url
+                        LOG.info(f"[{ticker}]    ✅ Direct HTTP success: {resolved_url[:80]}")
+                    else:
+                        LOG.info(f"[{ticker}]    ❌ Direct HTTP didn't redirect (still Google News)")
+                except Exception as e:
+                    LOG.info(f"[{ticker}]    ❌ Direct HTTP failed: {str(e)[:100]}")
+
+            # If both methods failed, keep Google News URL with existing domain
+            if not resolved_url:
                 failed_count += 1
-                LOG.warning(f"[{ticker}] ❌ [{idx}/{total}] Resolution returned None")
+                LOG.warning(f"[{ticker}] ❌ [{idx}/{total}] Both resolution methods failed - keeping Google News URL with domain '{existing_domain}'")
                 continue
 
-            # STEP 2: Check if resolved to Yahoo Finance (EXACT SAME LOGIC AS INGESTION!)
+            # STEP 2: Check if resolved to Yahoo Finance → Extract original source
             is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
                 "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
             ])
@@ -13196,23 +13226,23 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
                 yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
 
                 if yahoo_original:
-                    # SUCCESS: Google → Yahoo → Original
+                    # SUCCESS: Google → Yahoo → Original chain
                     final_resolved_url = yahoo_original
                     final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
                     final_source_url = resolved_url  # Yahoo URL becomes source
                     yahoo_chain_count += 1
                     LOG.info(f"[{ticker}] ✅ [{idx}/{total}] YAHOO CHAIN: {resolved_url[:60]} → {yahoo_original[:60]}")
                 else:
-                    # FALLBACK: Keep Yahoo URL
+                    # FALLBACK: Keep Yahoo URL (Yahoo articles are easy to scrape)
                     final_resolved_url = resolved_url
-                    final_domain = domain
-                    final_source_url = source_url
+                    final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+                    final_source_url = None
                     LOG.warning(f"[{ticker}] ⚠️ [{idx}/{total}] Yahoo extraction failed, keeping Yahoo URL")
             else:
                 # Direct resolution (Google → Article)
                 final_resolved_url = resolved_url
-                final_domain = domain
-                final_source_url = source_url
+                final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+                final_source_url = None
 
             # STEP 3: Update database with final resolved URLs
             with db() as conn, conn.cursor() as cur:

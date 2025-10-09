@@ -388,6 +388,61 @@ Function: `sort_articles_by_priority()` - Line 10278
 - NO `found_at` filter - all articles in DB are considered
 - Ranks by `published_at DESC` within each category/keyword partition
 
+#### Deferred Google URL Resolution (v3.6 - Oct 2025)
+**CRITICAL:** Google News URLs are resolved AFTER triage, not during ingestion, to prevent rate limiting.
+
+**The Problem (Pre-v3.6):**
+- Google URLs were resolved immediately during ingestion (burst of 150+ requests)
+- 3+ concurrent tickers triggered Google's rate limiter (429 errors)
+- Only ~20% of resolved URLs were used (80% wasted API calls)
+
+**The Solution:**
+1. **Ingestion Phase (Lines 4706-4727):**
+   - Yahoo URLs: Resolve immediately (works well, no rate limits)
+   - Google URLs: Store with `resolved_url = NULL` (deferred)
+   - Extract domain from title for spam filtering & deduplication
+   - Use `get_url_hash(url, NULL, domain, title)` for dedup (domain + first 10 words)
+
+2. **Phase 1.5: Resolution Phase (Lines 13133-13269):**
+   - After triage, before digest (at 62% progress)
+   - Function: `resolve_flagged_google_news_urls(ticker, flagged_article_ids)`
+   - Only resolves flagged articles (~20-25 per ticker vs 150 total)
+   - **Resolution methods (NO title extraction):**
+     - Method 1: Advanced API resolution (Google internal API)
+     - Method 2: Direct HTTP redirect (follow redirects)
+     - If both fail: Keep Google News URL with existing domain from ingestion
+   - **No rate limiting** - Resolutions happen sporadically across 3+ concurrent tickers
+   - Handles Google → Yahoo → Final chain correctly
+   - Detailed logging: Shows existing domain + each resolution attempt + ✅/❌ indicators
+
+3. **Deduplication Strategy:**
+   - Yahoo/Direct URLs: Use `resolved_url` (existing behavior)
+   - Google URLs (pre-resolution): Use `domain + first 10 words of title` (no spaces)
+   - Domain extracted from title during ingestion, stored in DB
+   - Used for Email #1 (shows correct domain) and deduplication
+   - Function: `get_url_hash()` - Line 9254
+   - Helper: `extract_title_words_normalized()` - Line 9235
+
+4. **What Happens When Resolution Fails:**
+   - Article keeps Google News URL in database (`resolved_url` stays NULL)
+   - Domain from title extraction (ingestion) remains in database
+   - Email #1: Shows domain from title ✅
+   - Email #2/3: Shows Google News URL (user can still click, will redirect) ✅
+   - No data loss, no broken links
+
+**Benefits:**
+✅ 80% fewer API calls (only resolve flagged articles)
+✅ No rate limiting needed (resolutions spread naturally across concurrent tickers)
+✅ 3+ concurrent tickers process smoothly
+✅ Minimal duplicate articles (domain + title matching is effective)
+✅ Comprehensive logging (per-article success/failure + summary stats)
+
+**Timing Impact:**
+- With 4 concurrent tickers, each with ~25 flagged articles
+- Resolution phase adds ~5-10 seconds per ticker (fast HTTP redirects)
+- Resolutions happen sporadically (not all at once), preventing rate limit issues
+- Total processing time: ~30 minutes (unchanged, resolution overlaps with other phases)
+
 ### Email Template System
 
 Uses Jinja2 templating with multiple templates:

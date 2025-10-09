@@ -18573,7 +18573,6 @@ def auto_send_cron_job():
                 WHERE status = 'ready'
                 AND sent_at IS NULL
                 AND is_production = TRUE
-                AND created_at >= CURRENT_DATE
             """)
 
             count = cur.fetchone()['count']

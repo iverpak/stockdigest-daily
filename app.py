@@ -9245,35 +9245,22 @@ def extract_title_words_normalized(title: str, num_words: int = 10) -> str:
 
 def get_url_hash(url: str, resolved_url: str = None, domain: str = None, title: str = None) -> str:
     """
-    Generate hash for URL deduplication
+    Generate hash for URL deduplication (simple URL-based)
 
-    For Yahoo/Direct URLs with resolved_url: Use resolved URL (existing behavior)
-    For Google News without resolved_url: Use domain + first 10 words of title
-    Fallback: Use URL itself
+    Uses resolved_url if available (Yahoo Finance URLs), otherwise uses original URL.
+    Cross-feed duplicates (Google News + Yahoo → same article) are caught later in
+    post-resolution deduplication (Phase 1.5) before AI analysis.
     """
-    # Standard deduplication for resolved URLs (Yahoo, Direct URLs)
-    if resolved_url and "news.google.com" not in url:
+    # Use resolved URL if available (Yahoo Finance URLs that were resolved during ingestion)
+    if resolved_url:
         url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', resolved_url.lower())
         url_clean = url_clean.rstrip('/')
         return hashlib.md5(url_clean.encode()).hexdigest()
 
-    # Google News deduplication (when resolved_url is NULL)
-    elif "news.google.com" in url and domain and title:
-        title_words = extract_title_words_normalized(title, num_words=10)
-
-        if not title_words:
-            # Fallback: use URL if title extraction fails
-            return hashlib.md5(url.encode()).hexdigest()
-
-        # Combine domain + title words (e.g., "reuters.comteslastockrises5after")
-        dedupe_key = f"{domain}{title_words}"
-        return hashlib.md5(dedupe_key.encode()).hexdigest()
-
-    # Fallback: use URL
-    else:
-        url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url.lower())
-        url_clean = url_clean.rstrip('/')
-        return hashlib.md5(url_clean.encode()).hexdigest()
+    # Otherwise use original URL (Google News URLs, Direct URLs)
+    url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url.lower())
+    url_clean = url_clean.rstrip('/')
+    return hashlib.md5(url_clean.encode()).hexdigest()
 
 def normalize_domain(domain: str) -> str:
     """Enhanced domain normalization for consistent storage"""
@@ -9512,25 +9499,19 @@ class DomainResolver:
             
             # Get the page content
             resp = requests.get(url, headers=headers, timeout=10)
-            LOG.info(f"🔍 [GOOGLE_NEWS] Initial fetch: status={resp.status_code}, content_length={len(resp.text)}")
             soup = BeautifulSoup(resp.text, 'html.parser')
 
             # Find the c-wiz element with data-p attribute
             c_wiz = soup.select_one('c-wiz[data-p]')
             if not c_wiz:
-                LOG.info(f"❌ [GOOGLE_NEWS] No <c-wiz[data-p]> element found in HTML (page may have changed structure)")
                 return None
 
             data_p = c_wiz.get('data-p')
             if not data_p:
-                LOG.info(f"❌ [GOOGLE_NEWS] <c-wiz> found but no data-p attribute")
                 return None
-
-            LOG.info(f"✅ [GOOGLE_NEWS] Found data-p attribute (length={len(data_p)})")
 
             # Parse the embedded JSON
             obj = json.loads(data_p.replace('%.@.', '["garturlreq",'))
-            LOG.info(f"✅ [GOOGLE_NEWS] Parsed data-p JSON successfully")
 
             # Prepare the payload for the internal API
             payload = {
@@ -9540,29 +9521,21 @@ class DomainResolver:
             # Make the API call
             api_url = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
             response = requests.post(api_url, headers=headers, data=payload, timeout=10)
-            LOG.info(f"🔍 [GOOGLE_NEWS] API call: status={response.status_code}, response_length={len(response.text)}")
 
             if response.status_code != 200:
-                LOG.info(f"❌ [GOOGLE_NEWS] API returned non-200 status: {response.status_code}")
                 return None
 
             # Parse the response
             response_text = response.text.replace(")]}'", "")
             response_json = json.loads(response_text)
-            LOG.info(f"✅ [GOOGLE_NEWS] Parsed API response JSON (top-level length={len(response_json)})")
 
             array_string = response_json[0][2]
             article_url = json.loads(array_string)[1]
-            LOG.info(f"✅ [GOOGLE_NEWS] Extracted article URL: {article_url[:100]}...")
 
             if article_url and len(article_url) > 10:  # Basic validation
-                LOG.info(f"✅ [GOOGLE_NEWS] Advanced API SUCCESS: {article_url}")
                 return article_url
-            else:
-                LOG.info(f"❌ [GOOGLE_NEWS] Article URL failed validation (length={len(article_url) if article_url else 0})")
-                
+
         except Exception as e:
-            LOG.info(f"❌ [GOOGLE_NEWS] Advanced API exception: {str(e)[:200]}")
             return None
         
         return None
@@ -13122,7 +13095,7 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
         LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
         raise
 
-async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> Optional[str]:
+async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> tuple[Optional[str], Optional[str]]:
     """
     Use ScrapFly to resolve Google News redirects by fetching the final URL
 
@@ -13133,10 +13106,13 @@ async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> Option
     Success rate: ~95% (ScrapFly designed specifically for Google scraping)
 
     Reference: https://scrapfly.io/blog/how-to-scrape-google-search/
+
+    Returns:
+        (resolved_url, error_message): URL if successful, error message if failed
     """
     try:
         if not SCRAPFLY_API_KEY:
-            return None
+            return None, "No ScrapFly API key configured"
 
         # Build params with anti-bot bypass for Google News
         # ASP (Anti-Scraping Protection) + JS rendering specifically recommended for Google
@@ -13155,12 +13131,18 @@ async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> Option
                     final_url = result.get("result", {}).get("url")
 
                     if final_url and "news.google.com" not in final_url:
-                        return final_url
+                        return final_url, None
 
-                return None
+                    return None, "Still Google News URL after resolution"
 
+                # Non-200 status
+                error_text = await response.text()
+                return None, f"HTTP {response.status}: {error_text[:100]}"
+
+    except asyncio.TimeoutError:
+        return None, "Timeout (15s exceeded)"
     except Exception as e:
-        return None
+        return None, f"{type(e).__name__}: {str(e)[:100]}"
 
 async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: List[int]):
     """
@@ -13216,6 +13198,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
         resolved_url = None
         resolution_method = None
+        scrapfly_error = None
 
         try:
             # METHOD 1: Try Advanced API resolution first (silent)
@@ -13236,15 +13219,18 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
                 except:
                     pass
 
-            # METHOD 3: Try ScrapFly resolution (silent)
+            # METHOD 3: Try ScrapFly resolution (capture error if fails)
             if not resolved_url:
-                resolved_url = await resolve_google_news_url_with_scrapfly(url, ticker)
+                resolved_url, scrapfly_error = await resolve_google_news_url_with_scrapfly(url, ticker)
                 if resolved_url:
                     resolution_method = "Tier 3 (ScrapFly)"
 
-            # If all methods failed, skip
+            # If all methods failed, log and skip
             if not resolved_url:
                 failed_count += 1
+                # Log Tier 3 failure with error message
+                if scrapfly_error:
+                    LOG.error(f"[{ticker}] ❌ [{idx}/{total}] Tier 3 (ScrapFly) failed → {scrapfly_error}")
                 continue
 
             # Check if resolved to Yahoo Finance → Extract original source
@@ -13273,8 +13259,22 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
                     WHERE id = %s
                 """, (final_resolved_url, final_domain, article_id))
 
+            # Store domain mapping for future use (if domain changed from fallback)
+            # This prevents future ScrapFly calls for the same publication
+            if existing_domain != final_domain and existing_domain.endswith('.com'):
+                # Extract publication name from title
+                clean_title, source_name = extract_source_from_title_smart(title)
+
+                if source_name:
+                    try:
+                        domain_resolver._store_in_database(final_domain, source_name, ai_generated=False)
+                        LOG.info(f"[{ticker}] 💾 Stored mapping: '{source_name}' → '{final_domain}' (learned from resolution)")
+                    except Exception as e:
+                        LOG.warning(f"[{ticker}] Failed to store domain mapping: {e}")
+
             resolved_count += 1
-            LOG.info(f"[{ticker}] ✅ [{idx}/{total}] {resolution_method} → {final_domain}")
+            # Show full resolved URL (not just domain)
+            LOG.info(f"[{ticker}] ✅ [{idx}/{total}] {resolution_method} → {final_resolved_url}")
 
         except Exception as e:
             failed_count += 1
@@ -13288,6 +13288,63 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     LOG.info(f"[{ticker}]    ❌ Failed: {failed_count} ({failed_count/total*100:.1f}%)")
     LOG.info(f"[{ticker}]    🔗 Google→Yahoo→Final chains: {yahoo_chain_count}")
     LOG.info(f"[{ticker}] {'='*60}")
+
+    # ============================================================================
+    # POST-RESOLUTION DEDUPLICATION
+    # ============================================================================
+    # After resolution, check if multiple articles resolved to the SAME final URL
+    # This catches: Google News → Source A, Yahoo Finance → Source A (same resolved_url)
+    # Keep the best article, remove duplicates from flagged list
+    # ============================================================================
+    LOG.info(f"[{ticker}] 🔍 Checking for duplicate resolved URLs...")
+
+    with db() as conn, conn.cursor() as cur:
+        # Find flagged articles with duplicate resolved_url
+        cur.execute("""
+            SELECT resolved_url, array_agg(a.id ORDER BY a.published_at DESC) as article_ids,
+                   array_agg(a.domain ORDER BY a.published_at DESC) as domains,
+                   array_agg(a.title ORDER BY a.published_at DESC) as titles
+            FROM articles a
+            JOIN ticker_articles ta ON a.id = ta.article_id
+            WHERE ta.ticker = %s
+            AND ta.flagged = TRUE
+            AND a.resolved_url IS NOT NULL
+            GROUP BY resolved_url
+            HAVING COUNT(*) > 1
+        """, (ticker,))
+
+        duplicates = cur.fetchall()
+
+        if duplicates:
+            removed_count = 0
+            for dup in duplicates:
+                resolved_url = dup['resolved_url']
+                article_ids = dup['article_ids']
+                domains = dup['domains']
+                titles = dup['titles']
+
+                # Keep first article (newest by published_at), unflag the rest
+                keep_id = article_ids[0]
+                remove_ids = article_ids[1:]
+
+                LOG.info(f"[{ticker}] 🔄 Duplicate resolved URL: {resolved_url[:80]}...")
+                LOG.info(f"[{ticker}]    ✅ Keeping: ID {keep_id} ({domains[0]}) - {titles[0][:60]}...")
+
+                for idx, remove_id in enumerate(remove_ids, 1):
+                    LOG.info(f"[{ticker}]    ❌ Removing: ID {remove_id} ({domains[idx]}) - {titles[idx][:60]}...")
+
+                    # Unflag the duplicate (don't delete, just remove from flagged list)
+                    cur.execute("""
+                        UPDATE ticker_articles
+                        SET flagged = FALSE
+                        WHERE ticker = %s AND article_id = %s
+                    """, (ticker, remove_id))
+
+                    removed_count += 1
+
+            LOG.info(f"[{ticker}] ✅ Removed {removed_count} duplicate articles from flagged list")
+        else:
+            LOG.info(f"[{ticker}] ✅ No duplicate resolved URLs found")
 
 async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
     """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary
@@ -13650,6 +13707,17 @@ async def process_ticker_job(job: dict):
 
         if flagged_article_ids:
             await resolve_flagged_google_news_urls(ticker, flagged_article_ids)
+
+            # Refresh flagged article IDs after deduplication
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT article_id FROM ticker_articles
+                    WHERE ticker = %s AND flagged = TRUE
+                    ORDER BY article_id
+                """, (ticker,))
+                flagged_article_ids = [row[0] for row in cur.fetchall()]
+
+            LOG.info(f"[{ticker}] 📋 [JOB {job_id}] After deduplication: {len(flagged_article_ids)} flagged articles remain")
         else:
             LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles to resolve")
 
@@ -13659,7 +13727,7 @@ async def process_ticker_job(job: dict):
         update_job_status(job_id, phase='digest_start', progress=65)
         LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Phase 2: Digest starting...")
 
-        # Call digest function (defined later in file) - pass flagged articles from triage
+        # Call digest function (defined later in file) - pass deduplicated flagged articles
         digest_result = await process_digest_phase(
             job_id=job_id,
             ticker=ticker,

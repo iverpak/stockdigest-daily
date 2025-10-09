@@ -317,15 +317,24 @@ For each ticker:
    - **Send Email #1 to admin** (Article Selection QA)
    - Update job heartbeat
 
-2. **Phase 2: Digest (60-95%)**
-   - Scrape article content (2-tier fallback: newspaper3k → Scrapfly)
+2. **Phase 1.5: Google News URL Resolution (62-64%)** ⭐ NEW (Oct 2025)
+   - Resolve flagged Google News URLs (only ~12-20 per ticker)
+   - 3-tier fallback: Advanced API → Direct HTTP → ScrapFly
+   - ScrapFly uses ASP + JS rendering (bypasses Google anti-bot)
+   - Success rate: **100%** (production validated)
+   - Cost: ~$0.096 per ticker (~$86/month for 30 tickers/day)
+   - Update job heartbeat
+
+3. **Phase 2: Digest (65-95%)**
+   - Scrape article content (uses resolved URLs from Phase 1.5)
+   - 2-tier fallback: newspaper3k → Scrapfly
    - Run AI analysis (Claude + OpenAI)
    - Generate executive summary
    - **Send Email #2 to admin** (Content QA)
    - Save executive summary to database
    - Update job heartbeat
 
-3. **Phase 3: Email Generation (95-97%)**
+4. **Phase 3: Email Generation (95-97%)**
    - Fetch executive summary from database
    - Generate Email #3 HTML using `generate_email_html_core()`
    - HTML contains `{{UNSUBSCRIBE_TOKEN}}` placeholder
@@ -335,7 +344,7 @@ For each ticker:
    - **Send Email #3 preview to admin**
    - Update job heartbeat
 
-4. **Phase 4: GitHub Commit (97-100%)**
+5. **Phase 4: GitHub Commit (97-100%)**
    - Commit ticker metadata to GitHub
    - Smart deployment: Only last ticker triggers Render deployment
 

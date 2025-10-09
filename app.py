@@ -738,7 +738,7 @@ def init_connection_pool():
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
 
-            LOG.info(f"✅ Database connection pool initialized (min: 5, max: 45) on attempt {attempt}")
+            LOG.info(f"✅ Database connection pool initialized (min: 5, max: 80) on attempt {attempt}")
             return  # Success!
 
         except Exception as e:

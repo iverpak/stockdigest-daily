@@ -1130,6 +1130,22 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_email_queue_created_at ON email_queue(created_at);
                 CREATE INDEX IF NOT EXISTS idx_email_queue_is_production ON email_queue(is_production);
                 CREATE INDEX IF NOT EXISTS idx_email_queue_heartbeat ON email_queue(heartbeat) WHERE status = 'processing';
+
+                -- System Configuration: UI-configurable settings
+                CREATE TABLE IF NOT EXISTS system_config (
+                    key VARCHAR(100) PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    description TEXT,
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_by VARCHAR(100)
+                );
+
+                -- Initialize default lookback window (7 days = 10080 minutes)
+                INSERT INTO system_config (key, value, description, updated_by)
+                VALUES ('lookback_minutes', '10080', 'Article lookback window in minutes (7 days default)', 'system')
+                ON CONFLICT (key) DO NOTHING;
+
+                CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config(key);
             """)
 
     LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS")
@@ -12984,6 +13000,34 @@ async def process_ticker_job(job: dict):
                 LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled before starting, exiting")
                 return
 
+        # PHASE 0: SAFETY CHECK - Ensure feeds exist (failsafe)
+        # This is a defensive check in case /jobs/submit initialization somehow failed
+        LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Phase 0: Checking feeds exist...")
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as count FROM ticker_feeds
+                WHERE ticker = %s AND active = TRUE
+            """, (ticker,))
+            feed_count = cur.fetchone()['count']
+
+            if feed_count == 0:
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No feeds found! Creating now (failsafe)...")
+
+                # Get or create metadata
+                metadata = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=True)
+                LOG.info(f"[{ticker}] 📋 [JOB {job_id}] Metadata: company={metadata.get('company_name', 'N/A')}")
+
+                # Create feeds
+                feeds_created = create_feeds_for_ticker_new_architecture(ticker, metadata)
+
+                if feeds_created:
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Created {len(feeds_created)} feeds (failsafe recovery)")
+                else:
+                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to create feeds - job will likely fail")
+            else:
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] {feed_count} feeds verified")
+
         # PHASE 1: Ingest (already implemented in /cron/ingest)
         update_job_status(job_id, phase='ingest_start', progress=10)
         LOG.info(f"[{ticker}] 📥 [JOB {job_id}] Phase 1: Ingest starting...")
@@ -14198,6 +14242,26 @@ async def submit_job_batch(request: Request, body: JobSubmitRequest):
 
     if not body.tickers:
         raise HTTPException(status_code=400, detail="No tickers specified")
+
+    # AUTO-INITIALIZE: Ensure CSV sync + feeds exist for all tickers
+    # This matches the PowerShell test workflow (calls /admin/init before /jobs/submit)
+    LOG.info(f"🔧 Auto-initializing {len(body.tickers)} tickers before queueing...")
+
+    try:
+        init_result = await admin_init(request, InitRequest(
+            tickers=body.tickers,
+            force_refresh=False  # Use cache if already initialized this session
+        ))
+
+        if init_result.get('status') == 'success':
+            total_feeds = init_result.get('total_feeds_created', 0)
+            LOG.info(f"✅ Initialization complete: {total_feeds} feeds created/verified")
+        else:
+            LOG.warning(f"⚠️ Initialization had issues: {init_result}")
+    except Exception as e:
+        LOG.error(f"❌ Initialization failed: {e}")
+        # Don't fail the entire batch - safety check in process_ticker_job will catch this
+        LOG.warning(f"⚠️ Continuing despite init failure - individual jobs will retry")
 
     # Check queue capacity
     with db() as conn, conn.cursor() as cur:

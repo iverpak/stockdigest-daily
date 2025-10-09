@@ -46,23 +46,33 @@ The Daily Workflow System automates the process of:
 
 ## Architecture
 
-### Workflow Separation
+### Unified Job Queue System
 
-**Your existing test workflow (UNCHANGED):**
+**UPDATED: October 9, 2025** - Test and production workflows now use the **SAME unified engine**: `process_ticker_job()`
+
+The **ONLY difference** is the `mode` configuration parameter:
+- **Test mode:** `mode='test'` → Email #3 sent immediately to admin
+- **Production mode:** `mode='daily'` → Email #3 saved to queue for later sending
+
+**Test workflow (PowerShell):**
 ```
 PowerShell → setup_job_queue.ps1
+          → /jobs/submit with mode='test'
           → ticker_processing_jobs table
-          → Emails #1, #2, #3 → YOUR EMAIL ONLY
+          → process_ticker_job() with mode='test'
+          → Emails #1, #2, #3 → YOUR EMAIL ONLY (immediate send)
 ```
 
-**New production workflow (SEPARATE):**
+**Production workflow (Cron):**
 ```
 6:00 AM Cron → Cleanup old queue entries
 7:00 AM Cron → Load beta_users (status='active')
              → Deduplicate tickers
-             → Process 3 concurrent tickers
-             → Save to email_queue (status='ready')
-             → Send previews to admin
+             → /jobs/submit with mode='daily'
+             → Process 4 concurrent tickers (recommended)
+             → process_ticker_job() with mode='daily'
+             → Emails #1, #2 → ADMIN (immediate)
+             → Email #3 → QUEUE (saved for review)
              → Send admin notification
 
 8:30 AM Cron → Send emails to users
@@ -71,7 +81,11 @@ PowerShell → setup_job_queue.ps1
              → Mark as sent
 ```
 
-**Zero cross-contamination** - The systems use different tables and never interfere with each other.
+**Benefits of Unified Architecture:**
+- ✅ Single engine for all workflows
+- ✅ No code duplication
+- ✅ Consistent behavior and error handling
+- ✅ Easier to test and maintain
 
 ---
 
@@ -233,7 +247,9 @@ WHERE status = 'active'
 # Result: 5 unique tickers to process
 ```
 
-**Step 3: Process Tickers (3 concurrent)**
+**Step 3: Process Tickers (4 concurrent - recommended)**
+
+**Unified Engine:** All tickers processed via `process_ticker_job()` with `mode='daily'`
 
 For each ticker:
 1. **Phase 1: Ingest (0-60%)**
@@ -241,23 +257,29 @@ For each ticker:
    - Run RSS feed parsing (async, 5.5x faster)
    - Run AI triage (dual scoring)
    - **Send Email #1 to admin** (Article Selection QA)
-   - Update heartbeat
+   - Update job heartbeat
 
 2. **Phase 2: Digest (60-95%)**
-   - Scrape article content (2-tier fallback)
+   - Scrape article content (2-tier fallback: newspaper3k → Scrapfly)
    - Run AI analysis (Claude + OpenAI)
    - Generate executive summary
    - **Send Email #2 to admin** (Content QA)
    - Save executive summary to database
-   - Update heartbeat
+   - Update job heartbeat
 
 3. **Phase 3: Email Generation (95-97%)**
    - Fetch executive summary from database
-   - Generate Email #3 HTML
-   - Replace unsubscribe link with `{{UNSUBSCRIBE_TOKEN}}` placeholder
-   - Save to `email_queue` (status='ready')
-   - **Send Email #3 preview to admin** (no [PREVIEW] prefix)
-   - Update heartbeat
+   - Generate Email #3 HTML using `generate_email_html_core()`
+   - HTML contains `{{UNSUBSCRIBE_TOKEN}}` placeholder
+   - **Mode-specific behavior:**
+     - `mode='daily'`: Call `save_email_to_queue()` → Save to `email_queue` (status='ready')
+     - `mode='test'`: Call `send_user_intelligence_report()` → Send immediately
+   - **Send Email #3 preview to admin**
+   - Update job heartbeat
+
+4. **Phase 4: GitHub Commit (97-100%)**
+   - Commit ticker metadata to GitHub
+   - Smart deployment: Only last ticker triggers Render deployment
 
 **Step 4: Send Admin Notification**
 
@@ -299,8 +321,9 @@ SELECT * FROM email_queue
 WHERE status = 'ready'
 AND sent_at IS NULL
 AND is_production = TRUE
-AND created_at >= CURRENT_DATE
 ```
+
+**Note:** Date filter removed (Oct 9, 2025) - allows sending emails processed late yesterday.
 
 **For each email:**
 1. For each recipient in recipients array:
@@ -540,9 +563,11 @@ View email HTML preview in browser.
 
 ## Core Functions
 
+**UPDATED: October 9, 2025** - Switched to unified job queue architecture. Line numbers may vary as code evolves.
+
 ### 1. `load_active_beta_users()`
 
-**Location:** Line 17569
+**Location:** ~Line 18220
 **Purpose:** Load active beta users and deduplicate tickers
 **Returns:** `Dict[str, List[str]]` - {ticker: [emails]}
 
@@ -560,64 +585,61 @@ for user in active_users:
 
 ---
 
-### 2. `generate_email_html_for_queue()`
+### 2. `process_ticker_job()` ⭐ **UNIFIED ENGINE**
 
-**Location:** Line 17615
-**Purpose:** Generate Email #3 HTML with placeholder token
-**Returns:** `{"status": "success", "html": "...", "subject": "...", ...}`
+**Location:** ~Line 12957
+**Purpose:** Main processing engine for both test and production workflows
+**Returns:** Job status with progress, phase, memory, duration
 
-**Key Feature:** Intercepts `send_user_intelligence_report()` to capture HTML before sending, then replaces unsubscribe token with `{{UNSUBSCRIBE_TOKEN}}` placeholder.
-
----
-
-### 3. `process_ticker_for_daily_workflow()`
-
-**Location:** Line 17709
-**Purpose:** Process single ticker (ingest → digest → email generation)
-**Timeout:** 10 minutes
-**Returns:** `{"status": "success|failed", "ticker": "...", "duration": ...}`
+**Key Feature:** Mode-aware processing:
+- `mode='test'` → Email #3 sent immediately
+- `mode='daily'` → Email #3 saved to queue
 
 **Phases:**
-1. Insert/update email_queue (status='processing')
-2. Initialize feeds
-3. Run ingest (sends Email #1)
-4. Update heartbeat
-5. Run digest (sends Email #2, saves executive summary)
-6. Update heartbeat
-7. Generate Email #3 HTML
-8. Save to email_queue (status='ready')
-9. Send preview to admin
+1. **Ingest (0-60%):** `process_ingest_phase()` → RSS feeds, AI triage, Email #1
+2. **Digest (60-95%):** `process_digest_phase()` → Scraping, AI analysis, Email #2
+3. **Email #3 (95-97%):**
+   - `mode='daily'`: `save_email_to_queue()` → Save to database
+   - `mode='test'`: `send_user_intelligence_report()` → Send immediately
+4. **Commit (97-100%):** `process_commit_phase()` → GitHub commit
 
 **Error Handling:**
-- Try/catch wraps entire process
-- On failure: Mark as failed in email_queue
-- Logs full stacktrace
+- Full try/catch with stacktrace logging
+- Marks job as failed with detailed error message
+- Supports retry logic (up to 2 retries)
 
 ---
 
-### 4. `process_all_tickers_daily()`
+### 3. `save_email_to_queue()`
 
-**Location:** Line 17857
-**Purpose:** Process all tickers with 3 concurrent workers
-**Returns:** `{"status": "success", "total": 30, "succeeded": 28, "failed": 2}`
+**Location:** ~Line 12577
+**Purpose:** Save Email #3 to queue for admin review (production mode)
+**Returns:** `True` on success, `False` on failure
 
-**Concurrency:**
+**Logic:**
 ```python
-semaphore = asyncio.Semaphore(3)  # Max 3 concurrent
+# Generate email HTML using core function
+email_data = generate_email_html_core(
+    ticker=ticker,
+    hours=hours,
+    flagged_article_ids=flagged_article_ids,
+    recipient_email=None  # Uses {{UNSUBSCRIBE_TOKEN}} placeholder
+)
 
-async def process_with_semaphore(ticker, recipients):
-    async with semaphore:
-        return await asyncio.wait_for(
-            process_ticker_for_daily_workflow(ticker, recipients),
-            timeout=600  # 10 minutes
-        )
+# Save to email_queue
+INSERT INTO email_queue (ticker, recipients, email_html, status)
+VALUES (%s, %s, %s, 'ready')
+ON CONFLICT (ticker) DO UPDATE
+SET email_html = EXCLUDED.email_html,
+    status = 'ready',
+    error_message = NULL  # Clear old errors on retry
 ```
 
 ---
 
-### 5. `send_all_ready_emails_impl()`
+### 4. `send_all_ready_emails_impl()`
 
-**Location:** Line 18023
+**Location:** ~Line 18646
 **Purpose:** Send all ready emails with unique unsubscribe tokens
 **Returns:** `{"status": "success", "sent_count": 28, "failed_count": 0}`
 
@@ -645,9 +667,9 @@ for email in ready_emails:
 
 ---
 
-### 6. `send_email_with_dry_run()`
+### 5. `send_email_with_dry_run()`
 
-**Location:** Line 17999
+**Location:** ~Line 18618
 **Purpose:** Email sending wrapper with DRY_RUN mode
 
 **DRY_RUN Mode:**
@@ -660,6 +682,16 @@ if os.getenv('DRY_RUN', 'false').lower() == 'true':
 ```
 
 **Usage:** Set `DRY_RUN=true` in Render environment for testing.
+
+---
+
+### 6. `generate_email_html_core()` ⭐ **UNIFIED EMAIL GENERATOR**
+
+**Location:** ~Line 12278
+**Purpose:** Generate Email #3 HTML for both test and production
+**Returns:** `{"html": "...", "subject": "...", "company_name": "...", "article_count": X}`
+
+**Key Feature:** Shared by both workflows - no code duplication!
 
 ---
 
@@ -1378,6 +1410,10 @@ Before going live:
 
 ---
 
-**Last Updated:** October 8, 2025
-**Version:** 1.0
+**Last Updated:** October 9, 2025
+**Version:** 1.1
 **Status:** Production Ready
+
+**Changelog:**
+- **v1.1 (Oct 9, 2025):** Unified job queue architecture - removed duplicate workflow code
+- **v1.0 (Oct 8, 2025):** Initial daily workflow system release

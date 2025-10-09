@@ -58,7 +58,7 @@ python app.py export    # 11:59 PM - Backup beta users to CSV
 **Key Features:**
 - Reads `beta_users` table (status='active')
 - Deduplicates tickers across users
-- Processes 3 concurrent tickers (ingest→digest→email generation)
+- Processes 4 concurrent tickers (recommended - ingest→digest→email generation)
 - Queues emails for admin review at `/admin/queue`
 - Auto-sends at 8:30 AM (or manual send anytime)
 - Unique unsubscribe tokens per recipient
@@ -89,7 +89,7 @@ and automatically requeues the job for retry. Runs every 60 seconds, 3-minute th
 
 **StockDigest** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
 
-- **Single-file monolithic design**: All functionality is contained in `app.py` (~15,000+ lines)
+- **Single-file monolithic design**: All functionality is contained in `app.py` (~18,700 lines)
 - **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, executive summaries, and beta users
 - **Job queue system**: Background worker for reliable, resumable processing (eliminates HTTP 520 errors)
 - **AI-powered content analysis**: Claude API (primary) with OpenAI fallback, prompt caching enabled (v2024-10-22)
@@ -280,9 +280,10 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - Email configuration: `SMTP_*` variables for digest delivery
 
 #### Default Processing Parameters
-- Time window: 1440 minutes (24 hours)
+- Time window: 1440 minutes (24 hours) - configurable per job
 - Triage batch size: 2-3 articles per AI call
-- Scraping concurrency: Controlled via semaphores
+- Concurrent tickers: 4 recommended (controlled via `MAX_CONCURRENT_JOBS` env var)
+- Semaphores: DISABLED (Oct 2025 - prevented threading deadlock)
 - Default ticker set: ["MO", "GM", "ODFL", "SO", "CVS"]
 
 ### Database Schema

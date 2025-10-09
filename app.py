@@ -17595,8 +17595,13 @@ def get_queue_status(token: str = Query(...)):
 
             return {
                 "status": "success",
-                "stats": stats,
-                "tickers": tickers_list
+                "tickers": tickers_list,
+                # Flatten stats for frontend (expects data.ready, not data.stats.ready)
+                "processing": stats["processing"],
+                "ready": stats["ready"],
+                "failed": stats["failed"],
+                "sent": stats["sent"],
+                "cancelled": stats["cancelled"]
             }
     except Exception as e:
         LOG.error(f"Failed to get queue status: {e}")

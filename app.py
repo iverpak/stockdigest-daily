@@ -15696,161 +15696,54 @@ async def cron_ingest(
         
         LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
         memory_monitor.take_snapshot("PHASE3_COMPLETE")
-        
+
+        # ============================================================================
+        # PHASE 4 DISABLED - MOVED TO DIGEST PHASE (Oct 2025)
+        # ============================================================================
+        # REASON: Phase 4 (scraping) was running BEFORE Phase 1.5 (Google URL resolution),
+        # causing all Google News URLs to fail scraping. Scraping now happens ONLY in
+        # process_digest_phase() which runs AFTER Phase 1.5, ensuring URLs are resolved first.
+        #
+        # TIMELINE FIX:
+        #   OLD (BROKEN): Phase 1 → Phase 4 (scrape unresolved URLs) → Phase 1.5 (resolve too late)
+        #   NEW (FIXED):  Phase 1 → Phase 1.5 (resolve) → Digest Phase (scrape resolved URLs)
+        #
+        # See: fetch_digest_articles_with_enhanced_content() for scraping implementation
+        # ============================================================================
+
         # PHASE 4: Ticker-specific content scraping and analysis (WITH ASYNC BATCH PROCESSING)
-        LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS (ASYNC BATCHES) ===")
-        memory_monitor.take_snapshot("PHASE4_START")
+        # COMMENTED OUT - NOW HAPPENS IN DIGEST PHASE
+        # LOG.info("=== PHASE 4: TICKER-SPECIFIC CONTENT SCRAPING AND ANALYSIS (ASYNC BATCHES) ===")
+        # memory_monitor.take_snapshot("PHASE4_START")
         scraping_final_stats = {"scraped": 0, "failed": 0, "ai_analyzed": 0, "reused_existing": 0}
-        
-        # Count total articles to be processed for heartbeat tracking
+
+        # PHASE 4 CODE BLOCK COMMENTED OUT (150+ lines)
+        # Scraping now happens in fetch_digest_articles_with_enhanced_content()
+        # which is called during process_digest_phase() AFTER Phase 1.5 URL resolution
+
+        # Initialize variables needed for response structure
         total_articles_to_process = 0
-        for target_ticker in articles_by_ticker.keys():
-            selected = triage_results.get(target_ticker, {})
-            for category in ["company", "industry", "competitor"]:
-                total_articles_to_process += len(selected.get(category, []))
-        
-        processed_count = 0
-        LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process in batches of {SCRAPE_BATCH_SIZE}")
-        
+        # for target_ticker in articles_by_ticker.keys():
+        #     selected = triage_results.get(target_ticker, {})
+        #     for category in ["company", "industry", "competitor"]:
+        #         total_articles_to_process += len(selected.get(category, []))
+
+        # processed_count = 0
+        # LOG.info(f"Starting Phase 4: {total_articles_to_process} total articles to process in batches of {SCRAPE_BATCH_SIZE}")
+
         # Track which tickers were successfully processed
         successfully_processed_tickers = set()
-        
-        for target_ticker in articles_by_ticker.keys():
-            memory_monitor.take_snapshot(f"TICKER_START_{target_ticker}")
-            
-            config = get_ticker_config(target_ticker)
-            metadata = {
-                "industry_keywords": config.get("industry_keywords", []) if config else [],
-                "competitors": config.get("competitors", []) if config else []
-            }
-            
-            ticker_success_count = 0
-            selected = triage_results.get(target_ticker, {})
-            
-            # Collect all selected articles for this ticker across categories
-            all_selected_articles = []
-            for category in ["company", "industry", "competitor"]:
-                category_selected = selected.get(category, [])
-                
-                for item in category_selected:
-                    article_idx = item["id"]
-                    if article_idx < len(articles_by_ticker[target_ticker][category]):
-                        article = articles_by_ticker[target_ticker][category][article_idx]
-                        all_selected_articles.append({
-                            "article": article,
-                            "category": category,
-                            "item": item
-                        })
-            
-            # Process articles in batches
-            total_batches = (len(all_selected_articles) + SCRAPE_BATCH_SIZE - 1) // SCRAPE_BATCH_SIZE
-            LOG.info(f"TICKER {target_ticker}: Processing {len(all_selected_articles)} articles in {total_batches} batches of {SCRAPE_BATCH_SIZE}")
-            
-            for batch_num in range(total_batches):
-                start_idx = batch_num * SCRAPE_BATCH_SIZE
-                end_idx = min(start_idx + SCRAPE_BATCH_SIZE, len(all_selected_articles))
-                batch = all_selected_articles[start_idx:end_idx]
-                
-                LOG.info(f"TICKER {target_ticker}: Processing batch {batch_num + 1}/{total_batches} ({len(batch)} articles)")
-                
-                # Prepare batch for processing
-                batch_articles = []
-                batch_categories = []
-                for selected_article in batch:
-                    batch_articles.append(selected_article["article"])
-                    batch_categories.append(selected_article["category"])
-                
-                # Process batch asynchronously with per-article categories
-                # Add company_name to metadata for AI summarization
-                metadata["company_name"] = config.get("company_name", target_ticker) if config else target_ticker
-                try:
-                    batch_results = await process_article_batch_async(
-                        batch_articles,
-                        batch_categories,  # Pass all categories for per-article processing
-                        metadata,
-                        target_ticker
-                    )
-                    
-                    # Update statistics based on batch results
-                    for result in batch_results:
-                        processed_count += 1
-                        
-                        if result["success"]:
-                            ticker_success_count += 1
-                            if result.get("scraped_content") and result.get("ai_summary"):
-                                scraping_final_stats["scraped"] += 1
-                                scraping_final_stats["ai_analyzed"] += 1
-                            elif result.get("scraped_content"):
-                                scraping_final_stats["reused_existing"] += 1
-                        else:
-                            scraping_final_stats["failed"] += 1
-                    
-                    # MEMORY MONITORING: Every batch
-                    elapsed = time.time() - start_time
-                    memory_monitor.take_snapshot(f"BATCH_{batch_num + 1}_COMPLETE")
-                    current_memory = memory_monitor.get_memory_info()
-                    
-                    LOG.info(f"BATCH COMPLETE: {batch_num + 1}/{total_batches} for {target_ticker} - {processed_count}/{total_articles_to_process} total ({elapsed:.1f}s elapsed)")
-                    LOG.info(f"BATCH STATS: Scraped:{scraping_final_stats['scraped']}, Failed:{scraping_final_stats['failed']}, Reused:{scraping_final_stats['reused_existing']}")
-                    LOG.info(f"MEMORY: {current_memory['memory_mb']:.1f}MB, CPU: {current_memory['cpu_percent']:.1f}%")
-                    
-                    # Force garbage collection if memory gets high
-                    if current_memory["memory_mb"] > 800:  # 800MB threshold
-                        LOG.warning(f"HIGH MEMORY USAGE: {current_memory['memory_mb']:.1f}MB - forcing garbage collection")
-                        gc_stats = memory_monitor.force_garbage_collection()
-                        memory_monitor.take_snapshot(f"BATCH_POST_GC_{batch_num + 1}")
-                        LOG.info(f"GC: Freed {gc_stats['objects_freed']} objects")
-                        
-                except Exception as e:
-                    LOG.error(f"BATCH PROCESSING ERROR: Batch {batch_num + 1} for {target_ticker} failed: {e}")
-                    # Mark articles in failed batch as failed
-                    for _ in batch:
-                        processed_count += 1
-                        scraping_final_stats["failed"] += 1
-                    continue
-            
-            # Track tickers that had successful processing
-            if ticker_success_count > 0:
-                successfully_processed_tickers.add(target_ticker)
-            
-            LOG.info(f"TICKER {target_ticker} COMPLETE: {ticker_success_count} successful articles")
-            memory_monitor.take_snapshot(f"TICKER_COMPLETE_{target_ticker}")
-        
-        # Final heartbeat before completion
-        elapsed = time.time() - start_time
-        LOG.info(f"PHASE 4 COMPLETE: All {total_articles_to_process} articles processed in batches in {elapsed:.1f}s")
-        LOG.info(f"=== PHASE 4 COMPLETE: {scraping_final_stats['scraped']} new + {scraping_final_stats['reused_existing']} reused ===")
-        memory_monitor.take_snapshot("PHASE4_COMPLETE")
 
-        # Consolidated scraping statistics
-        total_attempts = enhanced_scraping_stats["total_attempts"]
-        if total_attempts > 0:
-            total_success = (enhanced_scraping_stats["requests_success"] +
-                            enhanced_scraping_stats["playwright_success"] +
-                            enhanced_scraping_stats.get("scrapfly_success", 0))
-            overall_rate = (total_success / total_attempts) * 100
+        # [PHASE 4 SCRAPING LOOP DISABLED - 150+ lines commented out]
+        # The entire scraping loop has been removed because it ran BEFORE Phase 1.5 URL resolution.
+        # Scraping now happens in fetch_digest_articles_with_enhanced_content() during digest phase.
+        # See process_digest_phase() which calls fetch_digest_articles_with_enhanced_content()
 
-            requests_attempts = enhanced_scraping_stats["by_method"]["requests"]["attempts"]
-            requests_success = enhanced_scraping_stats["by_method"]["requests"]["successes"]
-            requests_rate = (requests_success / requests_attempts * 100) if requests_attempts > 0 else 0
+        # Skip Phase 4 - scraping happens in digest phase after URL resolution
+        LOG.info("=== PHASE 4 SKIPPED - Scraping moved to Digest Phase (after URL resolution) ===")
+        memory_monitor.take_snapshot("PHASE4_SKIPPED")
 
-            playwright_attempts = enhanced_scraping_stats["by_method"]["playwright"]["attempts"]
-            playwright_success = enhanced_scraping_stats["by_method"]["playwright"]["successes"]
-            playwright_rate = (playwright_success / playwright_attempts * 100) if playwright_attempts > 0 else 0
-
-            scrapfly_attempts = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("attempts", 0)
-            scrapfly_success = enhanced_scraping_stats["by_method"].get("scrapfly", {}).get("successes", 0)
-            scrapfly_rate = (scrapfly_success / scrapfly_attempts * 100) if scrapfly_attempts > 0 else 0
-
-            LOG.info("=" * 60)
-            LOG.info("SCRAPING SUCCESS RATES (2-Tier Architecture)")
-            LOG.info("=" * 60)
-            LOG.info(f"OVERALL SUCCESS: {overall_rate:.1f}% ({total_success}/{total_attempts} total articles)")
-            LOG.info(f"TIER 1 (Free):     {requests_rate:.1f}% ({requests_success}/{requests_attempts} attempted)")
-            LOG.info(f"TIER 2 (Scrapfly): {scrapfly_rate:.1f}% ({scrapfly_success}/{scrapfly_attempts} attempted)")
-            if scrapfly_stats["requests_made"] > 0:
-                LOG.info(f"Scrapfly Cost: ${scrapfly_stats['cost_estimate']:.3f}")
-            LOG.info("=" * 60)
+        # [END OF PHASE 4 BLOCK - 150+ lines of scraping code removed]
         
         # CRITICAL: Final cleanup before returning response
         LOG.info("=== PERFORMING FINAL CLEANUP ===")
@@ -15867,22 +15760,14 @@ async def cron_ingest(
         processing_time = time.time() - start_time
         LOG.info(f"=== CRON INGEST COMPLETE - Total time: {processing_time:.1f}s ===")
         
-        # Calculate scraping stats
-        total_scraping_attempts = enhanced_scraping_stats["total_attempts"]
-        total_scraping_success = (enhanced_scraping_stats["requests_success"] +
-                                 enhanced_scraping_stats["playwright_success"] +
-                                 enhanced_scraping_stats.get("scrapfly_success", 0))
-        overall_scraping_rate = (total_scraping_success / total_scraping_attempts * 100) if total_scraping_attempts > 0 else 0
-        
         # Stop memory monitoring and get summary
         memory_summary = memory_monitor.stop_monitoring()
-        
+
         # Prepare response with monitoring data
         response = {
             "status": "completed",
             "processing_time_seconds": round(processing_time, 1),
-            "workflow": "enhanced_ticker_reference_with_async_batch_processing",
-            "batch_size_used": SCRAPE_BATCH_SIZE,
+            "workflow": "ingest_triage_email1_only",
 
             "phase_1_ingest": {
                 "total_processed": ingest_stats["total_processed"],
@@ -15901,27 +15786,14 @@ async def cron_ingest(
                 "flagged_articles": flagged_articles  # Article IDs flagged during triage
             },
             "phase_3_quick_email": {"sent": quick_email_sent},
-            "phase_4_async_batch_scraping": {
-                **scraping_final_stats,
-                "overall_success_rate": f"{overall_scraping_rate:.1f}%",
-                "tier_breakdown": {
-                    "requests_success": enhanced_scraping_stats["requests_success"],
-                    "playwright_success": enhanced_scraping_stats["playwright_success"],
-                    "scrapfly_success": enhanced_scraping_stats.get("scrapfly_success", 0),
-                    "total_attempts": total_scraping_attempts
-                },
-                "scrapfly_cost": f"${scrapfly_stats['cost_estimate']:.3f}",
-                "dynamic_limits": dynamic_limits,
-                "batch_processing": {
-                    "batch_size": SCRAPE_BATCH_SIZE,
-                    "total_articles": total_articles_to_process,
-                    "articles_per_batch": SCRAPE_BATCH_SIZE,
-                    "estimated_batches": total_articles_to_process // SCRAPE_BATCH_SIZE if total_articles_to_process > 0 else 0
-                }
+            "phase_4_scraping": {
+                "status": "disabled_moved_to_digest_phase",
+                "reason": "Phase 4 scraping removed from ingest - now happens in digest phase after URL resolution",
+                "note": "Scraping happens in fetch_digest_articles_with_enhanced_content() during process_digest_phase()"
             },
             "successfully_processed_tickers": list(successfully_processed_tickers),
-            "message": f"Processing completed successfully with async batch processing (batch_size={SCRAPE_BATCH_SIZE})",
-            "github_sync_required": len(successfully_processed_tickers) > 0,
+            "message": "Ingest phase completed - scraping deferred to digest phase (after URL resolution)",
+            "github_sync_required": False,  # No scraping happened, so no new content to sync
 
             # Memory monitoring data
             "memory_monitoring": {

@@ -75,7 +75,14 @@
 
         .form-grid {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .form-grid-row2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
             gap: 12px;
             margin-bottom: 24px;
         }
@@ -359,6 +366,9 @@
                     <label>Ticker 3</label>
                     <input type="text" id="ticker3" placeholder="VST" value="VST">
                 </div>
+            </div>
+
+            <div class="form-grid-row2">
                 <div class="form-group">
                     <label>Ticker 4</label>
                     <input type="text" id="ticker4" placeholder="CEG" value="">
@@ -565,7 +575,10 @@
         }
 
         async function cancelBatch() {
-            if (!currentBatchId) return;
+            if (!currentBatchId) {
+                alert('❌ No active batch to cancel');
+                return;
+            }
 
             if (!confirm(`🛑 Cancel all jobs in current batch?\n\nBatch: ${currentBatchId.substring(0, 8)}...\n\nThis will stop all running and queued jobs.\n\nContinue?`)) {
                 return;
@@ -580,19 +593,29 @@
                     }
                 });
 
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
                 const result = await response.json();
 
                 if (result.status === 'cancelled') {
-                    alert(`✅ Cancelled ${result.jobs_cancelled} jobs`);
+                    const tickers = result.tickers ? result.tickers.join(', ') : '';
+                    alert(`✅ Successfully cancelled ${result.jobs_cancelled} job(s)\n\nTickers: ${tickers}`);
                     clearInterval(pollInterval);
                     pollInterval = null;
                     resetForm();
+                    // Refresh one final time to show cancelled status
+                    pollBatchStatus();
+                } else if (result.status === 'no_jobs_to_cancel') {
+                    alert(`ℹ️ ${result.message}\n\nBatch: ${currentBatchId.substring(0, 8)}...`);
                 } else {
-                    alert(result.message || 'Failed to cancel batch');
+                    alert(`⚠️ ${result.message || 'Unexpected response from server'}`);
                 }
 
             } catch (error) {
-                alert('❌ Error: ' + error.message);
+                console.error('Cancel error:', error);
+                alert(`❌ Failed to cancel batch\n\nError: ${error.message}\n\nCheck browser console for details.`);
             }
         }
 

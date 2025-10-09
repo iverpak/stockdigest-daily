@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Runner - StockDigest Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #ffffff;
+            padding: 24px 32px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .header-nav {
+            margin-top: 12px;
+            display: flex;
+            gap: 16px;
+        }
+
+        .header-nav a {
+            color: rgba(255,255,255,0.9);
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+
+        .header-nav a:hover {
+            color: #ffffff;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .card {
+            background: #ffffff;
+            padding: 32px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 24px;
+        }
+
+        .card h2 {
+            font-size: 20px;
+            font-weight: 700;
+            color: #1e40af;
+            margin-bottom: 16px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-group input {
+            padding: 10px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: 'Courier New', monospace;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #1e40af;
+        }
+
+        .form-group input::placeholder {
+            color: #9ca3af;
+        }
+
+        .params-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .btn {
+            padding: 14px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 100%;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #1e40af;
+            color: #ffffff;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #1e3a8a;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: #ffffff;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #dc2626;
+        }
+
+        .progress-section {
+            display: none;
+        }
+
+        .progress-section.active {
+            display: block;
+        }
+
+        .progress-header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #ffffff;
+            padding: 16px 20px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .progress-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .progress-stats {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .job-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .job-card {
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 6px;
+            border-left: 4px solid #6b7280;
+        }
+
+        .job-card.completed {
+            border-left-color: #10b981;
+            background: #f0fdf4;
+        }
+
+        .job-card.failed {
+            border-left-color: #ef4444;
+            background: #fef2f2;
+        }
+
+        .job-card.processing {
+            border-left-color: #f59e0b;
+            background: #fffbeb;
+        }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .job-ticker {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1e40af;
+        }
+
+        .job-status {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            border-radius: 10px;
+            background: #e5e7eb;
+            color: #4b5563;
+        }
+
+        .job-status.completed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .job-status.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .job-status.processing {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .job-progress {
+            font-size: 14px;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #1e40af;
+            transition: width 0.3s ease;
+        }
+
+        .progress-fill.completed {
+            background: #10b981;
+        }
+
+        .progress-fill.failed {
+            background: #ef4444;
+        }
+
+        .job-meta {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 8px;
+        }
+
+        .alert {
+            padding: 16px;
+            border-radius: 6px;
+            margin-bottom: 24px;
+            font-size: 14px;
+        }
+
+        .alert-info {
+            background: #eff6ff;
+            color: #1e40af;
+            border-left: 4px solid #1e40af;
+        }
+
+        .alert-success {
+            background: #f0fdf4;
+            color: #065f46;
+            border-left: 4px solid #10b981;
+        }
+
+        .alert-error {
+            background: #fef2f2;
+            color: #991b1b;
+            border-left: 4px solid #ef4444;
+        }
+
+        .help-text {
+            font-size: 13px;
+            color: #6b7280;
+            margin-top: 8px;
+            line-height: 1.5;
+        }
+
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🧪 Test Runner</h1>
+        <p>Web-based version of setup_job_queue.ps1 - Run test batches without PowerShell</p>
+        <div class="header-nav">
+            <a href="/admin?token={{ token }}">← Dashboard</a>
+            <a href="/admin/queue?token={{ token }}">📧 Email Queue</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Configuration Form -->
+        <div class="card" id="config-form">
+            <h2>⚙️ Test Configuration</h2>
+
+            <div class="alert alert-info">
+                <strong>Mode: TEST</strong> - All 3 emails will be sent immediately to your admin email. No queue staging.
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Ticker 1 *</label>
+                    <input type="text" id="ticker1" placeholder="RY.TO" value="RY.TO">
+                </div>
+                <div class="form-group">
+                    <label>Ticker 2</label>
+                    <input type="text" id="ticker2" placeholder="TD.TO" value="TD.TO">
+                </div>
+                <div class="form-group">
+                    <label>Ticker 3</label>
+                    <input type="text" id="ticker3" placeholder="VST" value="VST">
+                </div>
+                <div class="form-group">
+                    <label>Ticker 4</label>
+                    <input type="text" id="ticker4" placeholder="CEG" value="">
+                </div>
+                <div class="form-group">
+                    <label>Ticker 5</label>
+                    <input type="text" id="ticker5" placeholder="MO" value="">
+                </div>
+            </div>
+
+            <div class="params-grid">
+                <div class="form-group">
+                    <label>Lookback (minutes)</label>
+                    <input type="number" id="minutes" placeholder="1440" value="1440">
+                    <span class="help-text">24 hours = 1440</span>
+                </div>
+                <div class="form-group">
+                    <label>Batch Size</label>
+                    <input type="number" id="batch-size" placeholder="5" value="5">
+                    <span class="help-text">Scraping batch size</span>
+                </div>
+                <div class="form-group">
+                    <label>Triage Batch Size</label>
+                    <input type="number" id="triage-batch-size" placeholder="3" value="3">
+                    <span class="help-text">AI triage batch size</span>
+                </div>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-primary" id="run-btn" onclick="runTest()">
+                    🚀 RUN TEST
+                </button>
+                <button class="btn btn-danger" id="cancel-btn" onclick="cancelBatch()" disabled>
+                    🛑 CANCEL ALL JOBS
+                </button>
+            </div>
+        </div>
+
+        <!-- Progress Section -->
+        <div class="card progress-section" id="progress-section">
+            <div class="progress-header">
+                <div class="progress-title" id="progress-title">⏳ Initializing...</div>
+                <div class="progress-stats" id="progress-stats">--</div>
+            </div>
+
+            <div id="job-list" class="job-list">
+                <!-- Jobs will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const token = '{{ token }}';
+        let currentBatchId = null;
+        let pollInterval = null;
+        let isRunning = false;
+
+        async function runTest() {
+            // Collect tickers
+            const tickers = [
+                document.getElementById('ticker1').value.trim().toUpperCase(),
+                document.getElementById('ticker2').value.trim().toUpperCase(),
+                document.getElementById('ticker3').value.trim().toUpperCase(),
+                document.getElementById('ticker4').value.trim().toUpperCase(),
+                document.getElementById('ticker5').value.trim().toUpperCase()
+            ].filter(t => t.length > 0);
+
+            if (tickers.length === 0) {
+                alert('❌ Please enter at least one ticker');
+                return;
+            }
+
+            // Get parameters
+            const minutes = parseInt(document.getElementById('minutes').value) || 1440;
+            const batchSize = parseInt(document.getElementById('batch-size').value) || 5;
+            const triageBatchSize = parseInt(document.getElementById('triage-batch-size').value) || 3;
+
+            // Confirm
+            if (!confirm(`🚀 Run Test with ${tickers.length} tickers?\n\nTickers: ${tickers.join(', ')}\nLookback: ${minutes} minutes (${(minutes/60).toFixed(1)} hours)\n\nMode: TEST (emails sent immediately to admin)\n\nContinue?`)) {
+                return;
+            }
+
+            try {
+                // Disable form
+                isRunning = true;
+                document.getElementById('run-btn').disabled = true;
+                document.getElementById('cancel-btn').disabled = false;
+
+                // Show progress section
+                document.getElementById('progress-section').classList.add('active');
+                document.getElementById('progress-title').textContent = '⏳ Submitting batch...';
+
+                // Submit batch
+                const response = await fetch('/jobs/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': token
+                    },
+                    body: JSON.stringify({
+                        tickers: tickers,
+                        minutes: minutes,
+                        batch_size: batchSize,
+                        triage_batch_size: triageBatchSize,
+                        mode: 'test'  // CRITICAL: Test mode - send emails immediately
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.status !== 'success') {
+                    throw new Error(result.message || 'Failed to submit batch');
+                }
+
+                currentBatchId = result.batch_id;
+                document.getElementById('progress-title').textContent = `📦 Batch ${currentBatchId.substring(0, 8)}... (Test Mode)`;
+
+                // Start polling
+                pollBatchStatus();
+                pollInterval = setInterval(pollBatchStatus, 10000); // Poll every 10 seconds
+
+            } catch (error) {
+                alert('❌ Error: ' + error.message);
+                resetForm();
+            }
+        }
+
+        async function pollBatchStatus() {
+            if (!currentBatchId) return;
+
+            try {
+                const response = await fetch(`/jobs/batch/${currentBatchId}`, {
+                    headers: {
+                        'X-Admin-Token': token
+                    }
+                });
+
+                const data = await response.json();
+
+                // Update stats
+                const completed = data.completed || 0;
+                const failed = data.failed || 0;
+                const processing = data.processing || 0;
+                const total = data.total_tickers || 0;
+                const progress = data.overall_progress || 0;
+
+                document.getElementById('progress-stats').textContent =
+                    `${progress}% | ✅ ${completed} | ❌ ${failed} | 🔄 ${processing}`;
+
+                // Update job cards
+                const jobList = document.getElementById('job-list');
+                jobList.innerHTML = data.jobs.map(job => {
+                    const statusClass = job.status === 'completed' ? 'completed' :
+                                      job.status === 'failed' || job.status === 'timeout' ? 'failed' :
+                                      job.status === 'processing' ? 'processing' : '';
+
+                    const statusEmoji = job.status === 'completed' ? '✅' :
+                                      job.status === 'failed' || job.status === 'timeout' ? '❌' :
+                                      job.status === 'processing' ? '🔄' :
+                                      job.status === 'queued' ? '⏳' : '❓';
+
+                    const progressPct = job.progress || 0;
+                    const phase = job.phase || 'queued';
+                    const duration = job.duration_seconds ? `${(job.duration_seconds / 60).toFixed(1)}min` : '-';
+                    const memory = job.memory_mb ? `${job.memory_mb.toFixed(0)}MB` : '-';
+
+                    return `
+                        <div class="job-card ${statusClass}">
+                            <div class="job-header">
+                                <div class="job-ticker">${job.ticker}</div>
+                                <div class="job-status ${statusClass}">${statusEmoji} ${job.status}</div>
+                            </div>
+                            <div class="job-progress">${progressPct}% - ${phase}</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill ${statusClass}" style="width: ${progressPct}%"></div>
+                            </div>
+                            <div class="job-meta">
+                                Duration: ${duration} | Memory: ${memory}
+                                ${job.error_message ? `<br><span style="color: #ef4444;">Error: ${job.error_message}</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                // Check if complete
+                if (completed + failed === total) {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+
+                    if (failed === 0) {
+                        document.getElementById('progress-title').textContent = `✅ COMPLETE - All ${completed} tickers succeeded!`;
+                        showCompletionAlert('success', `✅ Test Complete!\n\n${completed} tickers processed successfully.\n\nCheck your email for the 3 QA reports per ticker.`);
+                    } else {
+                        document.getElementById('progress-title').textContent = `⚠️ COMPLETE - ${completed} succeeded, ${failed} failed`;
+                        showCompletionAlert('warning', `⚠️ Test Complete with Errors\n\n✅ Succeeded: ${completed}\n❌ Failed: ${failed}\n\nCheck logs for errors.`);
+                    }
+
+                    resetForm();
+                }
+
+            } catch (error) {
+                console.error('Poll error:', error);
+            }
+        }
+
+        async function cancelBatch() {
+            if (!currentBatchId) return;
+
+            if (!confirm(`🛑 Cancel all jobs in current batch?\n\nBatch: ${currentBatchId.substring(0, 8)}...\n\nThis will stop all running and queued jobs.\n\nContinue?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/jobs/batch/${currentBatchId}/cancel`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': token
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'cancelled') {
+                    alert(`✅ Cancelled ${result.jobs_cancelled} jobs`);
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                    resetForm();
+                } else {
+                    alert(result.message || 'Failed to cancel batch');
+                }
+
+            } catch (error) {
+                alert('❌ Error: ' + error.message);
+            }
+        }
+
+        function showCompletionAlert(type, message) {
+            const alertClass = type === 'success' ? 'alert-success' :
+                             type === 'error' ? 'alert-error' : 'alert-info';
+
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert ${alertClass}`;
+            alertDiv.style.whiteSpace = 'pre-line';
+            alertDiv.textContent = message;
+
+            const progressSection = document.getElementById('progress-section');
+            progressSection.insertBefore(alertDiv, progressSection.firstChild);
+        }
+
+        function resetForm() {
+            isRunning = false;
+            document.getElementById('run-btn').disabled = false;
+            document.getElementById('cancel-btn').disabled = true;
+            currentBatchId = null;
+        }
+
+        // Warn before leaving if test is running
+        window.addEventListener('beforeunload', (e) => {
+            if (isRunning) {
+                e.preventDefault();
+                e.returnValue = 'Test is still running. Are you sure you want to leave?';
+            }
+        });
+    </script>
+</body>
+</html>

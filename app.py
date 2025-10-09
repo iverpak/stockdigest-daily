@@ -17320,6 +17320,17 @@ def admin_queue_page(request: Request, token: str = Query(...)):
         "token": token
     })
 
+@APP.get("/admin/test")
+def admin_test_page(request: Request, token: str = Query(...)):
+    """Test runner page - web-based version of setup_job_queue.ps1"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_test.html", {
+        "request": request,
+        "token": token
+    })
+
 # Admin API endpoints
 @APP.get("/api/admin/stats")
 def get_admin_stats(token: str = Query(...)):

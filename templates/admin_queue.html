@@ -35,6 +35,13 @@
             justify-content: space-between;
             align-items: center;
             margin-top: 12px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .header-nav {
+            display: flex;
+            gap: 16px;
         }
 
         .header-nav a {
@@ -86,6 +93,7 @@
         .stat-value.danger { color: #ef4444; }
         .stat-value.warning { color: #f59e0b; }
         .stat-value.info { color: #1e40af; }
+        .stat-value.cancelled { color: #6b7280; }
 
         .stat-label {
             font-size: 12px;
@@ -102,25 +110,19 @@
         }
 
         .btn {
-            padding: 12px 24px;
+            padding: 12px 20px;
             border: none;
             border-radius: 6px;
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
 
-        .btn-success {
-            background: #10b981;
-            color: #ffffff;
-        }
-
-        .btn-success:hover {
-            background: #059669;
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
         }
 
         .btn-primary {
@@ -130,6 +132,15 @@
 
         .btn-primary:hover {
             background: #1e3a8a;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: #ffffff;
+        }
+
+        .btn-success:hover {
+            background: #059669;
         }
 
         .btn-warning {
@@ -150,9 +161,22 @@
             background: #dc2626;
         }
 
-        .btn-small {
-            padding: 6px 12px;
+        .btn-secondary {
+            background: #6b7280;
+            color: #ffffff;
+        }
+
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+
+        .btn-count {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 2px 8px;
+            border-radius: 10px;
             font-size: 12px;
+            margin-left: 6px;
         }
 
         .ticker-card {
@@ -161,41 +185,19 @@
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 16px;
-            transition: transform 0.2s;
-        }
-
-        .ticker-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-        }
-
-        .ticker-card.ready {
-            border-left: 4px solid #10b981;
-        }
-
-        .ticker-card.failed {
-            border-left: 4px solid #ef4444;
-        }
-
-        .ticker-card.processing {
-            border-left: 4px solid #f59e0b;
-        }
-
-        .ticker-card.sent {
-            border-left: 4px solid #1e40af;
-            opacity: 0.7;
         }
 
         .ticker-header {
             display: flex;
             justify-content: space-between;
-            align-items: start;
+            align-items: center;
             margin-bottom: 16px;
         }
 
         .ticker-info h3 {
             font-size: 20px;
-            color: #111827;
+            font-weight: 700;
+            color: #1e40af;
             margin-bottom: 4px;
         }
 
@@ -264,7 +266,8 @@
         <h1>📧 Email Queue</h1>
         <div class="header-meta">
             <div class="header-nav">
-                <a href="/admin?token={{ token }}">← Back to Dashboard</a>
+                <a href="/admin?token={{ token }}">← Dashboard</a>
+                <a href="/admin/test?token={{ token }}">🧪 Test Page</a>
             </div>
             <div class="countdown" id="countdown">Auto-send in: --</div>
         </div>
@@ -282,6 +285,10 @@
                 <div class="stat-label">Failed</div>
             </div>
             <div class="stat-card">
+                <div class="stat-value cancelled" id="cancelled-count">-</div>
+                <div class="stat-label">Cancelled</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-value warning" id="processing-count">-</div>
                 <div class="stat-label">Processing</div>
             </div>
@@ -294,25 +301,28 @@
         <!-- Global Actions -->
         <div class="global-actions">
             <button class="btn btn-primary" onclick="generateAllReports()">
-                📊 GENERATE ALL REPORTS
+                📊 GENERATE ALL REPORTS <span class="btn-count" id="btn-generate-count">-</span>
+            </button>
+            <button class="btn btn-danger" onclick="cancelInProgressRuns()">
+                🚫 CANCEL IN PROGRESS RUNS <span class="btn-count" id="btn-cancel-runs-count">-</span>
+            </button>
+            <button class="btn btn-primary" onclick="rerunAllQueue()">
+                🔄 RE-RUN ALL QUEUE <span class="btn-count" id="btn-rerun-all-count">-</span>
+            </button>
+            <button class="btn btn-primary" onclick="retryFailedAndCancelled()">
+                🔄 RETRY FAILED & CANCELLED <span class="btn-count" id="btn-retry-count">-</span>
+            </button>
+            <button class="btn-danger" onclick="cancelReadyEmails()">
+                ⛔ CANCEL READY EMAILS <span class="btn-count" id="btn-cancel-ready-count">-</span>
+            </button>
+            <button class="btn btn-warning" onclick="undoCancelReadyEmails()">
+                ✅ UNDO CANCEL READY EMAILS <span class="btn-count" id="btn-undo-cancel-count">-</span>
             </button>
             <button class="btn btn-success" onclick="sendAllReady()">
-                ✉️ SEND ALL READY EMAILS
-            </button>
-            <button class="btn btn-primary" onclick="rerunQueue()">
-                🔄 RE-RUN QUEUE
-            </button>
-            <button class="btn btn-primary" onclick="rerunAllFailed()">
-                🔄 RE-RUN ALL FAILED
-            </button>
-            <button class="btn btn-warning" onclick="approveAllCancelled()">
-                ✅ APPROVE ALL CANCELLED
+                ✉️ SEND ALL READY EMAILS <span class="btn-count" id="btn-send-count">-</span>
             </button>
             <button class="btn btn-secondary" onclick="clearAllReports()">
-                🗑️ CLEAR ALL REPORTS
-            </button>
-            <button class="btn btn-danger" onclick="emergencyStop()">
-                🛑 EMERGENCY STOP ALL
+                🗑️ CLEAR ALL REPORTS <span class="btn-count" id="btn-clear-count">-</span>
             </button>
         </div>
 
@@ -326,6 +336,7 @@
 
     <script>
         const token = '{{ token }}';
+        let queueStats = {};
 
         function updateCountdown() {
             const now = new Date();
@@ -353,72 +364,246 @@
             });
         }
 
-        function createTickerCard(ticker) {
-            const statusClass = ticker.status;
-            const badgeClass = `status-${ticker.status}`;
-
-            return `
-                <div class="ticker-card ${statusClass}">
-                    <div class="ticker-header">
-                        <div class="ticker-info">
-                            <h3>${ticker.ticker} - ${ticker.company_name || 'Unknown'}</h3>
-                            <p>Recipients: ${ticker.recipients ? ticker.recipients.join(', ') : 'None'}</p>
-                        </div>
-                        <span class="status-badge ${badgeClass}">${ticker.status.toUpperCase()}</span>
-                    </div>
-
-                    <div class="ticker-meta">
-                        ${ticker.article_count !== null ? `Articles: ${ticker.article_count} | ` : ''}
-                        ${ticker.status === 'failed' ? `Error: ${ticker.error_message || 'Unknown error'}<br>` : ''}
-                        ${ticker.status === 'processing' ? `Heartbeat: ${formatDate(ticker.heartbeat)}<br>` : ''}
-                        Updated: ${formatDate(ticker.updated_at)}
-                        ${ticker.sent_at ? ` | Sent: ${formatDate(ticker.sent_at)}` : ''}
-                    </div>
-
-                    <div class="ticker-actions">
-                        ${ticker.status === 'ready' || ticker.status === 'sent' ? `
-                            <button class="btn btn-primary btn-small" onclick="viewEmail('${ticker.ticker}')">
-                                👁️ View
-                            </button>
-                        ` : ''}
-                        <button class="btn btn-warning btn-small" onclick="rerunTicker('${ticker.ticker}')">
-                            🔄 Re-run
-                        </button>
-                        ${ticker.status === 'ready' ? `
-                            <button class="btn btn-danger btn-small" onclick="cancelTicker('${ticker.ticker}')">
-                                ❌ Cancel
-                            </button>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
-        }
-
         async function fetchQueueStatus() {
             try {
                 const response = await fetch(`/api/queue-status?token=${token}`);
                 const data = await response.json();
+                queueStats = data; // Store for button counts
 
                 // Update stats
-                document.getElementById('ready-count').textContent = data.stats.ready || 0;
-                document.getElementById('failed-count').textContent = data.stats.failed || 0;
-                document.getElementById('processing-count').textContent = data.stats.processing || 0;
-                document.getElementById('sent-count').textContent = data.stats.sent || 0;
+                document.getElementById('ready-count').textContent = data.ready || 0;
+                document.getElementById('failed-count').textContent = data.failed || 0;
+                document.getElementById('cancelled-count').textContent = data.cancelled || 0;
+                document.getElementById('processing-count').textContent = data.processing || 0;
+                document.getElementById('sent-count').textContent = data.sent || 0;
+
+                // Update button counts
+                updateButtonCounts(data);
 
                 // Update ticker list
                 const tickerList = document.getElementById('ticker-list');
-                if (data.tickers && data.tickers.length > 0) {
-                    tickerList.innerHTML = data.tickers.map(createTickerCard).join('');
-                } else {
+                if (!data.tickers || data.tickers.length === 0) {
                     tickerList.innerHTML = '<div class="empty-state"><p>No emails in queue</p></div>';
+                    return;
                 }
+
+                tickerList.innerHTML = data.tickers.map(ticker => `
+                    <div class="ticker-card">
+                        <div class="ticker-header">
+                            <div class="ticker-info">
+                                <h3>${ticker.ticker} - ${ticker.company_name || 'Unknown Company'}</h3>
+                                <p>${ticker.recipient_count || 0} recipients</p>
+                            </div>
+                            <span class="status-badge status-${ticker.status}">${ticker.status}</span>
+                        </div>
+                        <div class="ticker-meta">
+                            ${ticker.article_count || 0} articles • Updated ${formatDate(ticker.updated_at)}
+                            ${ticker.error_message ? '<br><span style="color: #ef4444;">Error: ' + ticker.error_message + '</span>' : ''}
+                        </div>
+                        <div class="ticker-actions">
+                            ${ticker.status === 'ready' ? `<button class="btn btn-success btn-sm" onclick="sendTicker('${ticker.ticker}')">✉️ Send</button>` : ''}
+                            ${ticker.status === 'ready' ? `<button class="btn btn-warning btn-sm" onclick="cancelTicker('${ticker.ticker}')">❌ Cancel</button>` : ''}
+                            ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
+                            <button class="btn btn-secondary btn-sm" onclick="viewEmail('${ticker.ticker}')">👁️ View</button>
+                        </div>
+                    </div>
+                `).join('');
             } catch (error) {
                 console.error('Failed to fetch queue status:', error);
             }
         }
 
+        function updateButtonCounts(data) {
+            const total = (data.ready || 0) + (data.processing || 0) + (data.failed || 0) + (data.cancelled || 0) + (data.sent || 0);
+            const failedAndCancelled = (data.failed || 0) + (data.cancelled || 0);
+
+            document.getElementById('btn-generate-count').textContent = '15'; // Active users count
+            document.getElementById('btn-cancel-runs-count').textContent = '?'; // Will update from jobs API
+            document.getElementById('btn-rerun-all-count').textContent = total;
+            document.getElementById('btn-retry-count').textContent = failedAndCancelled;
+            document.getElementById('btn-cancel-ready-count').textContent = (data.ready || 0) + (data.processing || 0);
+            document.getElementById('btn-undo-cancel-count').textContent = data.cancelled || 0;
+            document.getElementById('btn-send-count').textContent = data.ready || 0;
+            document.getElementById('btn-clear-count').textContent = total;
+        }
+
+        async function generateAllReports() {
+            if (!confirm('📊 Generate Reports for All Active Users?\n\n• Processing time: ~30-45 minutes\n• Emails will be queued with status \'ready\'\n• Will NOT send automatically\n\nContinue?')) return;
+
+            try {
+                const response = await fetch('/api/generate-all-reports', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Processing ${result.ticker_count} unique tickers.\n\nBatch ID: ${result.batch_id}\n\nRefresh this page in 30-60 minutes.`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to generate reports');
+            }
+        }
+
+        async function cancelInProgressRuns() {
+            try {
+                // Get active jobs first
+                const response = await fetch('/api/cancel-in-progress-runs', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+
+                if (result.cancelled_jobs === 0) {
+                    alert('✅ No active jobs to cancel!');
+                    return;
+                }
+
+                const jobsList = result.affected_jobs.slice(0, 5).map(j =>
+                    `• ${j.ticker} - ${j.status} (${j.progress}%, ${j.phase || 'starting'})`
+                ).join('\n');
+
+                const confirmMsg = `🚫 Cancel ${result.cancelled_jobs} In-Progress Jobs?\n\n${jobsList}\n${result.affected_jobs.length > 5 ? `... and ${result.affected_jobs.length - 5} more\n\n` : '\n'}Impact:\n• Jobs will be cancelled\n• Partial emails will be incomplete\n• Does NOT affect emails already in \'ready\' status\n\nContinue?`;
+
+                if (!confirm(confirmMsg)) return;
+
+                if (result.status === 'success') {
+                    alert(`✅ Cancelled ${result.cancelled_jobs} jobs across ${result.cancelled_batches} batches`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to cancel in-progress runs');
+            }
+        }
+
+        async function rerunAllQueue() {
+            const total = queueStats.ready + queueStats.processing + queueStats.failed + queueStats.cancelled + queueStats.sent;
+
+            if (!confirm(`🔄 Reprocess ALL ${total} Tickers from Scratch?\n\nAll statuses:\n• ${queueStats.ready} ready\n• ${queueStats.processing} processing\n• ${queueStats.failed} failed\n• ${queueStats.cancelled} cancelled\n• ${queueStats.sent} sent\n\nImpact:\n• Fresh emails generated with latest news\n• All existing emails replaced\n• Processing time: ~30-60 minutes\n\nContinue?`)) return;
+
+            try {
+                const response = await fetch('/api/rerun-all-queue', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Reprocessing ${result.ticker_count} tickers.\n\nBatch ID: ${result.batch_id}\n\nCheck back in 30-60 minutes.`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to rerun queue');
+            }
+        }
+
+        async function retryFailedAndCancelled() {
+            const failedAndCancelled = queueStats.failed + queueStats.cancelled;
+
+            if (failedAndCancelled === 0) {
+                alert('✅ No failed or cancelled tickers to retry!');
+                return;
+            }
+
+            if (!confirm(`🔄 Retry ${failedAndCancelled} Failed & Cancelled Tickers?\n\nTickers to reprocess:\n• ${queueStats.failed} failed\n• ${queueStats.cancelled} cancelled\n\nImpact:\n• Only non-ready tickers reprocessed\n• Ready tickers NOT affected\n• Processing time: ~15-30 minutes\n\nContinue?`)) return;
+
+            try {
+                const response = await fetch('/api/retry-failed-and-cancelled', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Retrying ${result.ticker_count} tickers.\n\nBatch ID: ${result.batch_id}\n\nProcessing time: ~15-30 minutes.`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to retry failed & cancelled');
+            }
+        }
+
+        async function cancelReadyEmails() {
+            const readyAndProcessing = queueStats.ready + queueStats.processing;
+
+            if (readyAndProcessing === 0) {
+                alert('✅ No ready emails to cancel!');
+                return;
+            }
+
+            if (!confirm(`⛔ Cancel ${readyAndProcessing} Ready Emails?\n\n⚠️ This prevents emails from being sent at 8:30am.\n\nReady emails to cancel:\n• ${queueStats.ready} ready\n• ${queueStats.processing} processing\n\nImpact:\n• Status: ready → cancelled\n• Can be restored via "Undo Cancel Ready Emails"\n• Does NOT affect processing jobs\n\nContinue?`)) return;
+
+            try {
+                const response = await fetch('/api/cancel-ready-emails', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`⛔ Cancelled ${result.cancelled_count} emails (prevents 8:30am send)`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to cancel ready emails');
+            }
+        }
+
+        async function undoCancelReadyEmails() {
+            const cancelledCount = queueStats.cancelled || 0;
+
+            if (cancelledCount === 0) {
+                alert('✅ No cancelled emails to restore!');
+                return;
+            }
+
+            if (!confirm(`✅ Restore ${cancelledCount} Cancelled Emails?\n\nImpact:\n• ALL cancelled emails restored to previous status\n• Some may need reprocessing (use "Retry Failed & Cancelled")\n• Ready emails eligible for send again\n\nContinue?`)) return;
+
+            try {
+                const response = await fetch('/api/undo-cancel-ready-emails', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Restored ${result.restored_count} cancelled emails to previous status`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to restore cancelled emails');
+            }
+        }
+
         async function sendAllReady() {
-            if (!confirm('Send all ready emails now?')) return;
+            const readyCount = queueStats.ready || 0;
+
+            if (readyCount === 0) {
+                alert('✅ No ready emails to send!');
+                return;
+            }
+
+            if (!confirm(`✉️ Send ${readyCount} Ready Emails NOW?\n\n⚠️ This action CANNOT be undone.\n\nImpact:\n• Emails sent immediately to users\' inboxes\n• Status: ready → sent\n• Personalized unsubscribe links included\n• You will receive BCC copies\n\nOnly proceed if you\'ve reviewed content.\n\nContinue?`)) return;
 
             try {
                 const response = await fetch('/api/send-all-ready', {
@@ -439,104 +624,22 @@
             }
         }
 
-        async function rerunAllFailed() {
-            if (!confirm('Re-run all failed tickers?')) return;
-
-            try {
-                const response = await fetch('/api/rerun-all-failed', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    alert(`✅ Re-running ${result.ticker_count} tickers`);
-                    fetchQueueStatus();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to re-run tickers');
-            }
-        }
-
-        async function rerunQueue() {
-            if (!confirm('⚠️ Re-run Queue?\n\nThis will REPROCESS all tickers currently in queue (ready, failed, cancelled).\n\nThis overwrites existing emails.\n\nContinue?')) return;
-
-            try {
-                const response = await fetch('/api/rerun-all-tickers', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    alert(`✅ Re-running ${result.ticker_count} tickers from queue.\n\nProcessing takes ~${Math.ceil(result.ticker_count / 3 * 10)}-${Math.ceil(result.ticker_count / 3 * 15)} minutes.\n\nCheck back soon.`);
-                    fetchQueueStatus();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to re-run queue');
-            }
-        }
-
-        async function generateAllReports() {
-            try {
-                const response = await fetch('/api/generate-all-reports', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token})
-                });
-
-                const result = await response.json();
-
-                if (result.status === 'success') {
-                    const confirmMsg = `⚠️ Generate All Reports?\n\n` +
-                        `This will process ${result.ticker_count} unique tickers from all active users.\n\n` +
-                        `Tickers: ${result.tickers.slice(0, 10).join(', ')}${result.tickers.length > 10 ? '...' : ''}\n\n` +
-                        `Processing takes ~${Math.ceil(result.ticker_count / 3 * 10)}-${Math.ceil(result.ticker_count / 3 * 15)} minutes.\n\n` +
-                        `Continue?`;
-
-                    if (!confirm(confirmMsg)) return;
-
-                    alert(`✅ ${result.message}\n\nProcessing ${result.ticker_count} tickers in background.\n\nRefresh this page in 30-60 minutes.`);
-                    fetchQueueStatus();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to generate reports');
-            }
-        }
-
         async function clearAllReports() {
+            const total = queueStats.ready + queueStats.processing + queueStats.failed + queueStats.cancelled + queueStats.sent;
+
+            if (total === 0) {
+                alert('Queue is already empty.');
+                return;
+            }
+
+            const deleteWord = prompt(`⚠️ DELETE All ${total} Queue Entries?\n\n⚠️ WARNING: This action CANNOT be undone!\n\nAll queue entries:\n• ${queueStats.ready} ready\n• ${queueStats.processing} processing\n• ${queueStats.failed} failed\n• ${queueStats.cancelled} cancelled\n• ${queueStats.sent} sent (history lost!)\n\nQueue will be completely empty.\nDoes NOT cancel running ticker jobs.\n\nType "DELETE" to confirm:`);
+
+            if (deleteWord !== 'DELETE') {
+                alert('Cancelled - you must type DELETE exactly');
+                return;
+            }
+
             try {
-                // First get current queue counts for confirmation
-                const statusResponse = await fetch(`/api/queue-status?token=${token}`);
-                const queueData = await statusResponse.json();
-
-                const total = queueData.ready + queueData.processing + queueData.failed + queueData.cancelled + queueData.sent;
-
-                if (total === 0) {
-                    alert('Queue is already empty.');
-                    return;
-                }
-
-                const confirmMsg = `⚠️ Delete All ${total} Queue Entries?\n\n` +
-                    `This will permanently delete:\n` +
-                    `- ${queueData.ready} ready emails\n` +
-                    `- ${queueData.processing} processing\n` +
-                    `- ${queueData.failed} failed emails\n` +
-                    `- ${queueData.cancelled} cancelled emails\n` +
-                    `- ${queueData.sent} sent emails\n\n` +
-                    `This cannot be undone.\n\n` +
-                    `Continue?`;
-
-                if (!confirm(confirmMsg)) return;
-
                 const response = await fetch('/api/clear-all-reports', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -544,7 +647,6 @@
                 });
 
                 const result = await response.json();
-
                 if (result.status === 'success') {
                     alert(`✅ Deleted ${result.deleted_count} queue entries.`);
                     fetchQueueStatus();
@@ -553,50 +655,6 @@
                 }
             } catch (error) {
                 alert('Failed to clear reports');
-            }
-        }
-
-        async function approveAllCancelled() {
-            if (!confirm('Approve all cancelled emails? They will be marked as ready to send.')) return;
-
-            try {
-                const response = await fetch('/api/approve-all-cancelled', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    alert(`✅ Approved ${result.approved_count} emails`);
-                    fetchQueueStatus();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to approve emails');
-            }
-        }
-
-        async function emergencyStop() {
-            if (!confirm('EMERGENCY STOP: Cancel all pending sends?')) return;
-
-            try {
-                const response = await fetch('/api/emergency-stop', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    alert(`🛑 Cancelled ${result.cancelled_count} emails`);
-                    fetchQueueStatus();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to emergency stop');
             }
         }
 
@@ -645,6 +703,28 @@
                 }
             } catch (error) {
                 alert('Failed to cancel ticker');
+            }
+        }
+
+        async function sendTicker(ticker) {
+            if (!confirm(`Send ${ticker} now?`)) return;
+
+            try {
+                const response = await fetch('/api/send-ticker', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, ticker})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ ${ticker} sent`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to send ticker');
             }
         }
 

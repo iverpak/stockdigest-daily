@@ -9474,7 +9474,7 @@ class DomainResolver:
                 return article_url
                 
         except Exception as e:
-            LOG.debug(f"Advanced Google News resolution failed for {url}: {e}")
+            LOG.info(f"❌ [GOOGLE_NEWS] Advanced API exception: {str(e)[:200]}")
             return None
         
         return None

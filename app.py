@@ -11321,8 +11321,8 @@ def sort_articles_chronologically(articles: List[Dict]) -> List[Dict]:
     )
 
 
-def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
-    """Send email with HTML body only (no attachments)."""
+def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | None = None) -> bool:
+    """Send email with HTML body only (no attachments). Supports BCC (hidden from recipients)."""
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
@@ -11335,6 +11335,7 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
         msg["To"] = recipient
+        # NOTE: BCC header is NOT added to message (hidden from recipients)
 
         # Plain-text fallback
         text_body = "This email contains HTML content. Please view in an HTML-capable email client."
@@ -11345,6 +11346,12 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
 
         LOG.info(f"Connecting to SMTP server: {SMTP_HOST}:{SMTP_PORT}")
 
+        # Build recipient list (includes BCC, but not shown in headers)
+        recipients = [recipient]
+        if bcc:
+            recipients.append(bcc)
+            LOG.info(f"BCC enabled: {bcc} (hidden from recipient)")
+
         # Add timeout to SMTP operations
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=60) as server:
             if SMTP_STARTTLS:
@@ -11353,9 +11360,9 @@ def send_email(subject: str, html_body: str, to: str | None = None) -> bool:
             LOG.info("Logging in to SMTP server...")
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             LOG.info("Sending email...")
-            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
+            server.sendmail(EMAIL_FROM, recipients, msg.as_string())
 
-        LOG.info(f"Email sent successfully to {recipient}")
+        LOG.info(f"Email sent successfully to {recipient}" + (f" (BCC: {bcc})" if bcc else ""))
         return True
 
     except smtplib.SMTPTimeout as e:
@@ -17205,7 +17212,12 @@ def get_lookback_minutes() -> int:
             cur.execute("SELECT value FROM system_config WHERE key = 'lookback_minutes'")
             row = cur.fetchone()
             if row:
-                return int(row[0])
+                minutes = int(row['value'])  # Fixed: use dict access, not tuple index
+                # Validate: must be at least 60 minutes (1 hour)
+                if minutes < 60:
+                    LOG.warning(f"⚠️ Invalid lookback_minutes in system_config: {minutes} < 60, using default 1440")
+                    return 1440
+                return minutes
             else:
                 LOG.warning("⚠️ No lookback_minutes in system_config, using default 1440 (1 day)")
                 return 1440  # 1 day default

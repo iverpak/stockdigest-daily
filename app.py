@@ -1115,6 +1115,7 @@ def ensure_schema():
                     email_subject VARCHAR(500),
                     article_count INTEGER,
                     status VARCHAR(50) NOT NULL DEFAULT 'queued',
+                    previous_status VARCHAR(50),  -- Tracks status before cancellation (for smart restore)
                     error_message TEXT,
                     is_production BOOLEAN DEFAULT TRUE,
                     heartbeat TIMESTAMPTZ,
@@ -17734,9 +17735,9 @@ async def rerun_all_tickers_api(request: Request):
         LOG.error(f"Failed to rerun all tickers: {e}")
         return {"status": "error", "message": str(e)}
 
-@APP.post("/api/approve-all-cancelled")
-async def approve_all_cancelled_api(request: Request):
-    """Approve all cancelled emails"""
+@APP.post("/api/undo-cancel-ready-emails")
+async def undo_cancel_ready_emails_api(request: Request):
+    """Undo cancellation - restore ALL cancelled emails to their previous status (smart restore)"""
     body = await request.json()
     token = body.get('token')
 
@@ -17745,22 +17746,46 @@ async def approve_all_cancelled_api(request: Request):
 
     try:
         with db() as conn, conn.cursor() as cur:
+            # Get affected emails for response
             cur.execute("""
-                UPDATE email_queue
-                SET status = 'ready', updated_at = NOW()
+                SELECT ticker, company_name, status, previous_status
+                FROM email_queue
                 WHERE status = 'cancelled'
             """)
-            approved_count = cur.rowcount
+            affected_emails = cur.fetchall()
+
+            # Smart restore: Use previous_status if available, otherwise default to 'ready'
+            cur.execute("""
+                UPDATE email_queue
+                SET status = COALESCE(previous_status, 'ready'),
+                    previous_status = NULL,
+                    updated_at = NOW()
+                WHERE status = 'cancelled'
+            """)
+            restored_count = cur.rowcount
             conn.commit()
 
-            LOG.info(f"✅ Approved {approved_count} cancelled emails")
+            LOG.info(f"✅ Restored {restored_count} cancelled emails to previous status")
+
+            # Build response with restoration details
+            restored_tickers = [
+                {
+                    "ticker": email['ticker'],
+                    "company_name": email['company_name'],
+                    "restored_to": email['previous_status'] or 'ready',
+                    "was_cancelled": True
+                }
+                for email in affected_emails
+            ]
+
             return {
                 "status": "success",
-                "approved_count": approved_count,
-                "message": f"Approved {approved_count} emails"
+                "restored_count": restored_count,
+                "restored_tickers": restored_tickers,
+                "message": f"Restored {restored_count} cancelled emails to previous status"
             }
     except Exception as e:
-        LOG.error(f"Failed to approve cancelled emails: {e}")
+        LOG.error(f"Failed to restore cancelled emails: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/generate-user-reports")
@@ -17962,9 +17987,9 @@ async def clear_all_reports_api(request: Request):
         LOG.error(f"Failed to clear all reports: {e}")
         return {"status": "error", "message": str(e)}
 
-@APP.post("/api/emergency-stop")
-async def emergency_stop_api(request: Request):
-    """Emergency stop - cancel all pending sends"""
+@APP.post("/api/cancel-ready-emails")
+async def cancel_ready_emails_api(request: Request):
+    """Cancel ready emails - prevent 8:30am auto-send (tracks previous_status for smart restore)"""
     body = await request.json()
     token = body.get('token')
 
@@ -17973,22 +17998,128 @@ async def emergency_stop_api(request: Request):
 
     try:
         with db() as conn, conn.cursor() as cur:
+            # Get affected emails for response
+            cur.execute("""
+                SELECT ticker, company_name, recipients, status
+                FROM email_queue
+                WHERE status IN ('ready', 'processing')
+            """)
+            affected_emails = cur.fetchall()
+
+            # Track previous_status before cancelling
             cur.execute("""
                 UPDATE email_queue
-                SET status = 'cancelled', updated_at = NOW()
+                SET previous_status = status,
+                    status = 'cancelled',
+                    updated_at = NOW()
                 WHERE status IN ('ready', 'processing')
             """)
             cancelled_count = cur.rowcount
             conn.commit()
 
-            LOG.warning(f"🛑 EMERGENCY STOP: Cancelled {cancelled_count} emails")
+            LOG.warning(f"⛔ CANCEL READY EMAILS: Cancelled {cancelled_count} emails (prevents 8:30am send)")
+
+            # Build response with affected tickers
+            affected_tickers = [
+                {
+                    "ticker": email['ticker'],
+                    "company_name": email['company_name'],
+                    "recipient_count": len(email['recipients']) if email['recipients'] else 0,
+                    "previous_status": email['status']
+                }
+                for email in affected_emails
+            ]
+
             return {
                 "status": "success",
                 "cancelled_count": cancelled_count,
-                "message": f"Emergency stop: {cancelled_count} emails cancelled"
+                "affected_tickers": affected_tickers,
+                "message": f"Cancelled {cancelled_count} ready emails (prevents 8:30am auto-send)"
             }
     except Exception as e:
-        LOG.error(f"Emergency stop failed: {e}")
+        LOG.error(f"Cancel ready emails failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cancel-in-progress-runs")
+async def cancel_in_progress_runs_api(request: Request):
+    """Cancel all in-progress ticker processing jobs (stops current runs)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get all active batches with their jobs
+            cur.execute("""
+                SELECT
+                    b.batch_id,
+                    b.created_by,
+                    b.created_at
+                FROM ticker_processing_batches b
+                WHERE EXISTS (
+                    SELECT 1 FROM ticker_processing_jobs j
+                    WHERE j.batch_id = b.batch_id
+                      AND j.status IN ('queued', 'processing')
+                )
+                ORDER BY b.created_at DESC
+            """)
+            active_batches = cur.fetchall()
+
+            if not active_batches:
+                return {
+                    "status": "success",
+                    "cancelled_jobs": 0,
+                    "cancelled_batches": 0,
+                    "message": "No active jobs to cancel"
+                }
+
+            # Get detailed job information for response
+            all_jobs = []
+            for batch in active_batches:
+                cur.execute("""
+                    SELECT job_id, ticker, status, phase, progress
+                    FROM ticker_processing_jobs
+                    WHERE batch_id = %s
+                      AND status IN ('queued', 'processing')
+                """, (batch['batch_id'],))
+                jobs = cur.fetchall()
+                all_jobs.extend([{
+                    "batch_id": str(batch['batch_id']),
+                    "batch_created_by": batch['created_by'],
+                    "ticker": j['ticker'],
+                    "status": j['status'],
+                    "phase": j['phase'],
+                    "progress": j['progress']
+                } for j in jobs])
+
+            # Cancel all active jobs across all batches
+            total_cancelled = 0
+            for batch in active_batches:
+                cur.execute("""
+                    UPDATE ticker_processing_jobs
+                    SET status = 'cancelled',
+                        error_message = 'Cancelled by admin via UI',
+                        updated_at = NOW()
+                    WHERE batch_id = %s
+                      AND status IN ('queued', 'processing')
+                """, (batch['batch_id'],))
+                total_cancelled += cur.rowcount
+
+            conn.commit()
+
+            LOG.warning(f"🚫 CANCEL IN PROGRESS RUNS: Cancelled {total_cancelled} jobs across {len(active_batches)} batches")
+
+            return {
+                "status": "success",
+                "cancelled_jobs": total_cancelled,
+                "cancelled_batches": len(active_batches),
+                "affected_jobs": all_jobs,
+                "message": f"Cancelled {total_cancelled} in-progress jobs across {len(active_batches)} batches"
+            }
+    except Exception as e:
+        LOG.error(f"Cancel in-progress runs failed: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/cancel-ticker")

@@ -852,11 +852,15 @@ def ensure_schema():
                     name VARCHAR(255) NOT NULL,
                     search_keyword VARCHAR(255),
                     competitor_ticker VARCHAR(10),
+                    company_name VARCHAR(255),
                     retain_days INTEGER DEFAULT 90,
                     active BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
+
+                -- Add company_name column if it doesn't exist (migration)
+                ALTER TABLE feeds ADD COLUMN IF NOT EXISTS company_name VARCHAR(255);
 
                 -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
                 CREATE TABLE IF NOT EXISTS ticker_feeds (
@@ -1281,19 +1285,20 @@ def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
 
 # NEW FEED ARCHITECTURE V2 - Category per Relationship Functions
 def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None,
-                                competitor_ticker: str = None, retain_days: int = 90) -> int:
+                                competitor_ticker: str = None, company_name: str = None, retain_days: int = 90) -> int:
     """Insert/update feed in new architecture - NO CATEGORY (category is per-relationship)"""
     with db() as conn, conn.cursor() as cur:
         try:
             # Insert or get existing feed - NEVER overwrite existing feeds
             cur.execute("""
-                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, retain_days)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, company_name, retain_days)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO UPDATE SET
                     active = TRUE,
+                    company_name = COALESCE(EXCLUDED.company_name, feeds.company_name),
                     updated_at = NOW()
                 RETURNING id;
-            """, (url, name, search_keyword, competitor_ticker, retain_days))
+            """, (url, name, search_keyword, competitor_ticker, company_name, retain_days))
 
             result = cur.fetchone()
             if result:
@@ -1428,7 +1433,8 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                     url=f"https://news.google.com/rss/search?q=\"{comp_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
                     name=f"Google News: {comp_name}",  # Neutral name (no "Competitor:" prefix)
                     search_keyword=comp_name,
-                    competitor_ticker=comp_ticker  # Can be None
+                    competitor_ticker=comp_ticker,  # Can be None
+                    company_name=comp_name  # Full company name for display
                 )
 
                 # Associate this feed with this ticker as "competitor" category
@@ -1444,7 +1450,8 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                         url=f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
                         name=f"Yahoo Finance: {comp_ticker}",  # Neutral name (no "Competitor:" prefix)
                         search_keyword=comp_name,
-                        competitor_ticker=comp_ticker
+                        competitor_ticker=comp_ticker,
+                        company_name=comp_name  # Full company name for display
                     )
 
                     # Associate this feed with this ticker as "competitor" category
@@ -11627,7 +11634,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     if category == "company":
                         header_badges.append(f'<span class="company-name-badge">🎯 {full_company_name}</span>')
                     elif category == "competitor":
-                        comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
+                        # Use company_name from article metadata (populated from feeds.company_name)
+                        comp_name = article.get('company_name') or get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
                         header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
@@ -12935,12 +12943,9 @@ async def process_commit_phase(job_id: str, ticker: str, batch_id: str = None, i
 
         LOG.info(f"[JOB {job_id}] Calling GitHub commit for {ticker}...")
 
-        # Skip render for all jobs EXCEPT the last one in batch
-        skip_render = not is_last_job
-        if is_last_job:
-            LOG.info(f"[JOB {job_id}] ⚠️ LAST JOB IN BATCH - Render will deploy after this commit")
-        else:
-            LOG.info(f"[JOB {job_id}] [skip render] flag enabled - no deployment")
+        # ALWAYS skip render for job queue commits (deployment only via 6:30 AM cron or manual button)
+        skip_render = True
+        LOG.info(f"[JOB {job_id}] [skip render] flag enabled - no deployment (job queue mode)")
 
         # Convert job_id to string (PostgreSQL returns UUID objects)
         result = await commit_func(MockRequest(), CommitBody(tickers=[ticker], job_id=str(job_id), skip_render=skip_render))
@@ -13248,32 +13253,14 @@ async def process_ticker_job(job: dict):
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
 
         try:
-            # Check if this is the last job in the batch (to control [skip render] flag)
+            # Commit to GitHub (always with [skip render] for job queue)
             batch_id = job.get('batch_id')
-            is_last_job = False
-
-            if batch_id:
-                with db() as conn, conn.cursor() as cur:
-                    # Count remaining jobs in batch (queued + processing, excluding this one)
-                    cur.execute("""
-                        SELECT COUNT(*) as remaining
-                        FROM ticker_processing_jobs
-                        WHERE batch_id = %s
-                        AND status IN ('queued', 'processing')
-                        AND job_id != %s
-                    """, (batch_id, job_id))
-                    result = cur.fetchone()
-                    remaining_jobs = result['remaining'] if result else 0
-
-                    if remaining_jobs == 0:
-                        is_last_job = True
-                        LOG.info(f"[JOB {job_id}] 🎯 This is the LAST job in batch {batch_id}")
 
             await process_commit_phase(
                 job_id=job_id,
                 ticker=ticker,
                 batch_id=batch_id,
-                is_last_job=is_last_job
+                is_last_job=False  # Not used anymore - always skip render
             )
             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Metadata committed to GitHub successfully")
         except Exception as e:
@@ -15159,7 +15146,7 @@ async def cron_ingest(
                         WITH ranked_articles AS (
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
                                    ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                   a.scraped_content, ta.ai_summary, a.url_hash,
+                                   a.scraped_content, ta.ai_summary, a.url_hash, f.company_name,
                                    ROW_NUMBER() OVER (
                                        PARTITION BY ta.ticker,
                                            CASE
@@ -15171,12 +15158,13 @@ async def cron_ingest(
                                    ) as rn
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
+                            LEFT JOIN feeds f ON ta.feed_id = f.id
                             WHERE ta.ticker = ANY(%s)
                             AND (a.published_at >= %s OR a.published_at IS NULL)
                         )
                         SELECT id, url, resolved_url, title, domain, published_at,
                                category, search_keyword, competitor_ticker, ticker,
-                               scraped_content, ai_summary, url_hash
+                               scraped_content, ai_summary, url_hash, company_name
                         FROM ranked_articles
                         WHERE (category = 'company' AND rn <= 50)
                            OR (category = 'industry' AND rn <= 25)
@@ -15188,7 +15176,7 @@ async def cron_ingest(
                         WITH ranked_articles AS (
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
                                    ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
-                                   a.scraped_content, ta.ai_summary, a.url_hash,
+                                   a.scraped_content, ta.ai_summary, a.url_hash, f.company_name,
                                    ROW_NUMBER() OVER (
                                        PARTITION BY ta.ticker,
                                            CASE
@@ -15200,11 +15188,12 @@ async def cron_ingest(
                                    ) as rn
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
+                            LEFT JOIN feeds f ON ta.feed_id = f.id
                             WHERE (a.published_at >= %s OR a.published_at IS NULL)
                         )
                         SELECT id, url, resolved_url, title, domain, published_at,
                                category, search_keyword, competitor_ticker, ticker,
-                               scraped_content, ai_summary, url_hash
+                               scraped_content, ai_summary, url_hash, company_name
                         FROM ranked_articles
                         WHERE (category = 'company' AND rn <= 50)
                            OR (category = 'industry' AND rn <= 25)

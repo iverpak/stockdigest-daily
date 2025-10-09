@@ -829,6 +829,10 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
 
+                -- Add source_url column for Yahoo Finance chain tracking (Google → Yahoo → Original)
+                -- Added: Oct 2025 for deferred Google News URL resolution
+                ALTER TABLE articles ADD COLUMN IF NOT EXISTS source_url TEXT;
+
                 -- Add financial data columns to ticker_reference if they don't exist
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_last_price NUMERIC(15, 2);
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_price_change_pct NUMERIC(10, 4);

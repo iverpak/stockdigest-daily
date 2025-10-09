@@ -17637,9 +17637,9 @@ async def rerun_ticker_api(request: Request):
         return {"status": "error", "message": str(e)}
 
 
-@APP.post("/api/rerun-all-failed")
-async def rerun_all_failed_api(request: Request):
-    """Rerun all failed tickers"""
+@APP.post("/api/retry-failed-and-cancelled")
+async def retry_failed_and_cancelled_api(request: Request):
+    """Retry all failed and cancelled tickers (non-ready only) - uses existing job queue"""
     body = await request.json()
     token = body.get('token')
 
@@ -17647,50 +17647,94 @@ async def rerun_all_failed_api(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
-        # Get all failed tickers with their recipients
+        # Get all non-ready tickers (failed + cancelled)  with their recipients
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT ticker, recipients
+                SELECT ticker, company_name, recipients, status
                 FROM email_queue
-                WHERE status = 'failed'
+                WHERE status IN ('failed', 'cancelled')
                 ORDER BY ticker
             """)
-            failed_rows = cur.fetchall()
+            retry_rows = cur.fetchall()
 
-        if not failed_rows:
+        if not retry_rows:
             return {
                 "status": "success",
                 "ticker_count": 0,
-                "message": "No failed tickers to rerun"
+                "message": "No failed or cancelled tickers to retry"
             }
 
         # Build ticker_recipients dict
         ticker_recipients = {
             row['ticker']: row['recipients']
-            for row in failed_rows
+            for row in retry_rows
         }
 
-        # Trigger background processing
-        trigger_background_rerun(ticker_recipients)
+        # Submit to existing job queue system
+        tickers_list = sorted(list(ticker_recipients.keys()))
 
-        tickers_list = list(ticker_recipients.keys())
-        LOG.info(f"🔄 Re-run all failed triggered: {tickers_list}")
+        with db() as conn, conn.cursor() as cur:
+            # Create batch record
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (len(tickers_list), 'admin_ui_retry', json.dumps({
+                "minutes": 1440,
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily"
+            })))
+
+            batch_id = cur.fetchone()['batch_id']
+
+            # Create individual jobs with mode='daily' and recipients
+            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            for ticker in tickers_list:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id, ticker, config, timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (batch_id, ticker, json.dumps({
+                    "minutes": 1440,
+                    "batch_size": 3,
+                    "triage_batch_size": 3,
+                    "mode": "daily",
+                    "recipients": ticker_recipients[ticker]
+                }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"🔄 Retry failed & cancelled: {len(tickers_list)} tickers (batch {batch_id})")
+
+        # Build response with ticker details
+        affected_tickers = [
+            {
+                "ticker": row['ticker'],
+                "company_name": row['company_name'],
+                "status": row['status']
+            }
+            for row in retry_rows
+        ]
 
         return {
             "status": "success",
+            "batch_id": str(batch_id),
             "ticker_count": len(ticker_recipients),
+            "affected_tickers": affected_tickers,
             "tickers": tickers_list,
-            "message": f"Processing {len(ticker_recipients)} failed tickers. Check dashboard in 5-10 minutes."
+            "message": f"Retrying {len(ticker_recipients)} failed/cancelled tickers. Processing time: ~15-30 minutes."
         }
 
     except Exception as e:
-        LOG.error(f"Failed to rerun all failed tickers: {e}")
+        LOG.error(f"Failed to retry failed & cancelled tickers: {e}")
         return {"status": "error", "message": str(e)}
 
 
-@APP.post("/api/rerun-all-tickers")
-async def rerun_all_tickers_api(request: Request):
-    """Rerun all tickers regardless of status"""
+@APP.post("/api/rerun-all-queue")
+async def rerun_all_queue_api(request: Request):
+    """Rerun ALL tickers in queue from scratch (regardless of status) - uses existing job queue"""
     body = await request.json()
     token = body.get('token')
 
@@ -17698,10 +17742,10 @@ async def rerun_all_tickers_api(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
-        # Get ALL tickers with their recipients
+        # Get ALL tickers with their recipients and status
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT ticker, recipients
+                SELECT ticker, company_name, recipients, status
                 FROM email_queue
                 ORDER BY ticker
             """)
@@ -17720,19 +17764,60 @@ async def rerun_all_tickers_api(request: Request):
             for row in all_rows
         }
 
-        # Trigger background processing
-        trigger_background_rerun(ticker_recipients)
+        # Submit to existing job queue system
+        tickers_list = sorted(list(ticker_recipients.keys()))
 
-        LOG.info(f"🔄 Re-run ALL tickers triggered: {len(ticker_recipients)} tickers")
+        with db() as conn, conn.cursor() as cur:
+            # Create batch record
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (len(tickers_list), 'admin_ui_rerun_all', json.dumps({
+                "minutes": 1440,
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily"
+            })))
+
+            batch_id = cur.fetchone()['batch_id']
+
+            # Create individual jobs with mode='daily' and recipients
+            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            for ticker in tickers_list:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id, ticker, config, timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (batch_id, ticker, json.dumps({
+                    "minutes": 1440,
+                    "batch_size": 3,
+                    "triage_batch_size": 3,
+                    "mode": "daily",
+                    "recipients": ticker_recipients[ticker]
+                }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"🔄 Re-run ALL queue: {len(tickers_list)} tickers (batch {batch_id})")
+
+        # Build response with status breakdown
+        status_counts = {}
+        for row in all_rows:
+            status = row['status']
+            status_counts[status] = status_counts.get(status, 0) + 1
 
         return {
             "status": "success",
+            "batch_id": str(batch_id),
             "ticker_count": len(ticker_recipients),
-            "message": f"Processing all {len(ticker_recipients)} tickers. This will take approximately 10-15 minutes."
+            "status_breakdown": status_counts,
+            "message": f"Reprocessing ALL {len(ticker_recipients)} tickers from scratch. Processing time: ~30-60 minutes."
         }
 
     except Exception as e:
-        LOG.error(f"Failed to rerun all tickers: {e}")
+        LOG.error(f"Failed to rerun all queue: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/undo-cancel-ready-emails")

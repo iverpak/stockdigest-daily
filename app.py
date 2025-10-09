@@ -13157,7 +13157,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
             SELECT id, url, title, domain
             FROM articles
             WHERE id = ANY(%s)
-            AND url LIKE '%news.google.com%'
+            AND url LIKE '%%news.google.com%%'
             AND resolved_url IS NULL
         """, (flagged_article_ids,))
 

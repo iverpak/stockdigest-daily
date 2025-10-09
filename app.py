@@ -11170,6 +11170,7 @@ Articles are provided in a UNIFIED TIMELINE sorted newest to oldest. Each articl
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
 OUTPUT FORMAT - Use these exact headers (omit sections with no content):
+DO NOT use markdown headers (##) or add title lines. Start directly with emoji headers EXACTLY as shown:
 🔴 MAJOR DEVELOPMENTS
 📊 FINANCIAL/OPERATIONAL PERFORMANCE
 ⚠️ RISK FACTORS

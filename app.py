@@ -2018,6 +2018,93 @@ def get_stock_context_polygon(ticker: str) -> Optional[Dict]:
         LOG.error(f"❌ Polygon.io failed for {ticker}: {e}")
         return None
 
+def fetch_company_name_from_polygon(ticker: str) -> Optional[str]:
+    """
+    Fetch company name from Polygon.io ticker details API.
+    Free tier: 5 API calls/minute.
+    Returns company name or None if unavailable.
+    """
+    if not POLYGON_API_KEY:
+        LOG.warning("POLYGON_API_KEY not set, skipping Polygon.io company name fetch")
+        return None
+
+    try:
+        _wait_for_polygon_rate_limit()
+
+        # Ticker details endpoint provides company name
+        url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
+        params = {"apiKey": POLYGON_API_KEY}
+
+        LOG.info(f"📊 Fetching company name from Polygon.io for {ticker}...")
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('results', {})
+            company_name = results.get('name')
+
+            if company_name and company_name != ticker:
+                LOG.info(f"✅ Polygon.io company name for {ticker}: {company_name}")
+                return company_name
+            else:
+                LOG.warning(f"⚠️ Polygon.io returned no valid company name for {ticker}")
+                return None
+        else:
+            LOG.warning(f"⚠️ Polygon.io company name fetch failed for {ticker}: HTTP {response.status_code}")
+            return None
+
+    except Exception as e:
+        LOG.error(f"❌ Polygon.io company name fetch failed for {ticker}: {e}")
+        return None
+
+def fetch_company_name_from_yfinance(ticker: str, timeout: int = 10) -> Optional[str]:
+    """
+    Fetch company name from yfinance as a lightweight fallback.
+    Returns longName or shortName, or None if unavailable.
+    """
+    try:
+        LOG.info(f"Fetching company name from yfinance for {ticker}...")
+        result = {'data': None, 'error': None}
+
+        def fetch_data():
+            try:
+                ticker_obj = yf.Ticker(ticker)
+                info = ticker_obj.info
+                result['data'] = info
+            except Exception as e:
+                result['error'] = e
+
+        # Start fetch in thread with timeout
+        fetch_thread = threading.Thread(target=fetch_data)
+        fetch_thread.daemon = True
+        fetch_thread.start()
+        fetch_thread.join(timeout=timeout)
+
+        if fetch_thread.is_alive():
+            LOG.warning(f"yfinance company name fetch timeout for {ticker} after {timeout}s")
+            return None
+
+        if result['error']:
+            LOG.warning(f"yfinance company name fetch error for {ticker}: {result['error']}")
+            return None
+
+        if not result['data']:
+            return None
+
+        info = result['data']
+        company_name = info.get('longName') or info.get('shortName') or info.get('name')
+
+        if company_name and company_name != ticker:
+            LOG.info(f"✅ yfinance company name for {ticker}: {company_name}")
+            return company_name
+        else:
+            LOG.warning(f"⚠️ yfinance returned ticker symbol as company name for {ticker}")
+            return None
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to fetch company name from yfinance for {ticker}: {e}")
+        return None
+
 def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optional[Dict]:
     """
     Fetch financial data with yfinance (primary) and Polygon.io (fallback).
@@ -10433,19 +10520,47 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
 
         return metadata
     
-    # === No config row, fallback to AI generation + INSERT (unchanged logic) ===
+    # === No config row, fallback to AI generation + INSERT ===
     LOG.info("DEBUG: Entering fallback AI generation path")
-    
+
     if OPENAI_API_KEY:
-        LOG.info(f"No reference data found for {ticker}, generating with AI")
-        ai_metadata = generate_enhanced_ticker_metadata_with_ai(normalized_ticker)
-        
+        # CRITICAL: Try to fetch company name from multiple sources BEFORE calling AI without a hint
+        LOG.info(f"⚠️ No reference data found for {ticker}, trying external sources for company name...")
+
+        # Try yfinance first (fast, free, but gets throttled easily)
+        company_name_from_source = fetch_company_name_from_yfinance(normalized_ticker)
+        source_used = "yfinance"
+
+        # If yfinance fails, try Polygon.io (slower, rate limited, but more reliable)
+        if not company_name_from_source:
+            LOG.info(f"⚠️ yfinance failed for {ticker}, trying Polygon.io fallback...")
+            company_name_from_source = fetch_company_name_from_polygon(normalized_ticker)
+            source_used = "Polygon.io"
+
+        if company_name_from_source:
+            LOG.info(f"✅ {source_used} provided company name: {company_name_from_source}")
+            # Call AI with company name hint from external source
+            ai_metadata = generate_enhanced_ticker_metadata_with_ai(
+                normalized_ticker,
+                company_name=company_name_from_source
+            )
+        else:
+            LOG.warning(f"⚠️ Both yfinance and Polygon.io failed for {ticker}, calling AI without hint")
+            # Last resort: Call AI without company name hint
+            ai_metadata = generate_enhanced_ticker_metadata_with_ai(normalized_ticker)
+
+        # Validate AI response - warn if company_name == ticker, but ALLOW it
+        if ai_metadata and ai_metadata.get('company_name') == normalized_ticker:
+            LOG.warning(f"⚠️ AI returned ticker symbol as company name for {ticker}")
+            LOG.warning(f"   This means: 1) CSV not loaded, 2) yfinance failed, 3) Polygon.io failed, 4) AI failed")
+            LOG.warning(f"   Continuing with company_name='{normalized_ticker}' to avoid crash")
+
         # Store the AI-generated data back to reference table for future use
         if ai_metadata:
             reference_data = {
                 'ticker': normalized_ticker,
                 'country': 'US',
-                'company_name': ai_metadata.get('company_name', ticker),
+                'company_name': ai_metadata.get('company_name', normalized_ticker),  # Fallback to ticker if missing
                 'sector': ai_metadata.get('sector', ''),
                 'industry': ai_metadata.get('industry', ''),
                 'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
@@ -10454,21 +10569,22 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                 'ai_generated': True,
                 'data_source': 'ai_generated'
             }
-            
+
             # Convert competitors to separate fields
             competitors = ai_metadata.get('competitors', [])
             for i, comp in enumerate(competitors[:3], 1):
                 if isinstance(comp, dict):
                     reference_data[f'competitor_{i}_name'] = comp.get('name')
                     reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
-            
+
             store_ticker_reference(reference_data)
-        
-        return ai_metadata or {"ticker": normalized_ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
-    
-    # Step 3: Final fallback
-    LOG.warning(f"No data found for {ticker} and no AI configured")
-    return {"ticker": normalized_ticker, "company_name": ticker, "industry_keywords": [], "competitors": []}
+
+        return ai_metadata or {"ticker": normalized_ticker, "company_name": normalized_ticker, "industry_keywords": [], "competitors": []}
+
+    # Step 3: Final fallback - NO AI configured (use ticker as company name)
+    LOG.warning(f"⚠️ No data found for {ticker} and no AI configured")
+    LOG.warning(f"   Using ticker symbol as company name to avoid crash")
+    return {"ticker": normalized_ticker, "company_name": normalized_ticker, "industry_keywords": [], "competitors": []}
 
 def get_ticker_reference(ticker: str) -> Optional[Dict]:
     """Get ticker reference data from database"""
@@ -13369,6 +13485,19 @@ def job_worker_loop():
     from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
     LOG.info(f"🔧 Job worker started (worker_id: {get_worker_id()}, max_concurrent_jobs: {MAX_CONCURRENT_JOBS})")
+
+    # CRITICAL: Load CSV from GitHub BEFORE processing any jobs
+    LOG.info("🔄 Syncing ticker reference from GitHub (job worker initialization)...")
+    try:
+        github_sync_result = sync_ticker_references_from_github()
+        if github_sync_result["status"] == "success":
+            LOG.info(f"✅ GitHub sync successful: {github_sync_result.get('message', 'Completed')}")
+        else:
+            LOG.error(f"❌ GitHub sync failed: {github_sync_result.get('message', 'Unknown error')}")
+            LOG.error("⚠️ Worker will continue, but tickers may have incorrect data!")
+    except Exception as e:
+        LOG.error(f"❌ GitHub sync crashed: {e}")
+        LOG.error("⚠️ Worker will continue, but tickers may have incorrect data!")
 
     # Create thread pool for concurrent job processing
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS, thread_name_prefix="TickerWorker") as executor:
@@ -17702,6 +17831,12 @@ async def retry_failed_and_cancelled_api(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
+        # CRITICAL: Load CSV from GitHub BEFORE processing
+        try:
+            sync_ticker_references_from_github()
+        except Exception as e:
+            LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
+
         # Get all non-ready tickers (failed + cancelled)  with their recipients
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
@@ -17797,6 +17932,12 @@ async def rerun_all_queue_api(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
+        # CRITICAL: Load CSV from GitHub BEFORE processing
+        try:
+            sync_ticker_references_from_github()
+        except Exception as e:
+            LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
+
         # Get ALL tickers with their recipients and status
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
@@ -17942,6 +18083,12 @@ async def generate_user_reports_api(request: Request):
         return {"status": "error", "message": "No users selected"}
 
     try:
+        # CRITICAL: Load CSV from GitHub BEFORE processing
+        try:
+            sync_ticker_references_from_github()
+        except Exception as e:
+            LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
+
         # Load tickers for selected users only and build ticker → recipients mapping
         ticker_recipients = {}
 
@@ -18040,6 +18187,12 @@ async def generate_all_reports_api(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
+        # CRITICAL: Load CSV from GitHub BEFORE processing
+        try:
+            sync_ticker_references_from_github()
+        except Exception as e:
+            LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
+
         # Load all active beta users (same as process_daily_workflow)
         ticker_recipients = load_active_beta_users()
 
@@ -18786,6 +18939,12 @@ def process_daily_workflow():
     LOG.info("="*80)
 
     try:
+        # CRITICAL: Load CSV from GitHub BEFORE processing (same as test workflow)
+        try:
+            sync_ticker_references_from_github()
+        except Exception as e:
+            LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
+
         # Load beta users
         ticker_recipients = load_active_beta_users()
 

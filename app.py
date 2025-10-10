@@ -18070,6 +18070,42 @@ async def delete_user(request: Request):
         LOG.error(f"Failed to delete user: {e}")
         return {"status": "error", "message": str(e)}
 
+@APP.post("/api/admin/restart-worker")
+async def restart_worker_api(request: Request):
+    """Restart worker thread only (gentle, 0 downtime)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.warning("🔄 Admin requested worker thread restart")
+        restart_worker_thread()
+        return {"status": "success", "message": "Worker thread restarted successfully"}
+    except Exception as e:
+        LOG.error(f"Failed to restart worker: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/restart-server")
+async def restart_server_api(request: Request):
+    """Force full server restart (exits process, Render auto-restarts, ~10-20s downtime)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    LOG.critical("💀 Admin requested FULL SERVER RESTART - exiting process in 2 seconds")
+    LOG.critical("Render will automatically detect the crash and restart the service")
+
+    # Give time for response to be sent
+    import asyncio
+    await asyncio.sleep(2)
+
+    # Force exit (Render will restart the entire service)
+    os._exit(1)
+
 # Email Queue API endpoints
 @APP.get("/api/queue-status")
 def get_queue_status(token: str = Query(...)):

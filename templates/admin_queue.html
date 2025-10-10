@@ -142,6 +142,13 @@
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .restart-actions {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
             margin-bottom: 32px;
         }
 
@@ -413,6 +420,17 @@
             </button>
             <button class="btn btn-secondary" onclick="clearAllReports()">
                 🗑️ CLEAR ALL REPORTS <span class="btn-count" id="btn-clear-count">-</span>
+            </button>
+        </div>
+
+        <!-- Restart Actions -->
+        <div class="restart-actions">
+            <div></div>
+            <button class="btn btn-warning" onclick="restartWorker()">
+                🔄 RESTART WORKER THREAD
+            </button>
+            <button class="btn btn-danger" onclick="restartServer()">
+                🚀 FORCE SERVER RESTART
             </button>
         </div>
 
@@ -856,6 +874,53 @@
                 }
             } catch (error) {
                 alert('Failed to clear reports');
+            }
+        }
+
+        async function restartWorker() {
+            if (!confirm('🔄 Restart Worker Thread?\n\nThis will:\n• Stop the current worker thread\n• Start a fresh worker thread\n• NO downtime (0 seconds)\n• Jobs will be reclaimed and retried\n\nUse this if the worker appears frozen.\n\nContinue?')) return;
+
+            try {
+                const response = await fetch('/api/admin/restart-worker', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('✅ Worker thread restarted successfully!\n\nJobs will be retried automatically.');
+                    fetchQueueStatus();
+                    fetchMetrics();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to restart worker');
+            }
+        }
+
+        async function restartServer() {
+            if (!confirm('💀 FORCE FULL SERVER RESTART?\n\n⚠️ WARNING: This action will:\n\n• Kill the entire Python process\n• Cause 10-20 seconds of downtime\n• Trigger Render to restart the service\n• Clear all in-memory state\n• Jobs will be reclaimed on startup\n\nOnly use this if:\n• Worker restart did not fix the issue\n• Entire server is frozen\n• You need a complete clean slate\n\nContinue?')) return;
+
+            const confirmText = prompt('Type "RESTART" to confirm full server restart:');
+            if (confirmText !== 'RESTART') {
+                alert('Cancelled - you must type RESTART exactly');
+                return;
+            }
+
+            try {
+                // Note: Server will exit before response is received
+                fetch('/api/admin/restart-server', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                alert('🚀 Server restart initiated!\n\nThe server will go down in 2 seconds and automatically restart.\n\nRefresh this page in 20 seconds.');
+            } catch (error) {
+                // Expected - server exited
+                alert('Server restarting... Refresh in 20 seconds.');
             }
         }
 

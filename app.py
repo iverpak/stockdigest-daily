@@ -18117,6 +18117,46 @@ async def send_all_ready_api(request: Request):
 
     result = send_all_ready_emails_impl()
     return result
+
+@APP.post("/api/fix-inconsistent-emails")
+async def fix_inconsistent_emails_api(request: Request):
+    """Fix emails that have sent_at set but status is still 'ready' (data inconsistency)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Find inconsistent emails
+            cur.execute("""
+                SELECT ticker, status, sent_at
+                FROM email_queue
+                WHERE status = 'ready' AND sent_at IS NOT NULL
+            """)
+            inconsistent = cur.fetchall()
+
+            # Fix them by setting status to 'sent'
+            cur.execute("""
+                UPDATE email_queue
+                SET status = 'sent'
+                WHERE status = 'ready' AND sent_at IS NOT NULL
+            """)
+            fixed_count = cur.rowcount
+            conn.commit()
+
+            LOG.warning(f"🔧 Fixed {fixed_count} emails with inconsistent status (ready but already sent)")
+
+            return {
+                "status": "success",
+                "fixed_count": fixed_count,
+                "fixed_tickers": [e['ticker'] for e in inconsistent],
+                "message": f"Fixed {fixed_count} emails that were already sent but had status='ready'"
+            }
+    except Exception as e:
+        LOG.error(f"Failed to fix inconsistent emails: {e}")
+        return {"status": "error", "message": str(e)}
 @APP.post("/api/rerun-ticker")
 async def rerun_ticker_api(request: Request):
     """Rerun single ticker - uses unified job queue"""

@@ -11536,13 +11536,13 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
         ai_analysis_summary, model_used = generate_executive_summary_with_fallback(ticker, categories, config)
 
         if ai_analysis_summary:
-            # Add NEW badges for articles within 24 hours
+            # NEW badges removed per user request (Oct 2025)
             all_articles = (
                 [a for a in categories.get("company", []) if a.get("ai_summary")] +
                 [a for a in categories.get("industry", []) if a.get("ai_summary")] +
                 [a for a in categories.get("competitor", []) if a.get("ai_summary")]
             )
-            ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)
+            # ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)  # DISABLED
             LOG.info(f"✅ EXECUTIVE SUMMARY ({model_used}) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
 
             # Save to database with model tracking
@@ -12581,15 +12581,15 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
             # Check if article is new (< 24 hours)
-            is_new = False
-            if article.get('published_at'):
-                published_at = article['published_at']
-                # Ensure timezone-aware datetime
-                if published_at.tzinfo is None:
-                    published_at = published_at.replace(tzinfo=timezone.utc)
-                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-                is_new = age_hours < 24
-            new_badge = '🆕 ' if is_new else ''
+            # NEW badge removed per user request (Oct 2025)
+            # is_new = False
+            # if article.get('published_at'):
+            #     published_at = article['published_at']
+            #     if published_at.tzinfo is None:
+            #         published_at = published_at.replace(tzinfo=timezone.utc)
+            #     age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+            #     is_new = age_hours < 24
+            # new_badge = '🆕 ' if is_new else ''
 
             # Star for FLAGGED + QUALITY articles
             domain = article.get('domain', '')
@@ -12605,7 +12605,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
             article_links += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{new_badge}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''

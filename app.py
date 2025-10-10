@@ -66,6 +66,70 @@ from memory_monitor import (
     resource_cleanup_context,
     full_resource_cleanup
 )
+
+# ============================================================================
+# AIOHTTP CONNECTION MANAGEMENT - Prevents Connection Exhaustion & Deadlock
+# ============================================================================
+# Problem: Creating new session per API call leads to:
+# - 180+ sessions with 3 concurrent tickers
+# - File descriptor exhaustion → server freeze
+# - TCP handshake overhead (slow)
+#
+# Solution: Shared connector + thread-local sessions
+# - One connector shared across all threads (connection pooling)
+# - One session per thread (reused for all calls in that thread)
+# - Cleanup on thread exit (prevents resource leaks)
+# ============================================================================
+
+# Global connector with connection limits (shared across all threads)
+# Initialized lazily on first use (can't create at module level - no event loop)
+_HTTP_CONNECTOR = None
+_HTTP_CONNECTOR_LOCK = threading.Lock()
+
+def _get_or_create_connector():
+    """Get or create global HTTP connector (thread-safe lazy initialization)"""
+    global _HTTP_CONNECTOR
+    if _HTTP_CONNECTOR is None:
+        with _HTTP_CONNECTOR_LOCK:
+            if _HTTP_CONNECTOR is None:  # Double-check locking
+                _HTTP_CONNECTOR = aiohttp.TCPConnector(
+                    limit=100,              # Total connections across all hosts
+                    limit_per_host=30,      # Max 30 concurrent per host (OpenAI/Anthropic/ScrapFly)
+                    ttl_dns_cache=300,      # Cache DNS for 5 minutes
+                    enable_cleanup_closed=True  # Clean up closed connections
+                )
+    return _HTTP_CONNECTOR
+
+# Thread-local storage for sessions (one session per thread)
+_thread_local = threading.local()
+
+def get_http_session() -> aiohttp.ClientSession:
+    """
+    Get or create aiohttp session for current thread.
+
+    Returns cached session if exists, creates new one if not.
+    Session is reused for all HTTP calls in the thread (connection pooling).
+
+    Benefits:
+    - Prevents connection exhaustion (max 100 connections total)
+    - Faster (reuses TCP connections, no handshake overhead)
+    - Lower memory usage (one session per thread vs hundreds)
+    """
+    if not hasattr(_thread_local, 'session') or _thread_local.session is None or _thread_local.session.closed:
+        _thread_local.session = aiohttp.ClientSession(
+            connector=_get_or_create_connector(),
+            connector_owner=False  # Don't close connector when session closes
+        )
+    return _thread_local.session
+
+async def cleanup_http_session():
+    """Close thread-local session (call before thread exits)"""
+    if hasattr(_thread_local, 'session') and _thread_local.session is not None:
+        if not _thread_local.session.closed:
+            await _thread_local.session.close()
+        _thread_local.session = None
+
+# ============================================================================
 import yfinance as yf
 from collections import deque
 
@@ -3578,8 +3642,8 @@ async def scrape_with_scrapfly_html_only(url: str, domain: str, max_retries: int
                 params["asp"] = "true"
                 params["render_js"] = "true"
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
+            session = get_http_session()
+            async with session.get("https://api.scrapfly.io/scrape", params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         try:
                             result = await response.json()
@@ -3689,15 +3753,15 @@ async def scrape_with_requests_free(url: str, domain: str) -> Tuple[Optional[str
         if normalize_domain(domain) in PAYWALL_DOMAINS:
             return None, f"Paywall domain: {domain}"
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            headers = {
-                "User-Agent": get_random_user_agent(),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Referer": "https://www.google.com/"
-            }
+        session = get_http_session()
+        headers = {
+            "User-Agent": get_random_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://www.google.com/"
+        }
 
-            async with session.get(url, headers=headers) as response:
+        async with session.get(url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status != 200:
                     LOG.warning(f"FREE: HTTP {response.status} for {domain}")
                     return None, f"HTTP {response.status}"
@@ -5713,8 +5777,8 @@ Full Content: {scraped_content[:10000]}
             LOG.info(f"Generating AI summary for {ticker} - Content: {len(scraped_content)} chars, Title: {title[:50]}...")
             
             # Use asyncio-compatible HTTP client
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(OPENAI_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
                         
@@ -5791,8 +5855,8 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                 "messages": [{"role": "user", "content": user_content}]
             }
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = result.get("content", [{}])[0].get("text", "")
@@ -5857,8 +5921,8 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                 "messages": [{"role": "user", "content": user_content}]
             }
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = result.get("content", [{}])[0].get("text", "")
@@ -6001,8 +6065,8 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                 "messages": [{"role": "user", "content": user_content}]
             }
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
-                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=60)) as response:
                     if response.status != 200:
                         error_text = await response.text()
                         LOG.error(f"Claude relevance scoring error {response.status} for {ticker}: {error_text[:500]}")
@@ -6121,8 +6185,8 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                 "truncation": "auto"
             }
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
-                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(OPENAI_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=60)) as response:
                     if response.status != 200:
                         error_text = await response.text()
                         LOG.error(f"OpenAI relevance scoring error {response.status} for {ticker}: {error_text[:500]}")
@@ -6270,8 +6334,8 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                 "messages": [{"role": "user", "content": user_content}]
             }
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = result.get("content", [{}])[0].get("text", "")
@@ -6313,8 +6377,8 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(OPENAI_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = extract_text_from_responses(result)
@@ -6372,8 +6436,8 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(OPENAI_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = extract_text_from_responses(result)
@@ -6433,8 +6497,8 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
 
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(OPENAI_API_URL, headers=headers, json=data) as response:
+            session = get_http_session()
+            async with session.post(OPENAI_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = extract_text_from_responses(result)
@@ -13100,8 +13164,8 @@ async def resolve_google_news_url_with_scrapfly(url: str, ticker: str) -> tuple[
             "render_js": "true",  # JavaScript execution (required for redirects)
         }
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.get("https://api.scrapfly.io/scrape", params=params) as response:
+        session = get_http_session()
+        async with session.get("https://api.scrapfly.io/scrape", params=params, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 if response.status == 200:
                     result = await response.json()
                     final_url = result.get("result", {}).get("url")
@@ -13896,6 +13960,14 @@ async def process_ticker_job(job: dict):
 
         raise
 
+    finally:
+        # Cleanup thread-local HTTP session
+        try:
+            await cleanup_http_session()
+            LOG.debug(f"[{ticker}] 🧹 Cleaned up HTTP session for thread")
+        except Exception as cleanup_error:
+            LOG.warning(f"[{ticker}] Failed to cleanup HTTP session: {cleanup_error}")
+
 def job_worker_loop():
     """Background worker that polls database for jobs and processes them concurrently"""
     global _job_worker_running
@@ -14398,6 +14470,15 @@ async def shutdown_event():
 
     LOG.info("=" * 80)
     stop_job_worker()
+
+    # Close HTTP connector (if it was initialized)
+    if _HTTP_CONNECTOR is not None:
+        LOG.info("🔄 Closing HTTP connector...")
+        try:
+            await _HTTP_CONNECTOR.close()
+            LOG.info("✅ HTTP connector closed")
+        except Exception as e:
+            LOG.error(f"Failed to close HTTP connector: {e}")
 
     # Close connection pool
     LOG.info("🔄 Closing database connection pool...")

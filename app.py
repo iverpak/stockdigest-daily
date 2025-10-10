@@ -14086,6 +14086,9 @@ def worker_heartbeat_monitor_loop():
 
                 if latest_activity:
                     _last_worker_activity = latest_activity
+                    # Make timezone-aware if it's naive (database returns naive timestamps)
+                    if latest_activity.tzinfo is None:
+                        latest_activity = latest_activity.replace(tzinfo=timezone.utc)
                     time_since_activity = (datetime.now(timezone.utc) - latest_activity).total_seconds() / 60
 
                     # If no activity for 5 minutes AND there are jobs to process, worker is frozen

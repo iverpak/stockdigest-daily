@@ -102,6 +102,42 @@
             letter-spacing: 0.5px;
         }
 
+        .metrics-panel {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            border: 2px solid #bae6fd;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+        }
+
+        .metric-item {
+            background: #ffffff;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .metric-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1e40af;
+        }
+
         .global-actions {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -301,6 +337,33 @@
     </div>
 
     <div class="container">
+        <!-- System Health Metrics -->
+        <div class="metrics-panel" id="metrics-panel">
+            <h3 style="margin: 0 0 12px 0; color: #1e40af;">⚙️ System Health</h3>
+            <div class="metrics-grid">
+                <div class="metric-item">
+                    <div class="metric-label">Worker Status</div>
+                    <div class="metric-value" id="metric-worker-status">-</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Memory Usage</div>
+                    <div class="metric-value" id="metric-memory">-</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Last Activity</div>
+                    <div class="metric-value" id="metric-last-activity">-</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Active Jobs</div>
+                    <div class="metric-value" id="metric-active-jobs">-</div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">Worker Restarts</div>
+                    <div class="metric-value" id="metric-restarts">-</div>
+                </div>
+            </div>
+        </div>
+
         <!-- Stats -->
         <div class="stats-grid">
             <div class="stat-card">
@@ -389,6 +452,40 @@
                 hour: '2-digit',
                 minute: '2-digit'
             });
+        }
+
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+
+                // Worker status
+                const workerStatus = data.worker.thread_alive ? '✅ Running' : '❌ Dead';
+                const workerColor = data.worker.thread_alive ? '#10b981' : '#ef4444';
+                document.getElementById('metric-worker-status').textContent = workerStatus;
+                document.getElementById('metric-worker-status').style.color = workerColor;
+
+                // Memory usage
+                const memoryMB = data.memory ? `${data.memory.toFixed(0)} MB` : 'N/A';
+                document.getElementById('metric-memory').textContent = memoryMB;
+
+                // Last activity (from jobs)
+                const activeJobs = data.jobs.active || 0;
+                document.getElementById('metric-active-jobs').textContent = activeJobs;
+
+                // Recent completions (as a proxy for last activity)
+                const recentCompletions = data.jobs.recent_completions || 0;
+                const lastActivity = recentCompletions > 0 ? `${recentCompletions} in last 10min` : 'None';
+                document.getElementById('metric-last-activity').textContent = lastActivity;
+
+                // Worker restarts (not available in current health endpoint, show as N/A)
+                document.getElementById('metric-restarts').textContent = 'N/A';
+
+            } catch (error) {
+                console.error('Failed to fetch metrics:', error);
+                document.getElementById('metric-worker-status').textContent = 'Error';
+                document.getElementById('metric-worker-status').style.color = '#ef4444';
+            }
         }
 
         async function fetchQueueStatus() {
@@ -833,8 +930,14 @@
         fetchQueueStatus();
         updateCountdown();
 
+        // Initial load
+        fetchMetrics();
+
         // Auto-refresh (5 seconds for real-time job progress)
-        setInterval(fetchQueueStatus, 5000);
+        setInterval(() => {
+            fetchQueueStatus();
+            fetchMetrics();
+        }, 5000);
         setInterval(updateCountdown, 60000);
     </script>
 </body>

@@ -13041,6 +13041,9 @@ job_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_timeout=300)
 # Job Queue Worker State
 _job_worker_running = False
 _job_worker_thread = None
+_worker_heartbeat_monitor_thread = None
+_worker_restart_count = 0
+_last_worker_activity = None
 
 # Forward declarations - these reference functions defined later in the file
 # We use globals() to avoid circular imports
@@ -14018,6 +14021,92 @@ def stop_job_worker():
         _job_worker_thread.join(timeout=10)
         LOG.info("✅ Job worker stopped")
 
+def restart_worker_thread():
+    """Restart the worker thread (called by heartbeat monitor when worker is frozen)"""
+    global _job_worker_running, _job_worker_thread, _worker_restart_count
+
+    LOG.error("🔄 Worker thread appears frozen - attempting restart...")
+
+    # Stop the frozen worker
+    try:
+        _job_worker_running = False
+        if _job_worker_thread and _job_worker_thread.is_alive():
+            # Give it 5 seconds to gracefully stop
+            _job_worker_thread.join(timeout=5)
+            if _job_worker_thread.is_alive():
+                LOG.error("⚠️ Worker thread did not stop gracefully")
+    except Exception as e:
+        LOG.error(f"Error stopping worker: {e}")
+
+    # Increment restart counter
+    _worker_restart_count += 1
+
+    # If too many restarts, exit the process (let Render restart everything)
+    if _worker_restart_count >= 3:
+        LOG.critical(f"💀 Worker has been restarted {_worker_restart_count} times - exiting process!")
+        LOG.critical("Render will automatically restart the service with a clean slate")
+        os._exit(1)  # Force exit (bypasses cleanup, triggers Render restart)
+
+    # Restart the worker thread
+    try:
+        _job_worker_running = True
+        _job_worker_thread = threading.Thread(target=job_worker_loop, daemon=True, name=f"JobWorker-Restart-{_worker_restart_count}")
+        _job_worker_thread.start()
+        LOG.warning(f"✅ Worker thread restarted (attempt {_worker_restart_count}/3)")
+    except Exception as e:
+        LOG.error(f"Failed to restart worker thread: {e}")
+        os._exit(1)  # Can't restart worker - exit process
+
+def worker_heartbeat_monitor_loop():
+    """Monitor worker health and restart if frozen"""
+    global _last_worker_activity
+
+    LOG.info("💓 Worker heartbeat monitor started (checks every 60 seconds, 5-minute threshold)")
+
+    while True:
+        try:
+            time.sleep(60)  # Check every minute
+
+            # Check if worker thread is alive
+            if not _job_worker_running or not _job_worker_thread or not _job_worker_thread.is_alive():
+                LOG.warning("⚠️ Worker thread is not running - attempting restart...")
+                restart_worker_thread()
+                continue
+
+            # Check for recent worker activity
+            with db() as conn, conn.cursor() as cur:
+                # Look for any job that has been updated in the last 5 minutes
+                cur.execute("""
+                    SELECT MAX(last_updated) as latest_activity
+                    FROM ticker_processing_jobs
+                    WHERE status IN ('processing', 'queued')
+                """)
+                row = cur.fetchone()
+                latest_activity = row['latest_activity'] if row else None
+
+                if latest_activity:
+                    _last_worker_activity = latest_activity
+                    time_since_activity = (datetime.now(timezone.utc) - latest_activity).total_seconds() / 60
+
+                    # If no activity for 5 minutes AND there are jobs to process, worker is frozen
+                    if time_since_activity > 5:
+                        # Double-check there are actually jobs waiting
+                        cur.execute("""
+                            SELECT COUNT(*) as count
+                            FROM ticker_processing_jobs
+                            WHERE status = 'queued'
+                        """)
+                        queued_count = cur.fetchone()['count']
+
+                        if queued_count > 0:
+                            LOG.error(f"🚨 Worker frozen! {queued_count} jobs queued, no activity for {time_since_activity:.1f} minutes")
+                            restart_worker_thread()
+
+        except Exception as e:
+            LOG.error(f"Worker heartbeat monitor error: {e}")
+            LOG.error(traceback.format_exc())
+            time.sleep(60)  # Continue monitoring even if error
+
 def timeout_watchdog_loop():
     """Monitor for timed-out jobs"""
     LOG.info("⏰ Timeout watchdog started")
@@ -14291,7 +14380,12 @@ async def startup_event():
     timeout_thread = threading.Thread(target=timeout_watchdog_loop, daemon=True, name="TimeoutWatchdog")
     timeout_thread.start()
 
-    LOG.info("✅ Job queue system initialized (3 watchdog threads running)")
+    # Start worker heartbeat monitor (restarts worker if frozen)
+    global _worker_heartbeat_monitor_thread
+    _worker_heartbeat_monitor_thread = threading.Thread(target=worker_heartbeat_monitor_loop, daemon=True, name="WorkerHeartbeatMonitor")
+    _worker_heartbeat_monitor_thread.start()
+
+    LOG.info("✅ Job queue system initialized (4 watchdog threads running + worker heartbeat monitor)")
 
 @APP.on_event("shutdown")
 async def shutdown_event():
@@ -19066,7 +19160,7 @@ async def view_email_1_api(ticker: str, token: str = Query(...)):
         return HTMLResponse("Unauthorized", status_code=401)
 
     try:
-        config = get_ticker_metadata(ticker)
+        config = get_ticker_config(ticker)
         if not config:
             return HTMLResponse(f"<h1>Ticker {ticker} not found</h1>", status_code=404)
 
@@ -19153,7 +19247,7 @@ async def view_email_2_api(ticker: str, token: str = Query(...)):
             cur.execute("""
                 SELECT
                     a.id, a.title, a.url, a.resolved_url, a.published_at, a.domain,
-                    a.description, a.content, a.ai_summary, a.ai_model,
+                    a.description, a.scraped_content, a.ai_summary, a.ai_model,
                     ta.category, ta.relevance_score, ta.search_keyword, ta.competitor_ticker
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id

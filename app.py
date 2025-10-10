@@ -13303,7 +13303,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     # Return early if no flagged articles
     if not flagged_article_ids:
         LOG.info(f"[{ticker}] ✅ No flagged articles to deduplicate")
-        return flagged_article_ids
+        return flagged_article_ids or []  # Return empty list if None
 
     with db() as conn, conn.cursor() as cur:
         # Find flagged articles with duplicate resolved_url (use ID list, not database column)
@@ -13713,7 +13713,7 @@ async def process_ticker_job(job: dict):
         if flagged_article_ids:
             # Resolve URLs and get deduplicated list back
             flagged_article_ids = await resolve_flagged_google_news_urls(ticker, flagged_article_ids)
-            LOG.info(f"[{ticker}] 📋 [JOB {job_id}] After resolution & deduplication: {len(flagged_article_ids)} flagged articles remain")
+            LOG.info(f"[{ticker}] 📋 [JOB {job_id}] After resolution & deduplication: {len(flagged_article_ids or [])} flagged articles remain")
         else:
             LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles to resolve")
 

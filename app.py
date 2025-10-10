@@ -17723,7 +17723,7 @@ def admin_settings_page(request: Request, token: str = Query(...)):
 # Admin API endpoints
 @APP.get("/api/admin/stats")
 def get_admin_stats(token: str = Query(...)):
-    """Get dashboard stats"""
+    """Get dashboard stats - uses unified queue logic to match /admin/queue page"""
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
@@ -17737,11 +17737,38 @@ def get_admin_stats(token: str = Query(...)):
             cur.execute("SELECT COUNT(*) as count FROM beta_users WHERE status = 'active'")
             active_users = cur.fetchone()['count']
 
-            # Count ready emails
-            cur.execute("SELECT COUNT(*) as count FROM email_queue WHERE status = 'ready' AND sent_at IS NULL")
-            ready_emails = cur.fetchone()['count']
+            # Get unified queue status (same logic as /api/queue-status)
+            # Query 1: Get active processing jobs (mode='daily')
+            cur.execute("""
+                SELECT ticker, status
+                FROM ticker_processing_jobs
+                WHERE config->>'mode' = 'daily'
+                AND status IN ('queued', 'processing')
+            """)
+            active_jobs = cur.fetchall()
 
-            # Count sent today
+            # Query 2: Get email queue
+            cur.execute("""
+                SELECT ticker, status, sent_at
+                FROM email_queue
+            """)
+            email_queue_rows = cur.fetchall()
+
+            # Build unified status dict (same merging logic as /api/queue-status)
+            tickers_dict = {}
+
+            # Add email queue entries
+            for row in email_queue_rows:
+                tickers_dict[row['ticker']] = row['status']
+
+            # Override with active jobs (processing takes precedence)
+            for job in active_jobs:
+                tickers_dict[job['ticker']] = 'processing'
+
+            # Count by status
+            ready_emails = sum(1 for status in tickers_dict.values() if status == 'ready')
+
+            # Count sent today (from email_queue only)
             cur.execute("SELECT COUNT(*) as count FROM email_queue WHERE status = 'sent' AND sent_at >= CURRENT_DATE")
             sent_today = cur.fetchone()['count']
 
@@ -17910,6 +17937,36 @@ async def reactivate_user(request: Request):
             return {"status": "success", "message": f"Reactivated {email}"}
     except Exception as e:
         LOG.error(f"Failed to reactivate user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/delete-user")
+async def delete_user(request: Request):
+    """Permanently delete a user from the database (also deletes unsubscribe tokens via CASCADE)"""
+    body = await request.json()
+    token = body.get('token')
+    email = body.get('email')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Delete user (unsubscribe_tokens will be auto-deleted via ON DELETE CASCADE)
+            cur.execute("""
+                DELETE FROM beta_users
+                WHERE email = %s
+            """, (email,))
+
+            deleted_count = cur.rowcount
+            conn.commit()
+
+            if deleted_count == 0:
+                return {"status": "error", "message": f"User {email} not found"}
+
+            LOG.info(f"🗑️ Permanently deleted user: {email}")
+            return {"status": "success", "message": f"Deleted {email}"}
+    except Exception as e:
+        LOG.error(f"Failed to delete user: {e}")
         return {"status": "error", "message": str(e)}
 
 # Email Queue API endpoints

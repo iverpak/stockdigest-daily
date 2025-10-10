@@ -12233,7 +12233,10 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     LOG.info(f"=== FETCHING DIGEST ARTICLES (EMAIL #2: CONTENT QA) ===")
     LOG.info(f"Time window: {period_label} (cutoff: {cutoff})")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
-    LOG.info(f"Flagged article filter: {'ENABLED (' + str(len(flagged_article_ids)) + ' IDs)' if flagged_article_ids else 'DISABLED (showing all articles)'}")
+    if flagged_article_ids is not None and len(flagged_article_ids) > 0:
+        LOG.info(f"Flagged article filter: ENABLED ({len(flagged_article_ids)} IDs)")
+    else:
+        LOG.warning(f"Flagged article filter: DISABLED - using relevance_score >= 7.0 filter as fallback")
 
     with db() as conn, conn.cursor() as cur:
         # Enhanced query to get articles from new schema - MATCHES triage query
@@ -12259,23 +12262,10 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (cutoff, tickers, cutoff, flagged_article_ids))
             else:
-                cur.execute("""
-                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                        a.id, a.url, a.resolved_url, a.title, a.description,
-                        ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
-                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker,
-                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND ta.ticker = ANY(%s)
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
-                    ORDER BY a.url_hash, ta.ticker,
-                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, tickers, cutoff))
+                # ERROR: No flagged IDs - don't pull ALL articles
+                LOG.error(f"❌ Email #2: No flagged_article_ids provided for {tickers}")
+                # Return empty query instead of all articles
+                cur.execute("SELECT NULL LIMIT 0")
         else:
             if flagged_article_ids:
                 cur.execute("""
@@ -12296,22 +12286,10 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (cutoff, cutoff, flagged_article_ids))
             else:
-                cur.execute("""
-                    SELECT DISTINCT ON (a.url_hash, ta.ticker)
-                        a.id, a.url, a.resolved_url, a.title, a.description,
-                        ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
-                        a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
-                        ta.competitor_ticker,
-                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                    FROM articles a
-                    JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
-                    ORDER BY a.url_hash, ta.ticker,
-                        COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, cutoff))
+                # ERROR: No flagged IDs - don't pull ALL articles
+                LOG.error(f"❌ Email #2: No flagged_article_ids provided (all tickers)")
+                # Return empty query instead of all articles
+                cur.execute("SELECT NULL LIMIT 0")
 
         # Group articles by ticker
         articles_by_ticker = {}
@@ -12665,7 +12643,8 @@ def generate_email_html_core(
     articles_by_category = {"company": [], "industry": [], "competitor": []}
 
     with db() as conn, conn.cursor() as cur:
-        if flagged_article_ids:
+        if flagged_article_ids is not None and len(flagged_article_ids) > 0:
+            # Use flagged list (normal case)
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
                        ta.category, ta.search_keyword, ta.competitor_ticker,
@@ -12679,19 +12658,15 @@ def generate_email_html_core(
                 ORDER BY a.published_at DESC NULLS LAST
             """, (ticker, flagged_article_ids, cutoff))
         else:
-            cur.execute("""
-                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker,
-                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND (a.published_at >= %s OR a.published_at IS NULL)
-                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, cutoff))
+            # ERROR: No flagged_article_ids provided - should never happen in production
+            LOG.error(f"[{ticker}] ❌ CRITICAL: No flagged_article_ids provided to Email #3!")
+            LOG.error(f"[{ticker}] This should never happen - triage should always produce a list (even if empty)")
+            # Return empty result instead of pulling all articles
+            articles = []
 
-        articles = cur.fetchall()
+        if flagged_article_ids is not None and len(flagged_article_ids) > 0:
+            articles = cur.fetchall()
+        # else: articles already set to [] above
 
         # Group articles by category (preserves SQL sort order: newest first)
         for article in articles:
@@ -13184,7 +13159,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
     if not unresolved:
         LOG.info(f"[{ticker}] ✅ No Google News URLs need resolution (all already resolved or no Google News articles)")
-        return
+        return flagged_article_ids
 
     total = len(unresolved)
     LOG.info(f"[{ticker}] 📋 Found {total} unresolved Google News URLs")

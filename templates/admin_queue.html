@@ -466,20 +466,31 @@
                 document.getElementById('metric-worker-status').style.color = workerColor;
 
                 // Memory usage
-                const memoryMB = data.memory ? `${data.memory.toFixed(0)} MB` : 'N/A';
+                const memoryMB = data.system.memory_mb ? `${Math.round(data.system.memory_mb)} MB` : 'N/A';
                 document.getElementById('metric-memory').textContent = memoryMB;
 
-                // Last activity (from jobs)
+                // Active jobs
                 const activeJobs = data.jobs.active || 0;
                 document.getElementById('metric-active-jobs').textContent = activeJobs;
 
-                // Recent completions (as a proxy for last activity)
-                const recentCompletions = data.jobs.recent_completions || 0;
-                const lastActivity = recentCompletions > 0 ? `${recentCompletions} in last 10min` : 'None';
+                // Last activity (from heartbeat monitor)
+                let lastActivity = 'None';
+                if (data.heartbeat_monitor && data.heartbeat_monitor.last_activity) {
+                    const lastTime = new Date(data.heartbeat_monitor.last_activity);
+                    const now = new Date();
+                    const minutesAgo = Math.round((now - lastTime) / 60000);
+                    lastActivity = minutesAgo < 1 ? 'Just now' : `${minutesAgo}min ago`;
+                } else if (data.jobs.recent_completions_10min > 0) {
+                    lastActivity = `${data.jobs.recent_completions_10min} in last 10min`;
+                }
                 document.getElementById('metric-last-activity').textContent = lastActivity;
 
-                // Worker restarts (not available in current health endpoint, show as N/A)
-                document.getElementById('metric-restarts').textContent = 'N/A';
+                // Worker restarts
+                const restarts = data.heartbeat_monitor ? data.heartbeat_monitor.restart_count : 0;
+                const restartsText = restarts > 0 ? `⚠️ ${restarts}` : restarts;
+                const restartsColor = restarts > 0 ? '#f59e0b' : '#10b981';
+                document.getElementById('metric-restarts').textContent = restartsText;
+                document.getElementById('metric-restarts').style.color = restartsColor;
 
             } catch (error) {
                 console.error('Failed to fetch metrics:', error);

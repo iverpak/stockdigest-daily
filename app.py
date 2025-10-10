@@ -14944,6 +14944,10 @@ def health_check():
             "platform": sys.platform,
             "python_version": sys.version.split()[0],
             "render_instance": os.getenv('RENDER_INSTANCE_ID', 'not_render')
+        },
+        "heartbeat_monitor": {
+            "restart_count": _worker_restart_count,
+            "last_activity": _last_worker_activity.isoformat() if _last_worker_activity else None
         }
     }
 
@@ -19175,7 +19179,7 @@ async def view_email_1_api(ticker: str, token: str = Query(...)):
             cur.execute("""
                 SELECT
                     a.id, a.title, a.url, a.resolved_url, a.published_at, a.domain,
-                    a.flagged, ta.category, ta.relevance_score, ta.category_score,
+                    ta.category, ta.relevance_score, ta.category_score,
                     ta.search_keyword, ta.competitor_ticker
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
@@ -19187,14 +19191,18 @@ async def view_email_1_api(ticker: str, token: str = Query(...)):
         if not articles:
             return HTMLResponse(f"<h1>No articles for {ticker}</h1><p>Run processing first.</p>")
 
-        # Count flagged vs total by category
+        # Count flagged vs total by category (flagged = relevance_score >= 7.0)
         stats = {"company": {"total": 0, "flagged": 0}, "industry": {"total": 0, "flagged": 0}, "competitor": {"total": 0, "flagged": 0}}
         for a in articles:
             cat = a['category']
             if cat in stats:
                 stats[cat]["total"] += 1
-                if a['flagged']:
+                # Article is "flagged" if relevance_score >= 7.0
+                if a.get('relevance_score') and a['relevance_score'] >= 7.0:
                     stats[cat]["flagged"] += 1
+                    a['flagged'] = True  # Add flag for template
+                else:
+                    a['flagged'] = False
 
         # Generate simple HTML preview
         html = f"""
@@ -19245,16 +19253,17 @@ async def view_email_2_api(ticker: str, token: str = Query(...)):
     try:
         hours = get_lookback_minutes() / 60
 
-        # Query FLAGGED articles with AI summaries
+        # Query FLAGGED articles with AI summaries (flagged = relevance_score >= 7.0)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT
                     a.id, a.title, a.url, a.resolved_url, a.published_at, a.domain,
-                    a.description, a.scraped_content, a.ai_summary, a.ai_model,
+                    a.description, a.scraped_content, ta.ai_summary, ta.ai_model,
                     ta.category, ta.relevance_score, ta.search_keyword, ta.competitor_ticker
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s AND ta.flagged = TRUE
+                WHERE ta.ticker = %s
+                AND ta.relevance_score >= 7.0
                 AND a.published_at >= NOW() - INTERVAL '%s hours'
                 ORDER BY a.published_at DESC
             """, (ticker, hours))

@@ -19038,7 +19038,7 @@ async def send_ticker_api(request: Request):
 
 @APP.get("/api/view-email/{ticker}")
 def view_email_api(ticker: str, token: str = Query(...)):
-    """View email HTML preview"""
+    """View Email #3 (Final User Email) preview"""
     if not check_admin_token(token):
         return HTMLResponse("Unauthorized", status_code=401)
 
@@ -19058,6 +19058,130 @@ def view_email_api(ticker: str, token: str = Query(...)):
     except Exception as e:
         LOG.error(f"Failed to view email: {e}")
         return HTMLResponse(f"Error: {str(e)}", status_code=500)
+
+@APP.get("/api/view-email-1/{ticker}")
+async def view_email_1_api(ticker: str, token: str = Query(...)):
+    """View Email #1 (Article Selection QA) preview - regenerated on-demand from database"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    try:
+        config = get_ticker_metadata(ticker)
+        if not config:
+            return HTMLResponse(f"<h1>Ticker {ticker} not found</h1>", status_code=404)
+
+        hours = get_lookback_minutes() / 60
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        # Query ALL articles (not just flagged) to show triage results
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    a.id, a.title, a.url, a.resolved_url, a.published_at, a.domain,
+                    a.flagged, ta.category, ta.relevance_score, ta.category_score,
+                    ta.search_keyword, ta.competitor_ticker
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s AND a.published_at >= %s
+                ORDER BY a.published_at DESC
+            """, (ticker, cutoff))
+            articles = [dict(row) for row in cur.fetchall()]
+
+        if not articles:
+            return HTMLResponse(f"<h1>No articles for {ticker}</h1><p>Run processing first.</p>")
+
+        # Count flagged vs total by category
+        stats = {"company": {"total": 0, "flagged": 0}, "industry": {"total": 0, "flagged": 0}, "competitor": {"total": 0, "flagged": 0}}
+        for a in articles:
+            cat = a['category']
+            if cat in stats:
+                stats[cat]["total"] += 1
+                if a['flagged']:
+                    stats[cat]["flagged"] += 1
+
+        # Generate simple HTML preview
+        html = f"""
+        <html><head><style>body{{font-family:sans-serif;padding:20px;}}table{{border-collapse:collapse;width:100%;}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;}}th{{background:#1e40af;color:white;}}
+        .flagged{{background:#d1fae5;}}
+        .score{{font-weight:bold;color:#1e40af;}}</style></head>
+        <body>
+        <h1>📋 Email #1: Article Selection QA - {ticker}</h1>
+        <p><strong>Time Period:</strong> Last {int(hours)} hours | <strong>Company:</strong> {config.get('name', ticker)}</p>
+        <h2>Summary</h2>
+        <ul>
+        <li><strong>Company:</strong> {stats['company']['flagged']} flagged / {stats['company']['total']} total</li>
+        <li><strong>Industry:</strong> {stats['industry']['flagged']} flagged / {stats['industry']['total']} total</li>
+        <li><strong>Competitor:</strong> {stats['competitor']['flagged']} flagged / {stats['competitor']['total']} total</li>
+        </ul>
+        <h2>Articles (Flagged articles highlighted)</h2>
+        <table>
+        <tr><th>Category</th><th>Title</th><th>Domain</th><th>Relevance</th><th>Category Score</th><th>Published</th></tr>
+        """
+
+        for a in articles:
+            row_class = 'class="flagged"' if a['flagged'] else ''
+            pub_date = format_date_short(a['published_at']) if a['published_at'] else 'N/A'
+            html += f"""
+            <tr {row_class}>
+                <td>{a['category']}</td>
+                <td>{a['title'][:80]}...</td>
+                <td>{a['domain']}</td>
+                <td class="score">{a['relevance_score']}/10</td>
+                <td class="score">{a['category_score']}/10</td>
+                <td>{pub_date}</td>
+            </tr>
+            """
+
+        html += "</table></body></html>"
+        return HTMLResponse(html)
+
+    except Exception as e:
+        LOG.error(f"Failed to generate Email #1: {e}")
+        return HTMLResponse(f"<h1>Error</h1><p>{str(e)}</p>", status_code=500)
+
+@APP.get("/api/view-email-2/{ticker}")
+async def view_email_2_api(ticker: str, token: str = Query(...)):
+    """View Email #2 (Content QA) preview - regenerated on-demand"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    try:
+        hours = get_lookback_minutes() / 60
+
+        # Query FLAGGED articles with AI summaries
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    a.id, a.title, a.url, a.resolved_url, a.published_at, a.domain,
+                    a.description, a.content, a.ai_summary, a.ai_model,
+                    ta.category, ta.relevance_score, ta.search_keyword, ta.competitor_ticker
+                FROM articles a
+                JOIN ticker_articles ta ON a.id = ta.article_id
+                WHERE ta.ticker = %s AND ta.flagged = TRUE
+                AND a.published_at >= NOW() - INTERVAL '%s hours'
+                ORDER BY a.published_at DESC
+            """, (ticker, hours))
+            flagged = [dict(row) for row in cur.fetchall()]
+
+        if not flagged:
+            return HTMLResponse(f"<h1>No flagged articles for {ticker}</h1><p>Run processing first.</p>")
+
+        # Use existing template
+        flagged_ids = [a['id'] for a in flagged]
+        articles_dict = await fetch_digest_articles_with_enhanced_content(
+            hours=int(hours), tickers=[ticker], flagged_article_ids=flagged_ids
+        )
+
+        html = templates.get_template("email_template.html").render(
+            articles_by_ticker=articles_dict,
+            time_period=f"{int(hours)} hours",
+            current_time=format_timestamp_est(datetime.now(timezone.utc))
+        )
+        return HTMLResponse(html)
+
+    except Exception as e:
+        LOG.error(f"Failed to generate Email #2: {e}")
+        return HTMLResponse(f"<h1>Error</h1><p>{str(e)}</p>", status_code=500)
 
 # ------------------------------------------------------------------------------
 # DAILY WORKFLOW PROCESSING FUNCTIONS

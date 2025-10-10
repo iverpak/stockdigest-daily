@@ -183,6 +183,29 @@
             margin-left: 6px;
         }
 
+        .btn-wrapped {
+            padding: 8px 12px;
+            min-width: 80px;
+            line-height: 1.2;
+            font-size: 11px;
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            white-space: normal;
+            text-align: center;
+        }
+
+        .btn-wrapped-line1 {
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .btn-wrapped-line2 {
+            font-size: 11px;
+            font-weight: 700;
+        }
+
         .ticker-card {
             background: #ffffff;
             padding: 24px;
@@ -435,7 +458,20 @@
                                 ${ticker.status === 'ready' ? `<button class="btn btn-success btn-sm" onclick="sendTicker('${ticker.ticker}')">✉️ Send</button>` : ''}
                                 ${ticker.status === 'ready' ? `<button class="btn btn-warning btn-sm" onclick="cancelTicker('${ticker.ticker}')">❌ Cancel</button>` : ''}
                                 ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
-                                ${ticker.status !== 'processing' ? `<button class="btn btn-secondary btn-sm" onclick="viewEmail('${ticker.ticker}')">👁️ View</button>` : ''}
+                                ${ticker.status !== 'processing' ? `
+                                    <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail1('${ticker.ticker}')">
+                                        <span class="btn-wrapped-line1">QA:</span>
+                                        <span class="btn-wrapped-line2">Article</span>
+                                    </button>
+                                    <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail2('${ticker.ticker}')">
+                                        <span class="btn-wrapped-line1">QA:</span>
+                                        <span class="btn-wrapped-line2">Content</span>
+                                    </button>
+                                    <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail('${ticker.ticker}')">
+                                        <span class="btn-wrapped-line1">VIEW</span>
+                                        <span class="btn-wrapped-line2">Email</span>
+                                    </button>
+                                ` : ''}
                             </div>
                         </div>
                     `;
@@ -717,6 +753,14 @@
 
         function viewEmail(ticker) {
             window.open(`/api/view-email/${ticker}?token=${token}`, '_blank');
+        }
+
+        function viewEmail1(ticker) {
+            window.open(`/api/view-email-1/${ticker}?token=${token}`, '_blank');
+        }
+
+        function viewEmail2(ticker) {
+            window.open(`/api/view-email-2/${ticker}?token=${token}`, '_blank');
         }
 
         async function rerunTicker(ticker) {

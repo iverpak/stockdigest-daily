@@ -14534,14 +14534,8 @@ async def shutdown_event():
     LOG.info("=" * 80)
     stop_job_worker()
 
-    # Close HTTP connector (if it was initialized)
-    if _HTTP_CONNECTOR is not None:
-        LOG.info("🔄 Closing HTTP connector...")
-        try:
-            await _HTTP_CONNECTOR.close()
-            LOG.info("✅ HTTP connector closed")
-        except Exception as e:
-            LOG.error(f"Failed to close HTTP connector: {e}")
+    # Note: Thread-local HTTP connectors are cleaned up automatically when threads exit
+    # (via cleanup_http_session() at end of each job + thread-local storage garbage collection)
 
     # Close connection pool
     LOG.info("🔄 Closing database connection pool...")

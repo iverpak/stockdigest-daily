@@ -11316,9 +11316,6 @@ If No Material News:
 
 No significant company news, regulatory updates, or competitive developments for {ticker} on {current_date}.
 
----
-*[For quiet days, skip to INVESTMENT IMPLICATIONS and FOOTER only]*
-
 🔴 MAJOR DEVELOPMENTS (Only if material news - 3-6 bullets max)
 
 Source Priority: [COMPANY] articles first, then [INDUSTRY]/[COMPETITOR] with competitive implications
@@ -12801,8 +12798,8 @@ def build_executive_summary_html(sections: Dict[str, List[str]]) -> str:
             '''
         else:
             # Special sections: render as paragraphs
-            # Join with line breaks to preserve structure
-            text = "<br><br>".join(content)
+            # Join with single line breaks to preserve structure without excessive spacing
+            text = "<br>".join(content)
 
             return f'''
                 <div style="margin-bottom: 20px;">

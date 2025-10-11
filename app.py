@@ -12774,64 +12774,57 @@ def build_executive_summary_html(sections: Dict[str, List[str]]) -> str:
     """
     Convert executive summary sections dict into HTML string.
     Used by Jinja2 template.
+    Simple consistent formatting for all sections.
     """
-    def build_section(title: str, bullets: List[str]) -> str:
-        if not bullets:
+    def build_section(title: str, content: List[str], use_bullets: bool = True) -> str:
+        """
+        Build section with consistent styling.
+        use_bullets=True: render as bullet list
+        use_bullets=False: render as paragraphs
+        """
+        if not content:
             return ""
 
-        bullet_html = ""
-        for bullet in bullets:
-            bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{bullet}</li>'
+        if use_bullets:
+            # Standard sections: render as bullet list
+            bullet_html = ""
+            for item in content:
+                bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{item}</li>'
 
-        return f'''
-            <div style="margin-bottom: 20px;">
-                <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
-                <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
-                    {bullet_html}
-                </ul>
-            </div>
-        '''
+            return f'''
+                <div style="margin-bottom: 20px;">
+                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+                        {bullet_html}
+                    </ul>
+                </div>
+            '''
+        else:
+            # Special sections: render as paragraphs
+            # Join with line breaks to preserve structure
+            text = "<br><br>".join(content)
 
-    # Special rendering for Bottom Line (plain text, not bullets)
-    def build_bottom_line(bullets: List[str]) -> str:
-        if not bullets:
-            return ""
-        # Bottom Line is stored as bullets but should render as paragraphs
-        text = " ".join(bullets)  # Join all bullets into one text block
-        return f'''
-            <div style="margin-bottom: 24px; padding: 16px; background-color: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px;">
-                <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px;">📌 Bottom Line</h2>
-                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #78350f;">{text}</p>
-            </div>
-        '''
-
-    # Special rendering for Investment Implications (preserve structure)
-    def build_investment_implications(bullets: List[str]) -> str:
-        if not bullets:
-            return ""
-        # Investment Implications has structured text - preserve formatting
-        text = "<br>".join(bullets)  # Preserve line breaks for structure
-        return f'''
-            <div style="margin-bottom: 20px; padding: 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">🎯 Investment Implications</h2>
-                <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #1e3a8a;">{text}</div>
-            </div>
-        '''
+            return f'''
+                <div style="margin-bottom: 20px;">
+                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                    <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">{text}</div>
+                </div>
+            '''
 
     html = ""
-    # Bottom Line first (new)
-    html += build_bottom_line(sections.get("bottom_line", []))
+    # Bottom Line first (paragraph format)
+    html += build_section("Bottom Line", sections.get("bottom_line", []), use_bullets=False)
 
-    # Original 6 sections
-    html += build_section("Major Developments", sections.get("major_developments", []))
-    html += build_section("Financial/Operational Performance", sections.get("financial_operational", []))
-    html += build_section("Risk Factors", sections.get("risk_factors", []))
-    html += build_section("Wall Street Sentiment", sections.get("wall_street", []))
-    html += build_section("Competitive/Industry Dynamics", sections.get("competitive_industry", []))
-    html += build_section("Upcoming Catalysts", sections.get("upcoming_catalysts", []))
+    # Original 6 sections (bullet format)
+    html += build_section("Major Developments", sections.get("major_developments", []), use_bullets=True)
+    html += build_section("Financial/Operational Performance", sections.get("financial_operational", []), use_bullets=True)
+    html += build_section("Risk Factors", sections.get("risk_factors", []), use_bullets=True)
+    html += build_section("Wall Street Sentiment", sections.get("wall_street", []), use_bullets=True)
+    html += build_section("Competitive/Industry Dynamics", sections.get("competitive_industry", []), use_bullets=True)
+    html += build_section("Upcoming Catalysts", sections.get("upcoming_catalysts", []), use_bullets=True)
 
-    # Investment Implications last (new)
-    html += build_investment_implications(sections.get("investment_implications", []))
+    # Investment Implications last (paragraph format)
+    html += build_section("Investment Implications", sections.get("investment_implications", []), use_bullets=False)
 
     return html
 

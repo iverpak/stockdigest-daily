@@ -11309,7 +11309,7 @@ Use exact emoji headers shown below. No ##, no ###, no additional formatting.
 Answer: "What happened today for {ticker}?"
 
 If Material News:
-[What happened]. [Why it matters]. [What to monitor next].
+[What happened]. [Key data points]. [What to monitor next].
 
 If No Material News:
 📌 QUIET DAY - NO MATERIAL DEVELOPMENTS
@@ -11329,10 +11329,10 @@ Include:
 - Competitor moves with direct {ticker} implications
 
 Format:
-- [Development with context, amounts, rationale]. [Impact if relevant]. ([Date])
+- [Development with context, amounts, dates]. ([Date])
 
 Example:
-- Acquired AI startup for $4.2B to accelerate cloud capabilities; analysts estimate 18-month revenue contribution timeline (Oct 10)
+- Acquired AI startup for $4.2B; transaction expected to close Q1 2026 pending regulatory approval (Oct 10)
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
@@ -11346,7 +11346,7 @@ Include:
 - Stock performance with context
 
 Format:
-- [Metric]: [Value] [vs. comparison]. [Context]. ([Date])
+- [Metric]: [Value] [vs. comparison if provided]. ([Date])
 
 Example:
 - Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B; full-year guidance raised to $52B from $50B (Oct 10)
@@ -11355,24 +11355,33 @@ Example:
 
 Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
 
+CRITICAL RULE: Report facts separately. NO causal interpretation. NO competitive implications analysis.
+
+Format: [Risk category]: [Company A facts]; [Company B/competitor facts]; [Regulatory facts] ([Date])
+
 Include:
-- {ticker} operational risks: Production, supply chain, quality issues
-- {ticker} regulatory/legal: Investigations, lawsuits, compliance
-- Competitive threats: Competitor actions threatening {ticker}
-- Industry headwinds: Sector trends creating risks
-- Insider activity: C-suite transactions (amounts/context)
+- {ticker} operational developments: Production issues, supply chain disruptions, quality problems with specific metrics
+- {ticker} regulatory/legal actions: Investigation announcements, lawsuit filings, compliance notices with amounts/scope
+- Competitor operational facts: Their announcements, their metrics, their actions
+- Industry regulatory facts: New rules, tariffs, policy changes with specific terms
+- Insider transactions: C-suite buys/sells with amounts and dates
 
-Format:
-- [Risk]. [Potential impact]. [Timeline if known]. ([Date])
+Examples:
+✓ EU antitrust investigation: Commission issued formal information request on Oct 10 covering cloud division practices; similar probes of Meta, Amazon ongoing; potential fines range €100M-€5B under DSA framework (Oct 10)
+✓ Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K; competitor reported record 127,000 unit quarter (Oct 10)
+✓ Insider activity: CFO sold 50,000 shares at $87.50 on Oct 9 (first sale since June); CEO purchased 100,000 shares at $85.20 on Oct 10 (Oct 10)
 
-Example:
-- EU antitrust probe expanded to cloud division; potential fines up to $5B+ if violations found; ruling expected H1 2026 (Oct 10)
+DO NOT write:
+✗ "threatens {ticker} positioning"
+✗ "creates competitive pressure"
+✗ "forces {ticker} to respond"
+✗ "validates competitor advantage"
 
 📈 WALL STREET SENTIMENT (Only if analyst activity - 1-4 bullets max)
 
 Source: [COMPANY] articles only
 
-Format: [Firm] [action] to [rating/target], [rationale] ([Date])
+Format: [Firm] [action] to [rating/target], [rationale if provided] ([Date])
 
 If 3+ analysts moved same direction:
 Multiple firms [upgraded/downgraded]: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z ([Date range])
@@ -11384,110 +11393,140 @@ Example:
 
 Source: [INDUSTRY] and [COMPETITOR] articles
 
-Include ONLY developments affecting {ticker}:
-- Competitor M&A affecting market structure
-- Industry regulation impacting {ticker} operations
-- Technology shifts threatening/enhancing {ticker} positioning
-- Pricing/capacity moves affecting {ticker} margins
-- Market dynamics impacting {ticker} share
+CRITICAL RULE: Report developments factually. NO analysis of impact on {ticker}.
 
-Format:
-- [Development]. [Impact on {ticker}]. ([Date])
+Format: [What happened]. [Additional facts]. ([Date])
+
+Include:
+- Competitor M&A: Transaction details, amounts, companies involved
+- Industry regulation: New rules, effective dates, affected parties
+- Technology announcements: Product launches, specifications, availability
+- Market data: Pricing changes, capacity additions, production figures
+- Executive commentary: Direct quotes from earnings calls/statements
 
 Examples:
-✓ Competitor acquired startup for $2B, entering {ticker}'s core segment (Oct 10)
-✓ New tariffs impose 25% levy on imports, increasing {ticker} costs while domestic competitors unaffected (Oct 10)
+✓ Competitor acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
+✓ New tariffs effective Jan 1, 2026 impose 25% levy on Category 8471 imports; domestic producers exempt under Section 301 exclusions (Oct 10)
+✓ Industry leader reported Q3 revenue $47.5B (+22% YoY), operating margin 43% (+500 bps YoY); management guided Q4 revenue $49-51B (Oct 10)
 
-Omit section if no material developments.
+DO NOT write:
+✗ "threatening {ticker}'s market share"
+✗ "validates {ticker}'s strategy"
+✗ "forces {ticker} to match pricing"
+✗ "creates opportunity for {ticker}"
 
 📅 UPCOMING CATALYSTS (Only if events mentioned - 1-3 bullets max)
 
 Source: [COMPANY] articles only
 
 Include:
-- Earnings dates, investor days, regulatory deadlines, product launches
+- Earnings dates, investor days, regulatory deadlines, product launches, shareholder votes
 - Exact dates when available
 
 Format:
-- [Event]: [Date] - [What to watch] ([Source date if different])
+- [Event]: [Date] - [What will be disclosed/decided] ([Source date if different])
 
 Example:
-- Q3 Earnings: Oct 24 - Q4 guidance critical given intensifying competition (Oct 10)
+- Q3 Earnings: Oct 24 - Q4 guidance and margin outlook (Oct 10)
 
 🎯 INVESTMENT IMPLICATIONS (Always - adapt length to news volume)
 
+CRITICAL RULE: Stay factual. Cite specific developments from today's news. Minimize interpretation.
+
 For Material News Days (2+ developments):
 
-[SCENARIO ASSESSMENT] - [One sentence characterizing developments and directional impact]
+[SCENARIO ASSESSMENT] - [One sentence factual summary of today's developments]
 
 Examples:
-- COMPETITIVE PRESSURE RISING - New entrant threatens margin stability
-- REGULATORY CLARITY EMERGING - Policy framework reduces growth uncertainty
-- EXECUTION RISK ELEVATED - Operational challenges compound amid headwinds
-- FUNDAMENTAL STRENGTH CONFIRMED - Results validate thesis despite macro concerns
+- REGULATORY ACTION ANNOUNCED - EU issued formal information request; securities class action filed
+- EARNINGS BEAT FOLLOWED BY DILUTION - Q1 profit $1.5M vs. -$34.7M year-ago; $51.6M share offering filed same day
+- COMPETITOR LAUNCHES REPORTED - Meta demonstrated AR glasses Sept 18; Amazon entered AR development
+- PRODUCTION MILESTONE ACHIEVED - Q3 deliveries 462K units (+6% YoY); maintained guidance 1.8M units
 
-Bull Case (factors supporting upside):
-- [Assumption from today's news supporting positive outcome]
-- [Assumption from today's news supporting positive outcome]
-- [Assumption from today's news supporting positive outcome]
-→ Potential outcome: [What success looks like - specific metrics/improvements]
+Bull Case (factors from today's news supporting upside):
+- [Factual development from today with specific numbers/dates]
+- [Factual development from today with specific numbers/dates]
+- [Factual development from today with specific numbers/dates]
+→ Potential outcome: [Specific metrics from articles, not forecasts]
 
-Bear Case (factors supporting downside):
-- [Assumption from today's news supporting negative outcome]
-- [Assumption from today's news supporting negative outcome]
-- [Assumption from today's news supporting negative outcome]
-→ Potential outcome: [What failure looks like - specific risks/deterioration]
+Bear Case (factors from today's news supporting downside):
+- [Factual development from today with specific numbers/dates]
+- [Factual development from today with specific numbers/dates]
+- [Factual development from today with specific numbers/dates]
+→ Potential outcome: [Specific metrics from articles, not forecasts]
 
 Key Variables to Monitor (will determine which scenario materializes):
-1. [Specific metric/event] - Timeline: [when resolution expected]
-2. [Specific metric/event] - Timeline: [when resolution expected]
-3. [Specific metric/event] - Timeline: [when resolution expected]
+1. [Specific metric/event from articles] - Timeline: [Date/period from articles]
+2. [Specific metric/event from articles] - Timeline: [Date/period from articles]
+3. [Specific metric/event from articles] - Timeline: [Date/period from articles]
 
-Investment Considerations:
+Next Catalyst: [Event/Date from articles] - [What data will be disclosed]
 
-[2-4 sentences providing perspective on risk/reward based on today's developments. Frame as educational analysis, not directive. Connect to catalysts.]
+---
 
-Next Catalyst: [Event/Date] - [What outcome validates bull vs. bear case]
+WRITING RULES FOR BULL/BEAR/OUTCOMES:
+
+✓ DO:
+- Quote specific numbers from articles ("Q3 revenue $12.8B", "stock declined 18%", "investigation covers 2.9M vehicles")
+- Reference actual company names ("Cameco reported $320.89M profit", "UEC raised $203.8M")
+- Cite dates from articles ("ruling expected H1 2026", "approval timeline 2025-2026")
+- Use conditional language for outcomes ("if approval proceeds", "pending resolution")
+- Reference current metrics ("from current 41% share", "at current $82/lb pricing")
+
+✗ DO NOT:
+- Create specific forecasts not in articles ("35-40% market share", "$85-$100/lb pricing", "12-15x EBITDA")
+- Make causal claims ("forces", "threatens", "validates", "requires")
+- Model scenarios ("low-teens margins", "500,000 annual units")
+- String multiple conditionals ("if X then Y then Z")
+- Invent timelines not mentioned ("late 2020s", "12-24 month window")
+
+OUTCOME STATEMENT RULES:
+
+✓ GOOD (cites facts):
+"Wheeler River achieves production startup during current elevated uranium pricing environment (spot >$82/lb as of Oct 2025)"
+"Tesla maintains current U.S. market share position (41% in Q3) as competition intensifies"
+"FSD investigation concludes with software updates; subscription revenue continues current trajectory"
+
+✗ BAD (creates forecasts):
+"Wheeler River captures $85-$100/lb pricing and generates 500,000 annual units"
+"Tesla market share compresses below 35% as 90 models fragment demand"
+"margins compress to low-teens range"
 
 ---
 
 For Single Development Days:
 
-[SCENARIO ASSESSMENT] - [Development] shifts [aspect of investment case]
+[SCENARIO ASSESSMENT] - [Factual description of single development]
 
-What This Means:
-[2-3 sentences explaining immediate implication]
+What Happened:
+[2-3 sentences with specific facts, numbers, dates from articles]
 
-Upside Scenario:
-- [Assumption if plays out positively]
-→ Outcome: [Positive result]
+If Positive Resolution:
+- [Factual scenario from articles with specific metrics]
 
-Downside Scenario:
-- [Assumption if plays out negatively]
-→ Outcome: [Negative result]
+If Negative Resolution:
+- [Factual scenario from articles with specific metrics]
 
-Watch For: [1-2 near-term indicators]
+Watch For: [1-2 specific metrics/events from articles with dates]
 
-Next Catalyst: [Event/Date] - [What we'll learn]
+Next Catalyst: [Event/Date from articles] - [What data will be disclosed]
 
 ---
 
 For Quiet Days:
 
-THESIS UNCHANGED - Awaiting material developments
+NO MATERIAL DEVELOPMENTS - Monitoring for catalysts
 
-No new information to alter investment perspective. Monitoring for developments that could shift risk/reward dynamics.
+No company-specific news, regulatory actions, or competitive developments reported {current_date}.
 
-What Could Change the Thesis:
-- [Type of bullish development]
-- [Type of bearish development]
+Next Expected Catalyst: [Event/date if known from prior articles, otherwise: "Earnings, regulatory decisions, or material announcements"]
 
-Next Expected Catalyst: [Event/date if known, otherwise: "Material developments, earnings, or competitive actions"]
+---
 
 CRITICAL WRITING RULES:
 
 0. NO MARKDOWN - Section headers must be emoji only (🔴, 📊, etc.) with NO ## or ### syntax
-1. Bullets only - Each development = ONE bullet (standard sections use •, special sections use paragraphs)
+1. Bullets only - Each development = ONE bullet
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
 3. NO source names - Exception: cite when figures conflict
 4. Newest first within sections
@@ -11495,21 +11534,36 @@ CRITICAL WRITING RULES:
 6. Quantify everything - Exact figures ("12.7%", "$4.932B")
 7. Conflicting numbers - Report both with sources
 8. Active voice - "Company launched X" not "X was launched"
-9. No hedge language - Avoid "may," "might," "could" unless uncertainty
-10. Cross-category - If competitive implications → include in both Major Developments AND Competitive Dynamics
+9. Remove interpretive verbs - Replace "threatens/validates/forces/creates" with factual descriptions
+10. Cross-category - Related developments can appear in multiple sections if factually relevant
 
 PRECISION HIERARCHY:
-1. Specific numbers: "12.7%", "$4.932B"
-2. Ranges: "$2B-$3B"
-3. Directional: "substantial investment"
-4. Never replace numbers with vague terms when numbers exist
+1. Specific numbers from articles: "12.7%", "$4.932B", "2.9M vehicles"
+2. Ranges from articles: "$2B-$3B", "Q1-Q2 2026"
+3. Direct quotes: "CFO attributed to 'ad platform issue'"
+4. Never create numbers not in articles
+
+BANNED PHRASES - Never use:
+
+Causal/Interpretive:
+- "threatens", "validates", "forces", "requires", "necessitates"
+- "creates pressure", "intensifies competition", "signals", "demonstrates"
+- "suggests", "indicates", "implies", "reveals", "exposes"
+- "advantages", "disadvantages", "benefits", "harms"
+
+Forecasting:
+- Specific price targets not in articles
+- Specific margin ranges not in articles
+- Specific market share numbers not in articles
+- Specific production volumes not in articles
+- Multi-step conditional chains
 
 LENGTH GUIDELINES:
 
-HIGH (5+ material articles): 1,500-2,000 words - Full analysis
-MEDIUM (2-4 material articles): 800-1,200 words - Focused coverage
-LOW (1 material article): 400-700 words - Single story deep dive
-ZERO (0 material articles): 100-200 words - Quiet day notice only
+HIGH (5+ material articles): 1,200-1,500 words
+MEDIUM (2-4 material articles): 700-1,000 words
+LOW (1 material article): 400-600 words
+ZERO (0 material articles): 100-200 words
 
 SECTION RULES:
 
@@ -11531,8 +11585,8 @@ FILTERING - DO NOT include:
 
 ❌ Pure technical analysis
 ❌ Single fund position changes
-❌ Minor price target adjustments
-❌ Competitor news with no {ticker} impact
+❌ Minor price target adjustments (<5%)
+❌ Competitor news with no factual connection to {ticker}
 ❌ Generic macro affecting all stocks equally
 
 LEGAL COMPLIANCE:
@@ -11548,16 +11602,19 @@ NEVER use:
 ALWAYS use:
 - "Bull case factors"
 - "Bear case factors"
-- "Potential outcome if"
-- "Scenario analysis"
-- "Investment considerations"
-- "Key variables to monitor"
+- "Potential outcome"
+- "Key variables"
+- "Next catalyst"
 
-Frame as: Educational analysis of possibilities, not predictions or recommendations.
+Frame as: Educational presentation of scenarios based on factual developments, not predictions or recommendations.
 
-Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Use scenario analysis framework.
+INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
+1. Reporting facts separately without connecting them interpretively
+2. Citing specific numbers, dates, and quotes from articles
+3. Avoiding causal language and competitive analysis
+4. Letting readers draw their own conclusions from presented facts
 
-Your job: Provide educational investment analysis in 3-5 minutes, not direct advice."""
+Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Stay factual."""
 
     return (system_prompt, user_content, company_name)
 

@@ -11328,11 +11328,11 @@ Include:
 - {ticker} contracts: Dollar amounts or strategic significance
 - Competitor moves with direct {ticker} implications
 
-Format:
-- [Development with context, amounts, dates]. ([Date])
+Format (use • bullet character):
+• [Development with context, amounts, dates]. ([Date])
 
 Example:
-- Acquired AI startup for $4.2B; transaction expected to close Q1 2026 pending regulatory approval (Oct 10)
+• Acquired AI startup for $4.2B; transaction expected to close Q1 2026 pending regulatory approval (Oct 10)
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
@@ -11345,11 +11345,11 @@ Include:
 - Capex, debt, buybacks, dividends (amounts)
 - Stock performance with context
 
-Format:
-- [Metric]: [Value] [vs. comparison if provided]. ([Date])
+Format (use • bullet character):
+• [Metric]: [Value] [vs. comparison if provided]. ([Date])
 
 Example:
-- Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B; full-year guidance raised to $52B from $50B (Oct 10)
+• Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B; full-year guidance raised to $52B from $50B (Oct 10)
 
 ⚠️ RISK FACTORS (Only if risks identified - 2-4 bullets max)
 
@@ -11366,6 +11366,9 @@ Include:
 - Industry regulatory facts: New rules, tariffs, policy changes with specific terms
 - Insider transactions: C-suite buys/sells with amounts and dates
 
+Format (use • bullet character):
+• [Risk category]: [Facts about situation]. ([Date])
+
 Examples:
 ✓ EU antitrust investigation: Commission issued formal information request on Oct 10 covering cloud division practices; similar probes of Meta, Amazon ongoing; potential fines range €100M-€5B under DSA framework (Oct 10)
 ✓ Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K; competitor reported record 127,000 unit quarter (Oct 10)
@@ -11381,13 +11384,14 @@ DO NOT write:
 
 Source: [COMPANY] articles only
 
-Format: [Firm] [action] to [rating/target], [rationale if provided] ([Date])
+Format (use • bullet character):
+• [Firm] [action] to [rating/target], [rationale if provided] ([Date])
 
 If 3+ analysts moved same direction:
-Multiple firms [upgraded/downgraded]: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z ([Date range])
+• Multiple firms [upgraded/downgraded]: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z ([Date range])
 
 Example:
-- Goldman Sachs upgraded to Buy from Neutral, $450 target (from $380), citing AI infrastructure demand (Oct 10)
+• Goldman Sachs upgraded to Buy from Neutral, $450 target (from $380), citing AI infrastructure demand (Oct 10)
 
 ⚡ COMPETITIVE/INDUSTRY DYNAMICS (Only if developments exist - 2-5 bullets max)
 
@@ -11395,7 +11399,8 @@ Source: [INDUSTRY] and [COMPETITOR] articles
 
 CRITICAL RULE: Report developments factually. NO analysis of impact on {ticker}.
 
-Format: [What happened]. [Additional facts]. ([Date])
+Format (use • bullet character):
+• [What happened]. [Additional facts]. ([Date])
 
 Include:
 - Competitor M&A: Transaction details, amounts, companies involved
@@ -11423,11 +11428,11 @@ Include:
 - Earnings dates, investor days, regulatory deadlines, product launches, shareholder votes
 - Exact dates when available
 
-Format:
-- [Event]: [Date] - [What will be disclosed/decided] ([Source date if different])
+Format (use • bullet character):
+• [Event]: [Date] - [What will be disclosed/decided] ([Source date if different])
 
 Example:
-- Q3 Earnings: Oct 24 - Q4 guidance and margin outlook (Oct 10)
+• Q3 Earnings: Oct 24 - Q4 guidance and margin outlook (Oct 10)
 
 🎯 INVESTMENT IMPLICATIONS (Always - adapt length to news volume)
 
@@ -11526,7 +11531,7 @@ Next Expected Catalyst: [Event/date if known from prior articles, otherwise: "Ea
 CRITICAL WRITING RULES:
 
 0. NO MARKDOWN - Section headers must be emoji only (🔴, 📊, etc.) with NO ## or ### syntax
-1. Bullets only - Each development = ONE bullet
+1. BULLET FORMAT - Use • character (not - or *) for all bulleted sections. Each development = ONE bullet
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
 3. NO source names - Exception: cite when figures conflict
 4. Newest first within sections

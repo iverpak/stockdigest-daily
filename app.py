@@ -888,6 +888,45 @@ def db():
         finally:
             conn.close()
 
+def with_deadlock_retry(max_retries=100):
+    """
+    Decorator to automatically retry database operations on deadlock detection.
+
+    PostgreSQL deadlocks are transient - one transaction is automatically killed
+    to break the cycle, and retrying immediately almost always succeeds.
+
+    Args:
+        max_retries: Maximum retry attempts (default 100, effectively unlimited for deadlocks)
+
+    Usage:
+        @with_deadlock_retry()
+        def my_db_operation(...):
+            with db() as conn:
+                # database operations
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except psycopg.errors.DeadlockDetected as e:
+                    if attempt < max_retries - 1:
+                        # Exponential backoff capped at 1 second
+                        delay = min(0.1 * (2 ** attempt), 1.0)
+                        LOG.warning(
+                            f"⚠️ Deadlock detected in {func.__name__} (attempt {attempt + 1}/{max_retries}), "
+                            f"retrying in {delay:.1f}s: {str(e)[:100]}"
+                        )
+                        time.sleep(delay)
+                        continue
+                    else:
+                        LOG.error(f"💀 Deadlock in {func.__name__} failed after {max_retries} retries")
+                        raise
+            return None  # Should never reach here
+        return wrapper
+    return decorator
+
 def ensure_schema():
     """FRESH DATABASE - Complete schema creation for new architecture"""
     LOG.info("🔄 Creating complete database schema for NEW ARCHITECTURE")
@@ -1267,6 +1306,7 @@ def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
             result = cur.fetchone()
             return result['id'] if result else None
 
+@with_deadlock_retry()
 def link_article_to_ticker(article_id: int, ticker: str, category: str = None,
                           feed_id: int = None, search_keyword: str = None,
                           competitor_ticker: str = None) -> None:
@@ -1289,6 +1329,7 @@ def link_article_to_ticker(article_id: int, ticker: str, category: str = None,
                 WHERE ticker = %s AND article_id = %s
             """, (search_keyword, competitor_ticker, ticker, article_id))
 
+@with_deadlock_retry()
 def update_article_content(article_id: int, scraped_content: str = None, ai_summary: str = None,
                           ai_model: str = None, scraping_failed: bool = False, scraping_error: str = None) -> None:
     """Update article with scraped content and error status (ai_summary/ai_model params ignored, kept for backward compatibility)"""
@@ -1320,6 +1361,7 @@ def update_article_content(article_id: int, scraped_content: str = None, ai_summ
                 UPDATE articles SET {', '.join(updates)} WHERE id = %s
             """, params)
 
+@with_deadlock_retry()
 def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str, ai_model: str) -> None:
     """Update ticker-specific AI summary (POV-based analysis)"""
     with db() as conn, conn.cursor() as cur:
@@ -1329,6 +1371,7 @@ def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str,
             WHERE ticker = %s AND article_id = %s
         """, (ai_summary, ai_model, ticker, article_id))
 
+@with_deadlock_retry()
 def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
                           article_ids: List[int], company_count: int,
                           industry_count: int, competitor_count: int) -> None:

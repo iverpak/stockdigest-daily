@@ -12532,7 +12532,13 @@ def render_structured_summary_html(sections: list) -> str:
         if section.get('is_special'):
             # Render as paragraph text (join with <br> to preserve structure)
             if section['bullets']:
-                paragraph_text = '<br>'.join(section['bullets'])
+                # Remove empty lines to avoid gaps
+                bullets_filtered = [line for line in section['bullets'] if line.strip()]
+                paragraph_text = '<br>'.join(bullets_filtered)
+
+                # Apply bolding to Investment Implications section headers
+                paragraph_text = bold_investment_section_headers(paragraph_text)
+
                 html_parts.append(f"<div style='margin: 8px 0 0 0; line-height: 1.5;'>{paragraph_text}</div>")
         else:
             # Render as bullet list (standard sections)
@@ -12749,6 +12755,27 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     }
 
 
+def bold_investment_section_headers(text: str) -> str:
+    """
+    Bold specific headers in Investment Implications section.
+    Used by both Email #2 and Email #3.
+    """
+    # Bold these specific lines
+    text = text.replace(
+        "Bull Case (factors from today's news supporting upside):",
+        "<strong>Bull Case (factors from today's news supporting upside):</strong>"
+    )
+    text = text.replace(
+        "Bear Case (factors from today's news supporting downside):",
+        "<strong>Bear Case (factors from today's news supporting downside):</strong>"
+    )
+    text = text.replace(
+        "Key Variables to Monitor (will determine which scenario materializes):",
+        "<strong>Key Variables to Monitor (will determine which scenario materializes):</strong>"
+    )
+    return text
+
+
 def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     """
     Parse executive summary text into sections by emoji headers.
@@ -12807,9 +12834,9 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
 
             # Standard handling for other sections: bullets only
             else:
-                if line.startswith('•'):
-                    # Extract bullet text
-                    bullet_text = line[1:].strip()  # Remove bullet point
+                if line.startswith('•') or line.startswith('-'):
+                    # Extract bullet text (handle both • and - bullets)
+                    bullet_text = line.lstrip('•- ').strip()
                     if bullet_text:
                         sections[current_section].append(bullet_text)
 
@@ -12856,7 +12883,12 @@ def build_executive_summary_html(sections: Dict[str, List[str]]) -> str:
         else:
             # Special sections: render as paragraphs
             # Join with single line breaks to preserve structure without excessive spacing
-            text = "<br>".join(content)
+            # Remove empty lines to avoid gaps
+            content_filtered = [line for line in content if line.strip()]
+            text = "<br>".join(content_filtered)
+
+            # Apply bolding to Investment Implications section headers
+            text = bold_investment_section_headers(text)
 
             return f'''
                 <div style="margin-bottom: 20px;">

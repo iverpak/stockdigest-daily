@@ -1258,6 +1258,10 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_email_queue_is_production ON email_queue(is_production);
                 CREATE INDEX IF NOT EXISTS idx_email_queue_heartbeat ON email_queue(heartbeat) WHERE status = 'processing';
 
+                -- Add Email #1 and Email #2 snapshot columns (for admin dashboard previews)
+                ALTER TABLE email_queue ADD COLUMN IF NOT EXISTS email_1_html TEXT;
+                ALTER TABLE email_queue ADD COLUMN IF NOT EXISTS email_2_html TEXT;
+
                 -- System Configuration: UI-configurable settings
                 CREATE TABLE IF NOT EXISTS system_config (
                     key VARCHAR(100) PRIMARY KEY,
@@ -11308,17 +11312,19 @@ Use exact emoji headers shown below. No ##, no ###, no additional formatting.
 📌 BOTTOM LINE (Always - 50 words max):
 Answer: "What happened today for {ticker}?"
 
-If Material News:
+If Material News Within Past 48 Hours:
 [What happened]. [Key data points]. [What to monitor next].
 
-If No Material News:
-📌 QUIET DAY - NO MATERIAL DEVELOPMENTS
+If NO Material News for 48+ Hours:
+QUIET DAY - NO MATERIAL DEVELOPMENTS
 
-No significant company news, regulatory updates, or competitive developments for {ticker} on {current_date}.
+No significant company news, regulatory updates, or competitive developments for {ticker}.
 
-🔴 MAJOR DEVELOPMENTS (Only if material news - 3-6 bullets max)
+🔴 MAJOR DEVELOPMENTS (Only if material news within past 48 hours - 3-6 bullets max)
 
-Source Priority: [COMPANY] articles first, then [INDUSTRY]/[COMPETITOR] with competitive implications
+CRITICAL: Include ONLY developments from past 48 hours (or highly material developments from past 2 weeks). Move older developments to Risk Factors or Competitive Dynamics.
+
+Source Priority: [COMPANY] articles first, then [INDUSTRY]/[COMPETITOR] with direct implications
 
 Include:
 - {ticker} M&A: ALL deals (rumors, undisclosed amounts)
@@ -11328,8 +11334,8 @@ Include:
 - {ticker} contracts: Dollar amounts or strategic significance
 - Competitor moves with direct {ticker} implications
 
-Format (use • bullet character):
-• [Development with context, amounts, dates]. ([Date])
+Format (use • bullet):
+• [Development with context, amounts, dates] (Oct 10)
 
 Example:
 • Acquired AI startup for $4.2B; transaction expected to close Q1 2026 pending regulatory approval (Oct 10)
@@ -11339,14 +11345,14 @@ Example:
 Source: [COMPANY] articles only
 
 Include:
-- Earnings, revenue, guidance, margins (exact figures)
-- vs. consensus when mentioned
+- Earnings, revenue, guidance, margins (exact figures) vs. consensus when mentioned
 - Production metrics, capacity, operational KPIs
 - Capex, debt, buybacks, dividends (amounts)
 - Stock performance with context
+- IMPORTANT: Flag historical data with quarter end dates (e.g., "Q2 2025, quarter ended June 30")
 
-Format (use • bullet character):
-• [Metric]: [Value] [vs. comparison if provided]. ([Date])
+Format (use • bullet):
+• [Metric]: [Value] [vs. comparison if provided] (Oct 10)
 
 Example:
 • Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B; full-year guidance raised to $52B from $50B (Oct 10)
@@ -11355,40 +11361,42 @@ Example:
 
 Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
 
-CRITICAL RULE: Report facts separately. NO causal interpretation. NO competitive implications analysis.
+CRITICAL RULES:
+- Report facts separately without connecting them
+- NO causal interpretation ("creates," "threatens," "forces")
+- NO competitive implications analysis ("validates," "demonstrates")
+- List Company A facts; Company B facts; Regulatory facts separately
 
-Format: [Risk category]: [Company A facts]; [Company B/competitor facts]; [Regulatory facts] ([Date])
-
-Include:
+Include (report factually, no causal connection):
 - {ticker} operational developments: Production issues, supply chain disruptions, quality problems with specific metrics
 - {ticker} regulatory/legal actions: Investigation announcements, lawsuit filings, compliance notices with amounts/scope
 - Competitor operational facts: Their announcements, their metrics, their actions
 - Industry regulatory facts: New rules, tariffs, policy changes with specific terms
 - Insider transactions: C-suite buys/sells with amounts and dates
 
-Format (use • bullet character):
-• [Risk category]: [Facts about situation]. ([Date])
+Format (use • bullet):
+• [Risk category]: [Company facts]; [Competitor facts]; [Regulatory facts] (Oct 10)
 
 Examples:
-✓ EU antitrust investigation: Commission issued formal information request on Oct 10 covering cloud division practices; similar probes of Meta, Amazon ongoing; potential fines range €100M-€5B under DSA framework (Oct 10)
-✓ Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K; competitor reported record 127,000 unit quarter (Oct 10)
+✓ EU antitrust investigation: Commission issued formal information request Oct 10 covering cloud division practices; similar probes of Meta, Amazon ongoing; potential fines €100M-€5B under DSA framework (Oct 10)
+✓ Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K; competitor reported 127,000 unit quarter (Oct 10)
 ✓ Insider activity: CFO sold 50,000 shares at $87.50 on Oct 9 (first sale since June); CEO purchased 100,000 shares at $85.20 on Oct 10 (Oct 10)
 
 DO NOT write:
 ✗ "threatens {ticker} positioning"
 ✗ "creates competitive pressure"
 ✗ "forces {ticker} to respond"
-✗ "validates competitor advantage"
+✗ "demonstrates operational leverage {ticker} lacks"
 
 📈 WALL STREET SENTIMENT (Only if analyst activity - 1-4 bullets max)
 
 Source: [COMPANY] articles only
 
-Format (use • bullet character):
-• [Firm] [action] to [rating/target], [rationale if provided] ([Date])
+Format (use • bullet):
+• [Firm] [action] to [rating/target], [rationale if provided] (Oct 10)
 
 If 3+ analysts moved same direction:
-• Multiple firms [upgraded/downgraded]: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z ([Date range])
+• Multiple firms [upgraded/downgraded]: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z (Oct 9-10)
 
 Example:
 • Goldman Sachs upgraded to Buy from Neutral, $450 target (from $380), citing AI infrastructure demand (Oct 10)
@@ -11397,17 +11405,20 @@ Example:
 
 Source: [INDUSTRY] and [COMPETITOR] articles
 
-CRITICAL RULE: Report developments factually. NO analysis of impact on {ticker}.
+CRITICAL RULES:
+- Report developments factually
+- NO analysis of impact on {ticker}
+- NO interpretive verbs ("validates," "threatens," "creates")
 
-Format (use • bullet character):
-• [What happened]. [Additional facts]. ([Date])
-
-Include:
+Include (report developments only):
 - Competitor M&A: Transaction details, amounts, companies involved
 - Industry regulation: New rules, effective dates, affected parties
 - Technology announcements: Product launches, specifications, availability
 - Market data: Pricing changes, capacity additions, production figures
 - Executive commentary: Direct quotes from earnings calls/statements
+
+Format (use • bullet):
+• [What happened]. [Additional facts] (Oct 10)
 
 Examples:
 ✓ Competitor acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
@@ -11428,15 +11439,17 @@ Include:
 - Earnings dates, investor days, regulatory deadlines, product launches, shareholder votes
 - Exact dates when available
 
-Format (use • bullet character):
-• [Event]: [Date] - [What will be disclosed/decided] ([Source date if different])
+Format (use • bullet):
+• [Event]: [Date] - [What will be disclosed/decided] (Oct 10)
 
 Example:
 • Q3 Earnings: Oct 24 - Q4 guidance and margin outlook (Oct 10)
 
 🎯 INVESTMENT IMPLICATIONS (Always - adapt length to news volume)
 
-CRITICAL RULE: Stay factual. Cite specific developments from today's news. Minimize interpretation.
+CRITICAL: Stay factual. Cite specific developments from today's news. Acceptable inference: 25-30% in Bull/Bear cases only.
+
+CRITICAL: Write sub-headers exactly as shown: "BULL CASE:", "BEAR CASE:", "KEY VARIABLES TO MONITOR:", "NEXT CATALYST:"
 
 For Material News Days (2+ developments):
 
@@ -11448,58 +11461,27 @@ Examples:
 - COMPETITOR LAUNCHES REPORTED - Meta demonstrated AR glasses Sept 18; Amazon entered AR development
 - PRODUCTION MILESTONE ACHIEVED - Q3 deliveries 462K units (+6% YoY); maintained guidance 1.8M units
 
-Bull Case (factors from today's news supporting upside):
-• [Factual development from today with specific numbers/dates]
-• [Factual development from today with specific numbers/dates]
-• [Factual development from today with specific numbers/dates]
-→ Potential outcome: [Specific metrics from articles, not forecasts]
+BULL CASE:
+• [Factual development from today with specific numbers/dates supporting upside]
+• [Factual development from today with specific numbers/dates supporting upside]
+• Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
 
-Bear Case (factors from today's news supporting downside):
-• [Factual development from today with specific numbers/dates]
-• [Factual development from today with specific numbers/dates]
-• [Factual development from today with specific numbers/dates]
-→ Potential outcome: [Specific metrics from articles, not forecasts]
+BEAR CASE:
+• [Factual development from today with specific numbers/dates supporting downside]
+• [Factual development from today with specific numbers/dates supporting downside]
+• Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
 
-Key Variables to Monitor (will determine which scenario materializes):
-1. [Specific metric/event from articles] - Timeline: [Date/period from articles]
-2. [Specific metric/event from articles] - Timeline: [Date/period from articles]
-3. [Specific metric/event from articles] - Timeline: [Date/period from articles]
+KEY VARIABLES TO MONITOR:
+• [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
+• [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
+• [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 
-Next Catalyst: [Event/Date from articles] - [What data will be disclosed]
-
----
-
-WRITING RULES FOR BULL/BEAR/OUTCOMES:
-
-✓ DO:
-- Quote specific numbers from articles ("Q3 revenue $12.8B", "stock declined 18%", "investigation covers 2.9M vehicles")
-- Reference actual company names ("Cameco reported $320.89M profit", "UEC raised $203.8M")
-- Cite dates from articles ("ruling expected H1 2026", "approval timeline 2025-2026")
-- Use conditional language for outcomes ("if approval proceeds", "pending resolution")
-- Reference current metrics ("from current 41% share", "at current $82/lb pricing")
-
-✗ DO NOT:
-- Create specific forecasts not in articles ("35-40% market share", "$85-$100/lb pricing", "12-15x EBITDA")
-- Make causal claims ("forces", "threatens", "validates", "requires")
-- Model scenarios ("low-teens margins", "500,000 annual units")
-- String multiple conditionals ("if X then Y then Z")
-- Invent timelines not mentioned ("late 2020s", "12-24 month window")
-
-OUTCOME STATEMENT RULES:
-
-✓ GOOD (cites facts):
-"Wheeler River achieves production startup during current elevated uranium pricing environment (spot >$82/lb as of Oct 2025)"
-"Tesla maintains current U.S. market share position (41% in Q3) as competition intensifies"
-"FSD investigation concludes with software updates; subscription revenue continues current trajectory"
-
-✗ BAD (creates forecasts):
-"Wheeler River captures $85-$100/lb pricing and generates 500,000 annual units"
-"Tesla market share compresses below 35% as 90 models fragment demand"
-"margins compress to low-teens range"
+NEXT CATALYST:
+• [Event/Date from articles that will provide new information] - [What data will be disclosed]
 
 ---
 
-For Single Development Days:
+For Single Development Days (1 major development):
 
 [SCENARIO ASSESSMENT] - [Factual description of single development]
 
@@ -11518,53 +11500,102 @@ Next Catalyst: [Event/Date from articles] - [What data will be disclosed]
 
 ---
 
-For Quiet Days:
+OUTCOME STATEMENT RULES:
+
+Remove "if" conditionals. State outcomes directly using events from articles.
+
+✓ GOOD:
+"BVNK acquisition closes at reported $1.5-2.5B valuation range; x402 protocol maintains growth from current 38,000 monthly transactions (+90%)"
+
+✗ BAD:
+"If BVNK closes and x402 adoption accelerates as developers integrate protocol"
+
+✓ GOOD:
+"18A manufacturing begins before Dec 31 per announcement; Clearwater Forest ships H1 2026; x86 revenue share stabilizes at Q2 levels"
+
+✗ BAD:
+"If 18A successful and Clearwater meets targets while share erosion slows"
+
+---
+
+KEY VARIABLES FORMAT:
+
+State variable and timeline ONLY. NO analysis of why it matters.
+
+✓ GOOD:
+"1. Wheeler River permitting and construction decision - Timeline: Federal approval expected 2025-2026"
+
+✗ BAD:
+"1. Wheeler River permitting - impacts ability to capture current pricing vs. extended development exposing to volatility"
+
+---
+
+For Quiet Days (48+ hours no news):
 
 NO MATERIAL DEVELOPMENTS - Monitoring for catalysts
 
 No company-specific news, regulatory actions, or competitive developments reported {current_date}.
 
-Next Expected Catalyst: [Event/date if known from prior articles, otherwise: "Earnings, regulatory decisions, or material announcements"]
+---
+
+🚨 CRITICAL FABRICATION PREVENTION:
+
+NEVER include these unless EXPLICITLY stated in articles:
+✗ Specific monetary amounts not disclosed ("€20 million invested")
+✗ Specific quantities not reported ("5,500 kilograms inventory")
+✗ Calculated percentages without showing work ("~18% of revenue")
+✗ Specific resource figures not mentioned ("109.5M lbs indicated")
+
+If you calculate a percentage, show work:
+"[Germany revenue $X per Article A ÷ Total revenue $Y per Article A = Z%]"
+
+If uncertain whether number was stated:
+Use qualitative language: "significant portion," "substantial market," "material exposure"
+
+VERIFICATION: Before including ANY specific number, confirm: "Did I read this exact number in an article?"
+
+---
+
+BANNED INTERPRETIVE LANGUAGE:
+
+In Risk Factors, Competitive Dynamics, Financial Performance sections, NEVER use:
+✗ validates, demonstrates, threatens, signals, suggests, indicates, implies
+✗ requires, forces, necessitates, creates, provides, establishes
+✗ de-risks, enables, supports (except "factors supporting" in Bull/Bear)
+✗ limits, constrains, advantages, disadvantages, benefits, harms
+✗ despite, while (contrasting), however, yet
+
+Transform interpretive statements to factual:
+✗ "Revenue fell 12% despite competitor growing 15%"
+✓ "Revenue fell 12%; competitor revenue grew 15%"
+
+✗ "Cameco's profit creates resource advantage for expansion"
+✓ "Cameco generated $320.89M quarterly profit (+791% YoY); DNN reported $1.28M operating revenue"
+
+---
+
+REDUNDANCY PREVENTION:
+
+If fact is detailed in one section, cross-reference in others:
+- Instead of repeating: "FSD investigation (see Major Developments) focuses on traffic light recognition"
+- Only repeat when adding NEW context
 
 ---
 
 CRITICAL WRITING RULES:
 
-0. NO MARKDOWN - Section headers must be emoji only (🔴, 📊, etc.) with NO ## or ### syntax
-1. BULLET FORMAT - Use • character (not - or *) for all bulleted sections. Each development = ONE bullet
+0. NO MARKDOWN - Section headers are emoji only (🔴, 📊, etc.)
+1. BULLET FORMAT - Use • character for ALL bulleted sections (Major Developments, Financial, Risk Factors, Wall Street, Competitive, Catalysts, Bull/Bear, Key Variables)
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
-3. NO source names - Exception: cite when figures conflict
+3. NO source names in bullets - Exception: when figures conflict
 4. Newest first within sections
-5. Combine related facts - One story per bullet when connected
+5. Combine related facts - One story per bullet
 6. Quantify everything - Exact figures ("12.7%", "$4.932B")
-7. Conflicting numbers - Report both with sources
-8. Active voice - "Company launched X" not "X was launched"
-9. Remove interpretive verbs - Replace "threatens/validates/forces/creates" with factual descriptions
-10. Cross-category - Related developments can appear in multiple sections if factually relevant
-
-PRECISION HIERARCHY:
-1. Specific numbers from articles: "12.7%", "$4.932B", "2.9M vehicles"
-2. Ranges from articles: "$2B-$3B", "Q1-Q2 2026"
-3. Direct quotes: "CFO attributed to 'ad platform issue'"
-4. Never create numbers not in articles
-
-BANNED PHRASES - Never use:
-
-Causal/Interpretive:
-- "threatens", "validates", "forces", "requires", "necessitates"
-- "creates pressure", "intensifies competition", "signals", "demonstrates"
-- "suggests", "indicates", "implies", "reveals", "exposes"
-- "advantages", "disadvantages", "benefits", "harms"
-
-Forecasting:
-- Specific price targets not in articles
-- Specific margin ranges not in articles
-- Specific market share numbers not in articles
-- Specific production volumes not in articles
-- Multi-step conditional chains
+7. Active voice - "Company launched X" not "X was launched"
+8. Use past tense for historical data - "reported," "achieved"
+9. Use present tense for current metrics - "trades at," "stands at"
 
 LENGTH GUIDELINES:
-
 HIGH (5+ material articles): 1,200-1,500 words
 MEDIUM (2-4 material articles): 700-1,000 words
 LOW (1 material article): 400-600 words
@@ -11577,10 +11608,10 @@ ALWAYS include:
 - Investment Implications
 
 Include ONLY if content exists:
-- Major Developments (skip if no news)
+- Major Developments (skip if no news within 48 hours)
 - Financial Performance (skip if no data)
-- Risk Factors (skip if no risks)
 - Wall Street Sentiment (skip if no analyst actions)
+- Risk Factors (skip if no risks)
 - Competitive Dynamics (skip if no developments)
 - Upcoming Catalysts (skip if no events)
 
@@ -11619,7 +11650,7 @@ INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
 3. Avoiding causal language and competitive analysis
 4. Letting readers draw their own conclusions from presented facts
 
-Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Stay factual."""
+Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets."""
 
     return (system_prompt, user_content, company_name)
 
@@ -12238,6 +12269,23 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         html_content = "".join(html)
         subject = f"🔍 Article Selection QA: {ticker_list} - {total_flagged} flagged from {total_articles} articles"
 
+        # Save Email #1 snapshot to database (for admin dashboard preview)
+        # Email #1 is always single-ticker, so safe to use first key
+        ticker = list(articles_by_ticker.keys())[0]
+        try:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO email_queue (ticker, email_1_html, created_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (ticker) DO UPDATE
+                    SET email_1_html = EXCLUDED.email_1_html,
+                        updated_at = NOW()
+                """, (ticker, html_content))
+            LOG.debug(f"[{ticker}] Saved Email #1 snapshot to database")
+        except Exception as e:
+            LOG.error(f"[{ticker}] Failed to save Email #1 snapshot: {e}")
+            # Continue sending email even if snapshot save fails
+
         return send_email(subject, html_content)
 
     except Exception as e:
@@ -12541,9 +12589,6 @@ def render_structured_summary_html(sections: list) -> str:
                 bullets_filtered = [line for line in section['bullets'] if line.strip()]
                 paragraph_text = '<br>'.join(bullets_filtered)
 
-                # Apply bolding to Investment Implications section headers
-                paragraph_text = bold_investment_section_headers(paragraph_text)
-
                 html_parts.append(f"<div style='margin: 8px 0 0 0; line-height: 1.5;'>{paragraph_text}</div>")
         else:
             # Render as bullet list (standard sections)
@@ -12582,7 +12627,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     if flagged_article_ids is not None and len(flagged_article_ids) > 0:
         LOG.info(f"Flagged article filter: ENABLED ({len(flagged_article_ids)} IDs)")
     else:
-        LOG.warning(f"Flagged article filter: DISABLED - using relevance_score >= 7.0 filter as fallback")
+        LOG.info(f"ℹ️ No flagged articles provided - Email #2 will show 0 articles (expected for quiet news days)")
 
     with db() as conn, conn.cursor() as cur:
         # Enhanced query to get articles from new schema - MATCHES triage query
@@ -12608,9 +12653,9 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (cutoff, tickers, cutoff, flagged_article_ids))
             else:
-                # ERROR: No flagged IDs - don't pull ALL articles
-                LOG.error(f"❌ Email #2: No flagged_article_ids provided for {tickers}")
-                # Return empty query instead of all articles
+                # No flagged IDs - return empty results (quiet news day)
+                LOG.info(f"ℹ️ [{tickers}] No flagged articles - Email #2 will be empty")
+                # Return empty query structure (no articles)
                 cur.execute("SELECT NULL LIMIT 0")
         else:
             if flagged_article_ids:
@@ -12632,9 +12677,9 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (cutoff, cutoff, flagged_article_ids))
             else:
-                # ERROR: No flagged IDs - don't pull ALL articles
-                LOG.error(f"❌ Email #2: No flagged_article_ids provided (all tickers)")
-                # Return empty query instead of all articles
+                # No flagged IDs - return empty results (quiet news day)
+                LOG.info(f"ℹ️ [ALL TICKERS] No flagged articles - Email #2 will be empty")
+                # Return empty query structure (no articles)
                 cur.execute("SELECT NULL LIMIT 0")
 
         # Group articles by ticker
@@ -12728,6 +12773,25 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
         ticker_display_list.append(f"{company_name} ({ticker})")
     ticker_list = ', '.join(ticker_display_list)
     subject = f"📝 Content QA: {ticker_list} - {total_articles} articles analyzed"
+
+    # Save Email #2 snapshot to database (for admin dashboard preview)
+    # In production, this is always called with single ticker
+    if tickers and len(tickers) == 1:
+        ticker = tickers[0]
+        try:
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO email_queue (ticker, email_2_html, created_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (ticker) DO UPDATE
+                    SET email_2_html = EXCLUDED.email_2_html,
+                        updated_at = NOW()
+                """, (ticker, html))
+            LOG.debug(f"[{ticker}] Saved Email #2 snapshot to database")
+        except Exception as e:
+            LOG.error(f"[{ticker}] Failed to save Email #2 snapshot: {e}")
+            # Continue sending email even if snapshot save fails
+
     success = send_email(subject, html)
 
     # Count by category and content scraping
@@ -12760,25 +12824,6 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     }
 
 
-def bold_investment_section_headers(text: str) -> str:
-    """
-    Bold specific headers in Investment Implications section.
-    Used by both Email #2 and Email #3.
-    """
-    # Bold these specific lines
-    text = text.replace(
-        "Bull Case (factors from today's news supporting upside):",
-        "<strong>Bull Case (factors from today's news supporting upside):</strong>"
-    )
-    text = text.replace(
-        "Bear Case (factors from today's news supporting downside):",
-        "<strong>Bear Case (factors from today's news supporting downside):</strong>"
-    )
-    text = text.replace(
-        "Key Variables to Monitor (will determine which scenario materializes):",
-        "<strong>Key Variables to Monitor (will determine which scenario materializes):</strong>"
-    )
-    return text
 
 
 def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
@@ -12848,6 +12893,72 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     return sections
 
 
+def parse_investment_implications_subsections(content: List[str]) -> Dict[str, any]:
+    """
+    Parse Investment Implications section into sub-sections.
+
+    Returns:
+    {
+        'is_quiet_day': bool,
+        'quiet_day_text': str (if quiet day),
+        'bull_case': [...bullets...],
+        'bear_case': [...bullets...],
+        'key_variables': [...bullets...],
+        'next_catalyst': [...bullets...]
+    }
+    """
+    result = {
+        'is_quiet_day': False,
+        'quiet_day_text': '',
+        'bull_case': [],
+        'bear_case': [],
+        'key_variables': [],
+        'next_catalyst': []
+    }
+
+    if not content:
+        return result
+
+    # Join content to check for quiet day
+    full_text = '\n'.join(content)
+
+    # Check if it's a quiet day
+    if 'NO MATERIAL DEVELOPMENTS' in full_text:
+        result['is_quiet_day'] = True
+        result['quiet_day_text'] = full_text.strip()
+        return result
+
+    # Parse material news day sub-sections
+    current_subsection = None
+
+    for line in content:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Check for sub-section headers
+        if line.startswith('BULL CASE'):
+            current_subsection = 'bull_case'
+            continue
+        elif line.startswith('BEAR CASE'):
+            current_subsection = 'bear_case'
+            continue
+        elif line.startswith('KEY VARIABLES TO MONITOR'):
+            current_subsection = 'key_variables'
+            continue
+        elif line.startswith('NEXT CATALYST'):
+            current_subsection = 'next_catalyst'
+            continue
+
+        # Extract bullet content
+        if current_subsection and (line.startswith('•') or line.startswith('-')):
+            bullet_text = line.lstrip('•- ').strip()
+            if bullet_text:
+                result[current_subsection].append(bullet_text)
+
+    return result
+
+
 def is_paywall_article(domain: str) -> bool:
     """Check if domain is a known paywall using PAYWALL_DOMAINS constant"""
     if not domain:
@@ -12856,66 +12967,114 @@ def is_paywall_article(domain: str) -> bool:
     return normalized in PAYWALL_DOMAINS
 
 
-def build_executive_summary_html(sections: Dict[str, List[str]]) -> str:
+def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: bool = False) -> str:
     """
     Convert executive summary sections dict into HTML string.
     Used by Jinja2 template.
-    Simple consistent formatting for all sections.
+
+    Args:
+        sections: Parsed sections dict
+        strip_emojis: If True, remove emojis from section headers (for Email #3)
     """
+    def strip_emoji(text: str) -> str:
+        """Remove emoji characters from text"""
+        import re
+        # Remove emoji pattern (Unicode emoji ranges)
+        emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            u"\U00002702-\U000027B0"
+            u"\U000024C2-\U0001F251"
+            u"\U0001F900-\U0001F9FF"  # supplemental symbols
+            u"\U00002600-\U000026FF"  # misc symbols
+            "]+", flags=re.UNICODE)
+        return emoji_pattern.sub('', text).strip()
+
     def build_section(title: str, content: List[str], use_bullets: bool = True) -> str:
-        """
-        Build section with consistent styling.
-        use_bullets=True: render as bullet list
-        use_bullets=False: render as paragraphs
-        """
+        """Build section with consistent styling"""
         if not content:
             return ""
 
+        # Strip emojis from title if requested
+        display_title = strip_emoji(title) if strip_emojis else title
+
         if use_bullets:
-            # Standard sections: render as bullet list
+            # Bullet list format
             bullet_html = ""
             for item in content:
                 bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{item}</li>'
 
             return f'''
                 <div style="margin-bottom: 20px;">
-                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h2>
                     <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
                         {bullet_html}
                     </ul>
                 </div>
             '''
         else:
-            # Special sections: render as paragraphs
-            # Join with single line breaks to preserve structure without excessive spacing
-            # Remove empty lines to avoid gaps
+            # Paragraph format
             content_filtered = [line for line in content if line.strip()]
             text = "<br>".join(content_filtered)
 
-            # Apply bolding to Investment Implications section headers
-            text = bold_investment_section_headers(text)
-
             return f'''
                 <div style="margin-bottom: 20px;">
-                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h2>
+                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h2>
                     <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">{text}</div>
                 </div>
             '''
 
+    # Check for quiet day
+    investment_impl = sections.get("investment_implications", [])
+    parsed_investment = parse_investment_implications_subsections(investment_impl)
+
+    if parsed_investment['is_quiet_day']:
+        # Quiet day: just return plain paragraph text (no headers, no sections)
+        quiet_text = parsed_investment['quiet_day_text']
+        return f'''
+            <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">
+                {quiet_text.replace(chr(10), '<br>')}
+            </div>
+        '''
+
+    # Material news day: build sections
     html = ""
+
     # Bottom Line first (paragraph format)
-    html += build_section("Bottom Line", sections.get("bottom_line", []), use_bullets=False)
+    html += build_section("📌 Bottom Line" if not strip_emojis else "Bottom Line",
+                         sections.get("bottom_line", []), use_bullets=False)
 
-    # Original 6 sections (bullet format)
-    html += build_section("Major Developments", sections.get("major_developments", []), use_bullets=True)
-    html += build_section("Financial/Operational Performance", sections.get("financial_operational", []), use_bullets=True)
-    html += build_section("Risk Factors", sections.get("risk_factors", []), use_bullets=True)
-    html += build_section("Wall Street Sentiment", sections.get("wall_street", []), use_bullets=True)
-    html += build_section("Competitive/Industry Dynamics", sections.get("competitive_industry", []), use_bullets=True)
-    html += build_section("Upcoming Catalysts", sections.get("upcoming_catalysts", []), use_bullets=True)
+    # Standard sections (bullet format)
+    html += build_section("🔴 Major Developments" if not strip_emojis else "Major Developments",
+                         sections.get("major_developments", []), use_bullets=True)
+    html += build_section("📊 Financial/Operational Performance" if not strip_emojis else "Financial/Operational Performance",
+                         sections.get("financial_operational", []), use_bullets=True)
+    html += build_section("⚠️ Risk Factors" if not strip_emojis else "Risk Factors",
+                         sections.get("risk_factors", []), use_bullets=True)
+    html += build_section("📈 Wall Street Sentiment" if not strip_emojis else "Wall Street Sentiment",
+                         sections.get("wall_street", []), use_bullets=True)
+    html += build_section("⚡ Competitive/Industry Dynamics" if not strip_emojis else "Competitive/Industry Dynamics",
+                         sections.get("competitive_industry", []), use_bullets=True)
+    html += build_section("📅 Upcoming Catalysts" if not strip_emojis else "Upcoming Catalysts",
+                         sections.get("upcoming_catalysts", []), use_bullets=True)
 
-    # Investment Implications last (paragraph format)
-    html += build_section("Investment Implications", sections.get("investment_implications", []), use_bullets=False)
+    # Investment Implications parent header (only if has content)
+    if any([parsed_investment['bull_case'], parsed_investment['bear_case'],
+            parsed_investment['key_variables'], parsed_investment['next_catalyst']]):
+        html += build_section("🎯 Investment Implications" if not strip_emojis else "Investment Implications",
+                             [], use_bullets=False)  # Empty content, just header
+
+    # Investment Implications sub-sections as top-level sections (bullet format)
+    html += build_section("Bull Case" if strip_emojis else "Bull Case",
+                         parsed_investment['bull_case'], use_bullets=True)
+    html += build_section("Bear Case" if strip_emojis else "Bear Case",
+                         parsed_investment['bear_case'], use_bullets=True)
+    html += build_section("Key Variables to Monitor" if strip_emojis else "Key Variables to Monitor",
+                         parsed_investment['key_variables'], use_bullets=True)
+    html += build_section("Next Catalyst" if strip_emojis else "Next Catalyst",
+                         parsed_investment['next_catalyst'], use_bullets=True)
 
     return html
 
@@ -13086,10 +13245,9 @@ def generate_email_html_core(
                 ORDER BY a.published_at DESC NULLS LAST
             """, (ticker, flagged_article_ids, cutoff))
         else:
-            # ERROR: No flagged_article_ids provided - should never happen in production
-            LOG.error(f"[{ticker}] ❌ CRITICAL: No flagged_article_ids provided to Email #3!")
-            LOG.error(f"[{ticker}] This should never happen - triage should always produce a list (even if empty)")
-            # Return empty result instead of pulling all articles
+            # No flagged articles - quiet news day
+            LOG.info(f"[{ticker}] ℹ️ No flagged articles for Email #3 - executive summary will generate 'no material developments' report")
+            # Return empty result (executive summary will handle this gracefully)
             articles = []
 
         if flagged_article_ids is not None and len(flagged_article_ids) > 0:
@@ -13115,7 +13273,8 @@ def generate_email_html_core(
     current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
 
     # Build HTML sections
-    summary_html = build_executive_summary_html(sections)
+    # Email #3 is user-facing, so strip emojis from section headers
+    summary_html = build_executive_summary_html(sections, strip_emojis=True)
     articles_html = build_articles_html(articles_by_category)
 
     # Analysis message
@@ -16378,6 +16537,15 @@ async def cron_ingest(
             LOG.info(f"✅ Built flagged articles list: {len(flagged_articles)} article IDs for {ticker}")
             if flagged_articles:
                 LOG.info(f"   Sample IDs: {flagged_articles[:5]}...")
+            else:
+                # Diagnostic info when 0 articles flagged
+                total_articles = sum(len(articles_by_ticker[ticker].get(cat, [])) for cat in ['company', 'industry', 'competitor'])
+                LOG.info(f"ℹ️ [{ticker}] AI triage selected 0 articles from {total_articles} total")
+                LOG.info(f"   This can happen when:")
+                LOG.info(f"   1. No articles matched company name in title/description")
+                LOG.info(f"   2. All articles were listicles, sector roundups, or generic watchlists")
+                LOG.info(f"   3. Quiet news day with no material developments")
+                LOG.info(f"   💡 Email #2 and #3 will generate 'no material developments' reports")
 
         memory_monitor.take_snapshot("PHASE2_COMPLETE")
         
@@ -19613,132 +19781,59 @@ def view_email_api(ticker: str, token: str = Query(...)):
 
 @APP.get("/api/view-email-1/{ticker}")
 async def view_email_1_api(ticker: str, token: str = Query(...)):
-    """View Email #1 (Article Selection QA) preview - regenerated on-demand from database"""
+    """View Email #1 (Article Selection QA) snapshot"""
     if not check_admin_token(token):
         return HTMLResponse("Unauthorized", status_code=401)
 
     try:
-        config = get_ticker_config(ticker)
-        if not config:
-            return HTMLResponse(f"<h1>Ticker {ticker} not found</h1>", status_code=404)
-
-        hours = get_lookback_minutes() / 60
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-        # Query ALL articles (not just flagged) to show triage results
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT
-                    a.id, a.title, a.url, a.resolved_url, a.published_at, a.domain,
-                    ta.category, ta.relevance_score, ta.category_score,
-                    ta.search_keyword, ta.competitor_ticker
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s AND a.published_at >= %s
-                ORDER BY a.published_at DESC
-            """, (ticker, cutoff))
-            articles = [dict(row) for row in cur.fetchall()]
+                SELECT email_1_html
+                FROM email_queue
+                WHERE ticker = %s
+            """, (ticker,))
+            row = cur.fetchone()
 
-        if not articles:
-            return HTMLResponse(f"<h1>No articles for {ticker}</h1><p>Run processing first.</p>")
+            if not row or not row['email_1_html']:
+                return HTMLResponse(
+                    f"<h1>Email #1 not found for {ticker}</h1>"
+                    f"<p>Email #1 is generated during processing (Phase 1 - Triage).</p>"
+                    f"<p>Run processing for this ticker to generate Email #1.</p>",
+                    status_code=404
+                )
 
-        # Count flagged vs total by category (flagged = relevance_score >= 7.0)
-        stats = {"company": {"total": 0, "flagged": 0}, "industry": {"total": 0, "flagged": 0}, "competitor": {"total": 0, "flagged": 0}}
-        for a in articles:
-            cat = a['category']
-            if cat in stats:
-                stats[cat]["total"] += 1
-                # Article is "flagged" if relevance_score >= 7.0
-                if a.get('relevance_score') and a['relevance_score'] >= 7.0:
-                    stats[cat]["flagged"] += 1
-                    a['flagged'] = True  # Add flag for template
-                else:
-                    a['flagged'] = False
-
-        # Generate simple HTML preview
-        html = f"""
-        <html><head><style>body{{font-family:sans-serif;padding:20px;}}table{{border-collapse:collapse;width:100%;}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;}}th{{background:#1e40af;color:white;}}
-        .flagged{{background:#d1fae5;}}
-        .score{{font-weight:bold;color:#1e40af;}}</style></head>
-        <body>
-        <h1>📋 Email #1: Article Selection QA - {ticker}</h1>
-        <p><strong>Time Period:</strong> Last {int(hours)} hours | <strong>Company:</strong> {config.get('name', ticker)}</p>
-        <h2>Summary</h2>
-        <ul>
-        <li><strong>Company:</strong> {stats['company']['flagged']} flagged / {stats['company']['total']} total</li>
-        <li><strong>Industry:</strong> {stats['industry']['flagged']} flagged / {stats['industry']['total']} total</li>
-        <li><strong>Competitor:</strong> {stats['competitor']['flagged']} flagged / {stats['competitor']['total']} total</li>
-        </ul>
-        <h2>Articles (Flagged articles highlighted)</h2>
-        <table>
-        <tr><th>Category</th><th>Title</th><th>Domain</th><th>Relevance</th><th>Category Score</th><th>Published</th></tr>
-        """
-
-        for a in articles:
-            row_class = 'class="flagged"' if a['flagged'] else ''
-            pub_date = format_date_short(a['published_at']) if a['published_at'] else 'N/A'
-            html += f"""
-            <tr {row_class}>
-                <td>{a['category']}</td>
-                <td>{a['title'][:80]}...</td>
-                <td>{a['domain']}</td>
-                <td class="score">{a['relevance_score']}/10</td>
-                <td class="score">{a['category_score']}/10</td>
-                <td>{pub_date}</td>
-            </tr>
-            """
-
-        html += "</table></body></html>"
-        return HTMLResponse(html)
-
+            return HTMLResponse(row['email_1_html'])
     except Exception as e:
-        LOG.error(f"Failed to generate Email #1: {e}")
-        return HTMLResponse(f"<h1>Error</h1><p>{str(e)}</p>", status_code=500)
+        LOG.error(f"Failed to view Email #1: {e}")
+        return HTMLResponse(f"Error: {str(e)}", status_code=500)
 
 @APP.get("/api/view-email-2/{ticker}")
 async def view_email_2_api(ticker: str, token: str = Query(...)):
-    """View Email #2 (Content QA) preview - regenerated on-demand"""
+    """View Email #2 (Content QA) snapshot"""
     if not check_admin_token(token):
         return HTMLResponse("Unauthorized", status_code=401)
 
     try:
-        hours = get_lookback_minutes() / 60
-
-        # Query FLAGGED articles with AI summaries (flagged = relevance_score >= 7.0)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT
-                    a.id, a.title, a.url, a.resolved_url, a.published_at, a.domain,
-                    a.description, a.scraped_content, ta.ai_summary, ta.ai_model,
-                    ta.category, ta.relevance_score, ta.search_keyword, ta.competitor_ticker
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND ta.relevance_score >= 7.0
-                AND a.published_at >= NOW() - INTERVAL '%s hours'
-                ORDER BY a.published_at DESC
-            """, (ticker, hours))
-            flagged = [dict(row) for row in cur.fetchall()]
+                SELECT email_2_html
+                FROM email_queue
+                WHERE ticker = %s
+            """, (ticker,))
+            row = cur.fetchone()
 
-        if not flagged:
-            return HTMLResponse(f"<h1>No flagged articles for {ticker}</h1><p>Run processing first.</p>")
+            if not row or not row['email_2_html']:
+                return HTMLResponse(
+                    f"<h1>Email #2 not found for {ticker}</h1>"
+                    f"<p>Email #2 is generated during processing (Phase 2 - Digest).</p>"
+                    f"<p>Run processing for this ticker to generate Email #2.</p>",
+                    status_code=404
+                )
 
-        # Use existing template
-        flagged_ids = [a['id'] for a in flagged]
-        articles_dict = await fetch_digest_articles_with_enhanced_content(
-            hours=int(hours), tickers=[ticker], flagged_article_ids=flagged_ids
-        )
-
-        html = templates.get_template("email_template.html").render(
-            articles_by_ticker=articles_dict,
-            time_period=f"{int(hours)} hours",
-            current_time=format_timestamp_est(datetime.now(timezone.utc))
-        )
-        return HTMLResponse(html)
-
+            return HTMLResponse(row['email_2_html'])
     except Exception as e:
-        LOG.error(f"Failed to generate Email #2: {e}")
-        return HTMLResponse(f"<h1>Error</h1><p>{str(e)}</p>", status_code=500)
+        LOG.error(f"Failed to view Email #2: {e}")
+        return HTMLResponse(f"Error: {str(e)}", status_code=500)
 
 # ------------------------------------------------------------------------------
 # DAILY WORKFLOW PROCESSING FUNCTIONS

@@ -11260,173 +11260,320 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
             article['_category_tag'] = '[COMPETITOR]'
             all_flagged_articles.append(article)
 
-    # Must have at least some content
-    if not all_flagged_articles:
-        LOG.warning(f"[{ticker}] No articles with AI summaries - skipping executive summary")
-        return None
-
-    # Sort all articles globally by published_at DESC (newest first)
-    all_flagged_articles.sort(
-        key=lambda x: x.get("published_at") or datetime.min.replace(tzinfo=timezone.utc),
-        reverse=True
-    )
-
-    # Build unified timeline with category tags
+    # Build unified timeline with category tags (if articles exist)
     unified_timeline = []
-    for article in all_flagged_articles[:50]:  # Limit to 50 most recent
-        title = article.get("title", "")
-        ai_summary = article.get("ai_summary", "")
-        domain = article.get("domain", "")
-        published_at = article.get("published_at")
-        date_str = format_date_short(published_at)
-        category_tag = article.get("_category_tag", "[UNKNOWN]")
+    if all_flagged_articles:
+        # Sort all articles globally by published_at DESC (newest first)
+        all_flagged_articles.sort(
+            key=lambda x: x.get("published_at") or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True
+        )
 
-        if ai_summary:
-            source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            unified_timeline.append(f"• {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
+        for article in all_flagged_articles[:50]:  # Limit to 50 most recent
+            title = article.get("title", "")
+            ai_summary = article.get("ai_summary", "")
+            domain = article.get("domain", "")
+            published_at = article.get("published_at")
+            date_str = format_date_short(published_at)
+            category_tag = article.get("_category_tag", "[UNKNOWN]")
 
-    user_content = "UNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
+            if ai_summary:
+                source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                unified_timeline.append(f"• {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
+
+    # Handle case with no flagged articles (quiet day)
+    if not all_flagged_articles:
+        LOG.info(f"[{ticker}] No flagged articles - generating quiet day summary")
+        user_content = "NO FLAGGED ARTICLES - Generate quiet day summary per template."
+    else:
+        user_content = "UNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
+
+    # Get current date for prompt
+    current_date = datetime.now().strftime("%B %d, %Y")
 
     # System instructions (ticker-specific but cacheable per ticker)
-    system_prompt = f"""You are a hedge fund analyst creating an intelligence summary for {company_name} ({ticker}). All article summaries are already written from {ticker} investor perspective.
+    system_prompt = f"""You are a financial analyst creating a daily intelligence summary for {company_name} ({ticker}). All article summaries are already written from {ticker} investor perspective.
 
 INPUT FORMAT:
-Articles are provided in a UNIFIED TIMELINE sorted newest to oldest. Each article has a category tag:
+Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a category tag:
 - [COMPANY] = Articles directly about {ticker}
 - [INDUSTRY - keyword] = Industry/sector articles relevant to {ticker}
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
-OUTPUT FORMAT - Use these exact headers (omit sections with no content):
-DO NOT use markdown headers (##) or add title lines. Start directly with emoji headers EXACTLY as shown:
-🔴 MAJOR DEVELOPMENTS
-📊 FINANCIAL/OPERATIONAL PERFORMANCE
-⚠️ RISK FACTORS
-📈 WALL STREET SENTIMENT
-⚡ COMPETITIVE/INDUSTRY DYNAMICS
-📅 UPCOMING CATALYSTS
+OUTPUT STRUCTURE:
 
-RULES:
-- Bullet points (•) only - each development is ONE bullet
-- End bullets with date: (Oct 1) or (Sep 29-30)
-- NO source names, NO citations (EXCEPTION: cite source when figures conflict)
-- Newest items first within each section
-- 2-3 sentences per bullet if needed for full context
-- Omit section headers with no content
+HEADER (Always):
+🎯 {company_name} ({ticker})
+{current_date}
 
-REPORTING PHILOSOPHY:
-- Include all material developments, but keep bullets concise
-- If uncertain about materiality, include it - but in ONE sentence
-- Include transaction amounts when available for scale context
-- Strategic significance matters more than transaction size
+BOTTOM LINE (Always - 50 words max):
+Answer: "What happened today for {ticker}?"
+
+If Material News:
+[What happened]. [Why it matters]. [What to monitor next].
+
+If No Material News:
+📌 QUIET DAY - NO MATERIAL DEVELOPMENTS
+
+No significant company news, regulatory updates, or competitive developments for {ticker} on {current_date}.
 
 ---
+*[For quiet days, skip to INVESTMENT IMPLICATIONS and FOOTER only]*
 
-🔴 MAJOR DEVELOPMENTS (3-6 bullets)
-Source: Primarily [COMPANY] articles, plus relevant [INDUSTRY] and [COMPETITOR] articles with competitive implications
+🔴 MAJOR DEVELOPMENTS (Only if material news - 3-6 bullets max)
 
-Lead with most material developments. Each bullet = one discrete event with full context.
+Source Priority: [COMPANY] articles first, then [INDUSTRY]/[COMPETITOR] with competitive implications
 
 Include:
-- {ticker} M&A activity: ALL deals regardless of size (include rumors, undisclosed amounts)
-- {ticker} partnerships: Named companies (even without dollar values)
+- {ticker} M&A: ALL deals (rumors, undisclosed amounts)
+- {ticker} partnerships: Named companies
 - {ticker} leadership: VP level and above
 - {ticker} regulatory: Investigations, litigation, approvals
-- {ticker} major contracts: With dollar amounts or strategic significance
-- Competitor moves WITH competitive implications for {ticker}
+- {ticker} contracts: Dollar amounts or strategic significance
+- Competitor moves with direct {ticker} implications
 
-Provide available details: Deal size, timeline, strategic rationale.
-Combine related facts into single bullets when they tell one story.
+Format:
+- [Development with context, amounts, rationale]. [Impact if relevant]. ([Date])
 
----
+Example:
+- Acquired AI startup for $4.2B to accelerate cloud capabilities; analysts estimate 18-month revenue contribution timeline (Oct 10)
 
-📊 FINANCIAL/OPERATIONAL PERFORMANCE (2-4 bullets)
+📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
+
 Source: [COMPANY] articles only
 
-Quantified metrics only. Include:
-- Earnings, revenue, guidance, margins with exact figures
-- Report vs. consensus when mentioned
-- Production metrics, capacity changes, operational KPIs
-- Capex, debt, buybacks, dividends with amounts
-- Transaction sizes when disclosed
+Include:
+- Earnings, revenue, guidance, margins (exact figures)
+- vs. consensus when mentioned
+- Production metrics, capacity, operational KPIs
+- Capex, debt, buybacks, dividends (amounts)
+- Stock performance with context
 
----
+Format:
+- [Metric]: [Value] [vs. comparison]. [Context]. ([Date])
 
-⚠️ RISK FACTORS (2-4 bullets)
-Source: [COMPANY], [INDUSTRY], and [COMPETITOR] articles
+Example:
+- Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B; full-year guidance raised to $52B from $50B (Oct 10)
 
-Include threats with impact/timeline when available:
-- {ticker} operational risks: Production issues, supply chain, quality problems
-- {ticker} regulatory/legal: Investigations, lawsuits, compliance with financial impact
-- Competitive threats: Competitor actions directly threatening {ticker} position
-- Industry headwinds: Sector trends creating risks for {ticker}
-- Insider activity: C-suite selling with amounts/context
+⚠️ RISK FACTORS (Only if risks identified - 2-4 bullets max)
 
----
+Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
 
-📈 WALL STREET SENTIMENT (1-4 bullets)
+Include:
+- {ticker} operational risks: Production, supply chain, quality issues
+- {ticker} regulatory/legal: Investigations, lawsuits, compliance
+- Competitive threats: Competitor actions threatening {ticker}
+- Industry headwinds: Sector trends creating risks
+- Insider activity: C-suite transactions (amounts/context)
+
+Format:
+- [Risk]. [Potential impact]. [Timeline if known]. ([Date])
+
+Example:
+- EU antitrust probe expanded to cloud division; potential fines up to $5B+ if violations found; ruling expected H1 2026 (Oct 10)
+
+📈 WALL STREET SENTIMENT (Only if analyst activity - 1-4 bullets max)
+
 Source: [COMPANY] articles only
 
-Analyst actions on {ticker} only.
+Format: [Firm] [action] to [rating/target], [rationale] ([Date])
 
-Format: "[Firm] [action] to [new rating/target], [rationale if given] (date)"
+If 3+ analysts moved same direction:
+Multiple firms [upgraded/downgraded]: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z ([Date range])
 
-If 3+ analysts moved same direction in same week:
-"Multiple firms upgraded this week: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z (Oct 1-3)"
+Example:
+- Goldman Sachs upgraded to Buy from Neutral, $450 target (from $380), citing AI infrastructure demand (Oct 10)
 
----
+⚡ COMPETITIVE/INDUSTRY DYNAMICS (Only if developments exist - 2-5 bullets max)
 
-⚡ COMPETITIVE/INDUSTRY DYNAMICS (2-5 bullets)
-Source: [INDUSTRY] and [COMPETITOR] articles (already written with {ticker} impact framing)
+Source: [INDUSTRY] and [COMPETITOR] articles
 
-Include ONLY developments affecting {ticker}'s competitive position:
-- Competitor M&A: Strategic deals affecting market structure in {ticker}'s segments
-- Industry regulation: Directly impacts {ticker}'s operations or competitive advantages
-- Technology shifts: Threaten or enhance {ticker}'s product positioning
-- Pricing/capacity: Industry-wide moves affecting {ticker}'s pricing power or margins
-- Market dynamics: Supply/demand shifts impacting {ticker}'s market share
+Include ONLY developments affecting {ticker}:
+- Competitor M&A affecting market structure
+- Industry regulation impacting {ticker} operations
+- Technology shifts threatening/enhancing {ticker} positioning
+- Pricing/capacity moves affecting {ticker} margins
+- Market dynamics impacting {ticker} share
 
-CRITICAL: Every bullet must connect to {ticker}'s competitive environment.
-The article summaries already explain impact on {ticker} - synthesize those insights.
+Format:
+- [Development]. [Impact on {ticker}]. ([Date])
 
 Examples:
-✓ "Competitor acquired startup for $2B to expand capabilities, entering {ticker}'s core market segment (Oct 1)"
-✓ "Industry consolidation with two major acquisitions totaling $5B, reducing supplier options and potentially pressuring {ticker}'s margins (Oct 1-2)"
-✓ "New tariffs impose 25% levy on imports, increasing {ticker}'s costs while domestic competitors gain pricing advantage (Sep 30)"
+✓ Competitor acquired startup for $2B, entering {ticker}'s core segment (Oct 10)
+✓ New tariffs impose 25% levy on imports, increasing {ticker} costs while domestic competitors unaffected (Oct 10)
 
-Omit this section entirely if no material competitive/industry developments affect {ticker}.
+Omit section if no material developments.
 
----
+📅 UPCOMING CATALYSTS (Only if events mentioned - 1-3 bullets max)
 
-📅 UPCOMING CATALYSTS (1-3 bullets)
 Source: [COMPANY] articles only
 
-Events with specific dates only:
+Include:
 - Earnings dates, investor days, regulatory deadlines, product launches
-- Provide exact dates when available
-- Omit if no scheduled events mentioned
+- Exact dates when available
+
+Format:
+- [Event]: [Date] - [What to watch] ([Source date if different])
+
+Example:
+- Q3 Earnings: Oct 24 - Q4 guidance critical given intensifying competition (Oct 10)
+
+🎯 INVESTMENT IMPLICATIONS (Always - adapt length to news volume)
+
+For Material News Days (2+ developments):
+
+[SCENARIO ASSESSMENT] - [One sentence characterizing developments and directional impact]
+
+Examples:
+- COMPETITIVE PRESSURE RISING - New entrant threatens margin stability
+- REGULATORY CLARITY EMERGING - Policy framework reduces growth uncertainty
+- EXECUTION RISK ELEVATED - Operational challenges compound amid headwinds
+- FUNDAMENTAL STRENGTH CONFIRMED - Results validate thesis despite macro concerns
+
+Bull Case (factors supporting upside):
+- [Assumption from today's news supporting positive outcome]
+- [Assumption from today's news supporting positive outcome]
+- [Assumption from today's news supporting positive outcome]
+→ Potential outcome: [What success looks like - specific metrics/improvements]
+
+Bear Case (factors supporting downside):
+- [Assumption from today's news supporting negative outcome]
+- [Assumption from today's news supporting negative outcome]
+- [Assumption from today's news supporting negative outcome]
+→ Potential outcome: [What failure looks like - specific risks/deterioration]
+
+Key Variables to Monitor (will determine which scenario materializes):
+1. [Specific metric/event] - Timeline: [when resolution expected]
+2. [Specific metric/event] - Timeline: [when resolution expected]
+3. [Specific metric/event] - Timeline: [when resolution expected]
+
+Investment Considerations:
+
+[2-4 sentences providing perspective on risk/reward based on today's developments. Frame as educational analysis, not directive. Connect to catalysts.]
+
+Next Catalyst: [Event/Date] - [What outcome validates bull vs. bear case]
 
 ---
 
-HANDLING CONFLICTS:
-Report BOTH figures with sources: "Stock rose 5.3% (Reuters) to 7% (Bloomberg) (Oct 1)"
+For Single Development Days:
 
-PRECISION:
-- Exact figures when available: "12.7%", "$4.932B"
-- Qualitative if numbers unavailable: "substantial investment"
-- Never replace numbers with vague terms when numbers exist
-- Priority: Specific numbers > Ranges > Directional > Omission
+[SCENARIO ASSESSMENT] - [Development] shifts [aspect of investment case]
 
-BULLET CONSTRUCTION:
-Combine related facts telling one story. Add context/impact within same bullet.
+What This Means:
+[2-3 sentences explaining immediate implication]
 
-Example: "Halted Vision Pro refresh to redirect resources toward AI glasses targeting 2027 release; analysts estimate $500M+ R&D reallocation to compete with Meta (Oct 1)"
+Upside Scenario:
+- [Assumption if plays out positively]
+→ Outcome: [Positive result]
 
-CROSS-CATEGORY INTELLIGENCE:
-- If company article has competitive implications → include in BOTH Major Developments AND Competitive Dynamics
-- If competitor/industry development is major for {ticker} → can appear in Major Developments
-- Sort insights by TYPE (what they are) not SOURCE (where they came from)
+Downside Scenario:
+- [Assumption if plays out negatively]
+→ Outcome: [Negative result]
 
-Generate structured summary. Omit empty sections."""
+Watch For: [1-2 near-term indicators]
+
+Next Catalyst: [Event/Date] - [What we'll learn]
+
+---
+
+For Quiet Days:
+
+THESIS UNCHANGED - Awaiting material developments
+
+No new information to alter investment perspective. Monitoring for developments that could shift risk/reward dynamics.
+
+What Could Change the Thesis:
+- [Type of bullish development]
+- [Type of bearish development]
+
+Next Expected Catalyst: [Event/date if known, otherwise: "Material developments, earnings, or competitive actions"]
+
+FOOTER (Always):
+
+---
+
+📰 Today's Coverage
+[X] company articles | [Y] industry articles | [Z] competitor articles analyzed
+
+⏭️ NEXT UPDATE: [Tomorrow's date or "Next material development"]
+
+---
+
+CRITICAL WRITING RULES:
+
+1. Bullets only - Each development = ONE bullet
+2. End bullets with dates - (Oct 10) or (Oct 9-10)
+3. NO source names - Exception: cite when figures conflict
+4. Newest first within sections
+5. Combine related facts - One story per bullet when connected
+6. Quantify everything - Exact figures ("12.7%", "$4.932B")
+7. Conflicting numbers - Report both with sources
+8. Active voice - "Company launched X" not "X was launched"
+9. No hedge language - Avoid "may," "might," "could" unless uncertainty
+10. Cross-category - If competitive implications → include in both Major Developments AND Competitive Dynamics
+
+PRECISION HIERARCHY:
+1. Specific numbers: "12.7%", "$4.932B"
+2. Ranges: "$2B-$3B"
+3. Directional: "substantial investment"
+4. Never replace numbers with vague terms when numbers exist
+
+LENGTH GUIDELINES:
+
+HIGH (5+ material articles): 1,500-2,000 words - Full analysis
+MEDIUM (2-4 material articles): 800-1,200 words - Focused coverage
+LOW (1 material article): 400-700 words - Single story deep dive
+ZERO (0 material articles): 100-200 words - Quiet day notice only
+
+SECTION RULES:
+
+ALWAYS include:
+- Header
+- Bottom Line
+- Investment Implications
+- Footer
+
+Include ONLY if content exists:
+- Major Developments (skip if no news)
+- Financial Performance (skip if no data)
+- Risk Factors (skip if no risks)
+- Wall Street Sentiment (skip if no analyst actions)
+- Competitive Dynamics (skip if no developments)
+- Upcoming Catalysts (skip if no events)
+
+Omit empty section headers entirely.
+
+FILTERING - DO NOT include:
+
+❌ Pure technical analysis
+❌ Single fund position changes
+❌ Minor price target adjustments
+❌ Competitor news with no {ticker} impact
+❌ Generic macro affecting all stocks equally
+
+LEGAL COMPLIANCE:
+
+NEVER use:
+- "Buy this stock"
+- "Sell this stock"
+- "We recommend"
+- "You should"
+- "Add to portfolio"
+- "Take profits now"
+
+ALWAYS use:
+- "Bull case factors"
+- "Bear case factors"
+- "Potential outcome if"
+- "Scenario analysis"
+- "Investment considerations"
+- "Key variables to monitor"
+
+Frame as: Educational analysis of possibilities, not predictions or recommendations.
+
+Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Use scenario analysis framework.
+
+Your job: Provide educational investment analysis in 3-5 minutes, not direct advice."""
 
     return (system_prompt, user_content, company_name)
 
@@ -12547,12 +12694,14 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     Returns dict: {section_name: [bullet1, bullet2, ...]}
     """
     sections = {
+        "bottom_line": [],
         "major_developments": [],
         "financial_operational": [],
         "risk_factors": [],
         "wall_street": [],
         "competitive_industry": [],
-        "upcoming_catalysts": []
+        "upcoming_catalysts": [],
+        "investment_implications": []
     }
 
     if not summary_text:
@@ -12560,12 +12709,14 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
 
     # Split by emoji headers
     section_markers = [
+        ("📌 BOTTOM LINE", "bottom_line"),
         ("🔴 MAJOR DEVELOPMENTS", "major_developments"),
         ("📊 FINANCIAL/OPERATIONAL PERFORMANCE", "financial_operational"),
         ("⚠️ RISK FACTORS", "risk_factors"),
         ("📈 WALL STREET SENTIMENT", "wall_street"),
         ("⚡ COMPETITIVE/INDUSTRY DYNAMICS", "competitive_industry"),
-        ("📅 UPCOMING CATALYSTS", "upcoming_catalysts")
+        ("📅 UPCOMING CATALYSTS", "upcoming_catalysts"),
+        ("🎯 INVESTMENT IMPLICATIONS", "investment_implications")
     ]
 
     current_section = None
@@ -12618,13 +12769,46 @@ def build_executive_summary_html(sections: Dict[str, List[str]]) -> str:
             </div>
         '''
 
+    # Special rendering for Bottom Line (plain text, not bullets)
+    def build_bottom_line(bullets: List[str]) -> str:
+        if not bullets:
+            return ""
+        # Bottom Line is stored as bullets but should render as paragraphs
+        text = " ".join(bullets)  # Join all bullets into one text block
+        return f'''
+            <div style="margin-bottom: 24px; padding: 16px; background-color: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px;">
+                <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px;">📌 Bottom Line</h2>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #78350f;">{text}</p>
+            </div>
+        '''
+
+    # Special rendering for Investment Implications (preserve structure)
+    def build_investment_implications(bullets: List[str]) -> str:
+        if not bullets:
+            return ""
+        # Investment Implications has structured text - preserve formatting
+        text = "<br>".join(bullets)  # Preserve line breaks for structure
+        return f'''
+            <div style="margin-bottom: 20px; padding: 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+                <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">🎯 Investment Implications</h2>
+                <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #1e3a8a;">{text}</div>
+            </div>
+        '''
+
     html = ""
+    # Bottom Line first (new)
+    html += build_bottom_line(sections.get("bottom_line", []))
+
+    # Original 6 sections
     html += build_section("Major Developments", sections.get("major_developments", []))
     html += build_section("Financial/Operational Performance", sections.get("financial_operational", []))
     html += build_section("Risk Factors", sections.get("risk_factors", []))
     html += build_section("Wall Street Sentiment", sections.get("wall_street", []))
     html += build_section("Competitive/Industry Dynamics", sections.get("competitive_industry", []))
     html += build_section("Upcoming Catalysts", sections.get("upcoming_catalysts", []))
+
+    # Investment Implications last (new)
+    html += build_investment_implications(sections.get("investment_implications", []))
 
     return html
 
@@ -12730,12 +12914,14 @@ def generate_email_html_core(
 
     # Fetch stock price from ticker_reference (cached)
     stock_price = "$0.00"
-    price_change_pct = "+0.00%"
+    price_change_pct = None  # Changed to None for fallback logic
     price_change_color = "#4ade80"  # Green default
+    ytd_return_pct = None  # New: YTD return
+    ytd_return_color = "#4ade80"  # Green default
 
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT financial_last_price, financial_price_change_pct
+            SELECT financial_last_price, financial_price_change_pct, financial_ytd_return_pct
             FROM ticker_reference
             WHERE ticker = %s
         """, (ticker,))
@@ -12743,10 +12929,18 @@ def generate_email_html_core(
 
         if price_data and price_data['financial_last_price']:
             stock_price = f"${price_data['financial_last_price']:.2f}"
+
+            # Daily return (price change)
             if price_data['financial_price_change_pct'] is not None:
                 pct = price_data['financial_price_change_pct']
                 price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
                 price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+            # YTD return
+            if price_data['financial_ytd_return_pct'] is not None:
+                ytd = price_data['financial_ytd_return_pct']
+                ytd_return_pct = f"{'+' if ytd >= 0 else ''}{ytd:.2f}%"
+                ytd_return_color = "#4ade80" if ytd >= 0 else "#ef4444"
 
     # Fetch executive summary from database
     executive_summary_text = ""
@@ -12880,7 +13074,8 @@ def generate_email_html_core(
                                     <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
                                         <div style="display: inline-block; text-align: right;">
                                             <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
-                                            <div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>
+                                            {f'<div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>' if price_change_pct else ''}
+                                            {f'<div style="font-size: 14px; color: {ytd_return_color}; font-weight: 600; margin-top: 4px;">YTD: {ytd_return_pct}</div>' if ytd_return_pct else ''}
                                         </div>
                                     </td>
                                 </tr>
@@ -12925,7 +13120,7 @@ def generate_email_html_core(
 
                                         <!-- Legal Disclaimer -->
                                         <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                            This report is for informational purposes only and does not constitute investment advice, a recommendation, or an offer to buy or sell securities. Please consult a financial advisor before making investment decisions.
+                                            For informational and educational purposes only. Not investment advice. See Terms of Service for full disclaimer.
                                         </div>
 
                                         <!-- Links -->

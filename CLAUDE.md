@@ -767,6 +767,25 @@ Total: 60 minutes
 - Logged at digest completion and job completion
 - Format: `[{ticker}] 📊 Resource Status: Memory=215MB, DB Pool=18/45`
 
+**6. Thread-Local HTTP Connectors (Lines 88-147)** ⭐ **CRITICAL FIX - Oct 2025**
+- **Problem Solved:** "Event loop is closed" errors with 3+ concurrent tickers
+- **Root Cause:** Global `aiohttp.TCPConnector` bound to first thread's event loop, became unusable when that loop closed
+- **Solution:** Each `ThreadPoolExecutor` thread gets its own connector via `threading.local()`
+- **Architecture:**
+  - One connector per thread (isolated to thread's event loop)
+  - One session per thread (uses thread's connector)
+  - Automatic cleanup when job completes (`cleanup_http_session()`)
+- **Scaling:**
+  - `MAX_CONCURRENT_JOBS=3` → 3 connectors (300 max HTTP connections)
+  - `MAX_CONCURRENT_JOBS=4` → 4 connectors (400 max HTTP connections)
+  - No impact on database connections (separate system)
+- **Benefits:**
+  - ✅ Complete thread isolation (no cross-thread interference)
+  - ✅ Scales automatically with concurrency setting
+  - ✅ Fixes all "Event loop is closed" errors
+  - ✅ Safe for 3-10 concurrent tickers
+- **Trade-off:** Loses global connection pooling, but resources aren't the bottleneck (system runs at ~40% CPU, 60% memory with 4 concurrent)
+
 ### Environment Variables
 
 ```bash

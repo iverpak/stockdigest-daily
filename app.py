@@ -75,33 +75,40 @@ from memory_monitor import (
 # - File descriptor exhaustion → server freeze
 # - TCP handshake overhead (slow)
 #
-# Solution: Shared connector + thread-local sessions
-# - One connector shared across all threads (connection pooling)
+# Solution: Thread-local connectors + thread-local sessions
+# - One connector per thread (isolated event loop per thread)
 # - One session per thread (reused for all calls in that thread)
 # - Cleanup on thread exit (prevents resource leaks)
+#
+# FIX (Oct 2025): Made connector thread-local to prevent "Event loop is closed"
+# errors when multiple ThreadPoolExecutor workers use asyncio.run() concurrently.
+# Each thread gets its own connector bound to its own event loop.
 # ============================================================================
 
-# Global connector with connection limits (shared across all threads)
-# Initialized lazily on first use (can't create at module level - no event loop)
-_HTTP_CONNECTOR = None
-_HTTP_CONNECTOR_LOCK = threading.Lock()
+# Thread-local storage for connectors and sessions (one per thread)
+_thread_local = threading.local()
 
 def _get_or_create_connector():
-    """Get or create global HTTP connector (thread-safe lazy initialization)"""
-    global _HTTP_CONNECTOR
-    if _HTTP_CONNECTOR is None:
-        with _HTTP_CONNECTOR_LOCK:
-            if _HTTP_CONNECTOR is None:  # Double-check locking
-                _HTTP_CONNECTOR = aiohttp.TCPConnector(
-                    limit=100,              # Total connections across all hosts
-                    limit_per_host=30,      # Max 30 concurrent per host (OpenAI/Anthropic/ScrapFly)
-                    ttl_dns_cache=300,      # Cache DNS for 5 minutes
-                    enable_cleanup_closed=True  # Clean up closed connections
-                )
-    return _HTTP_CONNECTOR
+    """
+    Get or create HTTP connector for current thread (thread-safe lazy initialization).
 
-# Thread-local storage for sessions (one session per thread)
-_thread_local = threading.local()
+    Each ThreadPoolExecutor worker thread gets its own connector, which prevents
+    "Event loop is closed" errors when multiple threads run asyncio.run() concurrently.
+
+    The connector is bound to the thread's event loop and is automatically cleaned up
+    when the thread exits.
+    """
+    if not hasattr(_thread_local, 'connector') or _thread_local.connector is None:
+        import threading
+        thread_name = threading.current_thread().name
+        _thread_local.connector = aiohttp.TCPConnector(
+            limit=100,              # Total connections across all hosts (per thread)
+            limit_per_host=30,      # Max 30 concurrent per host (OpenAI/Anthropic/ScrapFly)
+            ttl_dns_cache=300,      # Cache DNS for 5 minutes
+            enable_cleanup_closed=True  # Clean up closed connections
+        )
+        LOG.debug(f"🔌 Created new HTTP connector for thread: {thread_name}")
+    return _thread_local.connector
 
 def get_http_session() -> aiohttp.ClientSession:
     """
@@ -111,9 +118,10 @@ def get_http_session() -> aiohttp.ClientSession:
     Session is reused for all HTTP calls in the thread (connection pooling).
 
     Benefits:
-    - Prevents connection exhaustion (max 100 connections total)
+    - Prevents connection exhaustion (max 100 connections per thread)
     - Faster (reuses TCP connections, no handshake overhead)
     - Lower memory usage (one session per thread vs hundreds)
+    - Thread-safe (each thread has its own session + connector)
     """
     if not hasattr(_thread_local, 'session') or _thread_local.session is None or _thread_local.session.closed:
         _thread_local.session = aiohttp.ClientSession(
@@ -123,11 +131,23 @@ def get_http_session() -> aiohttp.ClientSession:
     return _thread_local.session
 
 async def cleanup_http_session():
-    """Close thread-local session (call before thread exits)"""
+    """
+    Close thread-local session and connector (call before thread exits).
+
+    This ensures proper cleanup of HTTP resources when a ThreadPoolExecutor
+    worker thread completes processing a job.
+    """
+    # Close session first
     if hasattr(_thread_local, 'session') and _thread_local.session is not None:
         if not _thread_local.session.closed:
             await _thread_local.session.close()
         _thread_local.session = None
+
+    # Close connector second (session must be closed first)
+    if hasattr(_thread_local, 'connector') and _thread_local.connector is not None:
+        if not _thread_local.connector.closed:
+            await _thread_local.connector.close()
+        _thread_local.connector = None
 
 # ============================================================================
 import yfinance as yf
@@ -13961,12 +13981,12 @@ async def process_ticker_job(job: dict):
         raise
 
     finally:
-        # Cleanup thread-local HTTP session
+        # Cleanup thread-local HTTP session and connector
         try:
             await cleanup_http_session()
-            LOG.debug(f"[{ticker}] 🧹 Cleaned up HTTP session for thread")
+            LOG.debug(f"[{ticker}] 🧹 Cleaned up HTTP session + connector for thread")
         except Exception as cleanup_error:
-            LOG.warning(f"[{ticker}] Failed to cleanup HTTP session: {cleanup_error}")
+            LOG.warning(f"[{ticker}] Failed to cleanup HTTP session/connector: {cleanup_error}")
 
 def job_worker_loop():
     """Background worker that polls database for jobs and processes them concurrently"""

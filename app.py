@@ -11302,11 +11302,7 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 
 OUTPUT STRUCTURE:
 
-HEADER (Always):
-🎯 {company_name} ({ticker})
-{current_date}
-
-BOTTOM LINE (Always - 50 words max):
+📌 BOTTOM LINE (Always - 50 words max):
 Answer: "What happened today for {ticker}?"
 
 If Material News:
@@ -11488,17 +11484,6 @@ What Could Change the Thesis:
 
 Next Expected Catalyst: [Event/date if known, otherwise: "Material developments, earnings, or competitive actions"]
 
-FOOTER (Always):
-
----
-
-📰 Today's Coverage
-[X] company articles | [Y] industry articles | [Z] competitor articles analyzed
-
-⏭️ NEXT UPDATE: [Tomorrow's date or "Next material development"]
-
----
-
 CRITICAL WRITING RULES:
 
 1. Bullets only - Each development = ONE bullet
@@ -11528,10 +11513,8 @@ ZERO (0 material articles): 100-200 words - Quiet day notice only
 SECTION RULES:
 
 ALWAYS include:
-- Header
 - Bottom Line
 - Investment Implications
-- Footer
 
 Include ONLY if content exists:
 - Major Developments (skip if no news)
@@ -12720,21 +12703,37 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     ]
 
     current_section = None
+    section_marker_prefixes = tuple(marker for marker, _ in section_markers)
+
     for line in summary_text.split('\n'):
         line = line.strip()
 
         # Check if line is a section header
+        is_header = False
         for marker, section_key in section_markers:
             if line.startswith(marker):
                 current_section = section_key
+                is_header = True
                 break
-        else:
+
+        if not is_header and current_section:
             # Line is content, not a header
-            if current_section and line.startswith('•'):
-                # Extract bullet text
-                bullet_text = line[1:].strip()  # Remove bullet point
-                if bullet_text:
-                    sections[current_section].append(bullet_text)
+
+            # Special handling for bottom_line and investment_implications: capture ALL text
+            if current_section in ['bottom_line', 'investment_implications']:
+                # Skip lines that start with section markers (shouldn't happen but be safe)
+                if not line.startswith(section_marker_prefixes):
+                    # Skip empty lines at start, but keep them once content exists
+                    if line or sections[current_section]:
+                        sections[current_section].append(line)
+
+            # Standard handling for other sections: bullets only
+            else:
+                if line.startswith('•'):
+                    # Extract bullet text
+                    bullet_text = line[1:].strip()  # Remove bullet point
+                    if bullet_text:
+                        sections[current_section].append(bullet_text)
 
     return sections
 

@@ -11449,15 +11449,15 @@ Examples:
 - PRODUCTION MILESTONE ACHIEVED - Q3 deliveries 462K units (+6% YoY); maintained guidance 1.8M units
 
 Bull Case (factors from today's news supporting upside):
-- [Factual development from today with specific numbers/dates]
-- [Factual development from today with specific numbers/dates]
-- [Factual development from today with specific numbers/dates]
+• [Factual development from today with specific numbers/dates]
+• [Factual development from today with specific numbers/dates]
+• [Factual development from today with specific numbers/dates]
 → Potential outcome: [Specific metrics from articles, not forecasts]
 
 Bear Case (factors from today's news supporting downside):
-- [Factual development from today with specific numbers/dates]
-- [Factual development from today with specific numbers/dates]
-- [Factual development from today with specific numbers/dates]
+• [Factual development from today with specific numbers/dates]
+• [Factual development from today with specific numbers/dates]
+• [Factual development from today with specific numbers/dates]
 → Potential outcome: [Specific metrics from articles, not forecasts]
 
 Key Variables to Monitor (will determine which scenario materializes):
@@ -11507,10 +11507,10 @@ What Happened:
 [2-3 sentences with specific facts, numbers, dates from articles]
 
 If Positive Resolution:
-- [Factual scenario from articles with specific metrics]
+• [Factual scenario from articles with specific metrics]
 
 If Negative Resolution:
-- [Factual scenario from articles with specific metrics]
+• [Factual scenario from articles with specific metrics]
 
 Watch For: [1-2 specific metrics/events from articles with dates]
 

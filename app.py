@@ -12396,8 +12396,11 @@ def parse_structured_summary(summary_text: str) -> list:
     sections = []
     current_section = None
 
-    # Known section emojis to detect headers
-    section_emojis = ['🔴', '📊', '⚠️', '📈', '⚡', '📅']
+    # Known section emojis to detect headers (includes new sections)
+    section_emojis = ['📌', '🔴', '📊', '⚠️', '📈', '⚡', '📅', '🎯']
+
+    # Special sections that contain paragraph/structured text (not just bullets)
+    special_sections = ['📌 BOTTOM LINE', '🎯 INVESTMENT IMPLICATIONS']
 
     for line in summary_text.split('\n'):
         line = line.strip()
@@ -12421,9 +12424,12 @@ def parse_structured_summary(summary_text: str) -> list:
                 sections.append(current_section)
 
             # Start new section
+            # Check if this is a special section (paragraph content)
+            is_special = any(special in line for special in special_sections)
             current_section = {
                 'header': line,
-                'bullets': []
+                'bullets': [],
+                'is_special': is_special  # Flag for special rendering
             }
 
         # Detect bullets (lines starting with • or -)
@@ -12432,6 +12438,12 @@ def parse_structured_summary(summary_text: str) -> list:
             bullet_text = line.lstrip('•- ').strip()
             if bullet_text:  # Only add non-empty bullets
                 current_section['bullets'].append(bullet_text)
+
+        # Special sections: capture ALL text (paragraph content)
+        elif current_section and current_section.get('is_special'):
+            # Capture paragraph text for Bottom Line and Investment Implications
+            if line:  # Non-empty lines
+                current_section['bullets'].append(line)  # Store as "bullets" but will render as paragraphs
 
     # Add final section
     if current_section:
@@ -12445,6 +12457,7 @@ def render_structured_summary_html(sections: list) -> str:
     Convert parsed sections into properly formatted HTML.
 
     Returns HTML string with sections, headers, and bullet lists.
+    Handles special sections (Bottom Line, Investment Implications) as paragraphs.
     """
     if not sections:
         return ""
@@ -12457,12 +12470,19 @@ def render_structured_summary_html(sections: list) -> str:
         # Render section header with emoji
         html_parts.append(f"<div class='section-header'>{section['header']}</div>")
 
-        # Render bullets as HTML list
-        if section['bullets']:
-            html_parts.append("<ul class='section-bullets'>")
-            for bullet in section['bullets']:
-                html_parts.append(f"<li>{bullet}</li>")
-            html_parts.append("</ul>")
+        # Check if this is a special section (paragraph content)
+        if section.get('is_special'):
+            # Render as paragraph text (join with <br> to preserve structure)
+            if section['bullets']:
+                paragraph_text = '<br>'.join(section['bullets'])
+                html_parts.append(f"<div style='margin: 8px 0 0 0; line-height: 1.5;'>{paragraph_text}</div>")
+        else:
+            # Render as bullet list (standard sections)
+            if section['bullets']:
+                html_parts.append("<ul class='section-bullets'>")
+                for bullet in section['bullets']:
+                    html_parts.append(f"<li>{bullet}</li>")
+                html_parts.append("</ul>")
 
         html_parts.append("</div>")
 

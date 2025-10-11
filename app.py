@@ -11288,9 +11288,10 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
     # Handle case with no flagged articles (quiet day)
     if not all_flagged_articles:
         LOG.info(f"[{ticker}] No flagged articles - generating quiet day summary")
-        user_content = "NO FLAGGED ARTICLES - Generate quiet day summary per template."
+        user_content = "FLAGGED ARTICLE COUNT: 0\n\nNO FLAGGED ARTICLES - Generate quiet day summary per template."
     else:
-        user_content = "UNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
+        article_count = len(all_flagged_articles)
+        user_content = f"FLAGGED ARTICLE COUNT: {article_count}\n\nUNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
 
     # Get current date for prompt
     current_date = datetime.now().strftime("%B %d, %Y")
@@ -11312,17 +11313,25 @@ Use exact emoji headers shown below. No ##, no ###, no additional formatting.
 📌 BOTTOM LINE (Always - 50 words max):
 Answer: "What happened today for {ticker}?"
 
-If Material News Within Past 48 Hours:
-[What happened]. [Key data points]. [What to monitor next].
-
-If NO Material News for 48+ Hours:
+If FLAGGED ARTICLE COUNT = 0:
 QUIET DAY - NO MATERIAL DEVELOPMENTS
-
 No significant company news, regulatory updates, or competitive developments for {ticker}.
 
-🔴 MAJOR DEVELOPMENTS (Only if material news within past 48 hours - 3-6 bullets max)
+If FLAGGED ARTICLE COUNT ≥ 1:
+[What happened]. [Key data points]. [What to monitor next].
 
-CRITICAL: Include ONLY developments from past 48 hours (or highly material developments from past 2 weeks). Move older developments to Risk Factors or Competitive Dynamics.
+🔴 MAJOR DEVELOPMENTS (Only if material developments exist - 3-6 bullets max)
+
+CRITICAL MATERIALITY RULES:
+- ALL flagged articles have already passed AI triage for materiality
+- Regulatory investigations, safety recalls, antitrust actions: ALWAYS include in Major Developments
+- M&A deals, earnings reports, product launches: ALWAYS include in Major Developments
+- Competitive/industry context: May include here OR in Competitive Dynamics section
+
+PRIORITIZATION:
+- Newest articles first when multiple cover same topic
+- [COMPANY] articles have priority over [INDUSTRY]/[COMPETITOR]
+- If articles span multiple days within lookback window, group by topic rather than forcing all into one section
 
 Source Priority: [COMPANY] articles first, then [INDUSTRY]/[COMPETITOR] with direct implications
 
@@ -11449,9 +11458,9 @@ Example:
 
 CRITICAL: Stay factual. Cite specific developments from today's news. Acceptable inference: 25-30% in Bull/Bear cases only.
 
-CRITICAL: Write sub-headers exactly as shown: "BULL CASE:", "BEAR CASE:", "KEY VARIABLES TO MONITOR:", "NEXT CATALYST:"
+CRITICAL: Write sub-headers exactly as shown with emojis: "📈 BULL CASE:", "📉 BEAR CASE:", "🔍 KEY VARIABLES TO MONITOR:", "🔔 NEXT CATALYST:"
 
-For Material News Days (2+ developments):
+For Material News Days (1+ flagged articles):
 
 [SCENARIO ASSESSMENT] - [One sentence factual summary of today's developments]
 
@@ -11461,42 +11470,25 @@ Examples:
 - COMPETITOR LAUNCHES REPORTED - Meta demonstrated AR glasses Sept 18; Amazon entered AR development
 - PRODUCTION MILESTONE ACHIEVED - Q3 deliveries 462K units (+6% YoY); maintained guidance 1.8M units
 
-BULL CASE:
+📈 BULL CASE:
 • [Factual development from today with specific numbers/dates supporting upside]
 • [Factual development from today with specific numbers/dates supporting upside]
+• [Additional factual development if relevant]
 • Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
 
-BEAR CASE:
+📉 BEAR CASE:
 • [Factual development from today with specific numbers/dates supporting downside]
 • [Factual development from today with specific numbers/dates supporting downside]
+• [Additional factual development if relevant]
 • Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
 
-KEY VARIABLES TO MONITOR:
+🔍 KEY VARIABLES TO MONITOR:
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 
-NEXT CATALYST:
+🔔 NEXT CATALYST:
 • [Event/Date from articles that will provide new information] - [What data will be disclosed]
-
----
-
-For Single Development Days (1 major development):
-
-[SCENARIO ASSESSMENT] - [Factual description of single development]
-
-What Happened:
-[2-3 sentences with specific facts, numbers, dates from articles]
-
-If Positive Resolution:
-• [Factual scenario from articles with specific metrics]
-
-If Negative Resolution:
-• [Factual scenario from articles with specific metrics]
-
-Watch For: [1-2 specific metrics/events from articles with dates]
-
-Next Catalyst: [Event/Date from articles] - [What data will be disclosed]
 
 ---
 
@@ -11530,11 +11522,13 @@ State variable and timeline ONLY. NO analysis of why it matters.
 
 ---
 
-For Quiet Days (48+ hours no news):
+For Quiet Days (FLAGGED ARTICLE COUNT = 0):
 
-NO MATERIAL DEVELOPMENTS - Monitoring for catalysts
+📌 BOTTOM LINE
+QUIET DAY - NO MATERIAL DEVELOPMENTS
+No company-specific news, regulatory updates, or competitive developments for {ticker} reported {current_date}.
 
-No company-specific news, regulatory actions, or competitive developments reported {current_date}.
+CRITICAL: Output ONLY the Bottom Line section above (3 lines). Do NOT add Investment Implications, competitive context, bull/bear analysis, or invented headers. Quiet day means zero material developments to report.
 
 ---
 
@@ -11585,7 +11579,12 @@ If fact is detailed in one section, cross-reference in others:
 CRITICAL WRITING RULES:
 
 0. NO MARKDOWN - Section headers are emoji only (🔴, 📊, etc.)
-1. BULLET FORMAT - Use • character for ALL bulleted sections (Major Developments, Financial, Risk Factors, Wall Street, Competitive, Catalysts, Bull/Bear, Key Variables)
+1. BULLET FORMAT - Use • character for ALL bulleted sections (Major Developments, Financial, Risk Factors, Wall Street, Competitive, Catalysts, Bull/Bear, Key Variables, Next Catalyst)
+
+   CRITICAL: EVERY point under 📈 BULL CASE, 📉 BEAR CASE, 🔍 KEY VARIABLES TO MONITOR, and 🔔 NEXT CATALYST must start with • character
+   - NO paragraphs, NO plain text lines - only bullets
+   - Add blank line between 📈 BULL CASE and 📉 BEAR CASE, between 📉 BEAR CASE and 🔍 KEY VARIABLES, between 🔍 KEY VARIABLES and 🔔 NEXT CATALYST
+
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
 3. NO source names in bullets - Exception: when figures conflict
 4. Newest first within sections
@@ -11608,7 +11607,7 @@ ALWAYS include:
 - Investment Implications
 
 Include ONLY if content exists:
-- Major Developments (skip if no news within 48 hours)
+- Major Developments (skip ONLY if FLAGGED ARTICLE COUNT = 0)
 - Financial Performance (skip if no data)
 - Wall Street Sentiment (skip if no analyst actions)
 - Risk Factors (skip if no risks)
@@ -12936,17 +12935,18 @@ def parse_investment_implications_subsections(content: List[str]) -> Dict[str, a
         if not line:
             continue
 
-        # Check for sub-section headers
-        if line.startswith('BULL CASE'):
+        # Check for sub-section headers (with or without emojis)
+        # Support both "BULL CASE" and "📈 BULL CASE"
+        if 'BULL CASE' in line:
             current_subsection = 'bull_case'
             continue
-        elif line.startswith('BEAR CASE'):
+        elif 'BEAR CASE' in line:
             current_subsection = 'bear_case'
             continue
-        elif line.startswith('KEY VARIABLES TO MONITOR'):
+        elif 'KEY VARIABLES TO MONITOR' in line:
             current_subsection = 'key_variables'
             continue
-        elif line.startswith('NEXT CATALYST'):
+        elif 'NEXT CATALYST' in line:
             current_subsection = 'next_catalyst'
             continue
 
@@ -13067,13 +13067,13 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                              [], use_bullets=False)  # Empty content, just header
 
     # Investment Implications sub-sections as top-level sections (bullet format)
-    html += build_section("Bull Case" if strip_emojis else "Bull Case",
+    html += build_section("Bull Case" if strip_emojis else "📈 Bull Case",
                          parsed_investment['bull_case'], use_bullets=True)
-    html += build_section("Bear Case" if strip_emojis else "Bear Case",
+    html += build_section("Bear Case" if strip_emojis else "📉 Bear Case",
                          parsed_investment['bear_case'], use_bullets=True)
-    html += build_section("Key Variables to Monitor" if strip_emojis else "Key Variables to Monitor",
+    html += build_section("Key Variables to Monitor" if strip_emojis else "🔍 Key Variables to Monitor",
                          parsed_investment['key_variables'], use_bullets=True)
-    html += build_section("Next Catalyst" if strip_emojis else "Next Catalyst",
+    html += build_section("Next Catalyst" if strip_emojis else "🔔 Next Catalyst",
                          parsed_investment['next_catalyst'], use_bullets=True)
 
     return html

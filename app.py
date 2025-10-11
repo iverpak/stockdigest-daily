@@ -11302,6 +11302,9 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 
 OUTPUT STRUCTURE:
 
+CRITICAL: DO NOT use markdown headers (##) or title lines. Start sections with emoji ONLY.
+Use exact emoji headers shown below. No ##, no ###, no additional formatting.
+
 📌 BOTTOM LINE (Always - 50 words max):
 Answer: "What happened today for {ticker}?"
 
@@ -11486,7 +11489,8 @@ Next Expected Catalyst: [Event/date if known, otherwise: "Material developments,
 
 CRITICAL WRITING RULES:
 
-1. Bullets only - Each development = ONE bullet
+0. NO MARKDOWN - Section headers must be emoji only (🔴, 📊, etc.) with NO ## or ### syntax
+1. Bullets only - Each development = ONE bullet (standard sections use •, special sections use paragraphs)
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
 3. NO source names - Exception: cite when figures conflict
 4. Newest first within sections

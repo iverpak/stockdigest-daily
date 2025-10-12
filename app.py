@@ -11332,10 +11332,14 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                 # Only fill empty fields, don't overwrite existing data
                 if not metadata["industry_keywords"]:
                     metadata["industry_keywords"] = ai_metadata.get("industry_keywords", [])
-                
+
                 if not metadata["competitors"]:
                     metadata["competitors"] = ai_metadata.get("competitors", [])
-                
+
+                # Copy geographic_markets and subsidiaries from AI to metadata
+                metadata['geographic_markets'] = ai_metadata.get('geographic_markets', '')
+                metadata['subsidiaries'] = ai_metadata.get('subsidiaries', '')
+
                 # === MINIMAL CHANGE: update using the NORMALIZED ticker so the row matches
                 update_ticker_reference_ai_data(normalized_ticker, metadata)
 

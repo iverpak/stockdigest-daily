@@ -4628,7 +4628,7 @@ async def scrape_single_article_async(article: Dict, category: str, metadata: Di
                 content, status = await safe_content_scraper_with_scrapfly_only_async(
                     resolved_url, scrape_domain, category, keyword, set()
                 )
-                
+
                 if content:
                     return {
                         "success": True,
@@ -4643,6 +4643,26 @@ async def scrape_single_article_async(article: Dict, category: str, metadata: Di
                         "scraped_content": None
                     }
             else:
+                # Paywall or problematic domain - store headline-only marker for flagged articles
+                article_id = article.get("id")
+                if scrape_domain in PAYWALL_DOMAINS and article_id:
+                    try:
+                        with db() as conn, conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE ticker_articles
+                                SET ai_summary = %s,
+                                    ai_model = %s
+                                WHERE article_id = %s AND ticker = %s
+                            """, (
+                                "Paywalled content - headline only",
+                                "headline_only",
+                                article_id,
+                                analysis_ticker
+                            ))
+                        LOG.info(f"[{analysis_ticker}] 🔒 Stored headline-only marker for paywalled article: {title[:60]}...")
+                    except Exception as e:
+                        LOG.error(f"[{analysis_ticker}] Failed to store headline-only marker: {e}")
+
                 return {
                     "success": False,
                     "error": f"Skipped problematic domain: {scrape_domain}",

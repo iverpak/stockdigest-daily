@@ -11398,6 +11398,8 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                 'industry_keyword_1': ai_metadata.get('industry_keywords', [None])[0] if ai_metadata.get('industry_keywords') else None,
                 'industry_keyword_2': ai_metadata.get('industry_keywords', [None, None])[1] if len(ai_metadata.get('industry_keywords', [])) > 1 else None,
                 'industry_keyword_3': ai_metadata.get('industry_keywords', [None, None, None])[2] if len(ai_metadata.get('industry_keywords', [])) > 2 else None,
+                'geographic_markets': ai_metadata.get('geographic_markets', ''),
+                'subsidiaries': ai_metadata.get('subsidiaries', ''),
                 'ai_generated': True,
                 'data_source': 'ai_generated'
             }
@@ -11459,6 +11461,10 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                 # Handle old string format if needed
                 comp_data[f'competitor_{i}_name'] = str(comp) if comp else None
 
+        # Extract geographic_markets and subsidiaries
+        geographic_markets = metadata.get('geographic_markets', '')
+        subsidiaries = metadata.get('subsidiaries', '')
+
         LOG.info(f"DEBUG: UPSERT {ticker} with keywords={[keyword_1, keyword_2, keyword_3]} and competitors={comp_data}")
 
         with db() as conn, conn.cursor() as cur:
@@ -11470,9 +11476,10 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                     competitor_1_name, competitor_1_ticker,
                     competitor_2_name, competitor_2_ticker,
                     competitor_3_name, competitor_3_ticker,
+                    geographic_markets, subsidiaries,
                     ai_generated, ai_enhanced_at, created_at, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW(), NOW())
                 ON CONFLICT (ticker) DO UPDATE SET
                     industry_keyword_1 = EXCLUDED.industry_keyword_1,
                     industry_keyword_2 = EXCLUDED.industry_keyword_2,
@@ -11483,6 +11490,8 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                     competitor_2_ticker = EXCLUDED.competitor_2_ticker,
                     competitor_3_name = EXCLUDED.competitor_3_name,
                     competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                    geographic_markets = EXCLUDED.geographic_markets,
+                    subsidiaries = EXCLUDED.subsidiaries,
                     ai_generated = TRUE,
                     ai_enhanced_at = NOW(),
                     updated_at = NOW()
@@ -11498,7 +11507,9 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                 comp_data['competitor_2_name'],
                 comp_data['competitor_2_ticker'],
                 comp_data['competitor_3_name'],
-                comp_data['competitor_3_ticker']
+                comp_data['competitor_3_ticker'],
+                geographic_markets,
+                subsidiaries
             ))
 
             LOG.info(f"✅ UPSERT successful for {ticker} reference table with AI enhancements")

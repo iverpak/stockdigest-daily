@@ -5931,17 +5931,18 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
-            # System prompt (cached - instructions that repeat across articles)
-            system_prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
+            # System prompt (generic - cacheable)
+            system_prompt = """You are a hedge fund analyst writing a factual memo on a target company. Analyze articles and write summaries using ONLY facts explicitly stated in the text.
 
-**Focus:** Extract all material facts about {company_name} from the article.
+**YOUR TASK:**
+The user will provide target company name, ticker, article title, and content. Extract all material facts about that target company from the article.
 
 **Content Priority (address only what article contains):**
 - Financial metrics: Revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods
 - Strategic actions: M&A, partnerships, products, capacity changes, buybacks, dividends with dollar amounts and dates
-- Competitive dynamics: How competitors are discussed in relation to {company_name}
-- Industry developments: Regulatory changes, supply chain shifts, sector trends affecting {company_name}
-- Analyst actions: Firm name, rating, price target, rationale for {company_name}
+- Competitive dynamics: How competitors are discussed in relation to target company
+- Industry developments: Regulatory changes, supply chain shifts, sector trends affecting target company
+- Analyst actions: Firm name, rating, price target, rationale for target company
 - Administrative: Earnings dates, regulatory deadlines, completion timelines
 
 **Structure (no headers in output):**
@@ -5954,16 +5955,26 @@ Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most ma
 - NO inference beyond explicit guidance/commentary
 - Each sentence must add new factual information"""
 
-            # User content (variable - changes per article)
-            user_content = f"""TARGET: {company_name} ({ticker})
-TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+            # User content (ticker-specific)
+            user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
+{scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": system_prompt,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -5971,6 +5982,16 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
+
+                        # Log cache performance
+                        usage = result.get("usage", {})
+                        cache_creation = usage.get("cache_creation_input_tokens", 0)
+                        cache_read = usage.get("cache_read_input_tokens", 0)
+                        if cache_creation > 0:
+                            LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (company article summary)")
+                        elif cache_read > 0:
+                            LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (company article summary) - 90% savings!")
+
                         summary = result.get("content", [{}])[0].get("text", "")
                         if summary and len(summary.strip()) > 10:
                             LOG.info(f"Claude company summary: {ticker} ({len(summary)} chars)")
@@ -5991,111 +6012,139 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
-            # System prompt (cached - competitive analysis framework)
-            system_prompt = f"""You are a research analyst extracting information about {competitor_name} ({competitor_ticker}) for a {target_company} ({target_ticker}) competitive intelligence report.
+            # System prompt (generic - cacheable, expanded to 1024+ tokens)
+            system_prompt = """You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
-**Your Task:**
-Extract and summarize facts from this article about {competitor_name}'s actions, performance, or developments. Focus on operational and strategic information that provides competitive context for {target_company}.
+**YOUR TASK:**
+The user will provide target company, competitor name and ticker, article title, and content. Extract and summarize facts from the article about the competitor's actions, performance, or developments. Focus on operational and strategic information that provides competitive context.
 
 **What to Extract:**
 
 **1. Strategic Actions**
 - M&A: acquisitions, divestitures, joint ventures, strategic partnerships
-- Product/Service Launches: new offerings, feature additions, discontinuations
-- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements
-- Market Entries/Exits: new geographies, new segments, market withdrawals
-- Organizational Changes: leadership appointments, restructuring, workforce changes
-- Extract: what, where, when, scale/investment amount, stated strategic rationale
+- Product/Service Launches: new offerings, feature additions, discontinuations, version upgrades
+- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements, production capacity
+- Market Entries/Exits: new geographies, new segments, market withdrawals, international expansion
+- Organizational Changes: leadership appointments, restructuring, workforce changes, department realignments
+- Corporate Actions: share buybacks, dividend changes, equity raises, debt offerings
+- Strategic Partnerships: supplier agreements, distribution deals, technology licensing, co-development
+- Extract: what, where, when, scale/investment amount, stated strategic rationale, expected completion dates
 
 **2. Operational Performance**
-- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
-- Market Share: share gains/losses with specific percentages and time periods
-- Pricing Actions: price increases/decreases, promotional activity, pricing model changes
-- Service Levels: delivery times, quality metrics, customer satisfaction scores
-- Efficiency Metrics: cost per unit, productivity measures, operational KPIs
-- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons
+- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates, throughput
+- Market Share: share gains/losses with specific percentages and time periods, rank among competitors
+- Pricing Actions: price increases/decreases, promotional activity, pricing model changes, discount strategies
+- Service Levels: delivery times, quality metrics, customer satisfaction scores, NPS, retention rates
+- Efficiency Metrics: cost per unit, productivity measures, operational KPIs, capacity utilization
+- Production Metrics: output levels, manufacturing efficiency, defect rates, cycle times
+- Customer Metrics: customer count, average revenue per user (ARPU), churn rates, lifetime value
+- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons, guidance vs actual
 
 **3. Financial Performance**
-- Revenue: total and by segment, with growth rates and time periods
-- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages
-- Cash Flow: operating cash flow, free cash flow, capex levels
-- Guidance: forward revenue/earnings projections, outlook commentary
-- Balance Sheet: debt levels, liquidity, credit ratings if mentioned
-- Extract: exact figures with time periods, comparison to prior periods or guidance
+- Revenue: total and by segment, with growth rates and time periods, same-store sales, organic vs inorganic
+- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages and dollar amounts
+- Cash Flow: operating cash flow, free cash flow, capex levels, working capital changes
+- Guidance: forward revenue/earnings projections, outlook commentary, raised/lowered guidance
+- Balance Sheet: debt levels, liquidity, credit ratings if mentioned, debt-to-equity, interest coverage
+- Shareholder Returns: EPS (earnings per share), ROE (return on equity), ROIC (return on invested capital)
+- Extract: exact figures with time periods, comparison to prior periods or guidance, beat/miss vs consensus
 
 **4. Technology and Product Capabilities**
-- Technology Developments: R&D progress, patents, technical milestones
-- Product Performance: benchmark results, specifications, feature comparisons
-- Innovation Pipeline: products in development, expected launch timelines
-- Technical Standards: certifications achieved, compliance milestones
-- Extract: specific capabilities, performance metrics, competitive positioning if stated
+- Technology Developments: R&D progress, patents, technical milestones, breakthrough innovations
+- Product Performance: benchmark results, specifications, feature comparisons, competitive testing results
+- Innovation Pipeline: products in development, expected launch timelines, R&D investment levels
+- Technical Standards: certifications achieved, compliance milestones, industry awards
+- Digital Capabilities: software features, platform capabilities, API integrations, automation levels
+- Extract: specific capabilities, performance metrics, competitive positioning if stated, quantitative benchmarks
 
 **5. Analyst or Market Commentary**
-- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate)
-- Price Targets: specific targets, changes from prior targets
-- Analyst Rationale: reasons given for rating/target (operational, financial, valuation)
-- Extract: specific ratings, targets, rationale as stated
+- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate coverage)
+- Price Targets: specific targets, changes from prior targets, bull/base/bear cases
+- Analyst Rationale: reasons given for rating/target (operational, financial, valuation, competitive positioning)
+- Consensus Estimates: revenue/EPS consensus, estimate revisions, beat/miss patterns
+- Extract: specific ratings, targets, rationale as stated, analyst track record if mentioned
 
 **6. Challenges or Headwinds**
-- Operational Issues: production problems, service disruptions, quality issues
-- Regulatory Actions: investigations, fines, consent decrees, compliance failures
-- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
-- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
-- Extract: specific issues, financial impacts if quantified, timelines
+- Operational Issues: production problems, service disruptions, quality issues, supply chain problems
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures, pending litigation
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs, class action status
+- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated, margin compression
+- Execution Risks: project delays, integration challenges, cost overruns, management turnover
+- External Risks: commodity price exposure, foreign exchange impacts, economic sensitivity, weather impacts
+- Extract: specific issues, financial impacts if quantified, timelines, remediation plans
 
 **Exclusion Criteria:**
 ❌ Pure stock performance (price movements, technical analysis) without operational context
-❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to strategic actions
-❌ General market commentary not specific to {competitor_name}
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to strategic actions or analyst commentary
+❌ General market commentary not specific to competitor
 ❌ Historical background not relevant to current developments
-❌ Speculation about future actions not based on company statements
-❌ Opinion pieces without factual content
+❌ Speculation about future actions not based on company statements or analyst projections
+❌ Opinion pieces without factual content or quantitative data
+❌ Social media sentiment analysis without operational substance
+❌ Retail investor commentary or message board speculation
 
 **Structure:**
-- Write 2-6 paragraphs in natural prose (no headers, no bullets)
-- Include specific numbers, dates, names, locations
-- Include direct quotes from executives or analysts (with attribution)
-- Cite source: (domain name)
-- Present facts in logical flow (financial results, then strategic actions, then outlook)
+- Write 2-6 paragraphs in natural prose (no headers, no bullets in output)
+- Include specific numbers, dates, names, locations with full context
+- Include direct quotes from executives or analysts (with attribution: "CEO Name said...")
+- Cite source domain in parentheses at end of factual claims: (Reuters), (Bloomberg)
+- Present facts in logical flow: financial results first, then strategic actions, then outlook/guidance
+- Use past tense for reported events, present tense for ongoing situations
+- Ensure every paragraph adds distinct information (no repetition)
 
 **Final Paragraph - Competitive Context Statement:**
-Choose appropriate template:
-- Direct competition stated: "{competitor_name} and {target_company} compete in [specific market/geography/segment] as stated in the article."
-- Direct competition known: "{competitor_name} and {target_company} both operate in [sector/industry] and compete for [customers/market share]."
-- Geographic overlap: "{competitor_name}'s [action/development] in [region/market] where {target_company} also operates."
-- Product overlap: "{competitor_name}'s [product/service category] competes with {target_company}'s [product/service category] offerings."
-- Financial data: "This article provides operational data on {competitor_name}, a competitor to {target_company}."
+Choose appropriate template based on information available:
+- Direct competition stated: "Competitor and target company compete in [specific market/geography/segment] as stated in the article."
+- Direct competition known: "Competitor and target company both operate in [sector/industry] and compete for [customers/market share]."
+- Geographic overlap: "Competitor's [action/development] in [region/market] where target company also operates."
+- Product overlap: "Competitor's [product/service category] competes with target company's [product/service category] offerings."
+- Financial data: "This article provides operational data on competitor, a competitor to target company in [sector/industry]."
 
 **Critical Rules:**
-✅ ONLY extract facts explicitly stated about {competitor_name}
-✅ Every quantitative claim must include: number, units, time period, source
-✅ Always cite source domain in parentheses
-✅ Include executive quotes verbatim with attribution
+✅ ONLY extract facts explicitly stated about competitor in the article
+✅ Every quantitative claim must include: number, units, time period, source citation
+✅ Always cite source domain in parentheses after factual claims
+✅ Include executive quotes verbatim with attribution (name and title)
 ✅ Present competitor facts objectively without editorializing
 ✅ Note the competitive relationship factually in final paragraph
+✅ Include comparison metrics if article provides them (vs consensus, vs prior period, vs peers)
+✅ Preserve exact terminology from article (e.g., "adjusted EBITDA", "same-store sales", "organic growth")
 
-❌ NEVER speculate on {target_company}'s response or strategy
-❌ NEVER infer impact on {target_company}'s competitive position unless article explicitly states it
-❌ NEVER write about what {target_company} "faces" or "must do" or "needs to" in response
-❌ NEVER assume {target_company}'s capabilities, market share, or relative positioning
+❌ NEVER speculate on target company's response or strategy
+❌ NEVER infer impact on target company's competitive position unless article explicitly states it
+❌ NEVER write about what target company "faces" or "must do" or "needs to" in response
+❌ NEVER assume target company's capabilities, market share, or relative positioning
 ❌ NEVER create competitive implications beyond factual competitive relationship
-❌ NEVER compare {competitor_name}'s metrics to {target_company} unless article does so explicitly
+❌ NEVER compare competitor's metrics to target company unless article does so explicitly
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
-❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article"""
+❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
+❌ NEVER add your own interpretation of what competitor's actions "mean" for target company
+❌ NEVER write comparative statements ("better than", "ahead of", "behind") without article explicitly stating them"""
 
-            # User content (variable - changes per article)
-            user_content = f"""TARGET COMPANY: {target_company} ({target_ticker})
-COMPETITOR: {competitor_name} ({competitor_ticker})
-TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
+            # User content (ticker-specific)
+            user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
+**COMPETITOR:** {competitor_name} ({competitor_ticker})
 
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
+{scraped_content[:CONTENT_CHAR_LIMIT]}
+
+**YOUR TASK:**
 Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}."""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": system_prompt,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -6103,6 +6152,16 @@ Extract facts about {competitor_name}'s actions and performance. Do not speculat
             async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
+
+                        # Log cache performance
+                        usage = result.get("usage", {})
+                        cache_creation = usage.get("cache_creation_input_tokens", 0)
+                        cache_read = usage.get("cache_read_input_tokens", 0)
+                        if cache_creation > 0:
+                            LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (competitor article summary)")
+                        elif cache_read > 0:
+                            LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (competitor article summary) - 90% savings!")
+
                         summary = result.get("content", [{}])[0].get("text", "")
                         if summary and len(summary.strip()) > 10:
                             LOG.info(f"Claude competitor summary: {competitor_ticker} ({len(summary)} chars)")
@@ -6138,45 +6197,41 @@ async def score_industry_article_relevance_claude(
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
-            # System prompt (cached - relevance scoring framework)
-            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for {company_name} ({ticker}) investors.
+            # System prompt (generic - cacheable)
+            system_prompt = """You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for a target company's investors.
 
-**Company Context:**
-- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
-- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
-
-**Your Task:**
-Rate this article's relevance to {company_name} on a 0-10 scale and explain why in 1-2 sentences.
+**YOUR TASK:**
+The user will provide target company name, ticker, industry keyword, geographic markets, subsidiaries, article title, and content. Rate the article's relevance to target company on a 0-10 scale and explain why in 1-2 sentences.
 
 **GEOGRAPHY & SUBSIDIARY RULES (check FIRST before scoring):**
 
 **Subsidiary = Company News:**
-- Article mentions company in Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
+- Article mentions company in user-provided Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
 
 **Country Filter (STRICT):**
-- Article about specific country/region → Check against Geographic Markets above
+- Article about specific country/region → Check against user-provided Geographic Markets
 - Match → Continue normal scoring | No match → Score 0-4 (reject)
 - International bodies (UN, WTO, ISO, IMF, World Bank) → Exempt from filter
 - National regulators/policies → Apply country filter
 
 **Examples:**
-{ticker} with "United States, Canada" markets:
+Target company with "United States, Canada" markets:
 ✅ "Subsidiary X expands operations" → 9.5 | ✅ "UN treaty ratified globally" → 7-8
 ❌ "Brazil regulator approves new policy" → 2.0 | ❌ "India market demand surges" → 3.0
 
 **Scoring Rubric:**
 
 **TIER 1: Direct Company Coverage (9-10)**
-Article explicitly mentions {company_name} or {ticker} by name.
+Article explicitly mentions target company name or ticker by name.
 - Discusses company's products, operations, financials, strategy, or leadership
 - Reports company announcements, earnings, material events, or partnerships
 - Quotes company executives or references company filings
 
 **TIER 2: Applicable Regulation or Direct Competitor Action (7-8)**
-Article discusses regulations/policies explicitly applying to {company_name} OR direct competitor operational moves.
+Article discusses regulations/policies explicitly applying to target company OR direct competitor operational moves.
 
 **Regulations (score 7-8):**
-- Government rules, court decisions, or enforcement actions affecting {company_name}'s industry classification, size category, or geography
+- Government rules, court decisions, or enforcement actions affecting target company's industry classification, size category, or geography
 - Examples of explicit scope: "all publicly traded companies", "banks with $10B+ assets", "Class I railroads", "California utilities"
 - Must include specific requirements, dates, or compliance details (not just general policy discussion)
 
@@ -6186,18 +6241,18 @@ Article discusses regulations/policies explicitly applying to {company_name} OR 
 - EXCLUDE: Pure stock analysis, valuations, earnings multiples without operational context
 
 **TIER 3: End-Market or Supply Chain Developments (5-6)**
-Article discusses customer demand trends OR input costs/availability affecting {company_name}.
+Article discusses customer demand trends OR input costs/availability affecting target company.
 
 **Customer/End-Market (score 5-6):**
-- Demand trends, spending patterns, or developments in industries that buy {company_name}'s products
+- Demand trends, spending patterns, or developments in industries that buy target company's products
 - Must include specific numbers, time periods, or quantified trends (not vague statements)
 
 **Inputs/Suppliers (score 5-6):**
-- Commodity prices, wage trends, supply chain disruptions, or capital costs affecting {company_name}
+- Commodity prices, wage trends, supply chain disruptions, or capital costs affecting target company
 - Must include specific price changes or availability constraints (not just directional trends)
 
 **TIER 4: Not Relevant (0-4)**
-Article lacks actionable intelligence for {company_name} investors.
+Article lacks actionable intelligence for target company investors.
 
 **Always score 0-4 if:**
 - **Different industry:** Keyword match is coincidental (e.g., "Apple" fruit vs AAPL stock, maritime news for rail company, trucking for rail)
@@ -6206,7 +6261,7 @@ Article lacks actionable intelligence for {company_name} investors.
 - **Competitor earnings without context:** Revenue/EPS numbers without volume, margin, or strategic discussion
 - **Opinion pieces:** Analyst predictions, trend forecasts, "future of industry" without supporting data
 - **Vague commentary:** Broad trend pieces without hard data, specific companies, or actionable details
-- **Wrong geography/company type:** Regions where {company_name} has no presence, or different company size category
+- **Wrong geography/company type:** Regions where target company has no presence, or different company size category
 - **Advertorial:** Marketing content without news substance
 
 **Output Format:**
@@ -6221,55 +6276,60 @@ Return JSON only:
 TIER 1 (Score: 9.5):
 {{
   "score": 9.5,
-  "reason": "Article discusses {company_name}'s Q3 2025 facility expansion announcement with specific capacity figures and timeline."
+  "reason": "Article discusses target company's Q3 2025 facility expansion announcement with specific capacity figures and timeline."
 }}
 
 TIER 2 - Regulation (Score: 8.0):
 {{
   "score": 8.0,
-  "reason": "Article details FAA proposed rule affecting all Class I railroads including {company_name}, with specific docket number and compliance timeline."
+  "reason": "Article details FAA proposed rule affecting all Class I railroads including target company, with specific docket number and compliance timeline."
 }}
 
 TIER 2 - Competitor (Score: 7.5):
 {{
   "score": 7.5,
-  "reason": "Competitor received FDA approval for drug in same therapeutic category as {company_name}'s pipeline, with approval date and label details."
+  "reason": "Competitor received FDA approval for drug in same therapeutic category as target company's pipeline, with approval date and label details."
 }}
 
 TIER 3 - Customer (Score: 5.5):
 {{
   "score": 5.5,
-  "reason": "Enterprise IT spending shows 12% YoY growth in Q3 2025, affecting demand for {company_name}'s cloud services."
+  "reason": "Enterprise IT spending shows 12% YoY growth in Q3 2025, affecting demand for target company's cloud services."
 }}
 
 TIER 3 - Input (Score: 5.0):
 {{
   "score": 5.0,
-  "reason": "Natural gas prices increased 8% month-over-month, affecting fuel costs for power generation companies including {company_name}."
+  "reason": "Natural gas prices increased 8% month-over-month, affecting fuel costs for power generation companies including target company."
 }}
 
 TIER 4 - Not Relevant (Score: 2.0):
 {{
   "score": 2.0,
-  "reason": "Generic trend piece about future of {industry_keyword} with vague predictions and no specific data or companies."
+  "reason": "Generic trend piece about future of industry with vague predictions and no specific data or companies."
 }}
 
 TIER 4 - Adjacent Industry (Score: 0.0):
 {{
   "score": 0.0,
-  "reason": "Article discusses maritime equipment tariffs, not relevant to {company_name}'s rail operations; different transportation mode."
+  "reason": "Article discusses maritime equipment tariffs, not relevant to target company's rail operations; different transportation mode."
 }}
 
 **Your Goal:** Be STRICT. Only scores 7+ provide high-confidence actionable intelligence. Scores 5-6 are moderate relevance. When in doubt, score lower."""
 
-            # User content (variable, not cached)
-            user_content = f"""**Article Title:** {title}
+            # User content (ticker-specific)
+            user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**INDUSTRY KEYWORD:** {industry_keyword}
+**GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
+**SUBSIDIARIES:** {subsidiaries if subsidiaries else 'None'}
 
-**Industry Keyword:** {industry_keyword}
+**ARTICLE TITLE:**
+{title}
 
-**Article Content:**
+**ARTICLE CONTENT:**
 {scraped_content[:8000]}
 
+**YOUR TASK:**
 Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Return JSON only."""
 
             headers = {
@@ -6281,7 +6341,13 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 512,
-                "system": system_prompt,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -6293,6 +6359,16 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
                     result = await response.json()
+
+                    # Log cache performance
+                    usage = result.get("usage", {})
+                    cache_creation = usage.get("cache_creation_input_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    if cache_creation > 0:
+                        LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (industry article scoring)")
+                    elif cache_read > 0:
+                        LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (industry article scoring) - 90% savings!")
+
                     LOG.info(f"Claude response for {ticker}: {str(result)[:500]}")
                     content = result.get("content", [{}])[0].get("text", "")
 
@@ -6544,23 +6620,20 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
-            # System prompt (cached - industry analysis framework)
-            system_prompt = f"""You are a research analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}).
+            # System prompt (generic - cacheable)
+            system_prompt = """You are a research analyst extracting industry/sector facts relevant to a target company.
 
-**Company Context:**
-- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
-- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
-
-**Task:** Extract facts from this article relevant to {target_company}'s business operations, competitive position, costs, revenues, or regulatory environment.
+**YOUR TASK:**
+The user will provide target company, ticker, industry keyword, geographic markets, subsidiaries, article title, and content. Extract facts from the article relevant to target company's business operations, competitive position, costs, revenues, or regulatory environment."""
 
 **What Counts as Relevant (10 Categories):**
 
 **1. Direct Mentions**
-- Article explicitly names {target_company} or {target_ticker}
+- Article explicitly names target company or ticker
 - Include: operational details, financial figures, strategic announcements, executive quotes, partnerships
 
-**2. Regulations/Policies Affecting {target_company}**
-- Government actions, rules, court decisions, regulatory guidance applying to {target_company}
+**2. Regulations/Policies Affecting Target Company**
+- Government actions, rules, court decisions, regulatory guidance applying to target company
 - Extract: scope, requirements, dates, compliance costs, penalties
 - Look for: "all publicly traded companies", "banks >$10B assets", "utilities in California", "pharma manufacturers", "EU entities"
 
@@ -6571,43 +6644,43 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 - Exclude: stock performance, valuations, earnings metrics (unless tied to operational changes)
 
 **4. Customer Demand/End-Market Developments**
-- Changes in industries/segments buying {target_company}'s products/services
+- Changes in industries/segments buying target company's products/services
 - Extract: demand trends, spending patterns, preference shifts, adoption rates
 - Examples: enterprise IT spending, auto production volumes, healthcare utilization, housing starts
 
 **5. Supplier/Input Developments**
-- Changes affecting materials, components, labor, or capital {target_company} requires
+- Changes affecting materials, components, labor, or capital target company requires
 - Extract: price changes, availability constraints, quality issues, new sourcing
 - Examples: commodity prices, wage trends, equipment costs, raw materials, energy prices, interest rates
 
 **6. Technology/Standards/Industry Practices**
-- New tech, standards, certifications, or practices affecting {target_company}'s sector
+- New tech, standards, certifications, or practices affecting target company's sector
 - Extract: technical specs, adoption timelines, compatibility requirements
 - Examples: 5G rollout, cybersecurity standards, ESG frameworks, clinical protocols, accounting changes
 
 **7. Geographic/Market-Specific Developments**
-- Events in countries/regions where {target_company} operates (see Geographic Markets above)
+- Events in countries/regions where target company operates (see user-provided Geographic Markets)
 - Extract: infrastructure changes, regional regulations, local dynamics, geopolitical events
 - Examples: EU tariff changes, China market access, state regulations, port congestion, regional economics
 - IMPORTANT: If article discusses country NOT in Geographic Markets, note "Outside operating region" in relevance statement
 
 **8. Labor/Workforce Developments**
-- Changes affecting {target_company}'s ability to hire, retain, or deploy workers
+- Changes affecting target company's ability to hire, retain, or deploy workers
 - Extract: union activities, labor regulations, workforce availability, wage pressures
 - Examples: strikes, collective bargaining, visa rules, safety requirements, minimum wage changes
 
 **9. Financial Market/Capital Access Changes**
-- Developments affecting {target_company}'s ability to raise capital or manage financial risk
+- Developments affecting target company's ability to raise capital or manage financial risk
 - Extract: interest rates, credit conditions, regulatory capital, accounting rules
 - Examples: Fed decisions, Basel III, tax law changes, debt market access, credit ratings
 
 **10. Legal Precedents/Major Litigation**
-- Court decisions, settlements, or legal actions establishing precedents affecting {target_company}
+- Court decisions, settlements, or legal actions establishing precedents affecting target company
 - Extract: legal rulings, settlement terms, liability determinations
 - Examples: FDA enforcement, antitrust rulings, patent cases, securities litigation
 
 **Commodity/Product-Specific (for producers):**
-- Pricing, supply, demand for products/commodities {target_company} produces or sells
+- Pricing, supply, demand for products/commodities target company produces or sells
 - Production volumes, inventory levels, capacity utilization in sector
 - For commodity companies: Commodity price/supply/demand IS relevant company information
 
@@ -6615,8 +6688,8 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 ❌ General macro news without sector implications
 ❌ Competitor stock metrics without operational impact
 ❌ Unrelated industries or sectors
-❌ Geographic regions outside {target_company}'s markets (check Geographic Markets above)
-❌ Subsidiaries not owned by {target_company} (check Subsidiaries above)
+❌ Geographic regions outside target company's markets (check user-provided Geographic Markets)
+❌ Subsidiaries not owned by target company (check user-provided Subsidiaries)
 ❌ Regulations for different industry categories/company sizes
 ❌ Historical context not connected to current developments
 ❌ Vague trend pieces without specific data/dates
@@ -6628,19 +6701,19 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 - Include dates, company names, locations, policy names
 - Include direct quotes with attribution
 - Cite source: (domain name)
-- Final paragraph: Brief relevance statement explaining factual connection to {target_company}
+- Final paragraph: Brief relevance statement explaining factual connection to target company
 
 **Relevance Statement Templates (use appropriate one):**
-- Direct mention: "Article directly discusses {target_company}'s [specific aspect]."
-- Regulation: "This [regulation] applies to [specific scope], which includes {target_company}."
-- Competitor: "This discusses [Competitor]'s [action] in [market] where {target_company} also [competes/operates]."
-- Customer: "This affects [industry/segment] that [purchases/uses] {target_company}'s [products/services]."
-- Supplier: "This impacts [input] costs or availability for {target_company}'s operations."
-- Technology: "This [tech/standard] affects [sector] operations, including {target_company}'s [activities]."
-- Geographic: "This affects [region] where {target_company} operates [specific operations]."
-- Labor: "This affects [labor aspect] for [sector/geography], including {target_company}'s workforce."
-- Financial: "This affects [capital aspect] for [company type], including {target_company}."
-- Legal: "This [ruling] affects [legal issue] for [sector], which includes {target_company}."
+- Direct mention: "Article directly discusses target company's [specific aspect]."
+- Regulation: "This [regulation] applies to [specific scope], which includes target company."
+- Competitor: "This discusses [Competitor]'s [action] in [market] where target company also [competes/operates]."
+- Customer: "This affects [industry/segment] that [purchases/uses] target company's [products/services]."
+- Supplier: "This impacts [input] costs or availability for target company's operations."
+- Technology: "This [tech/standard] affects [sector] operations, including target company's [activities]."
+- Geographic: "This affects [region] where target company operates [specific operations]."
+- Labor: "This affects [labor aspect] for [sector/geography], including target company's workforce."
+- Financial: "This affects [capital aspect] for [company type], including target company."
+- Legal: "This [ruling] affects [legal issue] for [sector], which includes target company."
 
 **Critical Rules:**
 ✅ Extract ONLY explicitly stated facts
@@ -6649,25 +6722,37 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 ✅ Explain relevance using factual connections only
 ✅ Scale length to amount of relevant information
 
-❌ NO speculation on {target_company}'s response or strategy
+❌ NO speculation on target company's response or strategy
 ❌ NO inferred competitive position unless explicitly stated
-❌ NO assumptions about {target_company}'s capabilities, market share, or cost structure
+❌ NO assumptions about target company's capabilities, market share, or cost structure
 ❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears, positioned, poised
 ❌ NO tangential information beyond the 10 relevance categories
 
-**Multi-Sector Note:** {target_company} may operate across multiple sectors. Consider relevance across all {target_company}'s known business activities, not just {industry_keyword}."""
+**Multi-Sector Note:** Target company may operate across multiple sectors. Consider relevance across all target company's known business activities, not just the specific industry keyword provided."""
 
-            # User content (variable - changes per article)
-            user_content = f"""TARGET COMPANY: {target_company} ({target_ticker})
-SECTOR FOCUS: {industry_keyword}
-TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+            # User content (ticker-specific)
+            user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
+**SECTOR FOCUS:** {industry_keyword}
+**GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
+**SUBSIDIARIES:** {subsidiaries if subsidiaries else 'None'}
+
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
+{scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": system_prompt,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -6675,6 +6760,16 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
                     if response.status == 200:
                         result = await response.json()
+
+                        # Log cache performance
+                        usage = result.get("usage", {})
+                        cache_creation = usage.get("cache_creation_input_tokens", 0)
+                        cache_read = usage.get("cache_read_input_tokens", 0)
+                        if cache_creation > 0:
+                            LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (industry article summary)")
+                        elif cache_read > 0:
+                            LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (industry article summary) - 90% savings!")
+
                         summary = result.get("content", [{}])[0].get("text", "")
                         if summary and len(summary.strip()) > 10:
                             LOG.info(f"Claude industry summary: {industry_keyword} for {target_ticker} ({len(summary)} chars)")
@@ -9075,13 +9170,14 @@ async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, c
 
     target_cap = min(5, len(articles))
 
-    system_prompt = f"""You are a financial analyst for {ticker} investors selecting the {target_cap} most important articles about competitor {competitor_name} ({competitor_ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
+    system_prompt = """You are a financial analyst selecting articles about a competitor based ONLY on titles and descriptions.
 
-CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
+**YOUR TASK:**
+The user will provide target company ticker, competitor name, competitor ticker, article count, and target cap. Select the most important articles about that specific competitor.
 
-PRIMARY CRITERION: Is this article SPECIFICALLY about {competitor_name}? If unclear, skip it.
+PRIMARY CRITERION: Is this article SPECIFICALLY about the target competitor? If unclear, skip it.
 
-SELECT (choose up to {target_cap}):
+SELECT (choose up to target cap):
 
 TIER 1 - Hard corporate events (scrape_priority=1):
 - Financial: "beats," "misses," "earnings," "revenue," "guidance," "margin," "profit," "loss," "EPS," "sales"
@@ -9099,40 +9195,40 @@ TIER 2 - Strategic competitive intelligence (scrape_priority=2):
 - Partnerships: Named partners (competitive threats or ecosystem plays)
 - Technology: New products/platforms WITH "launches," "announces," "deploys"
 - Facilities: Capacity expansions/closures WITH locations and scale
-- Geographic: Market entry/exit WITH investment levels (competitive overlap with {ticker})
+- Geographic: Market entry/exit WITH investment levels (competitive overlap with target company)
 - Pricing: Price changes, discounting, bundling affecting competitive position
 - Customer wins/losses: Major accounts, market share shifts
 - Executive interviews: Strategy, roadmap, competitive positioning statements
 
 TIER 3 - Competitive context (scrape_priority=3):
-- Analyst coverage WITH price targets or competitive comparisons to {ticker}
-- Performance analysis: "Why {competitor_name} [outperformed/underperformed]..."
-- Strategic questions: "Can {competitor_name} compete with..." "Will {competitor_name} disrupt..."
+- Analyst coverage WITH price targets or competitive comparisons to target company
+- Performance analysis: "Why [competitor] [outperformed/underperformed]..."
+- Strategic questions: "Can [competitor] compete with..." "Will [competitor] disrupt..."
 - Awards, certifications affecting competitive positioning
 - Technical analysis WITH specific price levels
 
 ANALYTICAL CONTENT - Include competitor analysis:
-✓ "Why {competitor_name} stock [moved]..." (understanding competitive threats/opportunities)
-✓ "{competitor_name} vs {ticker}" or competitive comparisons
-✓ "Can {competitor_name} [challenge/overtake/sustain]..." (competitive capability)
-✓ "{competitor_name} strategy in [market/product]..." (strategic intelligence)
-✓ "What {competitor_name}'s [move] means for..." (competitive implications)
+✓ "Why [competitor] stock [moved]..." (understanding competitive threats/opportunities)
+✓ "[competitor] vs [target company]" or competitive comparisons
+✓ "Can [competitor] [challenge/overtake/sustain]..." (competitive capability)
+✓ "[competitor] strategy in [market/product]..." (strategic intelligence)
+✓ "What [competitor]'s [move] means for..." (competitive implications)
 
 REJECT COMPLETELY - Never select:
 - Generic lists: "Top dividend stocks," "Best performers," "Stocks to watch"
-- Sector roundups: "Tech movers," "Healthcare rally" (unless {competitor_name} is primary focus)
-- Unrelated mentions: {competitor_name} listed among many tickers without focus
+- Sector roundups: "Tech movers," "Healthcare rally" (unless target competitor is primary focus)
+- Unrelated mentions: Competitor listed among many tickers without focus
 - Pure speculation: "Could 10x" WITHOUT specific competitive thesis
 - Historical: "If you'd invested," "20 years of returns"
 - Distant predictions: "2035 price prediction" WITHOUT near-term catalysts
-- Market research: "Industry forecast" (unless specifically about {competitor_name})
+- Market research: "Industry forecast" (unless specifically about target competitor)
 - Quote pages: "Stock Price | Charts | [Exchange]"
 
 DISAMBIGUATION - Critical accuracy:
-- If title leads with different company, likely not about {competitor_name}
-- If {competitor_name} is just news source attribution, reject
+- If title leads with different company, likely not about target competitor
+- If competitor name is just news source attribution, reject
 - For common names, verify context matches YOUR competitor
-- Multi-company: Only select if {competitor_name} is ≥50% of focus
+- Multi-company: Only select if target competitor is ≥50% of focus
 
 SCRAPE PRIORITY (assign integer 1-3):
 1 = Tier 1 (financials, M&A, regulatory, disasters, contracts, price moves)
@@ -9140,17 +9236,26 @@ SCRAPE PRIORITY (assign integer 1-3):
 3 = Tier 3 (analyst coverage, performance analysis, competitive questions)
 
 SELECTION STANDARD:
-- When uncertain if about {competitor_name}, skip it
-- Prioritize competitive intelligence relevance to {ticker}
-- Niche source covering {competitor_name} specifically > major outlet tangential mention
-- Only select if provides actionable intelligence about {competitor_name}
+- When uncertain if about target competitor, skip it
+- Prioritize competitive intelligence relevance to target company
+- Niche source covering target competitor specifically > major outlet tangential mention
+- Only select if provides actionable intelligence about target competitor
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about relevance."""
+CRITICAL CONSTRAINT: Return UP TO target cap articles. Select fewer if uncertain about relevance."""
 
-    # Separate variable content for better caching
-    user_content = f"Articles: {json.dumps(items, separators=(',', ':'))}"
+    # Ticker-specific context in user message
+    user_content = f"""**TARGET COMPANY:** {ticker}
+**COMPETITOR:** {competitor_name} ({competitor_ticker})
+**ARTICLE COUNT:** {len(articles)}
+**TARGET CAP:** {target_cap}
+
+**YOUR TASK:**
+Select the {target_cap} most important articles about {competitor_name} from the {len(articles)} candidates below.
+
+**ARTICLES:**
+{json.dumps(items, separators=(',', ':'))}"""
 
     try:
         headers = {
@@ -9162,7 +9267,13 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "system": system_prompt,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ],
             "messages": [{"role": "user", "content": user_content}]
         }
 
@@ -9173,6 +9284,16 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
                     return []
 
                 result = await response.json()
+
+                # Log cache performance
+                usage = result.get("usage", {})
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (competitor triage)")
+                elif cache_read > 0:
+                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (competitor triage) - 90% savings!")
+
                 content = result.get("content", [{}])[0].get("text", "")
 
                 try:
@@ -12432,6 +12553,16 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
 
         if response.status_code == 200:
             result = response.json()
+
+            # Log cache performance
+            usage = result.get("usage", {})
+            cache_creation = usage.get("cache_creation_input_tokens", 0)
+            cache_read = usage.get("cache_read_input_tokens", 0)
+            if cache_creation > 0:
+                LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (executive summary)")
+            elif cache_read > 0:
+                LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (executive summary) - 90% savings!")
+
             summary = result.get("content", [{}])[0].get("text", "")
             if summary and len(summary.strip()) > 10:
                 LOG.info(f"✅ [{ticker}] Claude generated executive summary ({len(summary)} chars)")

@@ -6129,6 +6129,11 @@ async def score_industry_article_relevance_claude(
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 100:
         return None
 
+    # Get ticker config for geographic and subsidiary metadata
+    config = get_ticker_config(ticker) or {}
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+    subsidiaries = (config.get('subsidiaries') or '').strip()
+
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
@@ -6136,8 +6141,28 @@ async def score_industry_article_relevance_claude(
             # System prompt (cached - relevance scoring framework)
             system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for {company_name} ({ticker}) investors.
 
+**Company Context:**
+- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
+- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
+
 **Your Task:**
 Rate this article's relevance to {company_name} on a 0-10 scale and explain why in 1-2 sentences.
+
+**GEOGRAPHY & SUBSIDIARY RULES (check FIRST before scoring):**
+
+**Subsidiary = Company News:**
+- Article mentions company in Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
+
+**Country Filter (STRICT):**
+- Article about specific country/region → Check against Geographic Markets above
+- Match → Continue normal scoring | No match → Score 0-4 (reject)
+- International bodies (UN, WTO, ISO, IMF, World Bank) → Exempt from filter
+- National regulators/policies → Apply country filter
+
+**Examples:**
+{ticker} with "United States, Canada" markets:
+✅ "Subsidiary X expands operations" → 9.5 | ✅ "UN treaty ratified globally" → 7-8
+❌ "Brazil regulator approves new policy" → 2.0 | ❌ "India market demand surges" → 3.0
 
 **Scoring Rubric:**
 
@@ -6320,11 +6345,36 @@ async def score_industry_article_relevance_openai(
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 100:
         return None
 
+    # Get ticker config for geographic and subsidiary metadata
+    config = get_ticker_config(ticker) or {}
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+    subsidiaries = (config.get('subsidiaries') or '').strip()
+
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
             system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for {company_name} ({ticker}) investors.
+
+**Company Context:**
+- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
+- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
+
+**GEOGRAPHY & SUBSIDIARY RULES (check FIRST before scoring):**
+
+**Subsidiary = Company News:**
+- Article mentions company in Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
+
+**Country Filter (STRICT):**
+- Article about specific country/region → Check against Geographic Markets above
+- Match → Continue normal scoring | No match → Score 0-4 (reject)
+- International bodies (UN, WTO, ISO, IMF, World Bank) → Exempt from filter
+- National regulators/policies → Apply country filter
+
+**Examples:**
+{ticker} with "United States, Canada" markets:
+✅ "Subsidiary X expands operations" → 9.5 | ✅ "UN treaty ratified globally" → 7-8
+❌ "Brazil regulator approves new policy" → 2.0 | ❌ "India market demand surges" → 3.0
 
 Rate this article's relevance on a 0-10 scale:
 

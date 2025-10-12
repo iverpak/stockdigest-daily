@@ -6451,8 +6451,8 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 
     # Get ticker config for geographic and subsidiary metadata
     config = get_ticker_config(target_ticker) or {}
-    geographic_markets = config.get('geographic_markets', '').strip()
-    subsidiaries = config.get('subsidiaries', '').strip()
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with CLAUDE_SEM:
@@ -6723,8 +6723,8 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
 
     # Get ticker config for geographic and subsidiary metadata
     config = get_ticker_config(target_ticker) or {}
-    geographic_markets = config.get('geographic_markets', '').strip()
-    subsidiaries = config.get('subsidiaries', '').strip()
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with OPENAI_SEM:
@@ -8048,8 +8048,8 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
 
     # Get ticker config for geographic and subsidiary metadata
     config = get_ticker_config(ticker) or {}
-    geographic_markets = config.get('geographic_markets', '').strip()
-    subsidiaries = config.get('subsidiaries', '').strip()
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # Prepare items for triage (title + description)
     items = []
@@ -8725,8 +8725,8 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
 
     # Get ticker config for geographic and subsidiary metadata
     config = get_ticker_config(ticker) or {}
-    geographic_markets = config.get('geographic_markets', '').strip()
-    subsidiaries = config.get('subsidiaries', '').strip()
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # Prepare items
     items = []
@@ -10724,6 +10724,32 @@ COMPETITORS (exactly 3):
 - Verify ticker is correct Yahoo Finance format (if provided)
 - Exclude: Subsidiaries, companies acquired in last 2 years
 
+GEOGRAPHIC MARKETS (string format):
+- List the primary countries/regions where {company_name} has significant operations, revenue, or customers
+- Format: "Region1 (major), Region2 (major), Region3 (minor)"
+- Use parenthetical notes to indicate scale: (major), (major), (minor)
+- Be specific for major markets, broader for minor markets
+- Examples:
+  → EchoStar: "United States (major), Europe (minor), Latin America (minor)"
+  → Royal Bank: "Canada (major), United States (major), Caribbean (minor)"
+  → Apple: "United States (major), China (major), Europe (major)"
+  → Regional utility: "United States - Southeast (major)"
+- If truly global with balanced presence: "Global operations"
+- If unknown or insufficient information: ""
+
+SUBSIDIARIES (string format):
+- List up to 3 major operating subsidiaries or business units
+- Format: "Subsidiary Name 1, Subsidiary Name 2, Subsidiary Name 3"
+- Use COMMON/BRAND names, not legal entities (e.g., "Hughes Network Systems" not "Hughes Network Systems LLC")
+- Include only material subsidiaries (significant revenue/operations)
+- Exclude: Recently acquired companies, minor divisions, brands (brands go in aliases_brands_assets)
+- Examples:
+  → EchoStar: "Hughes Network Systems, Viasat Inc., EchoStar Mobile"
+  → Berkshire Hathaway: "GEICO, BNSF Railway, Berkshire Hathaway Energy"
+  → Alphabet: "Google, YouTube, Waymo"
+  → JPMorgan: "Chase Bank, J.P. Morgan Wealth Management, J.P. Morgan Securities"
+- If no significant subsidiaries or holding company structure unclear: ""
+
 Return ONLY valid JSON in this exact format:
 {{
     "ticker": "{ticker}",
@@ -10747,7 +10773,9 @@ Return ONLY valid JSON in this exact format:
         "aliases": ["alias1", "alias2", "alias3"],
         "brands": ["brand1", "brand2", "brand3"],
         "assets": ["asset1", "asset2", "asset3"]
-    }}
+    }},
+    "geographic_markets": "Region1 (major), Region2 (major), Region3 (minor)",
+    "subsidiaries": "Subsidiary Name 1, Subsidiary Name 2, Subsidiary Name 3"
 }}"""
 
     try:
@@ -10984,6 +11012,32 @@ COMPETITORS (exactly 3):
 - Verify ticker is correct and current Yahoo Finance format (if provided)
 - Exclude: Subsidiaries, companies acquired in last 2 years
 
+GEOGRAPHIC MARKETS (string format):
+- List the primary countries/regions where the company has significant operations, revenue, or customers
+- Format: "Region1 (major), Region2 (major), Region3 (minor)"
+- Use parenthetical notes to indicate scale: (major), (major), (minor)
+- Be specific for major markets, broader for minor markets
+- Examples:
+  → EchoStar: "United States (major), Europe (minor), Latin America (minor)"
+  → Royal Bank: "Canada (major), United States (major), Caribbean (minor)"
+  → Apple: "United States (major), China (major), Europe (major)"
+  → Regional utility: "United States - Southeast (major)"
+- If truly global with balanced presence: "Global operations"
+- If unknown or insufficient information: ""
+
+SUBSIDIARIES (string format):
+- List up to 3 major operating subsidiaries or business units
+- Format: "Subsidiary Name 1, Subsidiary Name 2, Subsidiary Name 3"
+- Use COMMON/BRAND names, not legal entities (e.g., "Hughes Network Systems" not "Hughes Network Systems LLC")
+- Include only material subsidiaries (significant revenue/operations)
+- Exclude: Recently acquired companies, minor divisions, brands (brands go in aliases_brands_assets)
+- Examples:
+  → EchoStar: "Hughes Network Systems, Viasat Inc., EchoStar Mobile"
+  → Berkshire Hathaway: "GEICO, BNSF Railway, Berkshire Hathaway Energy"
+  → Alphabet: "Google, YouTube, Waymo"
+  → JPMorgan: "Chase Bank, J.P. Morgan Wealth Management, J.P. Morgan Securities"
+- If no significant subsidiaries or holding company structure unclear: ""
+
 Generate response in valid JSON format with all required fields. Be concise and precise."""
 
     context_info = f"Company: {company_name} ({ticker})"
@@ -11023,7 +11077,9 @@ Required JSON format:
         "aliases": ["alias1", "alias2", "alias3"],
         "brands": ["brand1", "brand2", "brand3"],
         "assets": ["asset1", "asset2", "asset3"]
-    }}
+    }},
+    "geographic_markets": "Region1 (major), Region2 (major), Region3 (minor)",
+    "subsidiaries": "Subsidiary Name 1, Subsidiary Name 2, Subsidiary Name 3"
 }}"""
 
     try:

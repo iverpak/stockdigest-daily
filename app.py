@@ -2719,6 +2719,8 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                         'yahoo_ticker': str(row.get('yahoo_ticker', '')).strip() or ticker,
                         'active': str(row.get('active', 'true')).lower() in ('true', '1', 'yes', 'y', 't'),
                         'is_etf': str(row.get('is_etf', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y'),
+                        'geographic_markets': str(row.get('geographic_markets', '')).strip() or None,
+                        'subsidiaries': str(row.get('subsidiaries', '')).strip() or None,
                         'data_source': 'csv_import',
                         'ai_generated': str(row.get('ai_generated', 'FALSE')).upper() in ('TRUE', '1', 'YES', 'Y')
                     }
@@ -2792,7 +2794,8 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     'company_name', 'industry', 'sector', 'sub_industry', 'exchange',
                     'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
                     'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
-                    'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker'
+                    'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker',
+                    'geographic_markets', 'subsidiaries'
                 ]
                 for field in text_fields:
                     if ticker_data.get(field):
@@ -2835,6 +2838,7 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             ticker_data.get('competitor_1_name'), ticker_data.get('competitor_1_ticker'),
                             ticker_data.get('competitor_2_name'), ticker_data.get('competitor_2_ticker'),
                             ticker_data.get('competitor_3_name'), ticker_data.get('competitor_3_ticker'),
+                            ticker_data.get('geographic_markets'), ticker_data.get('subsidiaries'),
                             ticker_data.get('ai_generated', False), ticker_data.get('data_source', 'csv_import')
                         ))
                     
@@ -2847,8 +2851,9 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             competitor_1_name, competitor_1_ticker,
                             competitor_2_name, competitor_2_ticker,
                             competitor_3_name, competitor_3_ticker,
+                            geographic_markets, subsidiaries,
                             ai_generated, data_source
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (ticker) DO UPDATE SET
                             country = EXCLUDED.country,
                             company_name = EXCLUDED.company_name,
@@ -2870,6 +2875,8 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             competitor_2_ticker = EXCLUDED.competitor_2_ticker,
                             competitor_3_name = EXCLUDED.competitor_3_name,
                             competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                            geographic_markets = EXCLUDED.geographic_markets,
+                            subsidiaries = EXCLUDED.subsidiaries,
                             ai_generated = EXCLUDED.ai_generated,
                             data_source = EXCLUDED.data_source,
                             updated_at = NOW()
@@ -3101,6 +3108,7 @@ def export_ticker_references_to_csv():
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
+                       geographic_markets, subsidiaries,
                        financial_last_price, financial_price_change_pct,
                        financial_yesterday_return_pct, financial_ytd_return_pct,
                        financial_market_cap, financial_enterprise_value,
@@ -3139,6 +3147,7 @@ def export_ticker_references_to_csv():
                 'competitor_1_name', 'competitor_1_ticker',
                 'competitor_2_name', 'competitor_2_ticker',
                 'competitor_3_name', 'competitor_3_ticker',
+                'geographic_markets', 'subsidiaries',
                 'financial_last_price', 'financial_price_change_pct',
                 'financial_yesterday_return_pct', 'financial_ytd_return_pct',
                 'financial_market_cap', 'financial_enterprise_value',

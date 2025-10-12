@@ -11462,14 +11462,6 @@ CRITICAL: Write sub-headers exactly as shown with emojis: "📈 BULL CASE:", "�
 
 For Material News Days (1+ flagged articles):
 
-[SCENARIO ASSESSMENT] - [One sentence factual summary of today's developments]
-
-Examples:
-- REGULATORY ACTION ANNOUNCED - EU issued formal information request; securities class action filed
-- EARNINGS BEAT FOLLOWED BY DILUTION - Q1 profit $1.5M vs. -$34.7M year-ago; $51.6M share offering filed same day
-- COMPETITOR LAUNCHES REPORTED - Meta demonstrated AR glasses Sept 18; Amazon entered AR development
-- PRODUCTION MILESTONE ACHIEVED - Q3 deliveries 462K units (+6% YoY); maintained guidance 1.8M units
-
 📈 BULL CASE:
 • [Factual development from today with specific numbers/dates supporting upside]
 • [Factual development from today with specific numbers/dates supporting upside]
@@ -12433,13 +12425,10 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             html.append(f"<div class='summary-title'>📰 Executive Summary (Deep Analysis) - {model_used}</div>")
             html.append("<div class='summary-content'>")
 
-            # Parse and render summary with structured sections
-            summary_sections = parse_structured_summary(openai_summary)
-            if summary_sections:
-                html.append(render_structured_summary_html(summary_sections))
-            else:
-                # Fallback to raw text if parsing fails
-                html.append(f"<div>{openai_summary.replace(chr(10), '<br>')}</div>")
+            # Parse and render using same system as Email #3 (keep emojis for Email #2)
+            sections = parse_executive_summary_sections(openai_summary)
+            summary_html = build_executive_summary_html(sections, strip_emojis=False)
+            html.append(summary_html)
 
             html.append("</div>")
             html.append("</div>")

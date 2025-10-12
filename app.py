@@ -6607,7 +6607,7 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
             system_prompt = """You are a research analyst extracting industry/sector facts relevant to a target company.
 
 **YOUR TASK:**
-The user will provide target company, ticker, industry keyword, geographic markets, subsidiaries, article title, and content. Extract facts from the article relevant to target company's business operations, competitive position, costs, revenues, or regulatory environment."""
+The user will provide target company, ticker, industry keyword, geographic markets, subsidiaries, article title, and content. Extract facts from the article relevant to target company's business operations, competitive position, costs, revenues, or regulatory environment.
 
 **What Counts as Relevant (10 Categories):**
 

@@ -6316,7 +6316,7 @@ async def score_industry_article_relevance(
     industry_keyword: str,
     title: str,
     scraped_content: str,
-    threshold: float = 6.0
+    threshold: float = 5.0
 ) -> Dict:
     """
     Main wrapper for industry article relevance scoring.
@@ -6328,7 +6328,7 @@ async def score_industry_article_relevance(
         industry_keyword: Industry keyword being evaluated (e.g., "Cloud Computing")
         title: Article title
         scraped_content: Full article text
-        threshold: Minimum score to accept (default 6.0, rejects ≤6)
+        threshold: Minimum score to accept (default 5.0, rejects ≤5)
 
     Returns:
         {
@@ -6381,51 +6381,43 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
             # System prompt (cached - industry analysis framework)
             system_prompt = f"""You are a hedge fund analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}). Write summaries using ONLY facts explicitly stated in the article.
 
-**STEP 1: Relevance Check (Complete First)**
-
-Does this article contain information EXPLICITLY about {target_company}?
-- Direct mentions of {target_company} or {target_ticker}
-- Regulations explicitly applying to {target_company}'s industry/size/geography
-- Direct competitor operational moves affecting {target_company}'s market
-- Customer demand or input cost changes with specific data affecting {target_company}
-
-If article contains ZERO explicit information about {target_company}, respond exactly:
-
-"SECTOR TREND ONLY - Article discusses {industry_keyword} developments but does not contain specific information about {target_company}."
-
-**STEP 2: If Relevant, Write Summary**
-
-Extract facts in these categories (address only what article contains):
+**Extract facts in these categories (address only what article contains):**
 
 **Direct Company Information:**
 - {target_company}'s operational details, financial metrics, strategic actions
 - Quotes from {target_company} executives or references to company filings
 
+**Product/Commodity Dynamics (for commodity producers):**
+- Pricing, supply, demand for products/commodities {target_company} produces or sells
+- Market dynamics (TAM, growth rates, adoption trends) impacting {target_company}'s addressable market
+- Production volumes, inventory levels, capacity utilization in {target_company}'s sector
+
 **Regulations Affecting {target_company}:**
-- Government rules, court decisions, enforcement actions explicitly applying to {target_company}
-- Scope (e.g., "all publicly traded companies", "Class I railroads"), requirements, dates, compliance costs
+- Government rules, court decisions, enforcement actions explicitly applying to {target_company}'s industry/size/geography
+- Scope (e.g., "all publicly traded companies", "Class I railroads", "copper producers"), requirements, dates, compliance costs
 
 **Competitor Operational Moves:**
 - Competitor product launches, facility changes, partnerships, M&A, capacity changes
 - Competitor operational metrics (volume, market share, service levels) with specific data
 - How competitive actions affect {target_company}'s market position
 
-**Market/Supply Chain Developments:**
+**Customer Demand & Supply Chain:**
 - Customer demand trends in industries buying {target_company}'s products (with quantified data)
-- Input costs/availability (commodities, labor, capital) affecting {target_company}'s operations (with specific price changes)
-- Market dynamics (TAM, growth rates, adoption trends) impacting {target_company}'s addressable market
+- Input costs/availability (raw materials, labor, capital) affecting {target_company}'s operations (with specific price changes)
+- Supply chain developments impacting {target_company}'s production or delivery
 
 **Structure:**
 - Write 2-6 paragraphs in natural prose (no headers in output)
-- Lead with most relevant facts to {target_company}, then supporting context
+- Lead with most material facts for {target_company}, then supporting context
 - Scale length to article depth
 
 **Hard Rules:**
 - Every number MUST have: time period, units, comparison basis
 - Cite sources: (domain name only, e.g., WSJ, FT, Reuters)
 - FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
-- NO speculation about {target_company}'s response or strategy
-- NO assumptions about {target_company}'s capabilities, market share, or cost structure unless article explicitly states them"""
+- NO speculation about {target_company}'s future response or strategy
+- NO assumptions about {target_company}'s capabilities, market share, or cost structure unless article explicitly states them
+- For commodity companies: Commodity price/supply/demand data IS relevant company information"""
 
             # User content (variable - changes per article)
             user_content = f"""TARGET COMPANY: {target_company} ({target_ticker})
@@ -6447,10 +6439,6 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                         result = await response.json()
                         summary = result.get("content", [{}])[0].get("text", "")
                         if summary and len(summary.strip()) > 10:
-                            # Check for escape hatch response (article not relevant to target company)
-                            if "SECTOR TREND ONLY" in summary:
-                                LOG.info(f"Claude industry summary: Article not specific to {target_ticker}, skipping summary")
-                                return None
                             LOG.info(f"Claude industry summary: {industry_keyword} for {target_ticker} ({len(summary)} chars)")
                             return summary.strip()
                     else:
@@ -6573,51 +6561,43 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
         try:
             prompt = f"""You are a hedge fund analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}). Write summaries using ONLY facts explicitly stated in the article.
 
-**STEP 1: Relevance Check (Complete First)**
-
-Does this article contain information EXPLICITLY about {target_company}?
-- Direct mentions of {target_company} or {target_ticker}
-- Regulations explicitly applying to {target_company}'s industry/size/geography
-- Direct competitor operational moves affecting {target_company}'s market
-- Customer demand or input cost changes with specific data affecting {target_company}
-
-If article contains ZERO explicit information about {target_company}, respond exactly:
-
-"SECTOR TREND ONLY - Article discusses {industry_keyword} developments but does not contain specific information about {target_company}."
-
-**STEP 2: If Relevant, Write Summary**
-
-Extract facts in these categories (address only what article contains):
+**Extract facts in these categories (address only what article contains):**
 
 **Direct Company Information:**
 - {target_company}'s operational details, financial metrics, strategic actions
 - Quotes from {target_company} executives or references to company filings
 
+**Product/Commodity Dynamics (for commodity producers):**
+- Pricing, supply, demand for products/commodities {target_company} produces or sells
+- Market dynamics (TAM, growth rates, adoption trends) impacting {target_company}'s addressable market
+- Production volumes, inventory levels, capacity utilization in {target_company}'s sector
+
 **Regulations Affecting {target_company}:**
-- Government rules, court decisions, enforcement actions explicitly applying to {target_company}
-- Scope (e.g., "all publicly traded companies", "Class I railroads"), requirements, dates, compliance costs
+- Government rules, court decisions, enforcement actions explicitly applying to {target_company}'s industry/size/geography
+- Scope (e.g., "all publicly traded companies", "Class I railroads", "copper producers"), requirements, dates, compliance costs
 
 **Competitor Operational Moves:**
 - Competitor product launches, facility changes, partnerships, M&A, capacity changes
 - Competitor operational metrics (volume, market share, service levels) with specific data
 - How competitive actions affect {target_company}'s market position
 
-**Market/Supply Chain Developments:**
+**Customer Demand & Supply Chain:**
 - Customer demand trends in industries buying {target_company}'s products (with quantified data)
-- Input costs/availability (commodities, labor, capital) affecting {target_company}'s operations (with specific price changes)
-- Market dynamics (TAM, growth rates, adoption trends) impacting {target_company}'s addressable market
+- Input costs/availability (raw materials, labor, capital) affecting {target_company}'s operations (with specific price changes)
+- Supply chain developments impacting {target_company}'s production or delivery
 
 **Structure:**
 - Write 2-6 paragraphs in natural prose (no headers in output)
-- Lead with most relevant facts to {target_company}, then supporting context
+- Lead with most material facts for {target_company}, then supporting context
 - Scale length to article depth
 
 **Hard Rules:**
 - Every number MUST have: time period, units, comparison basis
 - Cite sources: (domain name only, e.g., WSJ, FT, Reuters)
 - FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
-- NO speculation about {target_company}'s response or strategy
+- NO speculation about {target_company}'s future response or strategy
 - NO assumptions about {target_company}'s capabilities, market share, or cost structure unless article explicitly states them
+- For commodity companies: Commodity price/supply/demand data IS relevant company information
 
 TARGET COMPANY: {target_company} ({target_ticker})
 SECTOR FOCUS: {industry_keyword}
@@ -6633,10 +6613,6 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                         result = await response.json()
                         summary = extract_text_from_responses(result)
                         if summary and len(summary.strip()) > 10:
-                            # Check for escape hatch response (article not relevant to target company)
-                            if "SECTOR TREND ONLY" in summary:
-                                LOG.info(f"OpenAI industry summary: Article not specific to {target_ticker}, skipping summary")
-                                return None
                             LOG.info(f"OpenAI industry summary: {industry_keyword} ({len(summary)} chars)")
                             return summary.strip()
                     else:

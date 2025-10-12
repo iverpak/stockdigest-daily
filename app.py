@@ -14243,7 +14243,8 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
             minutes=minutes,
             tickers=[ticker],
             batch_size=batch_size,
-            triage_batch_size=triage_batch_size
+            triage_batch_size=triage_batch_size,
+            mode=mode
         )
 
         LOG.info(f"[JOB {job_id}] cron_ingest completed for {ticker}")
@@ -16811,7 +16812,8 @@ async def cron_ingest(
     minutes: int = Query(default=15, description="Time window in minutes"),
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest"),
     batch_size: int = Query(default=None, description="Batch size for concurrent processing"),
-    triage_batch_size: int = Query(default=2, description="Batch size for triage processing")
+    triage_batch_size: int = Query(default=2, description="Batch size for triage processing"),
+    mode: str = 'daily'
 ):
     """Enhanced ingest with comprehensive memory monitoring and async batch processing"""
     # Set batch size from parameter or environment variable

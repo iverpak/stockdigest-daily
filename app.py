@@ -2540,7 +2540,8 @@ def store_ticker_reference(ticker_data: dict) -> bool:
             'company_name', 'industry', 'sector', 'sub_industry', 'exchange',
             'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
             'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
-            'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker'
+            'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker',
+            'geographic_markets', 'subsidiaries'
         ]
         for field in text_fields:
             if ticker_data.get(field):
@@ -2565,6 +2566,7 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                     competitor_1_name, competitor_1_ticker,
                     competitor_2_name, competitor_2_ticker,
                     competitor_3_name, competitor_3_ticker,
+                    geographic_markets, subsidiaries,
                     ai_generated, data_source
                 ) VALUES (
                     %(ticker)s, %(country)s, %(company_name)s, %(industry)s, %(sector)s, %(sub_industry)s,
@@ -2573,6 +2575,7 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                     %(competitor_1_name)s, %(competitor_1_ticker)s,
                     %(competitor_2_name)s, %(competitor_2_ticker)s,
                     %(competitor_3_name)s, %(competitor_3_ticker)s,
+                    %(geographic_markets)s, %(subsidiaries)s,
                     %(ai_generated)s, %(data_source)s
                 )
                 ON CONFLICT (ticker) DO UPDATE SET
@@ -2596,6 +2599,8 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                     competitor_2_ticker = EXCLUDED.competitor_2_ticker,
                     competitor_3_name = EXCLUDED.competitor_3_name,
                     competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                    geographic_markets = EXCLUDED.geographic_markets,
+                    subsidiaries = EXCLUDED.subsidiaries,
                     ai_generated = EXCLUDED.ai_generated,
                     data_source = EXCLUDED.data_source,
                     updated_at = NOW()
@@ -2621,6 +2626,8 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                 'competitor_2_ticker': ticker_data.get('competitor_2_ticker'),
                 'competitor_3_name': ticker_data.get('competitor_3_name'),
                 'competitor_3_ticker': ticker_data.get('competitor_3_ticker'),
+                'geographic_markets': ticker_data.get('geographic_markets'),
+                'subsidiaries': ticker_data.get('subsidiaries'),
                 'ai_generated': ticker_data.get('ai_generated', False),
                 'data_source': ticker_data.get('data_source', 'api')
             })
@@ -8211,10 +8218,10 @@ SUBSIDIARY RECOGNITION:
 - If article mentions company in SUBSIDIARIES list above:
   → Treat as DIRECT company news about {company_name} (not competitor/industry)
   → Score as if it were about {ticker} itself
-  → Reason: "{subsidiary} is a {ticker} subsidiary"
+  → Reason: "Article mentions {ticker} subsidiary - treat as company news"
 
 EXAMPLE:
-✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary, treat as company news)
+✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary - treat as company news)
 
 ANALYTICAL CONTENT - Include sector analysis:
 ✓ "Why [sector] companies are [performing/struggling]..." (explaining macro trends)
@@ -8826,10 +8833,10 @@ SUBSIDIARY RECOGNITION:
 - If article mentions company in SUBSIDIARIES list above:
   → Treat as DIRECT company news about {company_name} (not competitor/industry)
   → Score as if it were about {ticker} itself
-  → Reason: "{subsidiary} is a {ticker} subsidiary"
+  → Reason: "Article mentions {ticker} subsidiary - treat as company news"
 
 EXAMPLE:
-✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary, treat as company news)
+✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary - treat as company news)
 
 ANALYTICAL CONTENT - Include sector analysis:
 ✓ "Why [sector] companies are [performing/struggling]..." (explaining macro trends)
@@ -10552,6 +10559,8 @@ class TickerManager:
             'sector': metadata.get("sector", ""),
             'industry': metadata.get("industry", ""),
             'sub_industry': metadata.get("sub_industry", ""),
+            'geographic_markets': metadata.get("geographic_markets", ""),
+            'subsidiaries': metadata.get("subsidiaries", ""),
             'ai_generated': True,
             'data_source': 'ai_enhanced'
         }

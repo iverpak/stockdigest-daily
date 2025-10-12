@@ -968,6 +968,10 @@ def ensure_schema():
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_recommendation VARCHAR(50);
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_snapshot_date DATE;
 
+                -- Add geographic markets and subsidiaries metadata (Oct 2025)
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS geographic_markets TEXT;
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS subsidiaries TEXT;
+
                 -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
                 CREATE TABLE IF NOT EXISTS feeds (
                     id SERIAL PRIMARY KEY,
@@ -1064,7 +1068,9 @@ def ensure_schema():
                     financial_analyst_range_high NUMERIC(15, 2),
                     financial_analyst_count INTEGER,
                     financial_analyst_recommendation VARCHAR(50),
-                    financial_snapshot_date DATE
+                    financial_snapshot_date DATE,
+                    geographic_markets TEXT,
+                    subsidiaries TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS domain_names (
@@ -2420,7 +2426,8 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                    financial_volume, financial_avg_volume,
                    financial_analyst_target, financial_analyst_range_low,
                    financial_analyst_range_high, financial_analyst_count,
-                   financial_analyst_recommendation, financial_snapshot_date
+                   financial_analyst_recommendation, financial_snapshot_date,
+                   geographic_markets, subsidiaries
             FROM ticker_reference
             WHERE ticker = %s
         """, (ticker,))
@@ -2479,7 +2486,9 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
             "competitors": competitors,
             "sector": result.get("sector", ""),
             "industry": result.get("industry", ""),
-            "sub_industry": result.get("sub_industry", "")
+            "sub_industry": result.get("sub_industry", ""),
+            "geographic_markets": result.get("geographic_markets", ""),
+            "subsidiaries": result.get("subsidiaries", "")
         }
 
         # Add financial data if available
@@ -6440,12 +6449,21 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
+    # Get ticker config for geographic and subsidiary metadata
+    config = get_ticker_config(target_ticker) or {}
+    geographic_markets = config.get('geographic_markets', '').strip()
+    subsidiaries = config.get('subsidiaries', '').strip()
+
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
             # System prompt (cached - industry analysis framework)
             system_prompt = f"""You are a research analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}).
+
+**Company Context:**
+- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
+- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
 
 **Task:** Extract facts from this article relevant to {target_company}'s business operations, competitive position, costs, revenues, or regulatory environment.
 
@@ -6482,9 +6500,10 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 - Examples: 5G rollout, cybersecurity standards, ESG frameworks, clinical protocols, accounting changes
 
 **7. Geographic/Market-Specific Developments**
-- Events in countries/regions where {target_company} has operations, customers, or supply chain
+- Events in countries/regions where {target_company} operates (see Geographic Markets above)
 - Extract: infrastructure changes, regional regulations, local dynamics, geopolitical events
 - Examples: EU tariff changes, China market access, state regulations, port congestion, regional economics
+- IMPORTANT: If article discusses country NOT in Geographic Markets, note "Outside operating region" in relevance statement
 
 **8. Labor/Workforce Developments**
 - Changes affecting {target_company}'s ability to hire, retain, or deploy workers
@@ -6510,7 +6529,8 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 ❌ General macro news without sector implications
 ❌ Competitor stock metrics without operational impact
 ❌ Unrelated industries or sectors
-❌ Geographic regions where {target_company} has no presence
+❌ Geographic regions outside {target_company}'s markets (check Geographic Markets above)
+❌ Subsidiaries not owned by {target_company} (check Subsidiaries above)
 ❌ Regulations for different industry categories/company sizes
 ❌ Historical context not connected to current developments
 ❌ Vague trend pieces without specific data/dates
@@ -6701,11 +6721,20 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
+    # Get ticker config for geographic and subsidiary metadata
+    config = get_ticker_config(target_ticker) or {}
+    geographic_markets = config.get('geographic_markets', '').strip()
+    subsidiaries = config.get('subsidiaries', '').strip()
+
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
             prompt = f"""You are a research analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}).
+
+**Company Context:**
+- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
+- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
 
 **Task:** Extract facts from this article relevant to {target_company}'s business operations, competitive position, costs, revenues, or regulatory environment.
 
@@ -6742,9 +6771,10 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
 - Examples: 5G rollout, cybersecurity standards, ESG frameworks, clinical protocols, accounting changes
 
 **7. Geographic/Market-Specific Developments**
-- Events in countries/regions where {target_company} has operations, customers, or supply chain
+- Events in countries/regions where {target_company} operates (see Geographic Markets above)
 - Extract: infrastructure changes, regional regulations, local dynamics, geopolitical events
 - Examples: EU tariff changes, China market access, state regulations, port congestion, regional economics
+- IMPORTANT: If article discusses country NOT in Geographic Markets, note "Outside operating region" in relevance statement
 
 **8. Labor/Workforce Developments**
 - Changes affecting {target_company}'s ability to hire, retain, or deploy workers
@@ -6770,7 +6800,8 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
 ❌ General macro news without sector implications
 ❌ Competitor stock metrics without operational impact
 ❌ Unrelated industries or sectors
-❌ Geographic regions where {target_company} has no presence
+❌ Geographic regions outside {target_company}'s markets (check Geographic Markets above)
+❌ Subsidiaries not owned by {target_company} (check Subsidiaries above)
 ❌ Regulations for different industry categories/company sizes
 ❌ Historical context not connected to current developments
 ❌ Vague trend pieces without specific data/dates
@@ -8015,6 +8046,11 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
 
+    # Get ticker config for geographic and subsidiary metadata
+    config = get_ticker_config(ticker) or {}
+    geographic_markets = config.get('geographic_markets', '').strip()
+    subsidiaries = config.get('subsidiaries', '').strip()
+
     # Prepare items for triage (title + description)
     items = []
     for i, article in enumerate(articles):
@@ -8097,6 +8133,8 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
 TARGET COMPANY: {company_name} ({ticker})
 SECTOR: {sector}
 KNOWN PEERS: {peers_display}
+GEOGRAPHIC MARKETS: {geographic_markets if geographic_markets else 'Unknown'}
+SUBSIDIARIES: {subsidiaries if subsidiaries else 'None'}
 
 INDUSTRY CONTEXT: Select articles about sector-wide trends, regulatory changes, supply/demand shifts, and competitive dynamics that affect {company_name}'s business environment. These should provide competitive intelligence, not just mention the sector in passing.
 
@@ -8134,6 +8172,29 @@ TIER 3 - Market intelligence and context (scrape_priority=3):
 - Adoption metrics: Customer/user growth rates, penetration figures for {sector}
 - Cost structure changes: Input prices, labor costs, logistics affecting {sector}
 - Analyst sector reports WITH specific company mentions or competitive comparisons
+
+GEOGRAPHIC RELEVANCE CHECK:
+- If article focuses on SPECIFIC country/region (e.g., "India," "Pakistan," "Brazil," "China"):
+  → Check if country/region matches GEOGRAPHIC MARKETS above
+  → If NO match: Cap relevance score at 4.0 (reject - outside operating region)
+  → If YES match: Continue normal scoring (can reach 7-10)
+- If article about GLOBAL regulations (WTO, UN, ISO standards, international treaties):
+  → Always include (affects all companies regardless of geography)
+
+EXAMPLES:
+❌ "Amazon launches satellite in Pakistan" → 4.0 (Pakistan not in geographic markets)
+❌ "India satellite market to reach $15B" → 4.0 (India not in geographic markets)
+✅ "US FCC approves new spectrum rules" → 8.0 (US in geographic markets)
+✅ "ITU approves 6G standard globally" → 8.0 (global standard)
+
+SUBSIDIARY RECOGNITION:
+- If article mentions company in SUBSIDIARIES list above:
+  → Treat as DIRECT company news about {company_name} (not competitor/industry)
+  → Score as if it were about {ticker} itself
+  → Reason: "{subsidiary} is a {ticker} subsidiary"
+
+EXAMPLE:
+✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary, treat as company news)
 
 ANALYTICAL CONTENT - Include sector analysis:
 ✓ "Why [sector] companies are [performing/struggling]..." (explaining macro trends)
@@ -8662,6 +8723,11 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
     if not ANTHROPIC_API_KEY or not articles:
         return []
 
+    # Get ticker config for geographic and subsidiary metadata
+    config = get_ticker_config(ticker) or {}
+    geographic_markets = config.get('geographic_markets', '').strip()
+    subsidiaries = config.get('subsidiaries', '').strip()
+
     # Prepare items
     items = []
     for i, article in enumerate(articles):
@@ -8682,6 +8748,8 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
 TARGET COMPANY: {company_name} ({ticker})
 SECTOR: {sector}
 KNOWN PEERS: {peers_display}
+GEOGRAPHIC MARKETS: {geographic_markets if geographic_markets else 'Unknown'}
+SUBSIDIARIES: {subsidiaries if subsidiaries else 'None'}
 
 INDUSTRY CONTEXT: Select articles about sector-wide trends, regulatory changes, supply/demand shifts, and competitive dynamics that affect {company_name}'s business environment. These should provide competitive intelligence, not just mention the sector in passing.
 
@@ -8719,6 +8787,29 @@ TIER 3 - Market intelligence and context (scrape_priority=3):
 - Adoption metrics: Customer/user growth rates, penetration figures for {sector}
 - Cost structure changes: Input prices, labor costs, logistics affecting {sector}
 - Analyst sector reports WITH specific company mentions or competitive comparisons
+
+GEOGRAPHIC RELEVANCE CHECK:
+- If article focuses on SPECIFIC country/region (e.g., "India," "Pakistan," "Brazil," "China"):
+  → Check if country/region matches GEOGRAPHIC MARKETS above
+  → If NO match: Cap relevance score at 4.0 (reject - outside operating region)
+  → If YES match: Continue normal scoring (can reach 7-10)
+- If article about GLOBAL regulations (WTO, UN, ISO standards, international treaties):
+  → Always include (affects all companies regardless of geography)
+
+EXAMPLES:
+❌ "Amazon launches satellite in Pakistan" → 4.0 (Pakistan not in geographic markets)
+❌ "India satellite market to reach $15B" → 4.0 (India not in geographic markets)
+✅ "US FCC approves new spectrum rules" → 8.0 (US in geographic markets)
+✅ "ITU approves 6G standard globally" → 8.0 (global standard)
+
+SUBSIDIARY RECOGNITION:
+- If article mentions company in SUBSIDIARIES list above:
+  → Treat as DIRECT company news about {company_name} (not competitor/industry)
+  → Score as if it were about {ticker} itself
+  → Reason: "{subsidiary} is a {ticker} subsidiary"
+
+EXAMPLE:
+✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary, treat as company news)
 
 ANALYTICAL CONTENT - Include sector analysis:
 ✓ "Why [sector] companies are [performing/struggling]..." (explaining macro trends)
@@ -10530,10 +10621,102 @@ INDUSTRY KEYWORDS (exactly 3):
 - Use compound terms or specific product categories
 - Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
 
+KEYWORD EFFECTIVENESS TEST:
+Before finalizing keywords, ask yourself:
+1. JOURNALIST TEST: Would Bloomberg/Reuters use this exact phrase in a headline?
+   ✅ "Cloud Infrastructure" → YES (common in headlines)
+   ❌ "Infrastructure as a Service" → NO (too technical)
+
+2. FALSE POSITIVE TEST: Will this keyword pull irrelevant articles?
+   ✅ "Smartphone Manufacturing" → LOW false positives (specific)
+   ❌ "Mobile Technology" → HIGH false positives (too broad)
+
+3. COVERAGE TEST: Will this catch ALL material news about this business?
+   ✅ "Electric Vehicle Production" → Catches Tesla factory news, sales, recalls
+   ❌ "Battery Technology" → Misses most Tesla news (too narrow)
+
+BALANCE: Specific enough to avoid noise, broad enough to catch material developments
+
+INDUSTRY KEYWORDS - SECTOR EXAMPLES:
+
+Technology/Software:
+✅ "Cloud Infrastructure" (for AWS/Azure/GCP)
+✅ "Enterprise Software" (for Salesforce/SAP)
+✅ "Semiconductor Manufacturing" (for TSMC/Intel)
+❌ "Technology", "Software", "Computers"
+
+Financials:
+✅ "Investment Banking" (for Goldman/Morgan Stanley)
+✅ "Wealth Management" (for Morgan Stanley/UBS)
+✅ "Commercial Real Estate Lending" (for regional banks)
+❌ "Banking", "Financial Services", "Loans"
+
+Energy:
+✅ "Upstream Oil Production" (for Exxon/Chevron/ConocoPhillips)
+✅ "Liquefied Natural Gas" (for Cheniere)
+✅ "Renewable Energy Development" (for NextEra)
+❌ "Oil", "Energy", "Petroleum"
+
+Utilities:
+✅ "Electric Power Generation" (for Southern Company/Duke)
+✅ "Natural Gas Distribution" (for Sempra/Atmos)
+✅ "Renewable Energy Transition" (for utilities adding wind/solar)
+❌ "Utilities", "Power", "Energy"
+
+Real Estate:
+✅ "Industrial REITs" (for Prologis/Duke Realty)
+✅ "Data Center REITs" (for Equinix/Digital Realty)
+✅ "Cell Tower Infrastructure" (for American Tower/Crown Castle)
+❌ "Real Estate", "REITs", "Property"
+
+Healthcare:
+✅ "Biologics Manufacturing" (for Amgen/Biogen)
+✅ "Pharmacy Benefits Management" (for CVS/Cigna)
+✅ "Medical Device Innovation" (for Medtronic/Boston Scientific)
+❌ "Healthcare", "Pharmaceuticals", "Medicine"
+
+Consumer/Retail:
+✅ "Quick Service Restaurants" (for McDonald's/Yum Brands)
+✅ "Athletic Footwear" (for Nike/Adidas)
+✅ "E-commerce Marketplace" (for Amazon/eBay)
+❌ "Restaurants", "Shoes", "Retail"
+
+Industrials:
+✅ "Aerospace Manufacturing" (for Boeing/Lockheed)
+✅ "Industrial Automation" (for Rockwell/Emerson)
+✅ "Freight Transportation" (for UPS/FedEx)
+❌ "Manufacturing", "Industrial", "Logistics"
+
+BUSINESS STRUCTURE GUIDANCE:
+
+For MOST companies (single core business):
+- Standard approach: 3 keywords for primary business
+- Example: Netflix → ["Streaming Entertainment", "Subscription Video", "Original Content"]
+
+For DIVERSIFIED companies (2-3 major business lines):
+- Keywords should cover top 2-3 revenue segments (prioritize profit contributors)
+- Competitors can be a MIX across segments (no single competitor may compete in all areas)
+- Example: Amazon → Keywords: ["E-commerce Marketplace", "Cloud Infrastructure", "Digital Advertising"]
+  Competitors: Walmart (retail), Microsoft (cloud), Shopify (platform)
+
+For CONGLOMERATES (Berkshire, 3M, Honeywell):
+- Focus on 3 largest operating segments OR conglomerate-level themes
+- Competitors: Other diversified industrials/conglomerates
+- Example: Berkshire → ["Property Casualty Insurance", "Railroad Operations", "Diversified Holdings"]
+  Competitors: 3M, Honeywell, Danaher
+
+For REGIONAL/GEOGRAPHIC companies (utilities, Canadian banks):
+- Competitors MUST be in same primary market/regulatory environment
+- Example: RY.TO → Competitors: TD.TO, BMO.TO, BNS.TO (NOT JPM, BAC)
+- Example: Southern Company → Competitors: Duke Energy, Dominion, Entergy (all Southeast regulated utilities)
+
 COMPETITORS (exactly 3):
 - Must be DIRECT business competitors where the MAJORITY of both companies' revenues/operations compete in the same markets with similar products or services
 - NOT companies with only minor product overlap (e.g., Autodesk is NOT a Figma competitor despite both having design tools)
 - NOT companies in the same sector but serving different customers or markets
+- GEOGRAPHIC PRIORITY: For regional companies (utilities, local banks), prioritize competitors in same PRIMARY market over global peers
+  → Example: Royal Bank of Canada (RY.TO) → Canadian banks (TD.TO, BMO.TO), NOT JPMorgan/BofA
+  → Example: Southern Company (SO) → Southeast utilities (Duke, Dominion), NOT all US utilities
 - Prefer publicly traded companies with tickers when possible
 - For private companies: Include name but omit or set ticker to empty string
 - Company names should be the common/brand name ONLY (e.g., "Canva" not "Canva Pty Ltd", "Adobe" not "Adobe Inc")
@@ -10698,10 +10881,102 @@ INDUSTRY KEYWORDS (exactly 3):
 - Use compound terms or specific product categories
 - Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
 
+KEYWORD EFFECTIVENESS TEST:
+Before finalizing keywords, ask yourself:
+1. JOURNALIST TEST: Would Bloomberg/Reuters use this exact phrase in a headline?
+   ✅ "Cloud Infrastructure" → YES (common in headlines)
+   ❌ "Infrastructure as a Service" → NO (too technical)
+
+2. FALSE POSITIVE TEST: Will this keyword pull irrelevant articles?
+   ✅ "Smartphone Manufacturing" → LOW false positives (specific)
+   ❌ "Mobile Technology" → HIGH false positives (too broad)
+
+3. COVERAGE TEST: Will this catch ALL material news about this business?
+   ✅ "Electric Vehicle Production" → Catches Tesla factory news, sales, recalls
+   ❌ "Battery Technology" → Misses most Tesla news (too narrow)
+
+BALANCE: Specific enough to avoid noise, broad enough to catch material developments
+
+INDUSTRY KEYWORDS - SECTOR EXAMPLES:
+
+Technology/Software:
+✅ "Cloud Infrastructure" (for AWS/Azure/GCP)
+✅ "Enterprise Software" (for Salesforce/SAP)
+✅ "Semiconductor Manufacturing" (for TSMC/Intel)
+❌ "Technology", "Software", "Computers"
+
+Financials:
+✅ "Investment Banking" (for Goldman/Morgan Stanley)
+✅ "Wealth Management" (for Morgan Stanley/UBS)
+✅ "Commercial Real Estate Lending" (for regional banks)
+❌ "Banking", "Financial Services", "Loans"
+
+Energy:
+✅ "Upstream Oil Production" (for Exxon/Chevron/ConocoPhillips)
+✅ "Liquefied Natural Gas" (for Cheniere)
+✅ "Renewable Energy Development" (for NextEra)
+❌ "Oil", "Energy", "Petroleum"
+
+Utilities:
+✅ "Electric Power Generation" (for Southern Company/Duke)
+✅ "Natural Gas Distribution" (for Sempra/Atmos)
+✅ "Renewable Energy Transition" (for utilities adding wind/solar)
+❌ "Utilities", "Power", "Energy"
+
+Real Estate:
+✅ "Industrial REITs" (for Prologis/Duke Realty)
+✅ "Data Center REITs" (for Equinix/Digital Realty)
+✅ "Cell Tower Infrastructure" (for American Tower/Crown Castle)
+❌ "Real Estate", "REITs", "Property"
+
+Healthcare:
+✅ "Biologics Manufacturing" (for Amgen/Biogen)
+✅ "Pharmacy Benefits Management" (for CVS/Cigna)
+✅ "Medical Device Innovation" (for Medtronic/Boston Scientific)
+❌ "Healthcare", "Pharmaceuticals", "Medicine"
+
+Consumer/Retail:
+✅ "Quick Service Restaurants" (for McDonald's/Yum Brands)
+✅ "Athletic Footwear" (for Nike/Adidas)
+✅ "E-commerce Marketplace" (for Amazon/eBay)
+❌ "Restaurants", "Shoes", "Retail"
+
+Industrials:
+✅ "Aerospace Manufacturing" (for Boeing/Lockheed)
+✅ "Industrial Automation" (for Rockwell/Emerson)
+✅ "Freight Transportation" (for UPS/FedEx)
+❌ "Manufacturing", "Industrial", "Logistics"
+
+BUSINESS STRUCTURE GUIDANCE:
+
+For MOST companies (single core business):
+- Standard approach: 3 keywords for primary business
+- Example: Netflix → ["Streaming Entertainment", "Subscription Video", "Original Content"]
+
+For DIVERSIFIED companies (2-3 major business lines):
+- Keywords should cover top 2-3 revenue segments (prioritize profit contributors)
+- Competitors can be a MIX across segments (no single competitor may compete in all areas)
+- Example: Amazon → Keywords: ["E-commerce Marketplace", "Cloud Infrastructure", "Digital Advertising"]
+  Competitors: Walmart (retail), Microsoft (cloud), Shopify (platform)
+
+For CONGLOMERATES (Berkshire, 3M, Honeywell):
+- Focus on 3 largest operating segments OR conglomerate-level themes
+- Competitors: Other diversified industrials/conglomerates
+- Example: Berkshire → ["Property Casualty Insurance", "Railroad Operations", "Diversified Holdings"]
+  Competitors: 3M, Honeywell, Danaher
+
+For REGIONAL/GEOGRAPHIC companies (utilities, Canadian banks):
+- Competitors MUST be in same primary market/regulatory environment
+- Example: RY.TO → Competitors: TD.TO, BMO.TO, BNS.TO (NOT JPM, BAC)
+- Example: Southern Company → Competitors: Duke Energy, Dominion, Entergy (all Southeast regulated utilities)
+
 COMPETITORS (exactly 3):
 - Must be DIRECT business competitors where the MAJORITY of both companies' revenues/operations compete in the same markets with similar products or services
 - NOT companies with only minor product overlap (e.g., Autodesk is NOT a Figma competitor despite both having design tools)
 - NOT companies in the same sector but serving different customers or markets
+- GEOGRAPHIC PRIORITY: For regional companies (utilities, local banks), prioritize competitors in same PRIMARY market over global peers
+  → Example: Royal Bank of Canada (RY.TO) → Canadian banks (TD.TO, BMO.TO), NOT JPMorgan/BofA
+  → Example: Southern Company (SO) → Southeast utilities (Duke, Dominion), NOT all US utilities
 - Prefer publicly traded companies with tickers when possible
 - For private companies: Include name but omit or set ticker to empty string
 - Company names should be the common/brand name ONLY (e.g., "Canva" not "Canva Pty Ltd", "Adobe" not "Adobe Inc")
@@ -11713,7 +11988,7 @@ Example:
 
 CRITICAL: Stay factual. Cite specific developments from today's news. Acceptable inference: 25-30% in Bull/Bear cases only.
 
-CRITICAL: Write sub-headers exactly as shown with emojis: "📈 BULL CASE:", "📉 BEAR CASE:", "🔍 KEY VARIABLES TO MONITOR:", "🔔 NEXT CATALYST:"
+CRITICAL: Write sub-headers exactly as shown with emojis: "📈 BULL CASE:", "📉 BEAR CASE:", "🔍 KEY VARIABLES TO MONITOR:"
 
 For Material News Days (1+ flagged articles):
 
@@ -11733,9 +12008,6 @@ For Material News Days (1+ flagged articles):
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
-
-🔔 NEXT CATALYST:
-• [Event/Date from articles that will provide new information] - [What data will be disclosed]
 
 ---
 
@@ -11826,11 +12098,11 @@ If fact is detailed in one section, cross-reference in others:
 CRITICAL WRITING RULES:
 
 0. NO MARKDOWN - Section headers are emoji only (🔴, 📊, etc.)
-1. BULLET FORMAT - Use • character for ALL bulleted sections (Major Developments, Financial, Risk Factors, Wall Street, Competitive, Catalysts, Bull/Bear, Key Variables, Next Catalyst)
+1. BULLET FORMAT - Use • character for ALL bulleted sections (Major Developments, Financial, Risk Factors, Wall Street, Competitive, Catalysts, Bull/Bear, Key Variables)
 
-   CRITICAL: EVERY point under 📈 BULL CASE, 📉 BEAR CASE, 🔍 KEY VARIABLES TO MONITOR, and 🔔 NEXT CATALYST must start with • character
+   CRITICAL: EVERY point under 📈 BULL CASE, 📉 BEAR CASE, and 🔍 KEY VARIABLES TO MONITOR must start with • character
    - NO paragraphs, NO plain text lines - only bullets
-   - Add blank line between 📈 BULL CASE and 📉 BEAR CASE, between 📉 BEAR CASE and 🔍 KEY VARIABLES, between 🔍 KEY VARIABLES and 🔔 NEXT CATALYST
+   - Add blank line between 📈 BULL CASE and 📉 BEAR CASE, between 📉 BEAR CASE and 🔍 KEY VARIABLES
 
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
 3. NO source names in bullets - Exception: when figures conflict
@@ -13148,8 +13420,7 @@ def parse_investment_implications_subsections(content: List[str]) -> Dict[str, a
         'quiet_day_text': str (if quiet day),
         'bull_case': [...bullets...],
         'bear_case': [...bullets...],
-        'key_variables': [...bullets...],
-        'next_catalyst': [...bullets...]
+        'key_variables': [...bullets...]
     }
     """
     result = {
@@ -13157,8 +13428,7 @@ def parse_investment_implications_subsections(content: List[str]) -> Dict[str, a
         'quiet_day_text': '',
         'bull_case': [],
         'bear_case': [],
-        'key_variables': [],
-        'next_catalyst': []
+        'key_variables': []
     }
 
     if not content:
@@ -13191,9 +13461,6 @@ def parse_investment_implications_subsections(content: List[str]) -> Dict[str, a
             continue
         elif 'KEY VARIABLES TO MONITOR' in line:
             current_subsection = 'key_variables'
-            continue
-        elif 'NEXT CATALYST' in line:
-            current_subsection = 'next_catalyst'
             continue
 
         # Extract bullet content
@@ -13308,7 +13575,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
     # Investment Implications parent header (only if has content)
     if any([parsed_investment['bull_case'], parsed_investment['bear_case'],
-            parsed_investment['key_variables'], parsed_investment['next_catalyst']]):
+            parsed_investment['key_variables']]):
         html += build_section("🎯 Investment Implications" if not strip_emojis else "Investment Implications",
                              [], use_bullets=False)  # Empty content, just header
 
@@ -13319,8 +13586,6 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                          parsed_investment['bear_case'], use_bullets=True)
     html += build_section("Key Variables to Monitor" if strip_emojis else "🔍 Key Variables to Monitor",
                          parsed_investment['key_variables'], use_bullets=True)
-    html += build_section("Next Catalyst" if strip_emojis else "🔔 Next Catalyst",
-                         parsed_investment['next_catalyst'], use_bullets=True)
 
     return html
 
@@ -14002,6 +14267,8 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     resolved_count = 0
     failed_count = 0
     yahoo_chain_count = 0  # Track Google → Yahoo → Final chains
+    spam_blocked_count = 0  # Track spam articles blocked post-resolution
+    spam_blocked_ids = []  # Track spam article IDs to remove from flagged list
 
     for idx, article in enumerate(unresolved, 1):
         article_id = article['id']
@@ -14053,16 +14320,35 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
             if is_yahoo_finance:
                 yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
-                if yahoo_original:
+                # Check if extraction actually succeeded (returned a DIFFERENT URL)
+                if yahoo_original and yahoo_original != resolved_url:
                     final_resolved_url = yahoo_original
                     final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
                     yahoo_chain_count += 1
                 else:
+                    # Extraction failed, keep Yahoo URL
                     final_resolved_url = resolved_url
                     final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+                    if yahoo_original == resolved_url:
+                        LOG.warning(f"[{ticker}] ⚠️ Yahoo extraction failed (no providerContentUrl): {resolved_url[:80]}")
             else:
                 final_resolved_url = resolved_url
                 final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+
+            # SPAM CHECK: Block spam domains after full resolution chain
+            if final_domain in SPAM_DOMAINS:
+                LOG.info(f"[{ticker}] 🚫 SPAM BLOCKED (post-resolution): {final_domain} - {title[:60]}")
+                spam_blocked_count += 1
+                spam_blocked_ids.append(article_id)
+
+                # Delete spam article from database
+                with db() as conn2, conn2.cursor() as cur2:
+                    cur2.execute("DELETE FROM ticker_articles WHERE article_id = %s", (article_id,))
+                    cur2.execute("DELETE FROM articles WHERE id = %s", (article_id,))
+                    LOG.info(f"[{ticker}] 🗑️ Deleted spam article ID {article_id} from database")
+
+                # Skip database UPDATE and move to next article
+                continue
 
             # Update database (no source_url)
             with db() as conn, conn.cursor() as cur:
@@ -14099,8 +14385,14 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     LOG.info(f"[{ticker}]    Total processed: {total}")
     LOG.info(f"[{ticker}]    ✅ Succeeded: {resolved_count} ({resolved_count/total*100:.1f}%)")
     LOG.info(f"[{ticker}]    ❌ Failed: {failed_count} ({failed_count/total*100:.1f}%)")
+    LOG.info(f"[{ticker}]    🚫 Spam blocked: {spam_blocked_count}")
     LOG.info(f"[{ticker}]    🔗 Google→Yahoo→Final chains: {yahoo_chain_count}")
     LOG.info(f"[{ticker}] {'='*60}")
+
+    # Remove spam articles from flagged list
+    if spam_blocked_ids:
+        flagged_article_ids = [aid for aid in flagged_article_ids if aid not in spam_blocked_ids]
+        LOG.info(f"[{ticker}] 🗑️ Removed {len(spam_blocked_ids)} spam articles from flagged list")
 
     # ============================================================================
     # POST-RESOLUTION DEDUPLICATION

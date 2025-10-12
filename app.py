@@ -6667,13 +6667,7 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": [
-                    {
-                        "type": "text",
-                        "text": system_prompt,
-                        "cache_control": {"type": "ephemeral"}
-                    }
-                ],
+                "system": system_prompt,
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -8237,19 +8231,19 @@ PRIMARY CRITERION: Does this article reveal information about {company_name}'s c
 SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard industry events with quantified impact (scrape_priority=1):
-- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting {sector}
-- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting {company_name} sector
-- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting {sector}
+- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting target sector
+- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting target company sector
+- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting target sector
 - Standards: New requirements, certifications, compliance rules WITH deadlines/costs for {sector}
 - Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines for {sector}
-- Financial: Interest rates, capital requirements, reserve rules affecting {sector}
-- Technology shifts: Standards changes, platform migrations, protocol updates affecting {sector}
+- Financial: Interest rates, capital requirements, reserve rules affecting target sector
+- Technology shifts: Standards changes, platform migrations, protocol updates affecting target sector
 
 TIER 2 - Strategic sector developments (scrape_priority=2):
-- Major capacity additions/closures WITH impact metrics (e.g., "500MW," "1M units/year") in {sector}
+- Major capacity additions/closures WITH impact metrics (e.g., "500MW," "1M units/year") in target sector
 - Industry consolidation WITH transaction values and market share implications
 - Technology adoption WITH implementation timelines and cost/efficiency impacts
-- Labor agreements WITH wage/benefit details affecting {sector} economics
+- Labor agreements WITH wage/benefit details affecting target sector economics
 - Infrastructure investments WITH budgets and completion dates for {sector}
 - Patent expirations, generic approvals, licensing changes WITH market impact
 - Major peer announcements revealing sector trends (from peers: {peers_display})
@@ -8258,11 +8252,11 @@ TIER 2 - Strategic sector developments (scrape_priority=2):
 
 TIER 3 - Market intelligence and context (scrape_priority=3):
 - Market opportunity sizing WITH credible TAM/SAM figures for {company_name}'s addressable market
-- Economic indicators directly affecting {sector} WITH specific data points
+- Economic indicators directly affecting target sector WITH specific data points
 - Government funding/initiatives WITH allocated budgets (not vague "plans")
 - Research findings WITH quantified sector implications
 - Adoption metrics: Customer/user growth rates, penetration figures for {sector}
-- Cost structure changes: Input prices, labor costs, logistics affecting {sector}
+- Cost structure changes: Input prices, labor costs, logistics affecting target sector
 - Analyst sector reports WITH specific company mentions or competitive comparisons
 
 GEOGRAPHIC RELEVANCE CHECK:
@@ -8644,11 +8638,11 @@ async def triage_company_articles_claude(articles: List[Dict], ticker: str, comp
 
     target_cap = min(20, len(articles))
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important articles about {company_name} ({ticker}) from {len(articles)} candidates based ONLY on titles and descriptions.
+    # Generic system prompt (cacheable across all tickers)
+    system_prompt = """You are a financial analyst selecting articles about a target company based ONLY on titles and descriptions.
 
-CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
-
-PRIMARY CRITERION: Is this article SPECIFICALLY about {company_name}? If unclear, skip it.
+**YOUR TASK:**
+The user will provide a target company, article count, and target cap. Select the most important articles about that specific company.
 
 SELECT (choose up to {target_cap}):
 
@@ -8665,7 +8659,7 @@ TIER 1 - Hard corporate events (scrape_priority=1):
 
 TIER 2 - Strategic developments and analysis (scrape_priority=2):
 - Leadership: CEO, CFO, President, CTO WITH "appoints," "names," "resigns," "retires," "replaces"
-- Partnerships: Named partner companies (e.g., "{company_name} partners with [Other Company]")
+- Partnerships: Named partner companies (e.g., "Target Company partners with [Other Company]")
 - Technology: Specific tech/platform names WITH "launches," "announces," "deploys"
 - Facilities: Plant/office/branch/store openings, closures WITH locations and capacity/headcount numbers
 - Clinical: Trial phases, enrollment milestones, data releases (pharma/biotech)
@@ -8674,38 +8668,38 @@ TIER 2 - Strategic developments and analysis (scrape_priority=2):
 - Investment theses: Articles analyzing bull/bear cases, valuation, competitive position
 - Executive interviews: CEO, CFO, founder interviews discussing strategy, outlook, vision
 - Stock performance analysis: "Why [ticker] stock," "[Company] stock analysis," explaining recent moves
-- Industry positioning: "{company_name}'s role in [trend]," competitive advantages/disadvantages
+- Industry positioning: "Target Company's role in [trend]," competitive advantages/disadvantages
 
 TIER 3 - Context and market intelligence (scrape_priority=3):
 - Analyst coverage WITH price targets, ratings, or detailed notes
 - Industry awards, certifications indicating competitive position
-- Market opportunity sizing specific to {company_name}
+- Market opportunity sizing specific to target company
 - Routine announcements WITH material operational details
 - Technical analysis from any source WITH specific price targets or chart patterns
 
 ANALYTICAL CONTENT - Include these question-based titles:
-✓ "Why {company_name} stock [moved/performed]..." (explaining actual events)
-✓ "Can {company_name} [achieve/sustain/compete]..." (analyzing capability)
-✓ "Should you buy {company_name}..." (investment thesis with specific reasoning)
-✓ "What's next for {company_name}..." (forward-looking analysis based on recent events)
+✓ "Why [Company] stock [moved/performed]..." (explaining actual events)
+✓ "Can [Company] [achieve/sustain/compete]..." (analyzing capability)
+✓ "Should you buy [Company]..." (investment thesis with specific reasoning)
+✓ "What's next for [Company]..." (forward-looking analysis based on recent events)
 ✓ "[Company] stock: [Question about valuation/growth/strategy]" (substantive analysis)
 
 REJECT COMPLETELY - Never select:
 - Generic watchlists: "Top 5 stocks," "Best dividend picks," "Stocks to watch this week"
 - Sector roundups: "Tech sector movers," "Healthcare stocks rally," "Energy update"
-- Unrelated listicles: Articles where {company_name} is mentioned in passing among many tickers
+- Unrelated listicles: Articles where target company is mentioned in passing among many tickers
 - Pure clickbait: "This stock could 10x" (without specific company thesis)
 - Historical what-ifs: "If you'd invested $1000 in 2010," "Where would you be today"
 - Distant predictions: "Price prediction 2030," "Could reach $X by 2035" (without near-term catalyst)
-- Market research only: "Industry to reach $XB by 20XX" (unless specifically about {company_name}'s role)
+- Market research only: "Industry to reach $XB by 20XX" (unless specifically about target company's role)
 - Quote pages: "Stock Price | Live Quotes & Charts | [Exchange]"
-- Attribution confusion: Articles where {company_name} is the news SOURCE not the SUBJECT
+- Attribution confusion: Articles where target company is the news SOURCE not the SUBJECT
 
 DISAMBIGUATION - Critical for accuracy:
-- If title leads with different company name, likely not about {company_name} (reject unless comparative)
-- If {company_name} only appears as news source attribution (e.g., "According to {company_name}..."), reject
-- For common words (Oracle, Amazon, Apple, Crown), verify context matches YOUR company
-- Multi-company articles: Only select if {company_name} is primary focus (≥50% of title/description)
+- If title leads with different company name, likely not about target company (reject unless comparative)
+- If target company only appears as news source attribution (e.g., "According to [Company]..."), reject
+- For common words (Oracle, Amazon, Apple, Crown), verify context matches the target company
+- Multi-company articles: Only select if target company is primary focus (≥50% of title/description)
 
 SCRAPE PRIORITY (assign integer 1-3):
 1 = Tier 1 (financial results, M&A, regulatory, disasters, major contracts, price moves)
@@ -8713,18 +8707,27 @@ SCRAPE PRIORITY (assign integer 1-3):
 3 = Tier 3 (analyst coverage, awards, market sizing, technical analysis)
 
 SELECTION STANDARD:
-- When uncertain if article is about {company_name}, skip it
+- When uncertain if article is about target company, skip it
 - Prioritize relevance over domain prestige
-- A niche trade publication covering {company_name} specifically > major outlet mentioning tangentially
-- Only select if confident the article provides actionable intelligence about {company_name}
+- A niche trade publication covering target company specifically > major outlet mentioning tangentially
+- Only select if confident the article provides actionable intelligence about target company
 
+**OUTPUT FORMAT:**
 Return a JSON array of selected articles. Each must have:
 [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about relevance."""
+Select UP TO the target cap provided by user. Select fewer if uncertain about relevance."""
 
-    # Separate variable content for better caching (articles data changes per call)
-    user_content = f"Articles: {json.dumps(items, separators=(',', ':'))}"
+    # User message with ticker-specific context
+    user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**ARTICLE COUNT:** {len(articles)}
+**TARGET CAP:** {target_cap}
+
+**YOUR TASK:**
+Select the {target_cap} most important articles about {company_name} from the {len(articles)} candidates below. Is each article SPECIFICALLY about {company_name}? If unclear, skip it.
+
+**ARTICLES:**
+{json.dumps(items, separators=(',', ':'))}"""
 
     try:
         headers = {
@@ -8759,6 +8762,16 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
                     return []
 
                 result = await response.json()
+
+                # Log cache performance
+                usage = result.get("usage", {})
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (company triage)")
+                elif cache_read > 0:
+                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (company triage) - 90% savings!")
+
                 content = result.get("content", [{}])[0].get("text", "")
 
                 if not content:
@@ -8841,36 +8854,34 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
     target_cap = min(5, len(articles))
     peers_display = ', '.join(peers[:5]) if peers else 'None'
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
+    # Generic system prompt (cacheable across all tickers)
+    system_prompt = """You are a financial analyst selecting INDUSTRY articles based ONLY on titles and descriptions.
 
-TARGET COMPANY: {company_name} ({ticker})
-SECTOR: {sector}
-KNOWN PEERS: {peers_display}
-GEOGRAPHIC MARKETS: {geographic_markets if geographic_markets else 'Unknown'}
-SUBSIDIARIES: {subsidiaries if subsidiaries else 'None'}
+**YOUR TASK:**
+The user will provide target company, sector, known peers, geographic markets, subsidiaries, article count, and target cap. Select the most important industry articles that affect the target company's business environment.
 
-INDUSTRY CONTEXT: Select articles about sector-wide trends, regulatory changes, supply/demand shifts, and competitive dynamics that affect {company_name}'s business environment. These should provide competitive intelligence, not just mention the sector in passing.
+**INDUSTRY CONTEXT:**
+Select articles about sector-wide trends, regulatory changes, supply/demand shifts, and competitive dynamics that provide competitive intelligence for the target company.
 
-CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
-
-PRIMARY CRITERION: Does this article reveal information about {company_name}'s competitive landscape, regulatory environment, or market opportunity?
+**PRIMARY CRITERION:**
+Does this article reveal information about the target company's competitive landscape, regulatory environment, or market opportunity?
 
 SELECT (choose up to {target_cap}):
 
 TIER 1 - Hard industry events with quantified impact (scrape_priority=1):
-- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting {sector}
-- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting {company_name} sector
-- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting {sector}
+- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting target sector
+- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting target company sector
+- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting target sector
 - Standards: New requirements, certifications, compliance rules WITH deadlines/costs for {sector}
 - Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines for {sector}
-- Financial: Interest rates, capital requirements, reserve rules affecting {sector}
-- Technology shifts: Standards changes, platform migrations, protocol updates affecting {sector}
+- Financial: Interest rates, capital requirements, reserve rules affecting target sector
+- Technology shifts: Standards changes, platform migrations, protocol updates affecting target sector
 
 TIER 2 - Strategic sector developments (scrape_priority=2):
-- Major capacity additions/closures WITH impact metrics (e.g., "500MW," "1M units/year") in {sector}
+- Major capacity additions/closures WITH impact metrics (e.g., "500MW," "1M units/year") in target sector
 - Industry consolidation WITH transaction values and market share implications
 - Technology adoption WITH implementation timelines and cost/efficiency impacts
-- Labor agreements WITH wage/benefit details affecting {sector} economics
+- Labor agreements WITH wage/benefit details affecting target sector economics
 - Infrastructure investments WITH budgets and completion dates for {sector}
 - Patent expirations, generic approvals, licensing changes WITH market impact
 - Major peer announcements revealing sector trends (from peers: {peers_display})
@@ -8879,11 +8890,11 @@ TIER 2 - Strategic sector developments (scrape_priority=2):
 
 TIER 3 - Market intelligence and context (scrape_priority=3):
 - Market opportunity sizing WITH credible TAM/SAM figures for {company_name}'s addressable market
-- Economic indicators directly affecting {sector} WITH specific data points
+- Economic indicators directly affecting target sector WITH specific data points
 - Government funding/initiatives WITH allocated budgets (not vague "plans")
 - Research findings WITH quantified sector implications
 - Adoption metrics: Customer/user growth rates, penetration figures for {sector}
-- Cost structure changes: Input prices, labor costs, logistics affecting {sector}
+- Cost structure changes: Input prices, labor costs, logistics affecting target sector
 - Analyst sector reports WITH specific company mentions or competitive comparisons
 
 GEOGRAPHIC RELEVANCE CHECK:
@@ -8947,10 +8958,23 @@ SELECTION STANDARD:
 
 Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about sector relevance to {company_name}."""
+**OUTPUT FORMAT:**
+Return JSON array. Select UP TO the target cap. Select fewer if uncertain about sector relevance to target company."""
 
-    # Separate variable content for better caching
-    user_content = f"Articles: {json.dumps(items, separators=(',', ':'))}"
+    # User message with ticker-specific context
+    user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**SECTOR:** {sector}
+**KNOWN PEERS:** {peers_display}
+**GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
+**SUBSIDIARIES:** {subsidiaries if subsidiaries else 'None'}
+**ARTICLE COUNT:** {len(articles)}
+**TARGET CAP:** {target_cap}
+
+**YOUR TASK:**
+Select the {target_cap} most important industry articles about {sector} that affect {company_name}'s business environment from the {len(articles)} candidates below.
+
+**ARTICLES:**
+{json.dumps(items, separators=(',', ':'))}"""
 
     try:
         headers = {
@@ -8979,6 +9003,16 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
                     return []
 
                 result = await response.json()
+
+                # Log cache performance
+                usage = result.get("usage", {})
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (industry triage)")
+                elif cache_read > 0:
+                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (industry triage) - 90% savings!")
+
                 content = result.get("content", [{}])[0].get("text", "")
 
                 try:
@@ -9128,13 +9162,7 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "system": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"}
-                }
-            ],
+            "system": system_prompt,
             "messages": [{"role": "user", "content": user_content}]
         }
 

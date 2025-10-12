@@ -6667,7 +6667,13 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "system": system_prompt,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
                 "messages": [{"role": "user", "content": user_content}]
             }
 
@@ -8730,7 +8736,13 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
-            "system": system_prompt,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ],
             "messages": [
                 {
                     "role": "user",
@@ -8950,7 +8962,13 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "system": system_prompt,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ],
             "messages": [{"role": "user", "content": user_content}]
         }
 
@@ -9110,7 +9128,13 @@ CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncerta
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "system": system_prompt,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ],
             "messages": [{"role": "user", "content": user_content}]
         }
 
@@ -12360,7 +12384,13 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 10000,
-            "system": system_prompt,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ],
             "messages": [
                 {
                     "role": "user",

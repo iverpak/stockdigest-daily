@@ -5947,38 +5947,104 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
     if True:  # Maintain indentation
         try:
             # System prompt (cached - competitive analysis framework)
-            system_prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze articles and write summaries using ONLY facts explicitly stated in the text.
+            system_prompt = f"""You are a research analyst extracting information about {competitor_name} ({competitor_ticker}) for a {target_company} ({target_ticker}) competitive intelligence report.
 
-**Focus:** Extract facts about {competitor_name} AND assess impact on {target_company}'s competitive position.
+**Your Task:**
+Extract and summarize facts from this article about {competitor_name}'s actions, performance, or developments. Focus on operational and strategic information that provides competitive context for {target_company}.
 
-**Content Priority (address only what article contains):**
-- Financial metrics: {competitor_name}'s revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods → Explain competitive pressure/opportunity for {target_company}
-- Strategic actions: {competitor_name}'s M&A, partnerships, products, capacity changes → Assess how this shifts competitive landscape for {target_company}
-- Market positioning: {competitor_name}'s market share gains/losses, pricing actions → Quantify threat/benefit to {target_company}'s position
-- Technology/products: {competitor_name}'s launches, capabilities → Compare to {target_company}'s offerings, identify competitive gaps/advantages
-- Analyst actions: Firm name, rating, price target on {competitor_name} → Contextualize relative to {target_company}'s valuation/sentiment
-- Operational changes: {competitor_name}'s capacity, efficiency, cost structure → Implications for {target_company}'s competitive cost position
+**What to Extract:**
 
-**Structure (no headers in output):**
-Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with competitive implications for {target_company}, then supporting {competitor_name} facts.
+**1. Strategic Actions**
+- M&A: acquisitions, divestitures, joint ventures, strategic partnerships
+- Product/Service Launches: new offerings, feature additions, discontinuations
+- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements
+- Market Entries/Exits: new geographies, new segments, market withdrawals
+- Organizational Changes: leadership appointments, restructuring, workforce changes
+- Extract: what, where, when, scale/investment amount, stated strategic rationale
 
-**Competitive Impact Framework:**
-- If {competitor_name} gains advantage → explain pressure on {target_company} (market share, pricing power, margins)
-- If {competitor_name} faces challenges → explain opportunity for {target_company} (market share capture, pricing leverage)
-- If neutral development → explain why it doesn't change {target_company}'s competitive position
+**2. Operational Performance**
+- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
+- Market Share: share gains/losses with specific percentages and time periods
+- Pricing Actions: price increases/decreases, promotional activity, pricing model changes
+- Service Levels: delivery times, quality metrics, customer satisfaction scores
+- Efficiency Metrics: cost per unit, productivity measures, operational KPIs
+- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons
 
-**Hard Rules:**
-- Every number MUST have: time period, units, comparison basis
-- Cite sources in parentheses using domain name only: (Reuters), (Bloomberg)
-- FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
-- NO inference beyond explicit guidance/commentary
-- Each paragraph must connect {competitor_name} facts to {target_company} competitive impact"""
+**3. Financial Performance**
+- Revenue: total and by segment, with growth rates and time periods
+- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages
+- Cash Flow: operating cash flow, free cash flow, capex levels
+- Guidance: forward revenue/earnings projections, outlook commentary
+- Balance Sheet: debt levels, liquidity, credit ratings if mentioned
+- Extract: exact figures with time periods, comparison to prior periods or guidance
+
+**4. Technology and Product Capabilities**
+- Technology Developments: R&D progress, patents, technical milestones
+- Product Performance: benchmark results, specifications, feature comparisons
+- Innovation Pipeline: products in development, expected launch timelines
+- Technical Standards: certifications achieved, compliance milestones
+- Extract: specific capabilities, performance metrics, competitive positioning if stated
+
+**5. Analyst or Market Commentary**
+- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate)
+- Price Targets: specific targets, changes from prior targets
+- Analyst Rationale: reasons given for rating/target (operational, financial, valuation)
+- Extract: specific ratings, targets, rationale as stated
+
+**6. Challenges or Headwinds**
+- Operational Issues: production problems, service disruptions, quality issues
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
+- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
+- Extract: specific issues, financial impacts if quantified, timelines
+
+**Exclusion Criteria:**
+❌ Pure stock performance (price movements, technical analysis) without operational context
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to strategic actions
+❌ General market commentary not specific to {competitor_name}
+❌ Historical background not relevant to current developments
+❌ Speculation about future actions not based on company statements
+❌ Opinion pieces without factual content
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Include specific numbers, dates, names, locations
+- Include direct quotes from executives or analysts (with attribution)
+- Cite source: (domain name)
+- Present facts in logical flow (financial results, then strategic actions, then outlook)
+
+**Final Paragraph - Competitive Context Statement:**
+Choose appropriate template:
+- Direct competition stated: "{competitor_name} and {target_company} compete in [specific market/geography/segment] as stated in the article."
+- Direct competition known: "{competitor_name} and {target_company} both operate in [sector/industry] and compete for [customers/market share]."
+- Geographic overlap: "{competitor_name}'s [action/development] in [region/market] where {target_company} also operates."
+- Product overlap: "{competitor_name}'s [product/service category] competes with {target_company}'s [product/service category] offerings."
+- Financial data: "This article provides operational data on {competitor_name}, a competitor to {target_company}."
+
+**Critical Rules:**
+✅ ONLY extract facts explicitly stated about {competitor_name}
+✅ Every quantitative claim must include: number, units, time period, source
+✅ Always cite source domain in parentheses
+✅ Include executive quotes verbatim with attribution
+✅ Present competitor facts objectively without editorializing
+✅ Note the competitive relationship factually in final paragraph
+
+❌ NEVER speculate on {target_company}'s response or strategy
+❌ NEVER infer impact on {target_company}'s competitive position unless article explicitly states it
+❌ NEVER write about what {target_company} "faces" or "must do" or "needs to" in response
+❌ NEVER assume {target_company}'s capabilities, market share, or relative positioning
+❌ NEVER create competitive implications beyond factual competitive relationship
+❌ NEVER compare {competitor_name}'s metrics to {target_company} unless article does so explicitly
+❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
+❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article"""
 
             # User content (variable - changes per article)
             user_content = f"""TARGET COMPANY: {target_company} ({target_ticker})
 COMPETITOR: {competitor_name} ({competitor_ticker})
 TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
+
+Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}."""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
@@ -6566,37 +6632,51 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
-            prompt = f"""You are a hedge fund analyst evaluating how {competitor_name} ({competitor_ticker}) developments affect {target_company} ({target_ticker}) investors. Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+            prompt = f"""You are a research analyst extracting information about {competitor_name} ({competitor_ticker}) for a {target_company} ({target_ticker}) competitive intelligence report.
 
-**Focus:** This article is about {competitor_name}'s operations, but your analysis must explain competitive implications for {target_company}. Extract facts about {competitor_name} AND assess impact on {target_company}'s competitive position.
+**Your Task:** Extract and summarize facts from this article about {competitor_name}'s actions, performance, or developments.
 
-**Content Priority (address only what article contains):**
-- Financial metrics: {competitor_name}'s revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods → Explain competitive pressure/opportunity for {target_company}
-- Strategic actions: {competitor_name}'s M&A, partnerships, products, capacity changes → Assess how this shifts competitive landscape for {target_company}
-- Market positioning: {competitor_name}'s market share gains/losses, pricing actions → Quantify threat/benefit to {target_company}'s position
-- Technology/products: {competitor_name}'s launches, capabilities → Compare to {target_company}'s offerings, identify competitive gaps/advantages
-- Analyst actions: Firm name, rating, price target on {competitor_name} → Contextualize relative to {target_company}'s valuation/sentiment
-- Operational changes: {competitor_name}'s capacity, efficiency, cost structure → Implications for {target_company}'s competitive cost position
+**What to Extract:**
 
-**Structure (no headers in output):**
-Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with competitive implications for {target_company}, then supporting {competitor_name} facts.
+**1. Strategic Actions:** M&A, product launches, capacity changes, market entries/exits, organizational changes
+**2. Operational Performance:** Volume metrics, market share, pricing actions, service levels, efficiency
+**3. Financial Performance:** Revenue, profitability, cash flow, guidance, balance sheet
+**4. Technology/Product Capabilities:** R&D progress, patents, product performance, innovation pipeline
+**5. Analyst Commentary:** Rating changes, price targets, analyst rationale
+**6. Challenges/Headwinds:** Operational issues, regulatory actions, legal issues, market headwinds
 
-**Competitive Impact Framework:**
-- If {competitor_name} gains advantage → explain pressure on {target_company} (market share, pricing power, margins)
-- If {competitor_name} faces challenges → explain opportunity for {target_company} (market share capture, pricing leverage)
-- If neutral development → explain why it doesn't change {target_company}'s competitive position
+**Exclusion:**
+❌ Pure stock performance without operational context
+❌ Valuation analysis unless tied to strategic actions
+❌ General market commentary
+❌ Speculation about future actions
 
-**Hard Rules:**
-- Every number MUST have: time period, units, comparison basis
-- Cite sources in parentheses using domain name only: (Reuters), (Bloomberg)
-- FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
-- NO inference beyond explicit guidance/commentary
-- Each paragraph must connect {competitor_name} facts to {target_company} competitive impact
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Include specific numbers, dates, names, locations with units and time periods
+- Include executive quotes with attribution
+- Cite source: (domain name)
+- Final paragraph: Note factual competitive relationship (e.g., "{competitor_name} and {target_company} compete in [sector/market]")
+
+**Critical Rules:**
+✅ Extract ONLY facts explicitly stated about {competitor_name}
+✅ Every number needs: value, units, time period, source
+✅ Present competitor facts objectively
+
+❌ NEVER speculate on {target_company}'s response or strategy
+❌ NEVER infer impact on {target_company}'s competitive position unless article explicitly states it
+❌ NEVER write what {target_company} "faces" or "must do"
+❌ NEVER assume {target_company}'s capabilities or relative positioning
+❌ NEVER compare {competitor_name}'s metrics to {target_company} unless article does
+❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for"
+❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure)
 
 TARGET COMPANY: {target_company} ({target_ticker})
 COMPETITOR: {competitor_name} ({competitor_ticker})
 TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
+
+Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}."""
 
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}

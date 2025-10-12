@@ -12607,7 +12607,7 @@ def export_beta_users_to_csv() -> int:
         raise
 
 
-def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440) -> bool:
+def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440, mode: str = 'daily') -> bool:
     """Email #1: Article Selection QA - Shows which articles were flagged by AI triage"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
@@ -12875,21 +12875,25 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         subject = f"🔍 Article Selection QA: {ticker_list} - {total_flagged} flagged from {total_articles} articles"
 
         # Save Email #1 snapshot to database (for admin dashboard preview)
-        # Email #1 is always single-ticker, so safe to use first key
-        ticker = list(articles_by_ticker.keys())[0]
-        try:
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO email_queue (ticker, email_1_html, created_at)
-                    VALUES (%s, %s, NOW())
-                    ON CONFLICT (ticker) DO UPDATE
-                    SET email_1_html = EXCLUDED.email_1_html,
-                        updated_at = NOW()
-                """, (ticker, html_content))
-            LOG.debug(f"[{ticker}] Saved Email #1 snapshot to database")
-        except Exception as e:
-            LOG.error(f"[{ticker}] Failed to save Email #1 snapshot: {e}")
-            # Continue sending email even if snapshot save fails
+        # Skip saving for test runs - only save production runs
+        if mode != 'test':
+            # Email #1 is always single-ticker, so safe to use first key
+            ticker = list(articles_by_ticker.keys())[0]
+            try:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO email_queue (ticker, email_1_html, created_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (ticker) DO UPDATE
+                        SET email_1_html = EXCLUDED.email_1_html,
+                            updated_at = NOW()
+                    """, (ticker, html_content))
+                LOG.debug(f"[{ticker}] Saved Email #1 snapshot to database")
+            except Exception as e:
+                LOG.error(f"[{ticker}] Failed to save Email #1 snapshot: {e}")
+                # Continue sending email even if snapshot save fails
+        else:
+            LOG.debug(f"[TEST MODE] Skipping Email #1 snapshot save")
 
         return send_email(subject, html_content)
 
@@ -13208,7 +13212,8 @@ def render_structured_summary_html(sections: list) -> str:
 async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
                                                show_ai_analysis: bool = True,
                                                show_descriptions: bool = True,
-                                               flagged_article_ids: List[int] = None) -> Dict[str, Dict[str, List[Dict]]]:
+                                               flagged_article_ids: List[int] = None,
+                                               mode: str = 'daily') -> Dict[str, Dict[str, List[Dict]]]:
     """Email #2: Content QA - Fetch categorized articles for digest with ticker-specific AI analysis
 
     Args:
@@ -13377,8 +13382,8 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     subject = f"📝 Content QA: {ticker_list} - {total_articles} articles analyzed"
 
     # Save Email #2 snapshot to database (for admin dashboard preview)
-    # In production, this is always called with single ticker
-    if tickers and len(tickers) == 1:
+    # Skip saving for test runs - only save production runs
+    if mode != 'test' and tickers and len(tickers) == 1:
         ticker = tickers[0]
         try:
             with db() as conn, conn.cursor() as cur:
@@ -13393,6 +13398,8 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
         except Exception as e:
             LOG.error(f"[{ticker}] Failed to save Email #2 snapshot: {e}")
             # Continue sending email even if snapshot save fails
+    elif mode == 'test':
+        LOG.debug(f"[TEST MODE] Skipping Email #2 snapshot save")
 
     success = send_email(subject, html)
 
@@ -14207,7 +14214,7 @@ _last_worker_activity = None
 # Forward declarations - these reference functions defined later in the file
 # We use globals() to avoid circular imports
 
-async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_size: int, triage_batch_size: int):
+async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_size: int, triage_batch_size: int, mode: str = 'daily'):
     """Wrapper for ingest logic with error handling and progress tracking"""
     try:
         # Call the actual cron_ingest function which is defined later
@@ -14540,7 +14547,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
     return flagged_article_ids
 
-async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None):
+async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None, mode: str = 'daily'):
     """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary
 
     NEW (Oct 2025): Scraping happens HERE in digest phase, AFTER Phase 1.5 URL resolution
@@ -14651,7 +14658,8 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
             [ticker],
             show_ai_analysis=True,
             show_descriptions=True,
-            flagged_article_ids=flagged_article_ids
+            flagged_article_ids=flagged_article_ids,
+            mode=mode
         )
 
         LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Email sent: {result.get('status') == 'sent'}")
@@ -14852,7 +14860,8 @@ async def process_ticker_job(job: dict):
             ticker=ticker,
             minutes=minutes,
             batch_size=batch_size,
-            triage_batch_size=triage_batch_size
+            triage_batch_size=triage_batch_size,
+            mode=config.get('mode', 'daily')
         )
 
         update_job_status(job_id, phase='ingest_complete', progress=60)
@@ -14917,7 +14926,8 @@ async def process_ticker_job(job: dict):
             job_id=job_id,
             ticker=ticker,
             minutes=minutes,
-            flagged_article_ids=flagged_article_ids
+            flagged_article_ids=flagged_article_ids,
+            mode=config.get('mode', 'daily')
         )
 
         update_job_status(job_id, phase='digest_complete', progress=95)
@@ -17177,7 +17187,7 @@ async def cron_ingest(
         memory_monitor.take_snapshot("PHASE3_START")
 
         with resource_cleanup_context("email_sending"):
-            quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes)
+            quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes, mode=mode)
         
         LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
         memory_monitor.take_snapshot("PHASE3_COMPLETE")

@@ -6023,91 +6023,108 @@ async def score_industry_article_relevance_claude(
     if True:  # Maintain indentation
         try:
             # System prompt (cached - relevance scoring framework)
-            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article is ACTUALLY relevant to {company_name} ({ticker}), not just tangentially related to the {industry_keyword} keyword.
+            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for {company_name} ({ticker}) investors.
 
 **Your Task:**
 Rate this article's relevance to {company_name} on a 0-10 scale and explain why in 1-2 sentences.
 
 **Scoring Rubric:**
 
-**TIER 1: Highly Relevant (8-10)**
-- Article discusses {industry_keyword} trends/events that DIRECTLY affect {company_name}'s:
-  • Core business operations or revenue drivers
-  • Cost structure or profit margins
-  • Competitive positioning or market share
-  • Regulatory environment or compliance requirements
-  • Supply chain or key partnerships
-- Specific companies/competitors in {company_name}'s sector are named with material developments
-- Market data (TAM, growth rates, pricing) clearly impacts {company_name}'s addressable market
-- Technology/product developments affect {company_name}'s product roadmap or R&D priorities
+**TIER 1: Direct Company Coverage (9-10)**
+Article explicitly mentions {company_name} or {ticker} by name.
+- Discusses company's products, operations, financials, strategy, or leadership
+- Reports company announcements, earnings, material events, or partnerships
+- Quotes company executives or references company filings
 
-**TIER 2: Moderately Relevant (5-7)**
-- Article covers {industry_keyword} sector broadly with some relevance to {company_name}:
-  • General sector trends that indirectly affect {company_name}
-  • Broader economic/regulatory factors affecting the {industry_keyword} industry
-  • Competitor news with sector-wide implications (not just single company updates)
-  • Industry research/analysis that provides competitive context
-- Mentions multiple companies in the sector, including peers of {company_name}
-- Discusses market opportunities or challenges affecting the sector as a whole
+**TIER 2: Applicable Regulation or Direct Competitor Action (7-8)**
+Article discusses regulations/policies explicitly applying to {company_name} OR direct competitor operational moves.
 
-**TIER 3: Tangentially Related (2-4)**
-- Article mentions {industry_keyword} but connection to {company_name} is weak:
-  • Generic industry commentary without specific company or market impacts
-  • Single competitor news with no broader sector implications
-  • Distant geographic markets where {company_name} has minimal presence
-  • Industry mentioned in passing, not the article's focus
-  • Opinion pieces or trend lists without hard data
-- Very limited actionable intelligence for {company_name} investors
+**Regulations (score 7-8):**
+- Government rules, court decisions, or enforcement actions affecting {company_name}'s industry classification, size category, or geography
+- Examples of explicit scope: "all publicly traded companies", "banks with $10B+ assets", "Class I railroads", "California utilities"
+- Must include specific requirements, dates, or compliance details (not just general policy discussion)
 
-**TIER 4: Not Relevant (0-1)**
-- Article is NOT actually about {industry_keyword} or {company_name}:
-  • Keyword appears by coincidence (company name collision, unrelated usage)
-  • Different industry using similar terminology
-  • Only mentions sector in generic context (e.g., "like companies in {industry_keyword}...")
-  • Exclusively about unrelated companies/topics
-  • Marketing content, press releases without news value
+**Direct Competitors (score 7-8):**
+- Competitor product launches, facility changes, partnerships, M&A, capacity additions, or strategic moves
+- Competitor operational metrics (volume, market share, service levels) with specific data
+- EXCLUDE: Pure stock analysis, valuations, earnings multiples without operational context
 
-**Critical Filters - Always score 0-1 if:**
-- Article is primarily about a different industry (keyword match is coincidental)
-- Only connection is a passing mention or analogy
-- Content is pure speculation without factual basis
-- Advertorial or promotional content without news substance
-- Company name collision (e.g., "Apple" the fruit vs AAPL the company)
+**TIER 3: End-Market or Supply Chain Developments (5-6)**
+Article discusses customer demand trends OR input costs/availability affecting {company_name}.
+
+**Customer/End-Market (score 5-6):**
+- Demand trends, spending patterns, or developments in industries that buy {company_name}'s products
+- Must include specific numbers, time periods, or quantified trends (not vague statements)
+
+**Inputs/Suppliers (score 5-6):**
+- Commodity prices, wage trends, supply chain disruptions, or capital costs affecting {company_name}
+- Must include specific price changes or availability constraints (not just directional trends)
+
+**TIER 4: Not Relevant (0-4)**
+Article lacks actionable intelligence for {company_name} investors.
+
+**Always score 0-4 if:**
+- **Different industry:** Keyword match is coincidental (e.g., "Apple" fruit vs AAPL stock, maritime news for rail company, trucking for rail)
+- **Pure financial analysis:** ONLY discusses stock prices, valuations, P/E ratios, technical charts without operational content
+- **Adjacent industry:** Maritime/trucking for rail, banking for insurance, etc. (unless clear direct connection stated)
+- **Competitor earnings without context:** Revenue/EPS numbers without volume, margin, or strategic discussion
+- **Opinion pieces:** Analyst predictions, trend forecasts, "future of industry" without supporting data
+- **Vague commentary:** Broad trend pieces without hard data, specific companies, or actionable details
+- **Wrong geography/company type:** Regions where {company_name} has no presence, or different company size category
+- **Advertorial:** Marketing content without news substance
 
 **Output Format:**
 Return JSON only:
 {{
   "score": <float 0.0-10.0>,
-  "reason": "<1-2 sentence explanation of score>"
+  "reason": "<1-2 sentence explanation citing specific article content>"
 }}
 
-**Examples:**
+**Calibration Examples:**
 
-TIER 1 (Score: 9.0):
+TIER 1 (Score: 9.5):
 {{
-  "score": 9.0,
-  "reason": "Article provides detailed Q3 2024 sales data for electric vehicles in North America with specific market share figures for major manufacturers, directly relevant to {company_name}'s competitive position and revenue forecasts."
+  "score": 9.5,
+  "reason": "Article discusses {company_name}'s Q3 2025 facility expansion announcement with specific capacity figures and timeline."
 }}
 
-TIER 2 (Score: 6.0):
+TIER 2 - Regulation (Score: 8.0):
 {{
-  "score": 6.0,
-  "reason": "Discusses broader semiconductor supply chain constraints affecting automotive industry, which impacts {company_name} but article lacks specific details about their products or tier suppliers."
+  "score": 8.0,
+  "reason": "Article details FAA proposed rule affecting all Class I railroads including {company_name}, with specific docket number and compliance timeline."
 }}
 
-TIER 3 (Score: 3.0):
+TIER 2 - Competitor (Score: 7.5):
 {{
-  "score": 3.0,
-  "reason": "Generic trend piece about future of {industry_keyword} with vague predictions and no specific companies, data, or actionable insights for {company_name} investors."
+  "score": 7.5,
+  "reason": "Competitor received FDA approval for drug in same therapeutic category as {company_name}'s pipeline, with approval date and label details."
 }}
 
-TIER 4 (Score: 0.0):
+TIER 3 - Customer (Score: 5.5):
+{{
+  "score": 5.5,
+  "reason": "Enterprise IT spending shows 12% YoY growth in Q3 2025, affecting demand for {company_name}'s cloud services."
+}}
+
+TIER 3 - Input (Score: 5.0):
+{{
+  "score": 5.0,
+  "reason": "Natural gas prices increased 8% month-over-month, affecting fuel costs for power generation companies including {company_name}."
+}}
+
+TIER 4 - Not Relevant (Score: 2.0):
+{{
+  "score": 2.0,
+  "reason": "Generic trend piece about future of {industry_keyword} with vague predictions and no specific data or companies."
+}}
+
+TIER 4 - Adjacent Industry (Score: 0.0):
 {{
   "score": 0.0,
-  "reason": "Article about {industry_keyword} in a completely different context (e.g., banking software when we're tracking industrial manufacturing); keyword match is coincidental."
+  "reason": "Article discusses maritime equipment tariffs, not relevant to {company_name}'s rail operations; different transportation mode."
 }}
 
-**Your Goal:** Be STRICT. Only scores of 5+ should proceed to expensive AI summarization. When in doubt, score lower."""
+**Your Goal:** Be STRICT. Only scores 7+ provide high-confidence actionable intelligence. Scores 5-6 are moderate relevance. When in doubt, score lower."""
 
             # User content (variable, not cached)
             user_content = f"""**Article Title:** {title}
@@ -6196,21 +6213,25 @@ async def score_industry_article_relevance_openai(
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
-            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article is ACTUALLY relevant to {company_name} ({ticker}), not just tangentially related to the {industry_keyword} keyword.
+            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for {company_name} ({ticker}) investors.
 
 Rate this article's relevance on a 0-10 scale:
-- 8-10: Highly relevant (directly affects {company_name}'s operations, costs, revenue, or competitive position)
-- 5-7: Moderately relevant (sector trends with indirect impact on {company_name})
-- 2-4: Tangentially related (weak connection, limited actionable intelligence)
-- 0-1: Not relevant (coincidental keyword match, different industry, or no real connection)
+
+**TIER 1 (9-10):** Article explicitly mentions {company_name} or {ticker} by name with operational, financial, or strategic details.
+
+**TIER 2 (7-8):** Article discusses regulations explicitly applying to {company_name}'s industry/size/geography (e.g., "all publicly traded companies", "Class I railroads") OR direct competitor operational moves (product launches, facilities, partnerships) with specific data.
+
+**TIER 3 (5-6):** Article discusses customer demand trends OR input costs/availability affecting {company_name}, with specific numbers or quantified trends.
+
+**TIER 4 (0-4):** Article lacks actionable intelligence. Always score 0-4 if: different industry (keyword coincidence), pure stock analysis without operational content, adjacent industry (maritime for rail, trucking for rail), competitor earnings without context, opinion pieces, vague commentary, wrong geography, or advertorial content.
 
 Return JSON only:
 {{
   "score": <float 0.0-10.0>,
-  "reason": "<1-2 sentence explanation>"
+  "reason": "<1-2 sentence explanation citing specific article content>"
 }}
 
-Be STRICT. Only scores of 5+ should proceed to expensive AI summarization."""
+Be STRICT. Scores 7+ provide high-confidence intelligence. Scores 5-6 are moderate relevance. When in doubt, score lower."""
 
             user_content = f"""**Article Title:** {title}
 
@@ -6358,34 +6379,53 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
     if True:  # Maintain indentation
         try:
             # System prompt (cached - industry analysis framework)
-            system_prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze articles and write summaries using ONLY facts explicitly stated in the text.
+            system_prompt = f"""You are a hedge fund analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}). Write summaries using ONLY facts explicitly stated in the article.
 
-**Focus:** Extract {industry_keyword} industry insights and explain specific implications for {target_company}'s operations, costs, demand, or competitive position.
+**STEP 1: Relevance Check (Complete First)**
 
-**Content Priority (address only what article contains):**
-- Market dynamics: TAM/SAM sizing, growth rates, adoption trends with specific figures → How this affects {target_company}'s addressable market and growth runway
-- Technology developments: Product launches, performance benchmarks, standards adoption → Impact on {target_company}'s product roadmap, R&D priorities, or competitive differentiation
-- Competitive landscape: Market share data, company positioning, partnerships → Where {target_company} stands relative to sector trends
-- Financial metrics: Aggregate sector revenue/growth OR company metrics when comparing → {target_company}'s performance vs. sector benchmarks
-- Regulatory/policy: Government actions, standards, trade restrictions with dates and amounts → Compliance costs, competitive advantages, or operational constraints for {target_company}
-- Supply chain: Manufacturing capacity, component availability, pricing trends → Impact on {target_company}'s input costs, production capacity, or delivery timelines
+Does this article contain information EXPLICITLY about {target_company}?
+- Direct mentions of {target_company} or {target_ticker}
+- Regulations explicitly applying to {target_company}'s industry/size/geography
+- Direct competitor operational moves affecting {target_company}'s market
+- Customer demand or input cost changes with specific data affecting {target_company}
 
-**Structure (no headers in output):**
-Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with {target_company}-specific implications, then supporting sector facts.
+If article contains ZERO explicit information about {target_company}, respond exactly:
 
-**Impact Analysis Framework:**
-- Supply-side changes → explain effect on {target_company}'s costs, capacity, or supply security
-- Demand-side changes → explain effect on {target_company}'s revenue opportunities or pricing power
-- Regulatory changes → explain {target_company}'s compliance burden or competitive positioning shift
-- Competitive dynamics → explain where {target_company} wins/loses from sector trends
-- Technology shifts → explain whether {target_company} is ahead/behind the curve
+"SECTOR TREND ONLY - Article discusses {industry_keyword} developments but does not contain specific information about {target_company}."
+
+**STEP 2: If Relevant, Write Summary**
+
+Extract facts in these categories (address only what article contains):
+
+**Direct Company Information:**
+- {target_company}'s operational details, financial metrics, strategic actions
+- Quotes from {target_company} executives or references to company filings
+
+**Regulations Affecting {target_company}:**
+- Government rules, court decisions, enforcement actions explicitly applying to {target_company}
+- Scope (e.g., "all publicly traded companies", "Class I railroads"), requirements, dates, compliance costs
+
+**Competitor Operational Moves:**
+- Competitor product launches, facility changes, partnerships, M&A, capacity changes
+- Competitor operational metrics (volume, market share, service levels) with specific data
+- How competitive actions affect {target_company}'s market position
+
+**Market/Supply Chain Developments:**
+- Customer demand trends in industries buying {target_company}'s products (with quantified data)
+- Input costs/availability (commodities, labor, capital) affecting {target_company}'s operations (with specific price changes)
+- Market dynamics (TAM, growth rates, adoption trends) impacting {target_company}'s addressable market
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers in output)
+- Lead with most relevant facts to {target_company}, then supporting context
+- Scale length to article depth
 
 **Hard Rules:**
 - Every number MUST have: time period, units, comparison basis
-- Cite sources in parentheses using domain name only: (WSJ), (FT)
+- Cite sources: (domain name only, e.g., WSJ, FT, Reuters)
 - FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
-- NO inference beyond explicit projections/guidance
-- Each paragraph must connect sector facts to {target_company}-specific impact"""
+- NO speculation about {target_company}'s response or strategy
+- NO assumptions about {target_company}'s capabilities, market share, or cost structure unless article explicitly states them"""
 
             # User content (variable - changes per article)
             user_content = f"""TARGET COMPANY: {target_company} ({target_ticker})
@@ -6407,6 +6447,10 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                         result = await response.json()
                         summary = result.get("content", [{}])[0].get("text", "")
                         if summary and len(summary.strip()) > 10:
+                            # Check for escape hatch response (article not relevant to target company)
+                            if "SECTOR TREND ONLY" in summary:
+                                LOG.info(f"Claude industry summary: Article not specific to {target_ticker}, skipping summary")
+                                return None
                             LOG.info(f"Claude industry summary: {industry_keyword} for {target_ticker} ({len(summary)} chars)")
                             return summary.strip()
                     else:
@@ -6527,34 +6571,53 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
-            prompt = f"""You are a hedge fund analyst evaluating how {industry_keyword} sector developments affect {target_company} ({target_ticker}). Analyze this article and write a summary using ONLY facts explicitly stated in the text.
+            prompt = f"""You are a hedge fund analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}). Write summaries using ONLY facts explicitly stated in the article.
 
-**Focus:** This article contains {industry_keyword} industry insights, but your analysis must explain specific implications for {target_company}'s operations, costs, demand, or competitive position.
+**STEP 1: Relevance Check (Complete First)**
 
-**Content Priority (address only what article contains):**
-- Market dynamics: TAM/SAM sizing, growth rates, adoption trends with specific figures → How this affects {target_company}'s addressable market and growth runway
-- Technology developments: Product launches, performance benchmarks, standards adoption → Impact on {target_company}'s product roadmap, R&D priorities, or competitive differentiation
-- Competitive landscape: Market share data, company positioning, partnerships → Where {target_company} stands relative to sector trends
-- Financial metrics: Aggregate sector revenue/growth OR company metrics when comparing → {target_company}'s performance vs. sector benchmarks
-- Regulatory/policy: Government actions, standards, trade restrictions with dates and amounts → Compliance costs, competitive advantages, or operational constraints for {target_company}
-- Supply chain: Manufacturing capacity, component availability, pricing trends → Impact on {target_company}'s input costs, production capacity, or delivery timelines
+Does this article contain information EXPLICITLY about {target_company}?
+- Direct mentions of {target_company} or {target_ticker}
+- Regulations explicitly applying to {target_company}'s industry/size/geography
+- Direct competitor operational moves affecting {target_company}'s market
+- Customer demand or input cost changes with specific data affecting {target_company}
 
-**Structure (no headers in output):**
-Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with {target_company}-specific implications, then supporting sector facts.
+If article contains ZERO explicit information about {target_company}, respond exactly:
 
-**Impact Analysis Framework:**
-- Supply-side changes → explain effect on {target_company}'s costs, capacity, or supply security
-- Demand-side changes → explain effect on {target_company}'s revenue opportunities or pricing power
-- Regulatory changes → explain {target_company}'s compliance burden or competitive positioning shift
-- Competitive dynamics → explain where {target_company} wins/loses from sector trends
-- Technology shifts → explain whether {target_company} is ahead/behind the curve
+"SECTOR TREND ONLY - Article discusses {industry_keyword} developments but does not contain specific information about {target_company}."
+
+**STEP 2: If Relevant, Write Summary**
+
+Extract facts in these categories (address only what article contains):
+
+**Direct Company Information:**
+- {target_company}'s operational details, financial metrics, strategic actions
+- Quotes from {target_company} executives or references to company filings
+
+**Regulations Affecting {target_company}:**
+- Government rules, court decisions, enforcement actions explicitly applying to {target_company}
+- Scope (e.g., "all publicly traded companies", "Class I railroads"), requirements, dates, compliance costs
+
+**Competitor Operational Moves:**
+- Competitor product launches, facility changes, partnerships, M&A, capacity changes
+- Competitor operational metrics (volume, market share, service levels) with specific data
+- How competitive actions affect {target_company}'s market position
+
+**Market/Supply Chain Developments:**
+- Customer demand trends in industries buying {target_company}'s products (with quantified data)
+- Input costs/availability (commodities, labor, capital) affecting {target_company}'s operations (with specific price changes)
+- Market dynamics (TAM, growth rates, adoption trends) impacting {target_company}'s addressable market
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers in output)
+- Lead with most relevant facts to {target_company}, then supporting context
+- Scale length to article depth
 
 **Hard Rules:**
 - Every number MUST have: time period, units, comparison basis
-- Cite sources in parentheses using domain name only: (WSJ), (FT)
+- Cite sources: (domain name only, e.g., WSJ, FT, Reuters)
 - FORBIDDEN words: may, could, likely, appears, positioned, expect (unless quoting), estimate (unless quoting), catalyst
-- NO inference beyond explicit projections/guidance
-- Each paragraph must connect sector facts to {target_company}-specific impact
+- NO speculation about {target_company}'s response or strategy
+- NO assumptions about {target_company}'s capabilities, market share, or cost structure unless article explicitly states them
 
 TARGET COMPANY: {target_company} ({target_ticker})
 SECTOR FOCUS: {industry_keyword}
@@ -6570,6 +6633,10 @@ CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
                         result = await response.json()
                         summary = extract_text_from_responses(result)
                         if summary and len(summary.strip()) > 10:
+                            # Check for escape hatch response (article not relevant to target company)
+                            if "SECTOR TREND ONLY" in summary:
+                                LOG.info(f"OpenAI industry summary: Article not specific to {target_ticker}, skipping summary")
+                                return None
                             LOG.info(f"OpenAI industry summary: {industry_keyword} ({len(summary)} chars)")
                             return summary.strip()
                     else:

@@ -11717,8 +11717,10 @@ def generate_openai_executive_summary(ticker: str, categories: Dict[str, List[Di
 
     system_prompt, user_content, company_name = result
 
-    # For OpenAI, combine system and user content (format: instructions + article summaries)
-    prompt = f"{system_prompt}\n\nALL ARTICLE SUMMARIES:\n{user_content}"
+    # For OpenAI o1 API: combine system and user content into single input string
+    # (o1 reasoning models require single 'input' field, no separate system messages)
+    # Uses exact same prompt as Claude, just formatted as single string
+    prompt = f"{system_prompt}\n\n{user_content}"
 
     try:
         headers = {

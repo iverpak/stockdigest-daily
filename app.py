@@ -6012,7 +6012,7 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
-            # System prompt (generic - cacheable, expanded to 1024+ tokens)
+            # System prompt (generic - cacheable, ~1100 tokens to meet threshold)
             system_prompt = """You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
 **YOUR TASK:**
@@ -6022,93 +6022,78 @@ The user will provide target company, competitor name and ticker, article title,
 
 **1. Strategic Actions**
 - M&A: acquisitions, divestitures, joint ventures, strategic partnerships
-- Product/Service Launches: new offerings, feature additions, discontinuations, version upgrades
-- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements, production capacity
-- Market Entries/Exits: new geographies, new segments, market withdrawals, international expansion
-- Organizational Changes: leadership appointments, restructuring, workforce changes, department realignments
-- Corporate Actions: share buybacks, dividend changes, equity raises, debt offerings
-- Strategic Partnerships: supplier agreements, distribution deals, technology licensing, co-development
-- Extract: what, where, when, scale/investment amount, stated strategic rationale, expected completion dates
+- Product/Service Launches: new offerings, feature additions, discontinuations
+- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements
+- Market Entries/Exits: new geographies, new segments, market withdrawals
+- Organizational Changes: leadership appointments, restructuring, workforce changes
+- Extract: what, where, when, scale/investment amount, stated strategic rationale
 
 **2. Operational Performance**
-- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates, throughput
-- Market Share: share gains/losses with specific percentages and time periods, rank among competitors
-- Pricing Actions: price increases/decreases, promotional activity, pricing model changes, discount strategies
-- Service Levels: delivery times, quality metrics, customer satisfaction scores, NPS, retention rates
-- Efficiency Metrics: cost per unit, productivity measures, operational KPIs, capacity utilization
-- Production Metrics: output levels, manufacturing efficiency, defect rates, cycle times
-- Customer Metrics: customer count, average revenue per user (ARPU), churn rates, lifetime value
-- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons, guidance vs actual
+- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
+- Market Share: share gains/losses with specific percentages and time periods
+- Pricing Actions: price increases/decreases, promotional activity, pricing model changes
+- Service Levels: delivery times, quality metrics, customer satisfaction scores
+- Efficiency Metrics: cost per unit, productivity measures, operational KPIs
+- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons
 
 **3. Financial Performance**
-- Revenue: total and by segment, with growth rates and time periods, same-store sales, organic vs inorganic
-- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages and dollar amounts
-- Cash Flow: operating cash flow, free cash flow, capex levels, working capital changes
-- Guidance: forward revenue/earnings projections, outlook commentary, raised/lowered guidance
-- Balance Sheet: debt levels, liquidity, credit ratings if mentioned, debt-to-equity, interest coverage
-- Shareholder Returns: EPS (earnings per share), ROE (return on equity), ROIC (return on invested capital)
-- Extract: exact figures with time periods, comparison to prior periods or guidance, beat/miss vs consensus
+- Revenue: total and by segment, with growth rates and time periods
+- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages
+- Cash Flow: operating cash flow, free cash flow, capex levels
+- Guidance: forward revenue/earnings projections, outlook commentary
+- Balance Sheet: debt levels, liquidity, credit ratings if mentioned
+- Extract: exact figures with time periods, comparison to prior periods or guidance
 
 **4. Technology and Product Capabilities**
-- Technology Developments: R&D progress, patents, technical milestones, breakthrough innovations
-- Product Performance: benchmark results, specifications, feature comparisons, competitive testing results
-- Innovation Pipeline: products in development, expected launch timelines, R&D investment levels
-- Technical Standards: certifications achieved, compliance milestones, industry awards
-- Digital Capabilities: software features, platform capabilities, API integrations, automation levels
-- Extract: specific capabilities, performance metrics, competitive positioning if stated, quantitative benchmarks
+- Technology Developments: R&D progress, patents, technical milestones
+- Product Performance: benchmark results, specifications, feature comparisons
+- Innovation Pipeline: products in development, expected launch timelines
+- Technical Standards: certifications achieved, compliance milestones
+- Extract: specific capabilities, performance metrics, competitive positioning if stated
 
 **5. Analyst or Market Commentary**
-- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate coverage)
-- Price Targets: specific targets, changes from prior targets, bull/base/bear cases
-- Analyst Rationale: reasons given for rating/target (operational, financial, valuation, competitive positioning)
-- Consensus Estimates: revenue/EPS consensus, estimate revisions, beat/miss patterns
-- Extract: specific ratings, targets, rationale as stated, analyst track record if mentioned
+- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate)
+- Price Targets: specific targets, changes from prior targets
+- Analyst Rationale: reasons given for rating/target (operational, financial, valuation)
+- Extract: specific ratings, targets, rationale as stated
 
 **6. Challenges or Headwinds**
-- Operational Issues: production problems, service disruptions, quality issues, supply chain problems
-- Regulatory Actions: investigations, fines, consent decrees, compliance failures, pending litigation
-- Legal Issues: lawsuits filed/settled, liability determinations, legal costs, class action status
-- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated, margin compression
-- Execution Risks: project delays, integration challenges, cost overruns, management turnover
-- External Risks: commodity price exposure, foreign exchange impacts, economic sensitivity, weather impacts
-- Extract: specific issues, financial impacts if quantified, timelines, remediation plans
+- Operational Issues: production problems, service disruptions, quality issues
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
+- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
+- Extract: specific issues, financial impacts if quantified, timelines
 
 **Exclusion Criteria:**
 ❌ Pure stock performance (price movements, technical analysis) without operational context
-❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to strategic actions or analyst commentary
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to strategic actions
 ❌ General market commentary not specific to competitor
 ❌ Historical background not relevant to current developments
-❌ Speculation about future actions not based on company statements or analyst projections
-❌ Opinion pieces without factual content or quantitative data
-❌ Social media sentiment analysis without operational substance
-❌ Retail investor commentary or message board speculation
+❌ Speculation about future actions not based on company statements
+❌ Opinion pieces without factual content
 
 **Structure:**
-- Write 2-6 paragraphs in natural prose (no headers, no bullets in output)
-- Include specific numbers, dates, names, locations with full context
-- Include direct quotes from executives or analysts (with attribution: "CEO Name said...")
-- Cite source domain in parentheses at end of factual claims: (Reuters), (Bloomberg)
-- Present facts in logical flow: financial results first, then strategic actions, then outlook/guidance
-- Use past tense for reported events, present tense for ongoing situations
-- Ensure every paragraph adds distinct information (no repetition)
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Include specific numbers, dates, names, locations
+- Include direct quotes from executives or analysts (with attribution)
+- Cite source: (domain name)
+- Present facts in logical flow (financial results, then strategic actions, then outlook)
 
 **Final Paragraph - Competitive Context Statement:**
-Choose appropriate template based on information available:
+Choose appropriate template:
 - Direct competition stated: "Competitor and target company compete in [specific market/geography/segment] as stated in the article."
 - Direct competition known: "Competitor and target company both operate in [sector/industry] and compete for [customers/market share]."
 - Geographic overlap: "Competitor's [action/development] in [region/market] where target company also operates."
 - Product overlap: "Competitor's [product/service category] competes with target company's [product/service category] offerings."
-- Financial data: "This article provides operational data on competitor, a competitor to target company in [sector/industry]."
+- Financial data: "This article provides operational data on competitor, a competitor to target company."
 
 **Critical Rules:**
-✅ ONLY extract facts explicitly stated about competitor in the article
-✅ Every quantitative claim must include: number, units, time period, source citation
-✅ Always cite source domain in parentheses after factual claims
-✅ Include executive quotes verbatim with attribution (name and title)
+✅ ONLY extract facts explicitly stated about competitor
+✅ Every quantitative claim must include: number, units, time period, source
+✅ Always cite source domain in parentheses
+✅ Include executive quotes verbatim with attribution
 ✅ Present competitor facts objectively without editorializing
 ✅ Note the competitive relationship factually in final paragraph
-✅ Include comparison metrics if article provides them (vs consensus, vs prior period, vs peers)
-✅ Preserve exact terminology from article (e.g., "adjusted EBITDA", "same-store sales", "organic growth")
 
 ❌ NEVER speculate on target company's response or strategy
 ❌ NEVER infer impact on target company's competitive position unless article explicitly states it
@@ -6117,9 +6102,7 @@ Choose appropriate template based on information available:
 ❌ NEVER create competitive implications beyond factual competitive relationship
 ❌ NEVER compare competitor's metrics to target company unless article does so explicitly
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
-❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
-❌ NEVER add your own interpretation of what competitor's actions "mean" for target company
-❌ NEVER write comparative statements ("better than", "ahead of", "behind") without article explicitly stating them"""
+❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article"""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})

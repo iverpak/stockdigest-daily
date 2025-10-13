@@ -14490,13 +14490,14 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     def bold_bullet_labels(text: str) -> str:
         """
         Bold topic labels in bullet points.
-        Transforms: "• Topic Label: Details" → "• <strong>Topic Label:</strong> Details"
+        Transforms: "Topic Label: Details" → "<strong>Topic Label:</strong> Details"
+        Note: Bullets are stripped during parsing, so pattern matches at start of text.
         """
         import re
-        # Match pattern: bullet (•) followed by 2-5 words, followed by colon
-        # Capture the topic label (everything before the colon)
-        pattern = r'(•\s*)([^:]{2,50}?:)(\s)'
-        replacement = r'\1<strong>\2</strong>\3'
+        # Match pattern: start of text followed by 2-50 chars, then colon
+        # Capture the topic label (everything before the colon, including the colon)
+        pattern = r'^([^:]{2,50}?:)(\s)'
+        replacement = r'<strong>\1</strong>\2'
         return re.sub(pattern, replacement, text)
 
     def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
@@ -15713,6 +15714,86 @@ def get_next_queued_job():
             LOG.error(f"Error claiming job: {e}")
             return None
 
+# ============================================================================
+# Background Heartbeat Thread (Prevents Premature Job Reclaim)
+# ============================================================================
+
+# Global dict to track active heartbeats: {job_id: threading.Event}
+_active_heartbeats = {}
+_heartbeat_lock = threading.Lock()
+
+def start_heartbeat_thread(job_id: str):
+    """
+    Start background heartbeat thread for a job.
+
+    Updates last_updated every 60 seconds to prevent job reclaim during long phases.
+    Prevents the job from being marked as "stale" when ingest/digest phases take >3 minutes.
+
+    Thread automatically stops when stop_heartbeat_thread() is called.
+    """
+    stop_event = threading.Event()
+
+    def heartbeat_loop():
+        """Background thread that updates job heartbeat every 60 seconds"""
+        while not stop_event.is_set():
+            try:
+                # Update last_updated to keep job alive
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE ticker_processing_jobs
+                        SET last_updated = NOW()
+                        WHERE job_id = %s AND status = 'processing'
+                    """, (job_id,))
+
+                    # Check if update succeeded
+                    if cur.rowcount > 0:
+                        LOG.debug(f"💓 [JOB {job_id[:8]}] Heartbeat updated")
+                    else:
+                        # Job no longer processing (completed or failed)
+                        LOG.debug(f"💓 [JOB {job_id[:8]}] Heartbeat stopped (job no longer processing)")
+                        break
+
+            except Exception as e:
+                LOG.error(f"💓 [JOB {job_id[:8]}] Heartbeat update failed: {e}")
+                # Continue trying - don't let heartbeat thread crash
+
+            # Wait 60 seconds (or until stop event is set)
+            stop_event.wait(60)
+
+        LOG.debug(f"💓 [JOB {job_id[:8]}] Heartbeat thread exiting")
+
+    # Store stop event in global dict
+    with _heartbeat_lock:
+        _active_heartbeats[job_id] = stop_event
+
+    # Start background thread
+    thread = threading.Thread(
+        target=heartbeat_loop,
+        daemon=True,
+        name=f"Heartbeat-{job_id[:8]}"
+    )
+    thread.start()
+    LOG.info(f"💓 [JOB {job_id[:8]}] Heartbeat thread started (updates every 60s)")
+
+def stop_heartbeat_thread(job_id: str):
+    """
+    Stop background heartbeat thread for a job.
+
+    Should be called when job completes, fails, or is cancelled.
+    """
+    with _heartbeat_lock:
+        stop_event = _active_heartbeats.pop(job_id, None)
+
+    if stop_event:
+        stop_event.set()  # Signal thread to stop
+        LOG.info(f"💓 [JOB {job_id[:8]}] Heartbeat thread stopped")
+    else:
+        LOG.warning(f"💓 [JOB {job_id[:8]}] No heartbeat thread found to stop")
+
+# ============================================================================
+# Job Processing
+# ============================================================================
+
 async def process_ticker_job(job: dict):
     """Process a single ticker job (ingest + digest + commit)"""
     job_id = job['job_id']
@@ -15735,6 +15816,9 @@ async def process_ticker_job(job: dict):
     LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
 
     try:
+        # START HEARTBEAT THREAD - Updates last_updated every 60s to prevent premature reclaim
+        start_heartbeat_thread(job_id)
+
         # NOTE: TICKER_PROCESSING_LOCK removed from cron_ingest/cron_digest for parallel processing
         # We don't acquire it here to avoid deadlock (lock is not reentrant)
 
@@ -16050,6 +16134,9 @@ async def process_ticker_job(job: dict):
         raise
 
     finally:
+        # STOP HEARTBEAT THREAD (always runs, even on exception)
+        stop_heartbeat_thread(job_id)
+
         # Cleanup thread-local HTTP session and connector
         try:
             await cleanup_http_session()

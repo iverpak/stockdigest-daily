@@ -14947,9 +14947,14 @@ def generate_email_html_core(
         "article_count": analyzed_count
     }
 
-def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, flagged_article_ids: List[int] = None):
-    """Save Email #3 to email_queue table for daily workflow"""
-    LOG.info(f"[{ticker}] 💾 Saving Email #3 to queue for {len(recipients)} recipients")
+def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, flagged_article_ids: List[int] = None, mode: str = 'daily'):
+    """Save Email #3 to email_queue table for daily workflow
+
+    Args:
+        mode: 'daily' (production) or 'test' (test run)
+    """
+    is_production = (mode == 'daily')
+    LOG.info(f"[{ticker}] 💾 Saving Email #3 to queue for {len(recipients)} recipients (mode={mode}, is_production={is_production})")
 
     # Generate HTML using unified core function
     email_data = generate_email_html_core(
@@ -14986,7 +14991,7 @@ def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, fla
                 is_production = EXCLUDED.is_production,
                 heartbeat = NOW(),
                 updated_at = NOW()
-        """, (ticker, company_name, recipients, html, subject, article_count, 'ready', True))
+        """, (ticker, company_name, recipients, html, subject, article_count, 'ready', is_production))
         conn.commit()
 
     LOG.info(f"[{ticker}] ✅ Email #3 saved to queue (status=ready)")
@@ -15067,6 +15072,7 @@ class JobSubmitRequest(BaseModel):
     minutes: int = 1440
     batch_size: int = 3
     triage_batch_size: int = 3
+    mode: str = 'test'  # 'test' or 'daily' - defaults to test for safety
 
 # ------------------------------------------------------------------------------
 # JOB QUEUE SYSTEM - PostgreSQL-Based Background Processing
@@ -15895,7 +15901,8 @@ async def process_ticker_job(job: dict):
                     ticker=ticker,
                     recipients=recipients,
                     hours=int(minutes/60),
-                    flagged_article_ids=flagged_article_ids
+                    flagged_article_ids=flagged_article_ids,
+                    mode=mode
                 )
                 if success:
                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 saved to queue (status=ready)")
@@ -17156,7 +17163,8 @@ async def submit_job_batch(request: Request, body: JobSubmitRequest):
         """, (len(body.tickers), 'powershell', json.dumps({
             "minutes": body.minutes,
             "batch_size": body.batch_size,
-            "triage_batch_size": body.triage_batch_size
+            "triage_batch_size": body.triage_batch_size,
+            "mode": body.mode
         })))
 
         batch_id = cur.fetchone()['batch_id']
@@ -17175,7 +17183,8 @@ async def submit_job_batch(request: Request, body: JobSubmitRequest):
             """, (batch_id, ticker, json.dumps({
                 "minutes": body.minutes,
                 "batch_size": body.batch_size,
-                "triage_batch_size": body.triage_batch_size
+                "triage_batch_size": body.triage_batch_size,
+                "mode": body.mode
             }), timeout_at))
 
             job_ids.append(str(cur.fetchone()['job_id']))
@@ -20285,12 +20294,13 @@ def get_queue_status(token: str = Query(...)):
             """)
             active_jobs = cur.fetchall()
 
-            # Query 2: Get email queue (completed emails)
+            # Query 2: Get email queue (completed emails) - PRODUCTION ONLY
             cur.execute("""
                 SELECT ticker, company_name, recipients, email_subject,
                        article_count, status, error_message, heartbeat,
                        created_at, updated_at, sent_at
                 FROM email_queue
+                WHERE is_production = TRUE
                 ORDER BY
                     CASE status
                         WHEN 'processing' THEN 1

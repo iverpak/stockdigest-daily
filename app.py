@@ -6709,36 +6709,188 @@ async def score_industry_article_relevance_openai(
 **GEOGRAPHY & SUBSIDIARY RULES (check FIRST before scoring):**
 
 **Subsidiary = Company News:**
-- Article mentions company in Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
+- Article mentions any entity in Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
+- Treat subsidiary mentions identically to parent company mentions
 
 **Country Filter (STRICT):**
-- Article about specific country/region → Check against Geographic Markets above
-- Match → Continue normal scoring | No match → Score 0-4 (reject)
-- International bodies (UN, WTO, ISO, IMF, World Bank) → Exempt from filter
-- National regulators/policies → Apply country filter
+- Article focuses on specific country/region developments → Check against Geographic Markets above
+- Match found → Continue normal scoring | No match → Score 0-4 maximum (reject)
+- International bodies exempt from filter: UN, WTO, ISO, IMF, World Bank, OECD, BIS
+- National regulators/policies → Apply country filter strictly
+- Multi-country articles → Accept if ANY mentioned country matches target company markets
 
 **Examples:**
 {ticker} with "United States, Canada" markets:
 ✅ "Subsidiary X expands operations" → 9.5 | ✅ "UN treaty ratified globally" → 7-8
+✅ "USMCA trade provisions updated" → 7.5 (overlaps geography)
 ❌ "Brazil regulator approves new policy" → 2.0 | ❌ "India market demand surges" → 3.0
 
-Rate this article's relevance on a 0-10 scale:
+**Scoring Rubric:**
 
-**TIER 1 (9-10):** Article explicitly mentions {company_name} or {ticker} by name with operational, financial, or strategic details.
+**TIER 1: Direct Company Coverage (9-10)**
+Article explicitly mentions {company_name}, {ticker}, or subsidiary by name.
 
-**TIER 2 (7-8):** Article discusses regulations explicitly applying to {company_name}'s industry/size/geography (e.g., "all publicly traded companies", "Class I railroads") OR direct competitor operational moves (product launches, facilities, partnerships) with specific data.
+**Always score 9-10 if article discusses:**
+- Company's products, operations, financials, strategy, or leadership
+- Reports company announcements, earnings, material events, or partnerships
+- Quotes company executives or references company filings
+- Company-specific litigation, investigations, or regulatory actions
 
-**TIER 3 (5-6):** Article discusses customer demand trends OR input costs/availability affecting {company_name}, with specific numbers or quantified trends.
+**Scoring within tier:**
+- 10.0: Material financial disclosure or major strategic announcement
+- 9.5: Operational developments, product launches, executive changes
+- 9.0: Routine company mentions or quotes in industry roundups
 
-**TIER 4 (0-4):** Article lacks actionable intelligence. Always score 0-4 if: different industry (keyword coincidence), pure stock analysis without operational content, adjacent industry (maritime for rail, trucking for rail), competitor earnings without context, opinion pieces, vague commentary, wrong geography, or advertorial content.
+**TIER 2: Applicable Regulation or Direct Competitor Action (7-8)**
+Article discusses regulations explicitly applying to {company_name} OR direct competitor operational moves with quantifiable data.
 
-Return JSON only:
+**Regulations (score 7.0-8.5):**
+Must meet ALL three criteria:
+- Government agency rules, court decisions, or enforcement actions (not proposals or think-tank recommendations)
+- Explicitly applies to {company_name}'s: industry classification, asset size category, geographic footprint, or product category
+- Includes specific compliance requirements, deadlines, penalties, or implementation details
+
+**Scope examples:**
+✅ "SEC rule for all public companies >$10B market cap" (if {ticker} qualifies)
+✅ "EPA emission standards for coal plants effective 2026" (if {ticker} operates coal)
+✅ "California AB 1234 data privacy requirements" (if {ticker} operates in CA)
+❌ "Lawmakers debate potential regulation" (not final rule)
+❌ "Industry group recommends standards" (not government action)
+
+**Direct Competitors (score 7.0-8.5):**
+Must meet ALL three criteria:
+- Named competitor operates in SAME specific product/service category or geographic market as {company_name}
+- Discusses competitor operational actions: product launches, capacity changes, facility changes, partnerships, M&A, pricing actions
+- Includes quantifiable metrics: volume data, market share, capacity numbers, customer counts, service levels
+
+**Competitor examples:**
+✅ Competitor launches product with specs, pricing, availability in overlapping market
+✅ Competitor reports 15% volume growth with units sold in shared geography
+✅ Competitor closes facility reducing regional capacity by 20%
+❌ Competitor stock rises 8% on earnings (no operational detail)
+❌ Analyst upgrades competitor with price target (pure valuation)
+❌ Competitor trades at 18x P/E (financial analysis only)
+
+**Scoring within tier:**
+- 8.5: Regulation with near-term deadline or major competitor capacity change
+- 8.0: Material regulatory action or significant competitor strategic move
+- 7.5: Competitor product launch or partnership with scale disclosed
+- 7.0: Regulatory proposal likely to pass or minor competitor news
+
+**TIER 3: End-Market or Supply Chain Developments (5-6)**
+Article discusses customer demand trends OR input costs/availability affecting {company_name}, WITH specific quantifiable data.
+
+**Customer/End-Market (score 5.0-6.5):**
+Must meet ALL criteria:
+- Discusses industries/segments that purchase {company_name}'s products or services
+- Includes quantified trends: growth rates, spending levels, volume data, time periods
+- Provides actionable demand signals: order acceleration/deceleration, inventory changes, capex shifts
+- NOT vague statements like "demand is strong" without supporting numbers
+
+**End-market examples:**
+✅ "Auto production up 12% YoY Q3 to 4.2M units" (for steel, parts, logistics)
+✅ "Enterprise IT spending $850B in 2025, +8% YoY" (for software, hardware)
+✅ "Residential starts fell 6% MoM to 1.1M annualized" (for building materials)
+❌ "Consumer confidence remains elevated" (no specific spend data)
+
+**Inputs/Suppliers (score 5.0-6.5):**
+Must meet ALL criteria:
+- Discusses commodities, materials, labor, or capital costs {company_name} incurs
+- Includes specific price changes, availability constraints, or cost trends with time periods
+- Provides quantifiable impact: percentage changes, absolute prices, supply/demand data
+- NOT directional commentary like "costs rising" without specific numbers
+
+**Input examples:**
+✅ "Natural gas $3.20/MMBtu, +15% MoM" (for utilities, chemicals)
+✅ "Steel prices $850/ton, down from $920 in Q2" (for manufacturers)
+✅ "Truck driver wages up 8% YoY to $28/hour" (for logistics, retail)
+❌ "Commodity prices volatile" (no specific prices)
+
+**Scoring within tier:**
+- 6.5: Large magnitude change (>10%) in key input/end-market
+- 6.0: Moderate change (5-10%) in relevant metric
+- 5.5: Small change (<5%) or secondary factor
+- 5.0: Tangentially relevant trend with limited impact
+
+**TIER 4: Not Relevant (0-4)**
+Article lacks actionable intelligence for {company_name} investors despite industry keyword match.
+
+**Always score 0-4 if:**
+- **Industry mismatch:** Keyword coincidental (e.g., "Apple" fruit vs AAPL stock, "Amazon" rainforest vs AMZN, "Delta" variant vs DAL airline)
+- **Adjacent industry:** Different transport mode (maritime for rail), different financial subsector (banking for insurance) UNLESS explicit connection stated
+- **Pure stock/valuation:** Article discusses ONLY stock prices, P/E ratios, technical charts, analyst targets WITHOUT operational context
+- **Competitor financials without operations:** Earnings with ONLY revenue/EPS percentages, no volume/capacity/strategy discussion
+- **Opinion/forecast:** Trend predictions, "future of industry" WITHOUT hard data or company-specific facts
+- **Vague commentary:** "Industry facing headwinds" WITHOUT specific companies, numbers, or timelines
+- **Wrong geography/size:** Regions where {ticker} has no presence, or different company size category
+- **Advertorial:** Marketing content, sponsored articles without news substance
+- **Stale content:** Articles >3 years old or historical retrospectives without current developments
+
+**Scoring within tier:**
+- 4.0: Tangentially related but insufficient detail
+- 3.0: Keyword match but wrong sector/geography
+- 2.0: Coincidental keyword, clearly irrelevant
+- 1.0: Spam or promotional content
+- 0.0: Different industry homonym mismatch
+
+**Output Format:**
+Return valid JSON only (no markdown, no extra text):
 {{
-  "score": <float 0.0-10.0>,
-  "reason": "<1-2 sentence explanation citing specific article content>"
+  "score": <float 0.0-10.0, one decimal place>,
+  "reason": "<1-2 sentences citing specific article content justifying score>"
 }}
 
-Be STRICT. Scores 7+ provide high-confidence intelligence. Scores 5-6 are moderate relevance. When in doubt, score lower."""
+**Calibration Examples:**
+
+TIER 1 (Score: 9.5):
+{{
+  "score": 9.5,
+  "reason": "Article discusses {company_name}'s Q3 2025 facility expansion with $200M investment and 500 jobs, quoting CEO on production timeline."
+}}
+
+TIER 2 - Regulation (Score: 8.0):
+{{
+  "score": 8.0,
+  "reason": "SEC final rule 33-11234 requires public filers >$5B to adopt climate disclosures by Q2 2026, directly applicable to {company_name}."
+}}
+
+TIER 2 - Competitor (Score: 7.5):
+{{
+  "score": 7.5,
+  "reason": "Competitor launched 5G network in Denver where {ticker} operates, pricing $50/month vs {ticker}'s $60, with 100K subscriber target."
+}}
+
+TIER 3 - Customer (Score: 6.0):
+{{
+  "score": 6.0,
+  "reason": "U.S. auto sales 16.2M units annualized Q3 (+8% YoY), increasing demand for {company_name}'s automotive semiconductors."
+}}
+
+TIER 3 - Input (Score: 5.5):
+{{
+  "score": 5.5,
+  "reason": "Copper prices $4.10/lb (+12% QoQ), affecting input costs for {company_name}'s electrical equipment manufacturing."
+}}
+
+TIER 4 - Adjacent (Score: 2.5):
+{{
+  "score": 2.5,
+  "reason": "Maritime shipping rates discussed, not relevant to {company_name}'s rail freight operations despite both being transport."
+}}
+
+TIER 4 - Valuation only (Score: 1.5):
+{{
+  "score": 1.5,
+  "reason": "Technical analysis of sector ETF with support/resistance levels, no operational information about {ticker} or industry fundamentals."
+}}
+
+TIER 4 - Homonym (Score: 0.0):
+{{
+  "score": 0.0,
+  "reason": "Article about Apple fruit harvest in Washington, unrelated to Apple Inc technology company."
+}}
+
+**Your Goal:** Be STRICT and demand specificity. Only scores 7+ provide high-confidence actionable intelligence. Scores 5-6 require hard data. When in doubt, score lower."""
 
             user_content = f"""**Article Title:** {title}
 
@@ -7063,21 +7215,126 @@ async def generate_openai_article_summary(company_name: str, ticker: str, title:
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
-            prompt = f"""You are a hedge fund analyst writing a factual memo on {company_name} ({ticker}). Write a summary using ONLY facts explicitly stated.
+            prompt = f"""You are a hedge fund analyst extracting information about {company_name} ({ticker}) for an investment research report.
 
-**Focus:** Extract material facts about {company_name}'s operations, financials, strategic actions.
+**YOUR TASK:**
+Extract and summarize all material facts about {company_name}'s actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
 
-**Include:** Financial metrics with time periods, strategic actions with amounts/dates, analyst actions, administrative dates.
+**What to Extract:**
 
-**Hard Rules:**
-- Every number needs time period, units, comparison basis
-- Cite sources in parentheses (domain name only)
-- NO speculation words: may, could, likely, appears, positioned
-- 4-8 sentences, no preamble
+**1. Strategic Actions**
+- M&A: acquisitions, divestitures, joint ventures, strategic partnerships
+- Product/Service Launches: new offerings, feature additions, discontinuations
+- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements
+- Market Entries/Exits: new geographies, new segments, market withdrawals
+- Organizational Changes: leadership appointments, restructuring, workforce changes
+- Capital Allocation: share buybacks, dividend changes, debt issuance/repayment
+- Extract: what, where, when, scale/investment amount, stated strategic rationale
 
-TARGET: {company_name} ({ticker})
-TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+**2. Operational Performance**
+- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
+- Market Share: share gains/losses with specific percentages and time periods
+- Pricing Actions: price increases/decreases, promotional activity, pricing model changes
+- Service Levels: delivery times, quality metrics, customer satisfaction scores
+- Efficiency Metrics: cost per unit, productivity measures, operational KPIs
+- Customer Metrics: retention rates, net promoter scores, customer acquisition costs
+- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons
+
+**3. Financial Performance**
+- Revenue: total and by segment, with growth rates and time periods
+- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages
+- Cash Flow: operating cash flow, free cash flow, capex levels
+- Guidance: forward revenue/earnings projections, outlook commentary, raised/lowered ranges
+- Balance Sheet: debt levels, liquidity, cash position, credit ratings if mentioned
+- Shareholder Returns: dividends declared, buyback authorizations/executions, yield
+- Extract: exact figures with time periods, comparison to prior periods or guidance, beat/miss context
+
+**4. Technology and Product Capabilities**
+- Technology Developments: R&D progress, patents, technical milestones
+- Product Performance: benchmark results, specifications, feature comparisons
+- Innovation Pipeline: products in development, expected launch timelines
+- Technical Standards: certifications achieved, compliance milestones
+- Competitive Positioning: stated advantages, differentiation claims by company
+- Extract: specific capabilities, performance metrics, launch dates, investment levels
+
+**5. Analyst or Market Commentary**
+- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate/reiterate)
+- Price Targets: specific targets, changes from prior targets, high/low ranges
+- Analyst Rationale: reasons given for rating/target (operational, financial, valuation)
+- Consensus Changes: moves in consensus estimates, revision trends
+- Extract: specific ratings, targets, rationale as stated, date of action
+
+**6. Challenges or Headwinds**
+- Operational Issues: production problems, service disruptions, quality issues, recalls
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
+- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
+- Macro Impacts: interest rate effects, currency impacts, commodity cost pressures
+- Extract: specific issues, financial impacts if quantified, timelines, resolution status
+
+**7. Competitive and Industry Context**
+- Competitor Actions: direct mentions of competitor moves, market share dynamics
+- Industry Trends: sector-wide developments, regulatory changes, supply chain shifts
+- Relative Performance: company performance versus peers/industry benchmarks if stated
+- Market Structure: consolidation, new entrants, competitive intensity as discussed
+- Extract: specific competitor names, market dynamics, company's stated position
+
+**8. Corporate Events and Catalysts**
+- Earnings Dates: scheduled release dates, conference call times
+- Regulatory Deadlines: filing dates, approval timelines, compliance dates
+- Transaction Closings: M&A completion dates, expected closing timelines
+- Product Launches: specific launch dates, rollout schedules
+- Extract: exact dates, times, event details
+
+**Exclusion Criteria:**
+❌ Pure stock performance (price movements, technical analysis, chart patterns) without operational context
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to analyst rating rationale
+❌ General market commentary not specific to company
+❌ Historical background older than 2 years unless directly relevant to current developments
+❌ Speculation about future actions not based on company guidance or statements
+❌ Opinion pieces without factual content about company actions/performance
+❌ Promotional language without quantifiable metrics or commitments
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Scale length to article materiality: earnings releases merit more detail than routine announcements
+- Include specific numbers, dates, names, locations in every relevant sentence
+- Include direct quotes from executives, company statements, or analysts (with attribution)
+- Cite source: (domain name) - use once at end of first paragraph or when introducing quoted material
+- Present facts in logical flow: lead with most material information (earnings, guidance, major strategic actions), then supporting details, then forward-looking elements
+
+**Example Flow Patterns:**
+- Earnings article: Results vs. expectations → Segment performance → Guidance → Strategic commentary → Analyst reactions
+- M&A article: Deal terms → Strategic rationale → Financial impact → Timeline → Financing details
+- Product launch: Product details → Market opportunity → Pricing/availability → Company positioning statements
+- Analyst action: Rating/target change → Rationale → Supporting metrics → Comparison to consensus
+
+**Critical Rules:**
+✅ ONLY extract facts explicitly stated about {company_name} in the article
+✅ Every quantitative claim must include: number, units, time period, comparison basis (YoY/QoQ/vs. guidance/vs. consensus)
+✅ Always cite source domain in parentheses at appropriate point
+✅ Include executive or analyst quotes verbatim with attribution ("CEO Name stated", "Analyst Name from Firm wrote")
+✅ Note beat/miss context for financial metrics when article provides it
+✅ Include specific percentage changes, not just directional language
+✅ Specify which business segment for segment-specific metrics
+✅ Include guidance ranges completely (e.g., "$500M-$520M" not "approximately $510M")
+
+❌ NEVER speculate beyond explicit company guidance or analyst commentary
+❌ NEVER infer financial impacts not quantified in article
+❌ NEVER add competitive implications not stated in article
+❌ NEVER use hedge words: "may", "could", "likely", "appears", "positioned", "poised", "suggests" (except in direct quotes)
+❌ NEVER use "expect", "estimate", "forecast", "project" unless directly quoting source
+❌ NEVER write "the company plans to" unless article explicitly states company's plans
+❌ NEVER combine facts from general knowledge with article facts - extract ONLY from provided content
+❌ NEVER editorialize on whether developments are "positive", "negative", "strong", or "weak" unless quoting source
+❌ NEVER round numbers differently than article presents them
+❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)
+
+TARGET COMPANY: {company_name} ({ticker})
+ARTICLE TITLE: {title}
+ARTICLE CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
+
+Extract all material facts about {company_name}'s actions, performance, and developments. Present information factually without speculation or editorial commentary."""
 
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}

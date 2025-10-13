@@ -278,6 +278,192 @@ def timeout_handler(seconds: int):
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old_handler)
 
+
+# =============================================================================
+# CLAUDE API COST TRACKING
+# =============================================================================
+
+# Claude API Pricing (per 1M tokens as of January 2025)
+CLAUDE_PRICING = {
+    "input": 3.00,           # $3.00 per 1M input tokens
+    "output": 15.00,         # $15.00 per 1M output tokens
+    "cache_write": 3.75,     # $3.75 per 1M cache write tokens
+    "cache_read": 0.30       # $0.30 per 1M cache read tokens (90% savings)
+}
+
+# Thread-local storage for cost tracking (one tracker per ticker thread)
+_cost_tracker = threading.local()
+
+
+def get_cost_tracker():
+    """Get or create cost tracker for current thread"""
+    if not hasattr(_cost_tracker, 'data'):
+        _cost_tracker.data = {
+            "total_cost": 0.0,
+            "by_function": {},
+            "cache_stats": {
+                "cache_creations": 0,
+                "cache_creation_tokens": 0,
+                "cache_hits": 0,
+                "cache_hit_tokens": 0,
+                "total_cache_write_cost": 0.0,
+                "total_cache_read_cost": 0.0,
+                "total_savings": 0.0
+            }
+        }
+    return _cost_tracker.data
+
+
+def reset_cost_tracker():
+    """Reset cost tracker for new ticker"""
+    if hasattr(_cost_tracker, 'data'):
+        del _cost_tracker.data
+
+
+def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
+    """
+    Calculate cost from Claude API usage response and track it.
+
+    Args:
+        usage: Usage dict from Claude API response
+        function_name: Name of the function (for categorization)
+
+    Returns:
+        Cost breakdown dict
+    """
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+    cache_creation = usage.get("cache_creation_input_tokens", 0)
+    cache_read = usage.get("cache_read_input_tokens", 0)
+
+    # Calculate costs (divide by 1M to get actual cost)
+    input_cost = (input_tokens / 1_000_000) * CLAUDE_PRICING["input"]
+    output_cost = (output_tokens / 1_000_000) * CLAUDE_PRICING["output"]
+    cache_write_cost = (cache_creation / 1_000_000) * CLAUDE_PRICING["cache_write"]
+    cache_read_cost = (cache_read / 1_000_000) * CLAUDE_PRICING["cache_read"]
+
+    call_cost = input_cost + output_cost + cache_write_cost + cache_read_cost
+
+    # Calculate savings from cache hit (what we would have paid without caching)
+    cache_savings = 0
+    if cache_read > 0:
+        # Cache read is 90% cheaper than regular input
+        regular_input_cost = (cache_read / 1_000_000) * CLAUDE_PRICING["input"]
+        cache_savings = regular_input_cost - cache_read_cost
+
+    # Track in thread-local tracker
+    tracker = get_cost_tracker()
+    tracker["total_cost"] += call_cost
+
+    if function_name not in tracker["by_function"]:
+        tracker["by_function"][function_name] = {
+            "calls": 0,
+            "cost": 0.0
+        }
+
+    tracker["by_function"][function_name]["calls"] += 1
+    tracker["by_function"][function_name]["cost"] += call_cost
+
+    # Track cache stats
+    if cache_creation > 0:
+        tracker["cache_stats"]["cache_creations"] += 1
+        tracker["cache_stats"]["cache_creation_tokens"] += cache_creation
+        tracker["cache_stats"]["total_cache_write_cost"] += cache_write_cost
+
+    if cache_read > 0:
+        tracker["cache_stats"]["cache_hits"] += 1
+        tracker["cache_stats"]["cache_hit_tokens"] += cache_read
+        tracker["cache_stats"]["total_cache_read_cost"] += cache_read_cost
+        tracker["cache_stats"]["total_savings"] += cache_savings
+
+    return {
+        "call_cost": round(call_cost, 6),
+        "input_cost": round(input_cost, 6),
+        "output_cost": round(output_cost, 6),
+        "cache_write_cost": round(cache_write_cost, 6),
+        "cache_read_cost": round(cache_read_cost, 6),
+        "cache_savings": round(cache_savings, 6),
+        "tokens": {
+            "input": input_tokens,
+            "output": output_tokens,
+            "cache_creation": cache_creation,
+            "cache_read": cache_read
+        }
+    }
+
+
+def log_cost_summary(ticker: str, company_name: str = ""):
+    """Log emoji-rich cost summary for ticker"""
+    tracker = get_cost_tracker()
+
+    if tracker["total_cost"] == 0:
+        LOG.info(f"[{ticker}] 💰 No Claude API costs (no calls made)")
+        return
+
+    # Calculate what cost would have been without caching
+    cost_without_caching = tracker["total_cost"] + tracker["cache_stats"]["total_savings"]
+    savings_percentage = 0
+    if cost_without_caching > 0:
+        savings_percentage = (tracker["cache_stats"]["total_savings"] / cost_without_caching) * 100
+
+    # Header
+    LOG.info(f"[{ticker}] 💰 ════════════════════════════════════════════════════════════")
+    if company_name:
+        LOG.info(f"[{ticker}] 💰 API COST SUMMARY - {ticker} ({company_name})")
+    else:
+        LOG.info(f"[{ticker}] 💰 API COST SUMMARY - {ticker}")
+    LOG.info(f"[{ticker}] 💰 ════════════════════════════════════════════════════════════")
+    LOG.info(f"[{ticker}] 💵 Total Cost: ${tracker['total_cost']:.4f}")
+    LOG.info(f"[{ticker}] 💰 ────────────────────────────────────────────────────────────")
+
+    # By function breakdown
+    LOG.info(f"[{ticker}] 📞 API Calls by Function:")
+
+    # Define friendly names and emojis
+    function_display = {
+        "triage_company": ("🎯 Triage (Company)", 1),
+        "triage_industry": ("🏭 Triage (Industry)", 2),
+        "triage_competitor": ("🏢 Triage (Competitor)", 3),
+        "article_summary": ("📝 Article Summaries", 4),
+        "competitor_summary": ("🏆 Competitor Summaries", 5),
+        "industry_summary": ("🌐 Industry Summaries", 6),
+        "industry_scoring": ("⚖️ Industry Scoring", 7),
+        "executive_summary": ("📊 Executive Summary", 8)
+    }
+
+    # Sort by display order
+    sorted_functions = sorted(
+        tracker["by_function"].items(),
+        key=lambda x: function_display.get(x[0], (x[0], 99))[1]
+    )
+
+    for func_name, data in sorted_functions:
+        display_name, _ = function_display.get(func_name, (func_name, 99))
+        calls = data["calls"]
+        cost = data["cost"]
+        plural = "calls" if calls != 1 else "call"
+        LOG.info(f"[{ticker}]   {display_name}: {calls:3d} {plural:5s} →  ${cost:.4f}")
+
+    LOG.info(f"[{ticker}] 💰 ────────────────────────────────────────────────────────────")
+
+    # Cache performance
+    cache_stats = tracker["cache_stats"]
+    LOG.info(f"[{ticker}] 💾 Prompt Caching Performance:")
+
+    if cache_stats["cache_creations"] > 0:
+        LOG.info(f"[{ticker}]   ✨ Cache Created:  {cache_stats['cache_creations']:2d} times "
+                f"({cache_stats['cache_creation_tokens']:,} tokens)  →  Cost: ${cache_stats['total_cache_write_cost']:.4f}")
+
+    if cache_stats["cache_hits"] > 0:
+        LOG.info(f"[{ticker}]   ⚡ Cache Hits:    {cache_stats['cache_hits']:2d} times "
+                f"({cache_stats['cache_hit_tokens']:,} tokens)  →  Cost: ${cache_stats['total_cache_read_cost']:.4f}")
+        LOG.info(f"[{ticker}]   💰 Cache Savings: ${cache_stats['total_savings']:.4f} ({savings_percentage:.1f}% cost reduction)")
+        LOG.info(f"[{ticker}]   📈 Without caching, cost would have been: ${cost_without_caching:.4f}")
+    else:
+        LOG.info(f"[{ticker}]   ℹ️ No cache hits yet (first run for these prompts)")
+
+    LOG.info(f"[{ticker}] 💰 ════════════════════════════════════════════════════════════")
+
 def clean_null_bytes(text: str) -> str:
     """Remove NULL bytes and other problematic characters that cause PostgreSQL errors"""
     if not text:
@@ -6075,8 +6261,11 @@ The user will provide company name, ticker, article title, and content. Extract 
                     if response.status == 200:
                         result = await response.json()
 
-                        # Log cache performance
+                        # Track cost
                         usage = result.get("usage", {})
+                        calculate_claude_api_cost(usage, "article_summary")
+
+                        # Log cache performance
                         cache_creation = usage.get("cache_creation_input_tokens", 0)
                         cache_read = usage.get("cache_read_input_tokens", 0)
                         if cache_creation > 0:
@@ -6228,8 +6417,11 @@ Extract facts about {competitor_name}'s actions and performance. Do not speculat
                     if response.status == 200:
                         result = await response.json()
 
-                        # Log cache performance
+                        # Track cost
                         usage = result.get("usage", {})
+                        calculate_claude_api_cost(usage, "competitor_summary")
+
+                        # Log cache performance
                         cache_creation = usage.get("cache_creation_input_tokens", 0)
                         cache_read = usage.get("cache_read_input_tokens", 0)
                         if cache_creation > 0:
@@ -6435,8 +6627,11 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
 
                     result = await response.json()
 
-                    # Log cache performance
+                    # Track cost
                     usage = result.get("usage", {})
+                    calculate_claude_api_cost(usage, "industry_scoring")
+
+                    # Log cache performance
                     cache_creation = usage.get("cache_creation_input_tokens", 0)
                     cache_read = usage.get("cache_read_input_tokens", 0)
                     if cache_creation > 0:
@@ -6836,8 +7031,11 @@ The user will provide target company, ticker, industry keyword, geographic marke
                     if response.status == 200:
                         result = await response.json()
 
-                        # Log cache performance
+                        # Track cost
                         usage = result.get("usage", {})
+                        calculate_claude_api_cost(usage, "industry_summary")
+
+                        # Log cache performance
                         cache_creation = usage.get("cache_creation_input_tokens", 0)
                         cache_read = usage.get("cache_read_input_tokens", 0)
                         if cache_creation > 0:
@@ -8933,8 +9131,11 @@ Select the {target_cap} most important articles about {company_name} from the {l
 
                 result = await response.json()
 
-                # Log cache performance
+                # Track cost
                 usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "triage_company")
+
+                # Log cache performance
                 cache_creation = usage.get("cache_creation_input_tokens", 0)
                 cache_read = usage.get("cache_read_input_tokens", 0)
                 if cache_creation > 0:
@@ -9174,8 +9375,11 @@ Select the {target_cap} most important industry articles about {sector} that aff
 
                 result = await response.json()
 
-                # Log cache performance
+                # Track cost
                 usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "triage_industry")
+
+                # Log cache performance
                 cache_creation = usage.get("cache_creation_input_tokens", 0)
                 cache_read = usage.get("cache_read_input_tokens", 0)
                 if cache_creation > 0:
@@ -9360,8 +9564,11 @@ Select the {target_cap} most important articles about {competitor_name} from the
 
                 result = await response.json()
 
-                # Log cache performance
+                # Track cost
                 usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "triage_competitor")
+
+                # Log cache performance
                 cache_creation = usage.get("cache_creation_input_tokens", 0)
                 cache_read = usage.get("cache_read_input_tokens", 0)
                 if cache_creation > 0:
@@ -12645,8 +12852,11 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         if response.status_code == 200:
             result = response.json()
 
-            # Log cache performance
+            # Track cost
             usage = result.get("usage", {})
+            calculate_claude_api_cost(usage, "executive_summary")
+
+            # Log cache performance
             cache_creation = usage.get("cache_creation_input_tokens", 0)
             cache_read = usage.get("cache_read_input_tokens", 0)
             if cache_creation > 0:
@@ -15160,6 +15370,9 @@ async def process_ticker_job(job: dict):
     start_time = time.time()
     memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
 
+    # Reset cost tracker for this ticker
+    reset_cost_tracker()
+
     LOG.info(f"[{ticker}] 🚀 [JOB {job_id}] Starting processing for {ticker}")
     LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
 
@@ -15391,6 +15604,11 @@ async def process_ticker_job(job: dict):
         duration = time.time() - start_time
         memory_end = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
         memory_used = max(0, memory_end - memory_start)
+
+        # Log Claude API cost summary
+        ticker_config = get_ticker_config(ticker)
+        company_name = ticker_config.get("company_name", "") if ticker_config else ""
+        log_cost_summary(ticker, company_name)
 
         # Mark complete
         result = {

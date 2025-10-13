@@ -14757,14 +14757,14 @@ def generate_email_html_core(
                                     </td>
                                 </tr>
                                 <tr>
-                                    <td style="width: 58%; vertical-align: bottom; padding-bottom: 4px;">
+                                    <td style="width: 58%; vertical-align: top;">
                                         <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
-                                        <div style="margin-top: 8px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
+                                        <div style="margin-top: 10px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
                                     </td>
-                                    <td align="right" style="vertical-align: bottom; width: 42%; padding-bottom: 4px;">
+                                    <td align="right" style="vertical-align: top; width: 42%;">
                                         <div style="display: inline-block; text-align: right;">
-                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 2px; color: #ffffff;">{stock_price}</div>
-                                            {f'<div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 8px;">{price_change_pct}</div>' if price_change_pct else ''}
+                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin: 0; color: #ffffff;">{stock_price}</div>
+                                            {f'<div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 10px;">{price_change_pct}</div>' if price_change_pct else ''}
                                             {f'<div style="font-size: 14px; color: {ytd_return_color}; font-weight: 600; margin-top: 4px;">YTD: {ytd_return_pct}</div>' if ytd_return_pct else ''}
                                         </div>
                                     </td>

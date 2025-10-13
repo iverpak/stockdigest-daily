@@ -12483,7 +12483,23 @@ INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
 3. Avoiding causal language and competitive analysis
 4. Letting readers draw their own conclusions from presented facts
 
-Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets."""
+Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets.
+
+---
+
+🚨 OUTPUT FORMAT CHECKLIST - Review before submitting:
+
+SECTION RULES:
+✅ 📌 BOTTOM LINE - ALWAYS required (quiet day or material news)
+⚠️ All other sections - Include ONLY if you have actual content
+
+CRITICAL: IF you include 🎯 INVESTMENT IMPLICATIONS section, you MUST include ALL THREE sub-headers with exact emojis:
+   📈 BULL CASE:
+   📉 BEAR CASE:
+   🔍 KEY VARIABLES TO MONITOR:
+
+DO NOT write Investment Implications content without these three emoji sub-headers.
+DO NOT merge bull/bear/variables into unlabeled bullets - use the three distinct sub-headers above."""
 
     return (system_prompt, user_content, company_name)
 

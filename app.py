@@ -4856,7 +4856,7 @@ async def scrape_single_article_async(article: Dict, category: str, metadata: Di
                                     ai_model = %s
                                 WHERE article_id = %s AND ticker = %s
                             """, (
-                                "Paywalled content - headline only",
+                                f"Paywalled content - headline only. Title: {title}",
                                 "headline_only",
                                 article_id,
                                 analysis_ticker

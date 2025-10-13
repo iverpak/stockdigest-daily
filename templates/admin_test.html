@@ -442,7 +442,7 @@
             const triageBatchSize = parseInt(document.getElementById('triage-batch-size').value) || 3;
 
             // Confirm
-            if (!confirm(`🚀 Run Test with ${tickers.length} tickers?\n\nTickers: ${tickers.join(', ')}\nLookback: ${minutes} minutes (${(minutes/60).toFixed(1)} hours)\n\nMode: TEST (emails sent immediately to admin)\n\nThis will:\n1. Clean old feeds\n2. Reset digest flags\n3. Initialize feeds for each ticker\n4. Process and send emails\n\nContinue?`)) {
+            if (!confirm(`🚀 Run Test with ${tickers.length} tickers?\n\nTickers: ${tickers.join(', ')}\nLookback: ${minutes} minutes (${(minutes/60).toFixed(1)} hours)\n\nMode: TEST (emails sent immediately to admin)\n\nThis will:\n1. Clean old feeds\n2. Reset digest flags\n3. Process and send emails (feeds auto-initialized on backend)\n\nContinue?`)) {
                 return;
             }
 
@@ -456,7 +456,7 @@
                 document.getElementById('progress-section').classList.add('active');
 
                 // === STEP 1: CLEAN FEEDS ===
-                document.getElementById('progress-title').textContent = '🧹 Step 1/4: Cleaning old feeds...';
+                document.getElementById('progress-title').textContent = '🧹 Step 1/3: Cleaning old feeds...';
                 document.getElementById('progress-stats').textContent = 'Removing old articles';
 
                 const cleanResponse = await fetch('/admin/clean-feeds', {
@@ -474,7 +474,7 @@
                 console.log('✅ Clean feeds: SUCCESS');
 
                 // === STEP 2: RESET DIGEST FLAGS ===
-                document.getElementById('progress-title').textContent = '🔄 Step 2/4: Resetting digest flags...';
+                document.getElementById('progress-title').textContent = '🔄 Step 2/3: Resetting digest flags...';
                 document.getElementById('progress-stats').textContent = 'Clearing sent flags';
 
                 const resetResponse = await fetch('/admin/reset-digest-flags', {
@@ -491,48 +491,9 @@
                 }
                 console.log('✅ Reset digest flags: SUCCESS');
 
-                // === STEP 3: INITIALIZE EACH TICKER INDIVIDUALLY ===
-                document.getElementById('progress-title').textContent = `⚙️ Step 3/4: Initializing ${tickers.length} tickers...`;
-
-                let totalFeedsCreated = 0;
-                for (let i = 0; i < tickers.length; i++) {
-                    const ticker = tickers[i];
-                    document.getElementById('progress-stats').textContent = `Initializing ${ticker} (${i+1}/${tickers.length})`;
-
-                    const initResponse = await fetch('/admin/init', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-Admin-Token': token
-                        },
-                        body: JSON.stringify({
-                            tickers: [ticker],
-                            force_refresh: false
-                        })
-                    });
-
-                    if (!initResponse.ok) {
-                        throw new Error(`Init failed for ${ticker}: ${initResponse.statusText}`);
-                    }
-
-                    const initResult = await initResponse.json();
-                    if (initResult.results && initResult.results.length > 0) {
-                        const feedsForTicker = initResult.results.reduce((sum, r) => sum + (r.feeds_created || 0), 0);
-                        totalFeedsCreated += feedsForTicker;
-                        console.log(`✅ ${ticker}: ${feedsForTicker} feeds created`);
-                    }
-
-                    // Sleep 2 seconds between tickers (except after last one)
-                    if (i < tickers.length - 1) {
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                    }
-                }
-
-                console.log(`✅ Initialization complete: ${totalFeedsCreated} feeds created`);
-
-                // === STEP 4: SUBMIT JOB BATCH ===
-                document.getElementById('progress-title').textContent = '📦 Step 4/4: Submitting batch...';
-                document.getElementById('progress-stats').textContent = 'Starting server-side processing';
+                // === STEP 3: SUBMIT JOB BATCH (auto-initializes on backend) ===
+                document.getElementById('progress-title').textContent = '📦 Step 3/3: Submitting batch...';
+                document.getElementById('progress-stats').textContent = 'Server will auto-initialize feeds';
 
                 const submitResponse = await fetch('/jobs/submit', {
                     method: 'POST',

@@ -12768,11 +12768,15 @@ Include:
 - {ticker} contracts: Dollar amounts or strategic significance
 - Competitor moves with direct {ticker} implications
 
-Format (use • bullet):
-• [Development with context, amounts, dates] (Oct 10)
+Format (use • bullet with TOPIC LABEL):
+• [Topic Label]: [Development with context, amounts, dates] (Oct 10)
 
-Example:
-• Acquired AI startup for $4.2B; transaction expected to close Q1 2026 pending regulatory approval (Oct 10)
+Topic Label: 2-5 words describing the development (e.g., "AI acquisition", "Regulatory investigation", "India expansion")
+
+Examples:
+✅ CORRECT: • AI acquisition announced: Purchased startup for $4.2B; transaction closes Q1 2026 pending regulatory approval (Oct 10)
+✅ CORRECT: • Biometric security mandate: New $3B headquarters requires palm scans for 14,000 employees (Oct 11)
+❌ WRONG: • Acquired AI startup for $4.2B; transaction expected to close Q1 2026 (Oct 10)
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
@@ -12808,13 +12812,15 @@ Include (report factually, no causal connection):
 - Industry regulatory facts: New rules, tariffs, policy changes with specific terms
 - Insider transactions: C-suite buys/sells with amounts and dates
 
-Format (use • bullet):
-• [Risk category]: [Company facts]; [Competitor facts]; [Regulatory facts] (Oct 10)
+Format (use • bullet with TOPIC LABEL):
+• [Topic Label]: [Company facts]; [Competitor facts]; [Regulatory facts] (Oct 10)
+
+Topic Label: 2-5 words describing the risk (e.g., "EU antitrust investigation", "Production disruption", "Insider selling")
 
 Examples:
-✓ EU antitrust investigation: Commission issued formal information request Oct 10 covering cloud division practices; similar probes of Meta, Amazon ongoing; potential fines €100M-€5B under DSA framework (Oct 10)
-✓ Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K; competitor reported 127,000 unit quarter (Oct 10)
-✓ Insider activity: CFO sold 50,000 shares at $87.50 on Oct 9 (first sale since June); CEO purchased 100,000 shares at $85.20 on Oct 10 (Oct 10)
+✅ CORRECT: • EU antitrust investigation: Commission issued formal information request Oct 10 covering cloud division practices; potential fines €100M-€5B under DSA framework (Oct 10)
+✅ CORRECT: • Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K (Oct 10)
+✅ CORRECT: • Insider selling activity: CFO sold 50,000 shares at $87.50 on Oct 9 (first sale since June); CEO purchased 100,000 shares at $85.20 on Oct 10 (Oct 10)
 
 DO NOT write:
 ✗ "threatens {ticker} positioning"
@@ -12851,13 +12857,16 @@ Include (report developments only):
 - Market data: Pricing changes, capacity additions, production figures
 - Executive commentary: Direct quotes from earnings calls/statements
 
-Format (use • bullet):
-• [What happened]. [Additional facts] (Oct 10)
+Format (use • bullet with TOPIC LABEL):
+• [Topic Label]: [What happened]. [Additional facts] (Oct 10)
+
+Topic Label: 2-5 words describing the development (e.g., "Competitor acquisition", "Tariff update", "Earnings report")
 
 Examples:
-✓ Competitor acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
-✓ New tariffs effective Jan 1, 2026 impose 25% levy on Category 8471 imports; domestic producers exempt under Section 301 exclusions (Oct 10)
-✓ Industry leader reported Q3 revenue $47.5B (+22% YoY), operating margin 43% (+500 bps YoY); management guided Q4 revenue $49-51B (Oct 10)
+✅ CORRECT: • Competitor acquisition: Acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
+✅ CORRECT: • New tariffs imposed: Effective Jan 1, 2026 impose 25% levy on Category 8471 imports; domestic producers exempt under Section 301 exclusions (Oct 10)
+✅ CORRECT: • Industry leader earnings: Reported Q3 revenue $47.5B (+22% YoY), operating margin 43% (+500 bps YoY); management guided Q4 revenue $49-51B (Oct 10)
+❌ WRONG: • Competitor acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
 
 DO NOT write:
 ✗ "threatening {ticker}'s market share"
@@ -12888,18 +12897,54 @@ CRITICAL: Write sub-headers exactly as shown with emojis: "📈 BULL CASE:", "�
 For Material News Days (1+ flagged articles):
 
 📈 BULL CASE:
+
+Format (use • bullet with TOPIC LABEL):
+• [Topic Label]: [Factual development from today with specific numbers/dates supporting upside]
+
+Topic Label: 2-5 words describing the bullish development (e.g., "Revenue growth", "Market expansion", "Cost reduction")
+
+Examples:
+✅ CORRECT: • AI acquisition announced: Purchased startup for $4.2B; transaction closes Q1 2026 and adds 600 AI engineers (Oct 10)
+✅ CORRECT: • Margin expansion confirmed: Q3 gross margin 68.5% (+320 bps YoY); management guided Q4 70-72% on operating leverage (Oct 10)
+❌ WRONG: • Announced AI acquisition for $4.2B; transaction closes Q1 2026 and adds 600 AI engineers (Oct 10)
+
+Structure:
 • [Factual development from today with specific numbers/dates supporting upside]
 • [Factual development from today with specific numbers/dates supporting upside]
 • [Additional factual development if relevant]
 • Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
 
 📉 BEAR CASE:
+
+Format (use • bullet with TOPIC LABEL):
+• [Topic Label]: [Factual development from today with specific numbers/dates supporting downside]
+
+Topic Label: 2-5 words describing the bearish risk (e.g., "Regulatory investigation", "Revenue miss", "Margin pressure")
+
+Examples:
+✅ CORRECT: • DOJ antitrust probe: Investigation announced targeting cloud practices; hearing scheduled Nov 15; potential remedies include behavioral constraints (Oct 10)
+✅ CORRECT: • Revenue guidance cut: Q4 outlook reduced to $48-50B from prior $52-54B on enterprise spending slowdown (Oct 10)
+❌ WRONG: • DOJ announced antitrust investigation targeting cloud practices; hearing scheduled Nov 15; potential remedies include behavioral constraints (Oct 10)
+
+Structure:
 • [Factual development from today with specific numbers/dates supporting downside]
 • [Factual development from today with specific numbers/dates supporting downside]
 • [Additional factual development if relevant]
 • Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
 
 🔍 KEY VARIABLES TO MONITOR:
+
+Format (use • bullet with TOPIC LABEL):
+• [Topic Label]: [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
+
+Topic Label: 2-5 words describing the catalyst (e.g., "Earnings report", "FDA decision", "Contract renewal")
+
+Examples:
+✅ CORRECT: • Q4 earnings release: Revenue and margin guidance will clarify demand trajectory - Timeline: Feb 15, 2026
+✅ CORRECT: • FDA approval decision: Phase 3 trial results expected; approval would enable $2B market entry - Timeline: Q1 2026
+❌ WRONG: • Revenue and margin guidance will clarify demand trajectory - Timeline: Feb 15, 2026
+
+Structure:
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
@@ -14442,8 +14487,27 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             "]+", flags=re.UNICODE)
         return emoji_pattern.sub('', text).strip()
 
-    def build_section(title: str, content: List[str], use_bullets: bool = True) -> str:
-        """Build section with consistent styling"""
+    def bold_bullet_labels(text: str) -> str:
+        """
+        Bold topic labels in bullet points.
+        Transforms: "• Topic Label: Details" → "• <strong>Topic Label:</strong> Details"
+        """
+        import re
+        # Match pattern: bullet (•) followed by 2-5 words, followed by colon
+        # Capture the topic label (everything before the colon)
+        pattern = r'(•\s*)([^:]{2,50}?:)(\s)'
+        replacement = r'\1<strong>\2</strong>\3'
+        return re.sub(pattern, replacement, text)
+
+    def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
+        """Build section with consistent styling
+
+        Args:
+            title: Section title
+            content: List of bullet points or paragraphs
+            use_bullets: If True, format as bullet list
+            bold_labels: If True, bold topic labels in format "Topic: Details"
+        """
         if not content:
             return ""
 
@@ -14454,7 +14518,9 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             # Bullet list format
             bullet_html = ""
             for item in content:
-                bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{item}</li>'
+                # Apply label bolding if requested
+                processed_item = bold_bullet_labels(item) if bold_labels else item
+                bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{processed_item}</li>'
 
             return f'''
                 <div style="margin-bottom: 20px;">
@@ -14498,31 +14564,31 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
     # Standard sections (bullet format)
     html += build_section("🔴 Major Developments" if not strip_emojis else "Major Developments",
-                         sections.get("major_developments", []), use_bullets=True)
+                         sections.get("major_developments", []), use_bullets=True, bold_labels=True)
     html += build_section("📊 Financial/Operational Performance" if not strip_emojis else "Financial/Operational Performance",
-                         sections.get("financial_operational", []), use_bullets=True)
+                         sections.get("financial_operational", []), use_bullets=True, bold_labels=False)
     html += build_section("⚠️ Risk Factors" if not strip_emojis else "Risk Factors",
-                         sections.get("risk_factors", []), use_bullets=True)
+                         sections.get("risk_factors", []), use_bullets=True, bold_labels=True)
     html += build_section("📈 Wall Street Sentiment" if not strip_emojis else "Wall Street Sentiment",
-                         sections.get("wall_street", []), use_bullets=True)
+                         sections.get("wall_street", []), use_bullets=True, bold_labels=False)
     html += build_section("⚡ Competitive/Industry Dynamics" if not strip_emojis else "Competitive/Industry Dynamics",
-                         sections.get("competitive_industry", []), use_bullets=True)
+                         sections.get("competitive_industry", []), use_bullets=True, bold_labels=True)
     html += build_section("📅 Upcoming Catalysts" if not strip_emojis else "Upcoming Catalysts",
-                         sections.get("upcoming_catalysts", []), use_bullets=True)
+                         sections.get("upcoming_catalysts", []), use_bullets=True, bold_labels=False)
 
     # Investment Implications parent header (only if has content)
     if any([parsed_investment['bull_case'], parsed_investment['bear_case'],
             parsed_investment['key_variables']]):
         html += build_section("🎯 Investment Implications" if not strip_emojis else "Investment Implications",
-                             [], use_bullets=False)  # Empty content, just header
+                             [], use_bullets=False, bold_labels=False)  # Empty content, just header
 
     # Investment Implications sub-sections as top-level sections (bullet format)
     html += build_section("Bull Case" if strip_emojis else "📈 Bull Case",
-                         parsed_investment['bull_case'], use_bullets=True)
+                         parsed_investment['bull_case'], use_bullets=True, bold_labels=True)
     html += build_section("Bear Case" if strip_emojis else "📉 Bear Case",
-                         parsed_investment['bear_case'], use_bullets=True)
+                         parsed_investment['bear_case'], use_bullets=True, bold_labels=True)
     html += build_section("Key Variables to Monitor" if strip_emojis else "🔍 Key Variables to Monitor",
-                         parsed_investment['key_variables'], use_bullets=True)
+                         parsed_investment['key_variables'], use_bullets=True, bold_labels=True)
 
     return html
 

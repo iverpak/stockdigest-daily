@@ -15735,6 +15735,7 @@ def start_heartbeat_thread(job_id: str):
 
     def heartbeat_loop():
         """Background thread that updates job heartbeat every 60 seconds"""
+        job_id_str = str(job_id)  # Convert to string for logging
         while not stop_event.is_set():
             try:
                 # Update last_updated to keep job alive
@@ -15743,24 +15744,24 @@ def start_heartbeat_thread(job_id: str):
                         UPDATE ticker_processing_jobs
                         SET last_updated = NOW()
                         WHERE job_id = %s AND status = 'processing'
-                    """, (job_id,))
+                    """, (job_id_str,))
 
                     # Check if update succeeded
                     if cur.rowcount > 0:
-                        LOG.debug(f"💓 [JOB {job_id[:8]}] Heartbeat updated")
+                        LOG.debug(f"💓 [JOB {job_id_str[:8]}] Heartbeat updated")
                     else:
                         # Job no longer processing (completed or failed)
-                        LOG.debug(f"💓 [JOB {job_id[:8]}] Heartbeat stopped (job no longer processing)")
+                        LOG.debug(f"💓 [JOB {job_id_str[:8]}] Heartbeat stopped (job no longer processing)")
                         break
 
             except Exception as e:
-                LOG.error(f"💓 [JOB {job_id[:8]}] Heartbeat update failed: {e}")
+                LOG.error(f"💓 [JOB {job_id_str[:8]}] Heartbeat update failed: {e}")
                 # Continue trying - don't let heartbeat thread crash
 
             # Wait 60 seconds (or until stop event is set)
             stop_event.wait(60)
 
-        LOG.debug(f"💓 [JOB {job_id[:8]}] Heartbeat thread exiting")
+        LOG.debug(f"💓 [JOB {job_id_str[:8]}] Heartbeat thread exiting")
 
     # Store stop event in global dict
     with _heartbeat_lock:
@@ -15770,10 +15771,10 @@ def start_heartbeat_thread(job_id: str):
     thread = threading.Thread(
         target=heartbeat_loop,
         daemon=True,
-        name=f"Heartbeat-{job_id[:8]}"
+        name=f"Heartbeat-{str(job_id)[:8]}"
     )
     thread.start()
-    LOG.info(f"💓 [JOB {job_id[:8]}] Heartbeat thread started (updates every 60s)")
+    LOG.info(f"💓 [JOB {str(job_id)[:8]}] Heartbeat thread started (updates every 60s)")
 
 def stop_heartbeat_thread(job_id: str):
     """
@@ -15781,14 +15782,15 @@ def stop_heartbeat_thread(job_id: str):
 
     Should be called when job completes, fails, or is cancelled.
     """
+    job_id_str = str(job_id)  # Convert to string for logging and dict lookup
     with _heartbeat_lock:
         stop_event = _active_heartbeats.pop(job_id, None)
 
     if stop_event:
         stop_event.set()  # Signal thread to stop
-        LOG.info(f"💓 [JOB {job_id[:8]}] Heartbeat thread stopped")
+        LOG.info(f"💓 [JOB {job_id_str[:8]}] Heartbeat thread stopped")
     else:
-        LOG.warning(f"💓 [JOB {job_id[:8]}] No heartbeat thread found to stop")
+        LOG.warning(f"💓 [JOB {job_id_str[:8]}] No heartbeat thread found to stop")
 
 # ============================================================================
 # Job Processing

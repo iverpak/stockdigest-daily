@@ -5931,29 +5931,121 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
-            # System prompt (generic - cacheable)
-            system_prompt = """You are a hedge fund analyst writing a factual memo on a target company. Analyze articles and write summaries using ONLY facts explicitly stated in the text.
+            # System prompt (generic - cacheable, ~1800 tokens - optimized for caching and comprehensive extraction)
+            system_prompt = """You are a hedge fund analyst extracting information about a target company for an investment research report.
 
 **YOUR TASK:**
-The user will provide target company name, ticker, article title, and content. Extract all material facts about that target company from the article.
+The user will provide company name, ticker, article title, and content. Extract and summarize all material facts about the company's actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
 
-**Content Priority (address only what article contains):**
-- Financial metrics: Revenue, margins, EBITDA, FCF, growth rates, guidance with exact time periods
-- Strategic actions: M&A, partnerships, products, capacity changes, buybacks, dividends with dollar amounts and dates
-- Competitive dynamics: How competitors are discussed in relation to target company
-- Industry developments: Regulatory changes, supply chain shifts, sector trends affecting target company
-- Analyst actions: Firm name, rating, price target, rationale for target company
-- Administrative: Earnings dates, regulatory deadlines, completion timelines
+**What to Extract:**
 
-**Structure (no headers in output):**
-Write 2-6 paragraphs in natural prose. Scale to article depth. Lead with most material information.
+**1. Strategic Actions**
+- M&A: acquisitions, divestitures, joint ventures, strategic partnerships
+- Product/Service Launches: new offerings, feature additions, discontinuations
+- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements
+- Market Entries/Exits: new geographies, new segments, market withdrawals
+- Organizational Changes: leadership appointments, restructuring, workforce changes
+- Capital Allocation: share buybacks, dividend changes, debt issuance/repayment
+- Extract: what, where, when, scale/investment amount, stated strategic rationale
 
-**Hard Rules:**
-- Every number MUST have: time period, units, comparison basis
-- Cite sources in parentheses using domain name only: (Reuters), (Business Wire)
-- FORBIDDEN words: may, could, likely, appears, positioned, poised, expect (unless quoting), estimate (unless quoting), assume, suggests, catalyst
-- NO inference beyond explicit guidance/commentary
-- Each sentence must add new factual information"""
+**2. Operational Performance**
+- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
+- Market Share: share gains/losses with specific percentages and time periods
+- Pricing Actions: price increases/decreases, promotional activity, pricing model changes
+- Service Levels: delivery times, quality metrics, customer satisfaction scores
+- Efficiency Metrics: cost per unit, productivity measures, operational KPIs
+- Customer Metrics: retention rates, net promoter scores, customer acquisition costs
+- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons
+
+**3. Financial Performance**
+- Revenue: total and by segment, with growth rates and time periods
+- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages
+- Cash Flow: operating cash flow, free cash flow, capex levels
+- Guidance: forward revenue/earnings projections, outlook commentary, raised/lowered ranges
+- Balance Sheet: debt levels, liquidity, cash position, credit ratings if mentioned
+- Shareholder Returns: dividends declared, buyback authorizations/executions, yield
+- Extract: exact figures with time periods, comparison to prior periods or guidance, beat/miss context
+
+**4. Technology and Product Capabilities**
+- Technology Developments: R&D progress, patents, technical milestones
+- Product Performance: benchmark results, specifications, feature comparisons
+- Innovation Pipeline: products in development, expected launch timelines
+- Technical Standards: certifications achieved, compliance milestones
+- Competitive Positioning: stated advantages, differentiation claims by company
+- Extract: specific capabilities, performance metrics, launch dates, investment levels
+
+**5. Analyst or Market Commentary**
+- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate/reiterate)
+- Price Targets: specific targets, changes from prior targets, high/low ranges
+- Analyst Rationale: reasons given for rating/target (operational, financial, valuation)
+- Consensus Changes: moves in consensus estimates, revision trends
+- Extract: specific ratings, targets, rationale as stated, date of action
+
+**6. Challenges or Headwinds**
+- Operational Issues: production problems, service disruptions, quality issues, recalls
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
+- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
+- Macro Impacts: interest rate effects, currency impacts, commodity cost pressures
+- Extract: specific issues, financial impacts if quantified, timelines, resolution status
+
+**7. Competitive and Industry Context**
+- Competitor Actions: direct mentions of competitor moves, market share dynamics
+- Industry Trends: sector-wide developments, regulatory changes, supply chain shifts
+- Relative Performance: company performance versus peers/industry benchmarks if stated
+- Market Structure: consolidation, new entrants, competitive intensity as discussed
+- Extract: specific competitor names, market dynamics, company's stated position
+
+**8. Corporate Events and Catalysts**
+- Earnings Dates: scheduled release dates, conference call times
+- Regulatory Deadlines: filing dates, approval timelines, compliance dates
+- Transaction Closings: M&A completion dates, expected closing timelines
+- Product Launches: specific launch dates, rollout schedules
+- Extract: exact dates, times, event details
+
+**Exclusion Criteria:**
+❌ Pure stock performance (price movements, technical analysis, chart patterns) without operational context
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to analyst rating rationale
+❌ General market commentary not specific to company
+❌ Historical background older than 2 years unless directly relevant to current developments
+❌ Speculation about future actions not based on company guidance or statements
+❌ Opinion pieces without factual content about company actions/performance
+❌ Promotional language without quantifiable metrics or commitments
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Scale length to article materiality: earnings releases merit more detail than routine announcements
+- Include specific numbers, dates, names, locations in every relevant sentence
+- Include direct quotes from executives, company statements, or analysts (with attribution)
+- Cite source: (domain name) - use once at end of first paragraph or when introducing quoted material
+- Present facts in logical flow: lead with most material information (earnings, guidance, major strategic actions), then supporting details, then forward-looking elements
+
+**Example Flow Patterns:**
+- Earnings article: Results vs. expectations → Segment performance → Guidance → Strategic commentary → Analyst reactions
+- M&A article: Deal terms → Strategic rationale → Financial impact → Timeline → Financing details
+- Product launch: Product details → Market opportunity → Pricing/availability → Company positioning statements
+- Analyst action: Rating/target change → Rationale → Supporting metrics → Comparison to consensus
+
+**Critical Rules:**
+✅ ONLY extract facts explicitly stated about the company in the article
+✅ Every quantitative claim must include: number, units, time period, comparison basis (YoY/QoQ/vs. guidance/vs. consensus)
+✅ Always cite source domain in parentheses at appropriate point
+✅ Include executive or analyst quotes verbatim with attribution ("CEO Name stated", "Analyst Name from Firm wrote")
+✅ Note beat/miss context for financial metrics when article provides it
+✅ Include specific percentage changes, not just directional language
+✅ Specify which business segment for segment-specific metrics
+✅ Include guidance ranges completely (e.g., "$500M-$520M" not "approximately $510M")
+
+❌ NEVER speculate beyond explicit company guidance or analyst commentary
+❌ NEVER infer financial impacts not quantified in article
+❌ NEVER add competitive implications not stated in article
+❌ NEVER use hedge words: "may", "could", "likely", "appears", "positioned", "poised", "suggests" (except in direct quotes)
+❌ NEVER use "expect", "estimate", "forecast", "project" unless directly quoting source
+❌ NEVER write "the company plans to" unless article explicitly states company's plans
+❌ NEVER combine facts from general knowledge with article facts - extract ONLY from provided content
+❌ NEVER editorialize on whether developments are "positive", "negative", "strong", or "weak" unless quoting source
+❌ NEVER round numbers differently than article presents them
+❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)"""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})

@@ -12544,6 +12544,30 @@ def is_within_24_hours(dt: datetime) -> bool:
 
     return time_diff.total_seconds() < (24 * 60 * 60)
 
+def is_market_open() -> bool:
+    """
+    Check if US stock market is currently open.
+
+    Market hours: Monday-Friday, 9:30am - 4:00pm Eastern Time
+    Returns True only during regular trading hours.
+    Does NOT account for holidays or early closes.
+
+    Returns:
+        bool: True if market is open, False otherwise
+    """
+    eastern = pytz.timezone('US/Eastern')
+    now_et = datetime.now(timezone.utc).astimezone(eastern)
+
+    # Check if weekend (Saturday=5, Sunday=6)
+    if now_et.weekday() >= 5:
+        return False
+
+    # Check if during market hours (9:30am - 4:00pm)
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    return market_open <= now_et < market_close
+
 def insert_new_badges(ai_summary: str, articles: List[Dict]) -> str:
     """
     Post-process AI-generated summary to insert 🆕 badges for <24h articles.
@@ -14692,9 +14716,14 @@ def generate_email_html_core(
         if is_paywall_article(a.get('domain', ''))
     )
 
-    # Current date
+    # Current date and market status
     eastern = pytz.timezone('US/Eastern')
     current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
+
+    # Determine market status for dynamic labels
+    market_is_open = is_market_open()
+    market_status = "INTRADAY" if market_is_open else "LAST CLOSE"
+    return_label = "TODAY" if market_is_open else "1D"
 
     # Build HTML sections
     # Email #3 is user-facing, so strip emojis from section headers
@@ -14753,7 +14782,7 @@ def generate_email_html_core(
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
                                     </td>
                                     <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • Last Close</div>
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • {market_status}</div>
                                     </td>
                                 </tr>
                                 <tr>
@@ -14764,7 +14793,7 @@ def generate_email_html_core(
                                     <td align="right" style="vertical-align: top; width: 42%;">
                                         <div style="display: inline-block; text-align: right;">
                                             <div style="font-size: 28px; font-weight: 700; line-height: 1; margin: 0; color: #ffffff;">{stock_price}</div>
-                                            {f'<div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 10px;">{price_change_pct}</div>' if price_change_pct else ''}
+                                            {f'<div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 10px;">{return_label}: {price_change_pct}</div>' if price_change_pct else ''}
                                             {f'<div style="font-size: 14px; color: {ytd_return_color}; font-weight: 600; margin-top: 4px;">YTD: {ytd_return_pct}</div>' if ytd_return_pct else ''}
                                         </div>
                                     </td>

@@ -1048,13 +1048,26 @@ def close_connection_pool():
 
 @contextmanager
 def db():
-    """Get database connection from pool (or create direct connection if pool not initialized)"""
+    """
+    Get database connection from pool with automatic timeouts.
+
+    Sets per-connection timeouts to prevent zombie transactions:
+    - idle_in_transaction_session_timeout: 300s (5 min) - kills idle transactions
+    - lock_timeout: 30s - fails if can't acquire lock
+    - statement_timeout: 120s (2 min) - kills long-running queries
+    """
     global DB_POOL
 
     # Use pool if available (production)
     if DB_POOL is not None:
         with DB_POOL.connection() as conn:
             try:
+                # Set timeouts for this connection
+                with conn.cursor() as cur:
+                    cur.execute("SET idle_in_transaction_session_timeout = '300000';")  # 5 min
+                    cur.execute("SET lock_timeout = '30000';")  # 30 sec
+                    cur.execute("SET statement_timeout = '120000';")  # 2 min
+
                 yield conn
                 conn.commit()
             except Exception:
@@ -1066,6 +1079,12 @@ def db():
             raise RuntimeError("DATABASE_URL not configured")
         conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
         try:
+            # Set timeouts for this connection
+            with conn.cursor() as cur:
+                cur.execute("SET idle_in_transaction_session_timeout = '300000';")  # 5 min
+                cur.execute("SET lock_timeout = '30000';")  # 30 sec
+                cur.execute("SET statement_timeout = '120000';")  # 2 min
+
             yield conn
             conn.commit()
         except Exception:
@@ -3649,12 +3668,28 @@ def commit_ticker_reference_to_github():
         commit_result = commit_csv_to_github(csv_content, commit_message)
 
         if commit_result["status"] != "success":
-            LOG.error(f"❌ GitHub commit failed: {commit_result.get('message', 'Unknown error')}")
-            return {
-                "status": "error",
-                "message": f"GitHub commit failed: {commit_result.get('message')}",
-                "rows": ticker_count
-            }
+            error_msg = commit_result.get('message', 'Unknown error')
+
+            # Check if it's a missing env vars error (not a critical failure)
+            if "not configured" in error_msg or "GITHUB_TOKEN" in error_msg:
+                LOG.warning(f"⚠️ GitHub commit skipped: {error_msg}")
+                LOG.warning(f"   To enable: Set GITHUB_TOKEN and GITHUB_REPO in Render environment")
+                LOG.info(f"✅ CSV export successful (GitHub backup skipped)")
+                return {
+                    "status": "success",
+                    "message": "CSV export successful (GitHub backup skipped - env vars not configured)",
+                    "rows": ticker_count,
+                    "timestamp": timestamp,
+                    "github_skipped": True
+                }
+            else:
+                # Real error (network, permission, etc)
+                LOG.error(f"❌ GitHub commit failed: {error_msg}")
+                return {
+                    "status": "error",
+                    "message": f"GitHub commit failed: {error_msg}",
+                    "rows": ticker_count
+                }
 
         LOG.info(f"✅ GitHub commit successful")
         LOG.info(f"   Commit SHA: {commit_result.get('commit_sha', 'N/A')[:8]}")
@@ -16633,6 +16668,83 @@ def email_queue_watchdog_loop():
             # Continue running despite errors
 
 
+def stuck_transaction_monitor_loop():
+    """
+    Stuck transaction monitor - detects and logs zombie transactions.
+
+    Monitors pg_stat_activity for:
+    - Transactions idle >3 minutes (idle in transaction)
+    - Queries waiting for locks >1 minute
+
+    CRITICAL: Detects the root cause of job freezes (zombie transactions holding locks).
+    The per-connection timeouts will kill these automatically, but we log warnings.
+    """
+    LOG.info("🔍 Stuck transaction monitor started (checks every 60s)")
+
+    while True:
+        try:
+            time.sleep(60)  # Check every minute
+
+            with db() as conn, conn.cursor() as cur:
+                # Find idle-in-transaction connections
+                cur.execute("""
+                    SELECT pid, usename,
+                           EXTRACT(EPOCH FROM (NOW() - query_start))::INT as seconds_idle,
+                           EXTRACT(EPOCH FROM (NOW() - state_change))::INT as seconds_in_transaction,
+                           substring(query, 1, 100) as query_preview
+                    FROM pg_stat_activity
+                    WHERE state = 'idle in transaction'
+                      AND (NOW() - state_change) > interval '3 minutes'
+                      AND pid != pg_backend_pid()
+                    ORDER BY state_change
+                """)
+
+                idle_transactions = cur.fetchall()
+
+                if idle_transactions:
+                    LOG.warning(f"⚠️ Found {len(idle_transactions)} zombie transactions (idle >3min):")
+                    for txn in idle_transactions:
+                        LOG.warning(
+                            f"   → PID {txn['pid']}: {txn['usename']} "
+                            f"(idle {txn['seconds_in_transaction']}s) "
+                            f"Query: {txn['query_preview']}"
+                        )
+                    LOG.warning(
+                        f"   💡 These will be auto-killed by idle_in_transaction_session_timeout (300s)"
+                    )
+
+                # Find queries waiting for locks
+                cur.execute("""
+                    SELECT pid, usename, wait_event,
+                           EXTRACT(EPOCH FROM (NOW() - query_start))::INT as seconds_waiting,
+                           substring(query, 1, 100) as query_preview
+                    FROM pg_stat_activity
+                    WHERE state = 'active'
+                      AND wait_event = 'relation'
+                      AND (NOW() - query_start) > interval '1 minute'
+                      AND pid != pg_backend_pid()
+                    ORDER BY query_start
+                """)
+
+                blocked_queries = cur.fetchall()
+
+                if blocked_queries:
+                    LOG.warning(f"⚠️ Found {len(blocked_queries)} queries waiting for locks >1min:")
+                    for query in blocked_queries:
+                        LOG.warning(
+                            f"   → PID {query['pid']}: {query['usename']} "
+                            f"(waiting {query['seconds_waiting']}s) "
+                            f"Query: {query['query_preview']}"
+                        )
+                    LOG.warning(
+                        f"   💡 These will fail at lock_timeout (30s) or statement_timeout (120s)"
+                    )
+
+        except Exception as e:
+            LOG.error(f"❌ Stuck transaction monitor error: {e}")
+            # Continue running despite errors
+
+
 @APP.on_event("startup")
 async def startup_event():
     """Initialize job queue system on startup"""
@@ -16773,12 +16885,16 @@ async def startup_event():
     timeout_thread = threading.Thread(target=timeout_watchdog_loop, daemon=True, name="TimeoutWatchdog")
     timeout_thread.start()
 
+    # Start stuck transaction monitor (NEW - Oct 2025: monitors for zombie transactions)
+    stuck_txn_thread = threading.Thread(target=stuck_transaction_monitor_loop, daemon=True, name="StuckTransactionMonitor")
+    stuck_txn_thread.start()
+
     # Start worker heartbeat monitor (restarts worker if frozen)
     global _worker_heartbeat_monitor_thread
     _worker_heartbeat_monitor_thread = threading.Thread(target=worker_heartbeat_monitor_loop, daemon=True, name="WorkerHeartbeatMonitor")
     _worker_heartbeat_monitor_thread.start()
 
-    LOG.info("✅ Job queue system initialized (4 watchdog threads running + worker heartbeat monitor)")
+    LOG.info("✅ Job queue system initialized (5 watchdog threads running + worker heartbeat monitor)")
 
 @APP.on_event("shutdown")
 async def shutdown_event():
@@ -18150,10 +18266,12 @@ async def cron_ingest(
             competitor_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
 
         # Process all groups in parallel using ThreadPoolExecutor
+        # REDUCED: max_workers=8 (was 15) to reduce DB connection contention
+        # With 3 concurrent tickers: 3 × 8 = 24 peak DB connections (30% of 80-conn pool)
         LOG.info("=== Starting parallel feed processing with grouped strategy ===")
         processing_start_time = time.time()
 
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
 
             # Submit company feed groups (sequential Google→Yahoo within each ticker)

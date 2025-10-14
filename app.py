@@ -12910,6 +12910,9 @@ OUTPUT STRUCTURE:
 CRITICAL: DO NOT use markdown headers (##) or title lines. Start sections with emoji ONLY.
 Use exact emoji headers shown below. No ##, no ###, no additional formatting.
 
+CRITICAL: DO NOT use markdown bold (**text**) or any markdown formatting. Output plain text only.
+Topic labels will be automatically bolded during HTML rendering. Just write: "Topic Label: Details"
+
 📌 BOTTOM LINE (Always - 150 words max):
 Answer: "What happened today for {ticker}?"
 
@@ -14686,13 +14689,35 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             "]+", flags=re.UNICODE)
         return emoji_pattern.sub('', text).strip()
 
+    def strip_markdown_formatting(text: str) -> str:
+        """
+        Strip markdown formatting that AI sometimes adds despite instructions.
+        Removes: **bold**, *italic*, __underline__, etc.
+        """
+        import re
+        # Strip markdown bold (**text** or __text__)
+        text = re.sub(r'\*\*([^*]+?)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+?)__', r'\1', text)
+        # Strip markdown italic (*text* or _text_)
+        text = re.sub(r'\*([^*]+?)\*', r'\1', text)
+        text = re.sub(r'_([^_]+?)_', r'\1', text)
+        return text
+
     def bold_bullet_labels(text: str) -> str:
         """
         Bold topic labels in bullet points.
         Transforms: "Topic Label: Details" → "<strong>Topic Label:</strong> Details"
+        Also strips markdown bold syntax (**text**) that AI sometimes adds despite instructions.
         Note: Bullets are stripped during parsing, so pattern matches at start of text.
         """
         import re
+
+        # DEFENSIVE: Strip any markdown formatting that AI may have added
+        # This handles cases where AI outputs: "**Rate cut cycle initiated**: Details"
+        # We strip these first, then apply our own HTML <strong> tags
+        text = strip_markdown_formatting(text)
+
+        # Then apply HTML bold tags to topic label (text before colon)
         # Match pattern: start of text followed by 2-80 chars, then colon
         # Capture the topic label (everything before the colon, including the colon)
         # 80-char limit prevents bolding entire sentences while capturing longer labels
@@ -14732,8 +14757,9 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 </div>
             '''
         else:
-            # Paragraph format
-            content_filtered = [line for line in content if line.strip()]
+            # Paragraph format (used by Bottom Line)
+            # Strip markdown from each line before joining
+            content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
             text = "<br>".join(content_filtered)
 
             return f'''
@@ -14750,6 +14776,8 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     if parsed_investment['is_quiet_day']:
         # Quiet day: just return plain paragraph text (no headers, no sections)
         quiet_text = parsed_investment['quiet_day_text']
+        # Strip any markdown formatting AI may have added
+        quiet_text = strip_markdown_formatting(quiet_text)
         return f'''
             <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">
                 {quiet_text.replace(chr(10), '<br>')}

@@ -12803,15 +12803,79 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
 INPUT FORMAT:
 Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a category tag:
 - [COMPANY] = Articles directly about {ticker}
-- [INDUSTRY - keyword] = Industry/sector articles relevant to {ticker}
+- [INDUSTRY - keyword] = Fundamental value drivers for {ticker} (prices, costs, demand, supply, regulation)
 - [COMPETITOR] = Articles about {ticker}'s competitors
+
+🎯 INTELLIGENCE SYNTHESIS APPROACH:
+
+As you read the article stream, actively look for these patterns to create insights (not just lists):
+
+1. **Contradictions** - Opposing signals on same topic
+   Example: Price rallies BUT expert says "supply ample"
+
+2. **Competitive Benchmarks** - Peer metrics that contextualize company
+   Example: Peer costs $29K/unit; {ticker} costs $56K/unit
+
+3. **Recovery Context** - Show distance from peak/trough when relevant
+   Example: "Recovered to $116K" → "Recovered to $116K (still 8% below $126K peak)"
+
+4. **Duration Signals** - Preserve time phrases showing temporary vs structural
+   Example: "through 2027," "since 2021," "began 2022"
+
+5. **Causal Chains** - Connect related events across articles
+   Example: Fire Sept 16 → Premium spike Oct 6 → Production cuts Oct 13
+
+When 3+ articles cover same topic: Synthesize into one insight rather than separate bullets.
+
+---
+
+🔍 CONTRADICTION TAXONOMY:
+
+Actively identify and surface these contradiction types:
+
+**Price/Sentiment vs. Supply Reality:**
+- Pattern: "Price rallied to $X; however, [expert/data] notes supply remains ample"
+
+**Recovery Claims vs. Peak Context:**
+- Pattern: "Recovered to $X (still Y% below peak $Z)"
+
+**Headline Narrative vs. Behavioral Data:**
+- Pattern: "Despite [headline event], [behavioral data] indicates [contrarian signal]"
+
+---
+
+📏 EXECUTIVE-LEVEL DETAIL PRIORITY:
+
+Include with full context:
+✓ Numbers at extremes: "Record," "lowest since," "within X% of ATH," "first time"
+✓ Numbers that changed: Revised guidance, broken trends, new targets
+✓ Behavioral data over sentiment: Exchange flows, inventory movements (proof of action) > ETF flows, surveys (proof of interest)
+✓ Expert quotes contradicting narrative: "Despite X, [expert] states Y"
+✓ Competitive benchmarks: "{ticker} $X vs Peer $Y"
+
+Compress or omit:
+⚠ Mechanism explanations: HOW things work (state outcome only unless novel/material)
+⚠ Repeated metrics: Same number across sections (state once with full context, reference elsewhere)
+⚠ Generic commentary: "Expects growth" without specifics
+
+---
+
+📊 COMPETITIVE BENCHMARKING GUIDELINES:
+
+When competitor growth trajectory exists:
+- Show full arc: "Competitor: $X current revenue → $Y projected (2027) at Z% margins"
+
+When multiple peer metrics exist:
+- Present comparatively: "Peer A costs $29K/unit; Peer B $31K/unit; {ticker} costs [disclosed/undisclosed]"
+
+---
 
 OUTPUT STRUCTURE:
 
 CRITICAL: DO NOT use markdown headers (##) or title lines. Start sections with emoji ONLY.
 Use exact emoji headers shown below. No ##, no ###, no additional formatting.
 
-📌 BOTTOM LINE (Always - 50 words max):
+📌 BOTTOM LINE (Always - 150 words max):
 Answer: "What happened today for {ticker}?"
 
 If FLAGGED ARTICLE COUNT = 0:
@@ -12820,6 +12884,7 @@ No significant company news, regulatory updates, or competitive developments for
 
 If FLAGGED ARTICLE COUNT ≥ 1:
 [What happened]. [Key data points]. [What to monitor next].
+Include contradictions if present: "X rallied though expert notes Y"
 
 🔴 MAJOR DEVELOPMENTS (Only if material developments exist - 3-6 bullets max)
 
@@ -12833,6 +12898,11 @@ PRIORITIZATION:
 - Newest articles first when multiple cover same topic
 - [COMPANY] articles have priority over [INDUSTRY]/[COMPETITOR]
 - If articles span multiple days within lookback window, group by topic rather than forcing all into one section
+
+SYNTHESIS RULES:
+- If 3+ articles cover same development: Combine into ONE bullet with full context
+- If contradiction exists: Present as "[Development]; however, [contrarian signal]"
+- If causal chain exists: Connect temporally "[Event A] → [Impact B] → [Response C]"
 
 Source Priority: [COMPANY] articles first, then [INDUSTRY]/[COMPETITOR] with direct implications
 
@@ -12849,24 +12919,27 @@ Format (use • bullet with TOPIC LABEL):
 
 Topic Label: 2-5 words describing the development (e.g., "AI acquisition", "Regulatory investigation", "India expansion")
 
-Examples:
+Example:
 ✅ CORRECT: • AI acquisition announced: Purchased startup for $4.2B; transaction closes Q1 2026 pending regulatory approval (Oct 10)
-✅ CORRECT: • Biometric security mandate: New $3B headquarters requires palm scans for 14,000 employees (Oct 11)
-❌ WRONG: • Acquired AI startup for $4.2B; transaction expected to close Q1 2026 (Oct 10)
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
 Source: [COMPANY] articles only
+
+CRITICAL CONTEXT RULES:
+- Historical data: Flag with quarter end dates "Q2 2025 (quarter ended June 30): Revenue $X"
+- Guidance: "Q4 2025 guidance: Revenue $Y-Z"
+- Recovery: Show distance from peak "Revenue $X (still Y% below peak $Z)"
+- Growth: Show prior context "Revenue +15% (ending 8-quarter decline from peak $Z)"
 
 Include:
 - Earnings, revenue, guidance, margins (exact figures) vs. consensus when mentioned
 - Production metrics, capacity, operational KPIs
 - Capex, debt, buybacks, dividends (amounts)
 - Stock performance with context
-- IMPORTANT: Flag historical data with quarter end dates (e.g., "Q2 2025, quarter ended June 30")
 
 Format (use • bullet):
-• [Metric]: [Value] [vs. comparison if provided] (Oct 10)
+• [Metric]: [Value with context] [vs. comparison if provided] (Oct 10)
 
 Example:
 • Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B; full-year guidance raised to $52B from $50B (Oct 10)
@@ -12896,7 +12969,6 @@ Topic Label: 2-5 words describing the risk (e.g., "EU antitrust investigation", 
 Examples:
 ✅ CORRECT: • EU antitrust investigation: Commission issued formal information request Oct 10 covering cloud division practices; potential fines €100M-€5B under DSA framework (Oct 10)
 ✅ CORRECT: • Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K (Oct 10)
-✅ CORRECT: • Insider selling activity: CFO sold 50,000 shares at $87.50 on Oct 9 (first sale since June); CEO purchased 100,000 shares at $85.20 on Oct 10 (Oct 10)
 
 DO NOT write:
 ✗ "threatens {ticker} positioning"
@@ -12926,6 +12998,19 @@ CRITICAL RULES:
 - NO analysis of impact on {ticker}
 - NO interpretive verbs ("validates," "threatens," "creates")
 
+SYNTHESIS OPPORTUNITIES:
+- When competitor metric + {ticker} metric both exist: Present comparatively
+  Example: "Competitor A costs $29K/unit; Competitor B $31K/unit; {ticker} costs undisclosed"
+
+- When competitor announcement + {ticker} has gap: Report both factually
+  Example: "Competitor launched product at $X with feature Y; {ticker} product lineup [current state]"
+
+- When industry trend + multiple data points: Synthesize
+  Example: "Industry analysts project market growing X% through 2027; Competitor A announced $Y investment; Competitor B reported Z% growth"
+
+- When competitor trajectory exists: Show full arc
+  Example: "Competitor: $X current revenue → $Y projected (2027) at Z% margins"
+
 Include (report developments only):
 - Competitor M&A: Transaction details, amounts, companies involved
 - Industry regulation: New rules, effective dates, affected parties
@@ -12940,9 +13025,7 @@ Topic Label: 2-5 words describing the development (e.g., "Competitor acquisition
 
 Examples:
 ✅ CORRECT: • Competitor acquisition: Acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
-✅ CORRECT: • New tariffs imposed: Effective Jan 1, 2026 impose 25% levy on Category 8471 imports; domestic producers exempt under Section 301 exclusions (Oct 10)
 ✅ CORRECT: • Industry leader earnings: Reported Q3 revenue $47.5B (+22% YoY), operating margin 43% (+500 bps YoY); management guided Q4 revenue $49-51B (Oct 10)
-❌ WRONG: • Competitor acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
 
 DO NOT write:
 ✗ "threatening {ticker}'s market share"
@@ -12979,10 +13062,8 @@ Format (use • bullet with TOPIC LABEL):
 
 Topic Label: 2-5 words describing the bullish development (e.g., "Revenue growth", "Market expansion", "Cost reduction")
 
-Examples:
+Example:
 ✅ CORRECT: • AI acquisition announced: Purchased startup for $4.2B; transaction closes Q1 2026 and adds 600 AI engineers (Oct 10)
-✅ CORRECT: • Margin expansion confirmed: Q3 gross margin 68.5% (+320 bps YoY); management guided Q4 70-72% on operating leverage (Oct 10)
-❌ WRONG: • Announced AI acquisition for $4.2B; transaction closes Q1 2026 and adds 600 AI engineers (Oct 10)
 
 Structure:
 • [Factual development from today with specific numbers/dates supporting upside]
@@ -12997,10 +13078,8 @@ Format (use • bullet with TOPIC LABEL):
 
 Topic Label: 2-5 words describing the bearish risk (e.g., "Regulatory investigation", "Revenue miss", "Margin pressure")
 
-Examples:
+Example:
 ✅ CORRECT: • DOJ antitrust probe: Investigation announced targeting cloud practices; hearing scheduled Nov 15; potential remedies include behavioral constraints (Oct 10)
-✅ CORRECT: • Revenue guidance cut: Q4 outlook reduced to $48-50B from prior $52-54B on enterprise spending slowdown (Oct 10)
-❌ WRONG: • DOJ announced antitrust investigation targeting cloud practices; hearing scheduled Nov 15; potential remedies include behavioral constraints (Oct 10)
 
 Structure:
 • [Factual development from today with specific numbers/dates supporting downside]
@@ -13015,10 +13094,8 @@ Format (use • bullet with TOPIC LABEL):
 
 Topic Label: 2-5 words describing the catalyst (e.g., "Earnings report", "FDA decision", "Contract renewal")
 
-Examples:
+Example:
 ✅ CORRECT: • Q4 earnings release: Revenue and margin guidance will clarify demand trajectory - Timeline: Feb 15, 2026
-✅ CORRECT: • FDA approval decision: Phase 3 trial results expected; approval would enable $2B market entry - Timeline: Q1 2026
-❌ WRONG: • Revenue and margin guidance will clarify demand trajectory - Timeline: Feb 15, 2026
 
 Structure:
 • [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
@@ -13037,12 +13114,6 @@ Remove "if" conditionals. State outcomes directly using events from articles.
 ✗ BAD:
 "If BVNK closes and x402 adoption accelerates as developers integrate protocol"
 
-✓ GOOD:
-"18A manufacturing begins before Dec 31 per announcement; Clearwater Forest ships H1 2026; x86 revenue share stabilizes at Q2 levels"
-
-✗ BAD:
-"If 18A successful and Clearwater meets targets while share erosion slows"
-
 ---
 
 KEY VARIABLES FORMAT:
@@ -13050,10 +13121,10 @@ KEY VARIABLES FORMAT:
 State variable and timeline ONLY. NO analysis of why it matters.
 
 ✓ GOOD:
-"1. Wheeler River permitting and construction decision - Timeline: Federal approval expected 2025-2026"
+"Wheeler River permitting and construction decision - Timeline: Federal approval expected 2025-2026"
 
 ✗ BAD:
-"1. Wheeler River permitting - impacts ability to capture current pricing vs. extended development exposing to volatility"
+"Wheeler River permitting - impacts ability to capture current pricing vs. extended development exposing to volatility"
 
 ---
 
@@ -13109,6 +13180,13 @@ If fact is detailed in one section, cross-reference in others:
 - Instead of repeating: "FSD investigation (see Major Developments) focuses on traffic light recognition"
 - Only repeat when adding NEW context
 
+DETAIL COMPRESSION:
+When 3+ articles cover same topic (e.g., price movement):
+1. State current level with context ONCE: "$10,775 (within 3% of ATH $11,104)"
+2. Add contrarian signal if exists: "though [expert quote]"
+3. Add supply/demand context: "[stakeholder] behavior at current levels"
+4. Reference in other sections rather than repeat full details
+
 ---
 
 CRITICAL WRITING RULES:
@@ -13123,17 +13201,18 @@ CRITICAL WRITING RULES:
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
 3. NO source names in bullets - Exception: when figures conflict
 4. Newest first within sections
-5. Combine related facts - One story per bullet
+5. Combine related facts - One story per bullet (synthesize 3+ articles on same topic)
 6. Quantify everything - Exact figures ("12.7%", "$4.932B")
 7. Active voice - "Company launched X" not "X was launched"
 8. Use past tense for historical data - "reported," "achieved"
 9. Use present tense for current metrics - "trades at," "stands at"
 
-LENGTH GUIDELINES:
-HIGH (5+ material articles): 1,200-1,500 words
-MEDIUM (2-4 material articles): 700-1,000 words
-LOW (1 material article): 400-600 words
-ZERO (0 material articles): 100-200 words
+LENGTH GUIDELINES (Auto-scale to article volume):
+HIGH (8+ material articles): 1,800-2,500 words
+MEDIUM (4-7 material articles): 1,200-1,800 words
+LOW (2-3 material articles): 700-1,200 words
+MINIMAL (1 material article): 400-700 words
+ZERO (0 material articles): 100-150 words
 
 SECTION RULES:
 
@@ -13183,8 +13262,9 @@ INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
 2. Citing specific numbers, dates, and quotes from articles
 3. Avoiding causal language and competitive analysis
 4. Letting readers draw their own conclusions from presented facts
+5. Using synthesis patterns (contradictions, benchmarks, duration) to create insights without speculation
 
-Generate summary. Assess volume. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets.
+Generate summary. Synthesize related articles. Surface contradictions. Benchmark competition. Contextualize trajectories. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets. Scale to content volume.
 
 ---
 
@@ -13200,7 +13280,15 @@ CRITICAL: IF you include 🎯 INVESTMENT IMPLICATIONS section, you MUST include 
    🔍 KEY VARIABLES TO MONITOR:
 
 DO NOT write Investment Implications content without these three emoji sub-headers.
-DO NOT merge bull/bear/variables into unlabeled bullets - use the three distinct sub-headers above."""
+DO NOT merge bull/bear/variables into unlabeled bullets - use the three distinct sub-headers above.
+
+SYNTHESIS QUALITY CHECK:
+✅ If 3+ articles on same topic: Combined into ONE insight (not separate bullets)
+✅ If contradictions exist: Explicitly surfaced (not ignored)
+✅ If competitor benchmarks available: Contextualized comparatively (not listed separately)
+✅ If recovery/growth mentioned: Distance from peak/trough shown
+✅ If time phrases exist: Duration signals preserved ("through 2027," "since 2021")
+✅ If behavioral data exists: Prioritized over sentiment data (exchange flows > ETF inflows)"""
 
     return (system_prompt, user_content, company_name)
 
@@ -14570,9 +14658,10 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         Note: Bullets are stripped during parsing, so pattern matches at start of text.
         """
         import re
-        # Match pattern: start of text followed by 2-50 chars, then colon
+        # Match pattern: start of text followed by 2-80 chars, then colon
         # Capture the topic label (everything before the colon, including the colon)
-        pattern = r'^([^:]{2,50}?:)(\s)'
+        # 80-char limit prevents bolding entire sentences while capturing longer labels
+        pattern = r'^([^:]{2,80}?:)(\s)'
         replacement = r'<strong>\1</strong>\2'
         return re.sub(pattern, replacement, text)
 

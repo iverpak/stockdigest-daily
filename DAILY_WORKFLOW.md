@@ -764,24 +764,61 @@ if os.getenv('DRY_RUN', 'false').lower() == 'true':
 
 ## Safety Systems
 
-### Layered Defense Architecture (6 Levels)
+### Layered Defense Architecture (8 Levels)
 
-**UPDATED: October 11, 2025** - Enhanced concurrent processing stability
+**UPDATED: October 14, 2025** - Added database timeout protection
 
-StockDigest uses a 6-layer defense system to ensure jobs never get stuck:
+StockDigest uses an 8-layer defense system to ensure jobs never get stuck:
 
-1. **Startup Recovery** (one-time, 3-min threshold)
-2. **Job Queue Reclaim Thread** (continuous, 3-min threshold)
-3. **Email Watchdog Thread** (continuous, 3-min threshold)
-4. **Timeout Watchdog Thread** (continuous, 45-min limit)
-5. **Thread-Local HTTP Connectors** (concurrent processing isolation) ⭐ **NEW - Oct 11, 2025**
-6. **Automatic Deadlock Retry** (database concurrency safety) ⭐ **NEW - Oct 11, 2025**
+1. **Per-Connection Database Timeouts** (prevents zombie transactions) ⭐ **NEW - Oct 14, 2025**
+2. **Startup Recovery** (one-time, 3-min threshold)
+3. **Job Queue Reclaim Thread** (continuous, 3-min threshold)
+4. **Email Watchdog Thread** (continuous, 3-min threshold)
+5. **Timeout Watchdog Thread** (continuous, 45-min limit)
+6. **Stuck Transaction Monitor** (zombie transaction detection) ⭐ **NEW - Oct 14, 2025**
+7. **Thread-Local HTTP Connectors** (concurrent processing isolation) - Oct 11, 2025
+8. **Automatic Deadlock Retry** (database concurrency safety) - Oct 11, 2025
 
 ---
 
-### 1. Startup Recovery
+### 1. Per-Connection Database Timeouts ⭐ **NEW - Oct 14, 2025**
 
-**Location:** Line 13806-13841 (Job Queue), Line 13847-13882 (Email Queue)
+**Location:** Lines 1050-1094
+**Function:** `db()` context manager - Sets timeouts on every database connection
+**Trigger:** Automatic (applied to every DB connection from pool)
+
+**Timeouts Applied:**
+```python
+idle_in_transaction_session_timeout = 300000  # 5 minutes
+lock_timeout = 30000  # 30 seconds
+statement_timeout = 120000  # 2 minutes
+```
+
+**Purpose:** **CRITICAL - Prevents zombie transactions from holding locks indefinitely.**
+
+**The Problem (Oct 14, 2025 Incident):**
+- A database connection started a transaction and ran a query
+- The Python thread crashed/hung before committing
+- PostgreSQL kept the transaction open (idle in transaction)
+- Transaction held locks on `articles` table for 1+ hour
+- 9 other queries piled up waiting for locks
+- Entire system froze with no heartbeat updates
+
+**The Solution:**
+- `idle_in_transaction_session_timeout` auto-kills idle transactions after 5 min
+- `lock_timeout` makes queries fail fast if can't acquire lock within 30 sec
+- `statement_timeout` kills queries running >2 min
+
+**Impact:**
+- ✅ Max freeze duration: 5 min (was 1+ hour)
+- ✅ Auto-recovery (no manual intervention needed)
+- ✅ Queries fail fast and retry instead of waiting forever
+
+---
+
+### 2. Startup Recovery
+
+**Location:** Line 16748-16783 (Job Queue), Line 16789-16824 (Email Queue)
 **Function:** `startup_event()` - Reclaims orphaned jobs from crashed workers
 **Trigger:** Server restart (Render deployment, crash, manual restart)
 **Threshold:** 3 minutes
@@ -928,7 +965,50 @@ AND timeout_at < NOW()
 
 ---
 
-### 5. Thread-Local HTTP Connectors ⭐ **NEW - Oct 11, 2025**
+### 6. Stuck Transaction Monitor ⭐ **NEW - Oct 14, 2025**
+
+**Location:** Lines 16655-16730
+**Function:** `stuck_transaction_monitor_loop()`
+**Check Frequency:** Every 60 seconds
+**Purpose:** Detects and logs zombie transactions and lock contention
+
+**Monitoring:**
+```python
+# Finds idle-in-transaction connections >3 min
+SELECT pid, usename, state_change, query
+FROM pg_stat_activity
+WHERE state = 'idle in transaction'
+  AND (NOW() - state_change) > interval '3 minutes'
+
+# Finds queries waiting for locks >1 min
+SELECT pid, usename, query_start, query
+FROM pg_stat_activity
+WHERE state = 'active'
+  AND wait_event = 'relation'
+  AND (NOW() - query_start) > interval '1 minute'
+```
+
+**Logging Example:**
+```
+⚠️ Found 1 zombie transactions (idle >3min):
+   → PID 900217: quantbrief_db_user (idle 300s) Query: SELECT COUNT...
+   💡 These will be auto-killed by idle_in_transaction_session_timeout (300s)
+
+⚠️ Found 9 queries waiting for locks >1min:
+   → PID 900215: quantbrief_db_user (waiting 65s) Query: SELECT a.id FROM...
+   💡 These will fail at lock_timeout (30s) or statement_timeout (120s)
+```
+
+**Benefits:**
+- ✅ Early warning system (detect problems before cascade)
+- ✅ Detailed logging for post-incident analysis
+- ✅ Works with per-connection timeouts (layer #1) for auto-recovery
+
+**Impact:** Detected Oct 14, 2025 zombie transaction incident in real-time
+
+---
+
+### 7. Thread-Local HTTP Connectors - Oct 11, 2025
 
 **Location:** Line 88-147 in app.py
 **Function:** `_get_or_create_connector()`, `get_http_session()`, `cleanup_http_session()`
@@ -958,9 +1038,9 @@ def _get_or_create_connector():
 
 ---
 
-### 6. Automatic Deadlock Retry ⭐ **NEW - Oct 11, 2025**
+### 8. Automatic Deadlock Retry - Oct 11, 2025
 
-**Location:** Line 891-928 in app.py
+**Location:** Lines 1077-1114 in app.py
 **Function:** `@with_deadlock_retry()` decorator
 **Purpose:** Prevent article loss from database deadlocks during concurrent processing
 

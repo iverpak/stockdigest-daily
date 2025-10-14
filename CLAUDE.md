@@ -168,8 +168,11 @@ Total: max(10s, 5s, 10s) = ~10 seconds
 - Prevents duplicate scraping/AI calls (saves 20-40s + API costs per duplicate)
 
 **Implementation Details:**
-- Uses `ThreadPoolExecutor` with `max_workers=15`
-- Function: `process_feeds_sequentially()` (Line 13124)
+- Uses `ThreadPoolExecutor` with `max_workers=8` (reduced from 15 on Oct 14, 2025)
+  - **Reason for reduction:** Prevents database connection contention
+  - With 3 concurrent tickers: 3 × 8 = 24 peak connections (30% of 80-conn pool)
+  - Old config: 3 × 15 = 45 peak connections (56% of pool) - too high
+- Function: `process_feeds_sequentially()` (Line 17956)
 - Database connections: Thread-safe (each thread gets own connection)
 - Deduplication: `ON CONFLICT (url_hash)` prevents race conditions
 - Connection pool: 11 concurrent feeds << 22-97 available Postgres connections
@@ -736,12 +739,17 @@ Total: 60 minutes
 
 ### Key Components
 
-**1. Connection Pooling (Lines 690-770)**
+**1. Connection Pooling (Lines 1050-1094)** ⭐ **UPDATED - Oct 14, 2025**
 - Uses `psycopg_pool.ConnectionPool` for efficient connection reuse
 - Configuration: `min_size=5, max_size=80` (under 100 DB limit for Basic-1GB)
 - Supports up to 4-5 concurrent tickers comfortably
 - Retry logic: 3 attempts with exponential backoff (2s, 5s, 10s)
 - Fail-fast startup if pool cannot initialize
+- **NEW: Per-Connection Timeouts** (prevents zombie transactions):
+  - `idle_in_transaction_session_timeout = 300s` (5 min) - Auto-kills idle transactions
+  - `lock_timeout = 30s` - Queries fail fast if can't acquire lock
+  - `statement_timeout = 120s` (2 min) - Kills long-running queries
+  - **Critical:** Prevents lock queue buildup that froze system for 1+ hour (Oct 14, 2025 incident)
 
 **2. ThreadPoolExecutor Job Worker (Lines 12328-12367)**
 - Concurrent job processing using Python's `ThreadPoolExecutor`
@@ -787,7 +795,7 @@ Total: 60 minutes
   - ✅ Production validated with 10-ticker runs
 - **Trade-off:** Loses global connection pooling, but resources aren't the bottleneck (system runs at ~40% CPU, 60% memory with 4 concurrent)
 
-**7. Automatic Deadlock Retry (Lines 891-928)** ⭐ **CRITICAL FIX - Oct 11, 2025**
+**7. Automatic Deadlock Retry (Lines 1077-1114)** ⭐ **CRITICAL FIX - Oct 11, 2025**
 - **Problem Solved:** Database deadlocks causing article loss with 3+ concurrent tickers
 - **Root Cause:** Multiple threads writing to same database tables (articles, ticker_articles, domain_names) create circular lock dependencies
 - **Key Insight:** Deadlocks occur even with DIFFERENT tickers (no shared data) due to shared database infrastructure (indexes, sequences, foreign keys)
@@ -807,36 +815,54 @@ Total: 60 minutes
   - ✅ Minimal performance impact (~10-60 seconds total retry overhead per run)
   - ✅ Production validated with 10-ticker runs
 
+**8. Stuck Transaction Monitor (Lines 16655-16730)** ⭐ **NEW - Oct 14, 2025**
+- **Problem Solved:** Zombie transactions holding locks indefinitely (froze system Oct 14, 2025)
+- **How It Works:** Watchdog thread checks every 60s for:
+  - Idle-in-transaction connections >3 min
+  - Queries waiting for locks >1 min
+- **Logging Example:**
+  ```
+  ⚠️ Found 1 zombie transactions (idle >3min):
+     → PID 900217: quantbrief_db_user (idle 300s) Query: SELECT COUNT...
+     💡 These will be auto-killed by idle_in_transaction_session_timeout (300s)
+  ```
+- **Benefits:**
+  - ✅ Early warning system (detect before cascade)
+  - ✅ Detailed logging for debugging
+  - ✅ Works with per-connection timeouts (item #1) for auto-recovery
+- **Impact:** System now self-heals within 5 min max (was 1+ hour freeze)
+
 ### Environment Variables
 
 ```bash
-MAX_CONCURRENT_JOBS=4  # Number of tickers to process simultaneously (default: 2, recommended: 4)
+MAX_CONCURRENT_JOBS=3  # Number of tickers to process simultaneously (default: 2, recommended: 3)
 ```
 
-**Scaling:**
+**Scaling:** (Updated Oct 14, 2025 - reduced from 4 to 3 after zombie transaction incident)
 - Default: `2` (conservative, always safe)
-- **Recommended: `4`** (optimal balance of speed and stability)
-- Maximum: `5` (tight margins, not recommended)
+- **Recommended: `3`** (optimal balance of speed and stability)
+- Maximum: `4` (higher risk of lock contention, use with caution)
 - Infrastructure: Standard 2GB RAM app, Basic-1GB DB (100 connections)
 
 ### Resource Requirements
 
-**Per Ticker:**
+**Per Ticker:** (Updated Oct 14, 2025 - max_workers reduced to 8)
 - Memory: ~300MB peak (Scrapfly is lighter than Playwright)
-- DB Connections: ~15 peak (11 feeds + overhead)
+- DB Connections: ~8-10 peak (max_workers=8, plus query overhead)
 - Duration: ~25-30 minutes
 
-**Recommended: 4 Concurrent Tickers**
-- Memory: ~1200MB (60% of 2GB - comfortable) ✅
-- DB Connections: ~60 peak (75% of 80 pool limit - comfortable) ✅
+**Recommended: 3 Concurrent Tickers** (UPDATED from 4)
+- Memory: ~900MB (45% of 2GB - very comfortable) ✅
+- DB Connections: ~24-30 peak (30-38% of 80 pool limit - very comfortable) ✅
 - Duration: ~30 minutes (same as single ticker!)
-- **4x faster than sequential** (120 min → 30 min for 4 tickers)
+- **3x faster than sequential** (90 min → 30 min for 3 tickers)
+- **Why 3 not 4:** Safer margins after Oct 14, 2025 zombie transaction incident
 
-**Maximum: 5 Concurrent Tickers** (not recommended)
-- Memory: ~1500MB (75% of 2GB - tight margins) ⚠️
-- DB Connections: ~75 peak (94% of 80 pool limit - very tight) ⚠️
-- Duration: ~30 minutes (no time benefit vs 4 concurrent)
-- **Risk:** Tight resource margins, frequent API rate limit errors
+**Maximum: 4 Concurrent Tickers** (use with caution)
+- Memory: ~1200MB (60% of 2GB - acceptable) ⚠️
+- DB Connections: ~32-40 peak (40-50% of 80 pool limit - acceptable) ⚠️
+- Duration: ~30 minutes (no time benefit vs 3 concurrent)
+- **Risk:** Higher chance of lock contention during autovacuum
 
 ### GitHub Commit Logic
 

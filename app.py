@@ -6448,94 +6448,117 @@ async def score_industry_article_relevance_claude(
     scraped_content: str
 ) -> Optional[Dict]:
     """
-    Score industry article relevance to target company (0-10 scale) using Claude.
+    Score fundamental driver article relevance to target company (0-10 scale) using Claude.
     Returns {"score": float, "reason": str} or None on error.
     Uses prompt caching for cost savings.
     """
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 100:
         return None
 
-    # Get ticker config for geographic and subsidiary metadata
+    # Get ticker config for geographic metadata
     config = get_ticker_config(ticker) or {}
     geographic_markets = (config.get('geographic_markets') or '').strip()
-    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
             # System prompt (generic - cacheable)
-            system_prompt = """You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for a target company's investors.
+            system_prompt = """You are a hedge fund analyst evaluating whether a fundamental driver article contains actionable intelligence for a target company's investors.
 
 **YOUR TASK:**
-The user will provide target company name, ticker, industry keyword, geographic markets, subsidiaries, article title, and content. Rate the article's relevance to target company on a 0-10 scale and explain why in 1-2 sentences.
+The user will provide target company name, ticker, fundamental driver keyword, geographic markets, article title, and content. Rate the article's relevance to target company on a 0-10 scale and explain why in 1-2 sentences.
 
-**GEOGRAPHY & SUBSIDIARY RULES (check FIRST before scoring):**
+**FUNDAMENTAL DRIVER CONTEXT:**
+You are scoring articles about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact the target company's financial performance. Focus on whether the article contains QUANTIFIABLE or QUALITATIVE intelligence about metrics driving revenue, costs, or margins.
 
-**Subsidiary = Company News:**
-- Article mentions company in user-provided Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
+**GEOGRAPHY RULES (check FIRST before scoring):**
 
-**Country Filter (STRICT):**
-- Article about specific country/region → Check against user-provided Geographic Markets
-- Match → Continue normal scoring | No match → Score 0-4 (reject)
-- International bodies (UN, WTO, ISO, IMF, World Bank) → Exempt from filter
-- National regulators/policies → Apply country filter
+**Country Filter (MODIFIED FOR FUNDAMENTAL DRIVERS):**
+- Articles about GLOBAL commodities/macro drivers → EXEMPT from geographic filter (always score normally)
+  → Examples: Oil prices, copper demand, Fed rates, China construction, global auto sales
+- Articles about LOCAL regulations/markets without global impact → Apply geographic filter strictly
+  → Check against user-provided Geographic Markets | No match → Score 0-4 (reject)
+- International bodies (UN, WTO, ISO, IMF, World Bank, OPEC, IEA) → Exempt from filter
 
 **Examples:**
-Target company with "United States, Canada" markets:
-✅ "Subsidiary X expands operations" → 9.5 | ✅ "UN treaty ratified globally" → 7-8
-❌ "Brazil regulator approves new policy" → 2.0 | ❌ "India market demand surges" → 3.0
+✅ "Global copper prices rise 12% on supply concerns" → 8.5 (global commodity, exempt)
+✅ "Fed cuts rates 25bps to 4.50%" → 9.0 (global macro driver, exempt)
+❌ "Pakistan infrastructure spending announced" → 2.0 (local market, not material to global drivers)
 
 **Scoring Rubric:**
 
-**TIER 1: Direct Company Coverage (9-10)**
-Article explicitly mentions target company name or ticker by name.
-- Discusses company's products, operations, financials, strategy, or leadership
-- Reports company announcements, earnings, material events, or partnerships
-- Quotes company executives or references company filings
+**TIER 1: Primary Fundamental Drivers with Data (8-10)**
+Article contains QUANTIFIABLE data about metrics that DIRECTLY drive target company's revenue, costs, or margins.
 
-**TIER 2: Applicable Regulation or Direct Competitor Action (7-8)**
-Article discusses regulations/policies explicitly applying to target company OR direct competitor operational moves.
+**Score 9-10 if article includes:**
+- Commodity prices WITH specific levels, percentage changes, or trends
+- Key volume metrics WITH hard numbers
+- Policy changes WITH quantified impacts
+- Critical input costs WITH pricing data
+- Demand indicators WITH specific figures
 
-**Regulations (score 7-8):**
-- Government rules, court decisions, or enforcement actions affecting target company's industry classification, size category, or geography
-- Examples of explicit scope: "all publicly traded companies", "banks with $10B+ assets", "Class I railroads", "California utilities"
-- Must include specific requirements, dates, or compliance details (not just general policy discussion)
+**Score 8.0-8.9 if article includes:**
+- Supply/demand events WITH volume impacts
+- Regulatory actions WITH compliance costs/timelines affecting driver metrics
+- Major capacity changes WITH quantified additions/reductions
+- End-market data WITH growth rates or spending levels
 
-**Direct Competitors (score 7-8):**
-- Competitor product launches, facility changes, partnerships, M&A, capacity additions, or strategic moves
-- Competitor operational metrics (volume, market share, service levels) with specific data
-- EXCLUDE: Pure stock analysis, valuations, earnings multiples without operational context
+**TIER 2: Qualitative Driver Developments (6-7)**
+Article discusses important developments affecting fundamental drivers but lacks hard numbers, OR provides data on related/secondary drivers.
 
-**TIER 3: End-Market or Supply Chain Developments (5-6)**
-Article discusses customer demand trends OR input costs/availability affecting target company.
+**Score 7.0-7.9:**
+- Policy proposals or regulatory developments likely to affect driver metrics, EVEN WITHOUT specific numbers
+- Qualitative shifts in supply/demand WITHOUT specific numbers but with clear directional signals
+- Credible forecasts from official sources (IEA, EIA, IMF, industry associations)
+- Market structure changes affecting driver dynamics
+- Competitor operational moves revealing sector driver trends (capacity, pricing, demand patterns)
+- Company-specific events revealing broader driver trends (outages affecting supply, pricing changes indicating demand shifts)
+- For NICHE LEADERS (>70% market share in category keyword): Company operational data if revealing category-level trends
 
-**Customer/End-Market (score 5-6):**
-- Demand trends, spending patterns, or developments in industries that buy target company's products
-- Must include specific numbers, time periods, or quantified trends (not vague statements)
+**Score 6.0-6.9:**
+- Secondary or related drivers WITH some quantification
+- Macro trends affecting drivers WITHOUT specific target company connection
+- Industry-wide cost/margin pressure WITH directional commentary
+- Labor developments, supply chain shifts WITH qualitative impact discussion
+- Technology adoption affecting demand WITH deployment timelines or penetration commentary
 
-**Inputs/Suppliers (score 5-6):**
-- Commodity prices, wage trends, supply chain disruptions, or capital costs affecting target company
-- Must include specific price changes or availability constraints (not just directional trends)
+**TIER 3: Driver Context and Background (4-5)**
+Article provides useful context about fundamental drivers but limited actionable data for immediate decision-making.
 
-**TIER 4: Not Relevant (0-4)**
-Article lacks actionable intelligence for target company investors.
+**Score 5.0-5.9:**
+- Economic indicators tangentially related to drivers (GDP, employment, confidence)
+- Market sizing or TAM analysis for end-markets
+- Structural trends in consumption/production patterns WITH supporting context
+- Government initiatives or funding programs affecting drivers (without specific allocations)
+- Adoption metrics or penetration rates WITHOUT target company connection
 
-**Always score 0-4 if:**
-- **Different industry:** Keyword match is coincidental (e.g., "Apple" fruit vs AAPL stock, maritime news for rail company, trucking for rail)
-- **Pure financial analysis:** ONLY discusses stock prices, valuations, P/E ratios, technical charts without operational content
-- **Adjacent industry:** Maritime/trucking for rail, banking for insurance, etc. (unless clear direct connection stated)
-- **Competitor earnings without context:** Revenue/EPS numbers without volume, margin, or strategic discussion
-- **Opinion pieces:** Analyst predictions, trend forecasts, "future of industry" without supporting data
-- **Vague commentary:** Broad trend pieces without hard data, specific companies, or actionable details
-- **Wrong geography/company type:** Regions where target company has no presence, or different company size category
-- **Advertorial:** Marketing content without news substance
+**Score 4.0-4.9:**
+- Vague trend commentary about drivers WITHOUT data
+- Historical context or retrospectives on driver evolution
+- Opinion pieces WITH some factual basis but mostly speculation
+
+**TIER 4: Not Relevant (0-3)**
+Article lacks actionable intelligence about fundamental drivers affecting target company.
+
+**Always score 0-3 if:**
+- Company-specific news (earnings, guidance, M&A, appointments) WITHOUT driver context or sector-wide implications
+- Pure stock analysis (valuations, price targets, technical charts) WITHOUT operational driver discussion
+- Wrong keyword match (homonyms or coincidental matches)
+- Different industry without driver connection
+- Opinion without data (pure speculation, predictions, "future of industry" WITHOUT supporting facts)
+- Advertorial/promotional content
+- Wrong geography (local developments in non-operating regions AND not global driver)
+
+**NOTE:** Company-specific events WITH sector-wide driver implications should score 7.0-7.9 (Tier 2), not rejected.
+
+**PEER ARTICLES:** Score normally (6-10) if peer operational data reveals driver trends applicable to target (volumes, capacity utilization, pricing, demand signals). Score 0-4 if pure peer financials (revenue/EPS) without driver context or routine news (appointments, partnerships).
 
 **Output Format:**
 Return JSON only:
 {{
   "score": <float 0.0-10.0>,
-  "reason": "<1-2 sentence explanation citing specific article content>"
+  "reason": "<1-2 sentence explanation citing specific driver data or development in article>"
 }}
 
 **Calibration Examples:**
@@ -6543,52 +6566,53 @@ Return JSON only:
 TIER 1 (Score: 9.5):
 {{
   "score": 9.5,
-  "reason": "Article discusses target company's Q3 2025 facility expansion announcement with specific capacity figures and timeline."
+  "reason": "Article reports copper prices rose to $4.25/lb (+14% QoQ) on supply constraints, directly impacting target company's revenue realization."
 }}
 
-TIER 2 - Regulation (Score: 8.0):
-{{
-  "score": 8.0,
-  "reason": "Article details FAA proposed rule affecting all Class I railroads including target company, with specific docket number and compliance timeline."
-}}
-
-TIER 2 - Competitor (Score: 7.5):
+TIER 2 (Score: 7.5):
 {{
   "score": 7.5,
-  "reason": "Competitor received FDA approval for drug in same therapeutic category as target company's pipeline, with approval date and label details."
+  "reason": "China announces infrastructure stimulus program, qualitative signal for increased copper demand without specific spending figures."
 }}
 
-TIER 3 - Customer (Score: 5.5):
-{{
-  "score": 5.5,
-  "reason": "Enterprise IT spending shows 12% YoY growth in Q3 2025, affecting demand for target company's cloud services."
-}}
-
-TIER 3 - Input (Score: 5.0):
+TIER 3 (Score: 5.0):
 {{
   "score": 5.0,
-  "reason": "Natural gas prices increased 8% month-over-month, affecting fuel costs for power generation companies including target company."
+  "reason": "Article discusses general semiconductor market growth trends with some TAM projections but limited specific driver data for target company."
 }}
 
-TIER 4 - Not Relevant (Score: 2.0):
+TIER 4 (Score: 2.0):
 {{
   "score": 2.0,
-  "reason": "Generic trend piece about future of industry with vague predictions and no specific data or companies."
+  "reason": "Opinion piece speculating on industry future without specific driver data, quantified trends, or actionable intelligence."
 }}
 
-TIER 4 - Adjacent Industry (Score: 0.0):
+**Edge Case Examples:**
+
+Company-specific event with sector-wide implications (Score: 7.5):
 {{
-  "score": 0.0,
-  "reason": "Article discusses maritime equipment tariffs, not relevant to target company's rail operations; different transportation mode."
+  "score": 7.5,
+  "reason": "AWS major cloud outage reveals capacity constraints in US-East-1 region, indicating broader cloud infrastructure supply tightness affecting sector pricing dynamics."
 }}
 
-**Your Goal:** Be STRICT. Only scores 7+ provide high-confidence actionable intelligence. Scores 5-6 are moderate relevance. When in doubt, score lower."""
+Niche leader operational data (Score: 7.5):
+{{
+  "score": 7.5,
+  "reason": "ResMed reports strong CPAP sales growth in US market, revealing category-level demand trends for sleep apnea treatment given company's 70%+ market share."
+}}
+
+Regulatory development without specific numbers (Score: 7.0):
+{{
+  "score": 7.0,
+  "reason": "Congress advances drug pricing reform bill with Medicare negotiation provisions, material driver for pharma revenues despite lack of specific pricing impact figures."
+}}
+
+**Your Goal:** Score based on ACTIONABILITY for investors. Prefer quantified data (scores 8-10) but accept qualitative developments if material (scores 6-7). When in doubt, score lower."""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
-**INDUSTRY KEYWORD:** {industry_keyword}
+**FUNDAMENTAL DRIVER KEYWORD:** {industry_keyword}
 **GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
-**SUBSIDIARIES:** {subsidiaries if subsidiaries else 'None'}
 
 **ARTICLE TITLE:**
 {title}
@@ -6597,7 +6621,7 @@ TIER 4 - Adjacent Industry (Score: 0.0):
 {scraped_content[:8000]}
 
 **YOUR TASK:**
-Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Return JSON only."""
+Rate this article's relevance to {company_name} ({ticker}) fundamental drivers on a 0-10 scale. Focus on whether article contains quantifiable or qualitative intelligence about external market forces driving financial performance. Return JSON only."""
 
             headers = {
                 "x-api-key": ANTHROPIC_API_KEY,
@@ -6622,22 +6646,22 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
             async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=60)) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        LOG.error(f"Claude relevance scoring error {response.status} for {ticker}: {error_text[:500]}")
+                        LOG.error(f"Claude fundamental driver scoring error {response.status} for {ticker}: {error_text[:500]}")
                         return None
 
                     result = await response.json()
 
                     # Track cost
                     usage = result.get("usage", {})
-                    calculate_claude_api_cost(usage, "industry_scoring")
+                    calculate_claude_api_cost(usage, "fundamental_driver_scoring")
 
                     # Log cache performance
                     cache_creation = usage.get("cache_creation_input_tokens", 0)
                     cache_read = usage.get("cache_read_input_tokens", 0)
                     if cache_creation > 0:
-                        LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (industry article scoring)")
+                        LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (fundamental driver scoring)")
                     elif cache_read > 0:
-                        LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (industry article scoring) - 90% savings!")
+                        LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (fundamental driver scoring) - 90% savings!")
 
                     LOG.info(f"Claude response for {ticker}: {str(result)[:500]}")
                     content = result.get("content", [{}])[0].get("text", "")
@@ -6647,10 +6671,9 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
                     try:
-                        # Strip markdown code blocks if present (Claude wraps JSON in ```json...```)
+                        # Strip markdown code blocks if present
                         content_clean = content.strip()
                         if content_clean.startswith("```"):
-                            # Remove first line (```json) and last line (```)
                             lines = content_clean.split("\n")
                             if len(lines) >= 3:
                                 content_clean = "\n".join(lines[1:-1])
@@ -6670,7 +6693,7 @@ Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Retu
                         return None
 
         except Exception as e:
-            LOG.error(f"Claude relevance scoring failed for {ticker}: {str(e)}")
+            LOG.error(f"Claude fundamental driver scoring failed for {ticker}: {str(e)}")
             return None
 
     return None
@@ -6691,215 +6714,171 @@ async def score_industry_article_relevance_openai(
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 100:
         return None
 
-    # Get ticker config for geographic and subsidiary metadata
+    # Get ticker config for geographic metadata
     config = get_ticker_config(ticker) or {}
     geographic_markets = (config.get('geographic_markets') or '').strip()
-    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
-            system_prompt = f"""You are a hedge fund analyst evaluating whether an industry article contains actionable intelligence for {company_name} ({ticker}) investors.
+            system_prompt = """You are a hedge fund analyst evaluating whether a fundamental driver article contains actionable intelligence for a target company's investors.
 
-**Company Context:**
-- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
-- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
+**YOUR TASK:**
+The user will provide target company name, ticker, fundamental driver keyword, geographic markets, article title, and content. Rate the article's relevance to target company on a 0-10 scale and explain why in 1-2 sentences.
 
-**GEOGRAPHY & SUBSIDIARY RULES (check FIRST before scoring):**
+**FUNDAMENTAL DRIVER CONTEXT:**
+You are scoring articles about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact the target company's financial performance. Focus on whether the article contains QUANTIFIABLE or QUALITATIVE intelligence about metrics driving revenue, costs, or margins.
 
-**Subsidiary = Company News:**
-- Article mentions any entity in Subsidiaries list → Score 9-10 (TIER 1, direct coverage)
-- Treat subsidiary mentions identically to parent company mentions
+**GEOGRAPHY RULES (check FIRST before scoring):**
 
-**Country Filter (STRICT):**
-- Article focuses on specific country/region developments → Check against Geographic Markets above
-- Match found → Continue normal scoring | No match → Score 0-4 maximum (reject)
-- International bodies exempt from filter: UN, WTO, ISO, IMF, World Bank, OECD, BIS
-- National regulators/policies → Apply country filter strictly
-- Multi-country articles → Accept if ANY mentioned country matches target company markets
+**Country Filter (MODIFIED FOR FUNDAMENTAL DRIVERS):**
+- Articles about GLOBAL commodities/macro drivers → EXEMPT from geographic filter (always score normally)
+  → Examples: Oil prices, copper demand, Fed rates, China construction, global auto sales
+- Articles about LOCAL regulations/markets without global impact → Apply geographic filter strictly
+  → Check against user-provided Geographic Markets | No match → Score 0-4 (reject)
+- International bodies (UN, WTO, ISO, IMF, World Bank, OPEC, IEA) → Exempt from filter
 
 **Examples:**
-{ticker} with "United States, Canada" markets:
-✅ "Subsidiary X expands operations" → 9.5 | ✅ "UN treaty ratified globally" → 7-8
-✅ "USMCA trade provisions updated" → 7.5 (overlaps geography)
-❌ "Brazil regulator approves new policy" → 2.0 | ❌ "India market demand surges" → 3.0
+✅ "Global copper prices rise 12% on supply concerns" → 8.5 (global commodity, exempt)
+✅ "Fed cuts rates 25bps to 4.50%" → 9.0 (global macro driver, exempt)
+❌ "Pakistan infrastructure spending announced" → 2.0 (local market, not material to global drivers)
 
 **Scoring Rubric:**
 
-**TIER 1: Direct Company Coverage (9-10)**
-Article explicitly mentions {company_name}, {ticker}, or subsidiary by name.
+**TIER 1: Primary Fundamental Drivers with Data (8-10)**
+Article contains QUANTIFIABLE data about metrics that DIRECTLY drive target company's revenue, costs, or margins.
 
-**Always score 9-10 if article discusses:**
-- Company's products, operations, financials, strategy, or leadership
-- Reports company announcements, earnings, material events, or partnerships
-- Quotes company executives or references company filings
-- Company-specific litigation, investigations, or regulatory actions
+**Score 9-10 if article includes:**
+- Commodity prices WITH specific levels, percentage changes, or trends
+- Key volume metrics WITH hard numbers
+- Policy changes WITH quantified impacts
+- Critical input costs WITH pricing data
+- Demand indicators WITH specific figures
 
-**Scoring within tier:**
-- 10.0: Material financial disclosure or major strategic announcement
-- 9.5: Operational developments, product launches, executive changes
-- 9.0: Routine company mentions or quotes in industry roundups
+**Score 8.0-8.9 if article includes:**
+- Supply/demand events WITH volume impacts
+- Regulatory actions WITH compliance costs/timelines affecting driver metrics
+- Major capacity changes WITH quantified additions/reductions
+- End-market data WITH growth rates or spending levels
 
-**TIER 2: Applicable Regulation or Direct Competitor Action (7-8)**
-Article discusses regulations explicitly applying to {company_name} OR direct competitor operational moves with quantifiable data.
+**TIER 2: Qualitative Driver Developments (6-7)**
+Article discusses important developments affecting fundamental drivers but lacks hard numbers, OR provides data on related/secondary drivers.
 
-**Regulations (score 7.0-8.5):**
-Must meet ALL three criteria:
-- Government agency rules, court decisions, or enforcement actions (not proposals or think-tank recommendations)
-- Explicitly applies to {company_name}'s: industry classification, asset size category, geographic footprint, or product category
-- Includes specific compliance requirements, deadlines, penalties, or implementation details
+**Score 7.0-7.9:**
+- Policy proposals or regulatory developments likely to affect driver metrics, EVEN WITHOUT specific numbers
+- Qualitative shifts in supply/demand WITHOUT specific numbers but with clear directional signals
+- Credible forecasts from official sources (IEA, EIA, IMF, industry associations)
+- Market structure changes affecting driver dynamics
+- Competitor operational moves revealing sector driver trends (capacity, pricing, demand patterns)
+- Company-specific events revealing broader driver trends (outages affecting supply, pricing changes indicating demand shifts)
+- For NICHE LEADERS (>70% market share in category keyword): Company operational data if revealing category-level trends
 
-**Scope examples:**
-✅ "SEC rule for all public companies >$10B market cap" (if {ticker} qualifies)
-✅ "EPA emission standards for coal plants effective 2026" (if {ticker} operates coal)
-✅ "California AB 1234 data privacy requirements" (if {ticker} operates in CA)
-❌ "Lawmakers debate potential regulation" (not final rule)
-❌ "Industry group recommends standards" (not government action)
+**Score 6.0-6.9:**
+- Secondary or related drivers WITH some quantification
+- Macro trends affecting drivers WITHOUT specific target company connection
+- Industry-wide cost/margin pressure WITH directional commentary
+- Labor developments, supply chain shifts WITH qualitative impact discussion
+- Technology adoption affecting demand WITH deployment timelines or penetration commentary
 
-**Direct Competitors (score 7.0-8.5):**
-Must meet ALL three criteria:
-- Named competitor operates in SAME specific product/service category or geographic market as {company_name}
-- Discusses competitor operational actions: product launches, capacity changes, facility changes, partnerships, M&A, pricing actions
-- Includes quantifiable metrics: volume data, market share, capacity numbers, customer counts, service levels
+**TIER 3: Driver Context and Background (4-5)**
+Article provides useful context about fundamental drivers but limited actionable data for immediate decision-making.
 
-**Competitor examples:**
-✅ Competitor launches product with specs, pricing, availability in overlapping market
-✅ Competitor reports 15% volume growth with units sold in shared geography
-✅ Competitor closes facility reducing regional capacity by 20%
-❌ Competitor stock rises 8% on earnings (no operational detail)
-❌ Analyst upgrades competitor with price target (pure valuation)
-❌ Competitor trades at 18x P/E (financial analysis only)
+**Score 5.0-5.9:**
+- Economic indicators tangentially related to drivers (GDP, employment, confidence)
+- Market sizing or TAM analysis for end-markets
+- Structural trends in consumption/production patterns WITH supporting context
+- Government initiatives or funding programs affecting drivers (without specific allocations)
+- Adoption metrics or penetration rates WITHOUT target company connection
 
-**Scoring within tier:**
-- 8.5: Regulation with near-term deadline or major competitor capacity change
-- 8.0: Material regulatory action or significant competitor strategic move
-- 7.5: Competitor product launch or partnership with scale disclosed
-- 7.0: Regulatory proposal likely to pass or minor competitor news
+**Score 4.0-4.9:**
+- Vague trend commentary about drivers WITHOUT data
+- Historical context or retrospectives on driver evolution
+- Opinion pieces WITH some factual basis but mostly speculation
 
-**TIER 3: End-Market or Supply Chain Developments (5-6)**
-Article discusses customer demand trends OR input costs/availability affecting {company_name}, WITH specific quantifiable data.
+**TIER 4: Not Relevant (0-3)**
+Article lacks actionable intelligence about fundamental drivers affecting target company.
 
-**Customer/End-Market (score 5.0-6.5):**
-Must meet ALL criteria:
-- Discusses industries/segments that purchase {company_name}'s products or services
-- Includes quantified trends: growth rates, spending levels, volume data, time periods
-- Provides actionable demand signals: order acceleration/deceleration, inventory changes, capex shifts
-- NOT vague statements like "demand is strong" without supporting numbers
+**Always score 0-3 if:**
+- Company-specific news (earnings, guidance, M&A, appointments) WITHOUT driver context or sector-wide implications
+- Pure stock analysis (valuations, price targets, technical charts) WITHOUT operational driver discussion
+- Wrong keyword match (homonyms or coincidental matches)
+- Different industry without driver connection
+- Opinion without data (pure speculation, predictions, "future of industry" WITHOUT supporting facts)
+- Advertorial/promotional content
+- Wrong geography (local developments in non-operating regions AND not global driver)
 
-**End-market examples:**
-✅ "Auto production up 12% YoY Q3 to 4.2M units" (for steel, parts, logistics)
-✅ "Enterprise IT spending $850B in 2025, +8% YoY" (for software, hardware)
-✅ "Residential starts fell 6% MoM to 1.1M annualized" (for building materials)
-❌ "Consumer confidence remains elevated" (no specific spend data)
+**NOTE:** Company-specific events WITH sector-wide driver implications should score 7.0-7.9 (Tier 2), not rejected.
 
-**Inputs/Suppliers (score 5.0-6.5):**
-Must meet ALL criteria:
-- Discusses commodities, materials, labor, or capital costs {company_name} incurs
-- Includes specific price changes, availability constraints, or cost trends with time periods
-- Provides quantifiable impact: percentage changes, absolute prices, supply/demand data
-- NOT directional commentary like "costs rising" without specific numbers
-
-**Input examples:**
-✅ "Natural gas $3.20/MMBtu, +15% MoM" (for utilities, chemicals)
-✅ "Steel prices $850/ton, down from $920 in Q2" (for manufacturers)
-✅ "Truck driver wages up 8% YoY to $28/hour" (for logistics, retail)
-❌ "Commodity prices volatile" (no specific prices)
-
-**Scoring within tier:**
-- 6.5: Large magnitude change (>10%) in key input/end-market
-- 6.0: Moderate change (5-10%) in relevant metric
-- 5.5: Small change (<5%) or secondary factor
-- 5.0: Tangentially relevant trend with limited impact
-
-**TIER 4: Not Relevant (0-4)**
-Article lacks actionable intelligence for {company_name} investors despite industry keyword match.
-
-**Always score 0-4 if:**
-- **Industry mismatch:** Keyword coincidental (e.g., "Apple" fruit vs AAPL stock, "Amazon" rainforest vs AMZN, "Delta" variant vs DAL airline)
-- **Adjacent industry:** Different transport mode (maritime for rail), different financial subsector (banking for insurance) UNLESS explicit connection stated
-- **Pure stock/valuation:** Article discusses ONLY stock prices, P/E ratios, technical charts, analyst targets WITHOUT operational context
-- **Competitor financials without operations:** Earnings with ONLY revenue/EPS percentages, no volume/capacity/strategy discussion
-- **Opinion/forecast:** Trend predictions, "future of industry" WITHOUT hard data or company-specific facts
-- **Vague commentary:** "Industry facing headwinds" WITHOUT specific companies, numbers, or timelines
-- **Wrong geography/size:** Regions where {ticker} has no presence, or different company size category
-- **Advertorial:** Marketing content, sponsored articles without news substance
-- **Stale content:** Articles >3 years old or historical retrospectives without current developments
-
-**Scoring within tier:**
-- 4.0: Tangentially related but insufficient detail
-- 3.0: Keyword match but wrong sector/geography
-- 2.0: Coincidental keyword, clearly irrelevant
-- 1.0: Spam or promotional content
-- 0.0: Different industry homonym mismatch
+**PEER ARTICLES:** Score normally (6-10) if peer operational data reveals driver trends applicable to target (volumes, capacity utilization, pricing, demand signals). Score 0-4 if pure peer financials (revenue/EPS) without driver context or routine news (appointments, partnerships).
 
 **Output Format:**
-Return valid JSON only (no markdown, no extra text):
-{{
-  "score": <float 0.0-10.0, one decimal place>,
-  "reason": "<1-2 sentences citing specific article content justifying score>"
-}}
+Return JSON only:
+{
+  "score": <float 0.0-10.0>,
+  "reason": "<1-2 sentence explanation citing specific driver data or development in article>"
+}
 
 **Calibration Examples:**
 
 TIER 1 (Score: 9.5):
-{{
+{
   "score": 9.5,
-  "reason": "Article discusses {company_name}'s Q3 2025 facility expansion with $200M investment and 500 jobs, quoting CEO on production timeline."
-}}
+  "reason": "Article reports copper prices rose to $4.25/lb (+14% QoQ) on supply constraints, directly impacting target company's revenue realization."
+}
 
-TIER 2 - Regulation (Score: 8.0):
-{{
-  "score": 8.0,
-  "reason": "SEC final rule 33-11234 requires public filers >$5B to adopt climate disclosures by Q2 2026, directly applicable to {company_name}."
-}}
-
-TIER 2 - Competitor (Score: 7.5):
-{{
+TIER 2 (Score: 7.5):
+{
   "score": 7.5,
-  "reason": "Competitor launched 5G network in Denver where {ticker} operates, pricing $50/month vs {ticker}'s $60, with 100K subscriber target."
-}}
+  "reason": "China announces infrastructure stimulus program, qualitative signal for increased copper demand without specific spending figures."
+}
 
-TIER 3 - Customer (Score: 6.0):
-{{
-  "score": 6.0,
-  "reason": "U.S. auto sales 16.2M units annualized Q3 (+8% YoY), increasing demand for {company_name}'s automotive semiconductors."
-}}
+TIER 3 (Score: 5.0):
+{
+  "score": 5.0,
+  "reason": "Article discusses general semiconductor market growth trends with some TAM projections but limited specific driver data for target company."
+}
 
-TIER 3 - Input (Score: 5.5):
-{{
-  "score": 5.5,
-  "reason": "Copper prices $4.10/lb (+12% QoQ), affecting input costs for {company_name}'s electrical equipment manufacturing."
-}}
+TIER 4 (Score: 2.0):
+{
+  "score": 2.0,
+  "reason": "Opinion piece speculating on industry future without specific driver data, quantified trends, or actionable intelligence."
+}
 
-TIER 4 - Adjacent (Score: 2.5):
-{{
-  "score": 2.5,
-  "reason": "Maritime shipping rates discussed, not relevant to {company_name}'s rail freight operations despite both being transport."
-}}
+**Edge Case Examples:**
 
-TIER 4 - Valuation only (Score: 1.5):
-{{
-  "score": 1.5,
-  "reason": "Technical analysis of sector ETF with support/resistance levels, no operational information about {ticker} or industry fundamentals."
-}}
+Company-specific event with sector-wide implications (Score: 7.5):
+{
+  "score": 7.5,
+  "reason": "AWS major cloud outage reveals capacity constraints in US-East-1 region, indicating broader cloud infrastructure supply tightness affecting sector pricing dynamics."
+}
 
-TIER 4 - Homonym (Score: 0.0):
-{{
-  "score": 0.0,
-  "reason": "Article about Apple fruit harvest in Washington, unrelated to Apple Inc technology company."
-}}
+Niche leader operational data (Score: 7.5):
+{
+  "score": 7.5,
+  "reason": "ResMed reports strong CPAP sales growth in US market, revealing category-level demand trends for sleep apnea treatment given company's 70%+ market share."
+}
 
-**Your Goal:** Be STRICT and demand specificity. Only scores 7+ provide high-confidence actionable intelligence. Scores 5-6 require hard data. When in doubt, score lower."""
+Regulatory development without specific numbers (Score: 7.0):
+{
+  "score": 7.0,
+  "reason": "Congress advances drug pricing reform bill with Medicare negotiation provisions, material driver for pharma revenues despite lack of specific pricing impact figures."
+}
 
-            user_content = f"""**Article Title:** {title}
+**Your Goal:** Score based on ACTIONABILITY for investors. Prefer quantified data (scores 8-10) but accept qualitative developments if material (scores 6-7). When in doubt, score lower."""
 
-**Industry Keyword:** {industry_keyword}
+            user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**FUNDAMENTAL DRIVER KEYWORD:** {industry_keyword}
+**GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
 
-**Article Content:**
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
 {scraped_content[:8000]}
 
-Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Return JSON only."""
+**YOUR TASK:**
+Rate this article's relevance to {company_name} ({ticker}) fundamental drivers on a 0-10 scale. Focus on whether article contains quantifiable or qualitative intelligence about external market forces driving financial performance. Return JSON only."""
 
             headers = {
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -7029,145 +7008,143 @@ async def score_industry_article_relevance(
 
 
 async def generate_claude_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """Generate Claude summary for industry article with target company POV"""
+    """Generate Claude summary for fundamental driver article with target company POV"""
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    # Get ticker config for geographic and subsidiary metadata
+    # Get ticker config for geographic metadata
     config = get_ticker_config(target_ticker) or {}
     geographic_markets = (config.get('geographic_markets') or '').strip()
-    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
             # System prompt (generic - cacheable)
-            system_prompt = """You are a research analyst extracting industry/sector facts relevant to a target company.
+            system_prompt = """You are a research analyst extracting fundamental driver facts relevant to a target company's financial performance.
 
 **YOUR TASK:**
-The user will provide target company, ticker, industry keyword, geographic markets, subsidiaries, article title, and content. Extract facts from the article relevant to target company's business operations, competitive position, costs, revenues, or regulatory environment.
+The user will provide target company, ticker, driver keyword, geographic markets, article title, and content. Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact target company's revenue, costs, or margins.
 
-**What Counts as Relevant (10 Categories):**
+**What Counts as Relevant (8 Categories):**
 
-**1. Direct Mentions**
-- Article explicitly names target company or ticker
-- Include: operational details, financial figures, strategic announcements, executive quotes, partnerships
+**1. Commodity/Asset Prices**
+- Price levels, changes, or trends for commodities/assets target company produces or consumes
+- Extract: specific prices with units, percentage changes, time periods, drivers of movement
+- Examples: Oil $78/bbl, copper $4.25/lb, natural gas $3.20/MMBtu, jet fuel $2.80/gal, gold $2,100/oz
+- For producers: Output prices drive revenue | For consumers: Input prices drive costs
 
-**2. Regulations/Policies Affecting Target Company**
-- Government actions, rules, court decisions, regulatory guidance applying to target company
-- Extract: scope, requirements, dates, compliance costs, penalties
-- Look for: "all publicly traded companies", "banks >$10B assets", "utilities in California", "pharma manufacturers", "EU entities"
+**2. Volume Metrics & Demand Indicators**
+- Production, sales, consumption data for relevant markets/products
+- Extract: volumes with units, growth rates, time periods, geographic breakdowns
+- Examples: Auto sales 16.2M units annualized, air travel 2.8M daily passengers, smartphone shipments 180M units
+- Include: PMI readings, industrial production, retail sales, housing starts, capacity utilization
 
-**3. Competitors' Operational Actions**
-- Moves by direct competitors for customers, market share, or resources
-- Extract: what, where, when, scale, strategic rationale
-- Include: product launches, facilities, M&A, capacity, pricing, market entries/exits
-- Exclude: stock performance, valuations, earnings metrics (unless tied to operational changes)
+**3. Policy & Regulatory Changes**
+- Government decisions directly affecting driver metrics (rates, tariffs, quotas, subsidies, standards)
+- Extract: specific policy details, effective dates, quantified impacts, compliance requirements
+- Examples: Fed rate decision, OPEC production cuts, tariff rates, emission standards, tax credits
+- Include: Central bank actions, trade policy, environmental regulations, industry-specific rules
 
-**4. Customer Demand/End-Market Developments**
-- Changes in industries/segments buying target company's products/services
-- Extract: demand trends, spending patterns, preference shifts, adoption rates
-- Examples: enterprise IT spending, auto production volumes, healthcare utilization, housing starts
+**4. Supply Events & Capacity Changes**
+- Disruptions, additions, or changes affecting supply of relevant commodities/products
+- Extract: volume impacts, duration, affected regions/products, capacity numbers
+- Examples: Mine strikes, refinery outages, crop failures, facility expansions, technology deployments
+- Include: Production cuts/additions, inventory levels, logistics disruptions, export restrictions
 
-**5. Supplier/Input Developments**
-- Changes affecting materials, components, labor, or capital target company requires
-- Extract: price changes, availability constraints, quality issues, new sourcing
-- Examples: commodity prices, wage trends, equipment costs, raw materials, energy prices, interest rates
+**5. End-Market Developments**
+- Demand trends in industries/geographies that consume target company's products
+- Extract: spending patterns, growth rates, consumption data, adoption metrics
+- Examples: Enterprise IT spending $850B, China construction investment -8% YoY, EV adoption 18% penetration
+- Include: Consumer confidence, business investment, infrastructure spending, technology adoption
 
-**6. Technology/Standards/Industry Practices**
-- New tech, standards, certifications, or practices affecting target company's sector
-- Extract: technical specs, adoption timelines, compatibility requirements
-- Examples: 5G rollout, cybersecurity standards, ESG frameworks, clinical protocols, accounting changes
+**6. Input Cost Trends**
+- Price/availability changes for materials, labor, energy, capital target company requires
+- Extract: cost levels, percentage changes, availability constraints, wage data
+- Examples: Steel $850/ton, trucking wages +8% YoY, shipping rates, electricity prices, borrowing costs
+- Include: Raw materials, components, labor costs, logistics, utilities, financing costs
 
-**7. Geographic/Market-Specific Developments**
-- Events in countries/regions where target company operates (see user-provided Geographic Markets)
-- Extract: infrastructure changes, regional regulations, local dynamics, geopolitical events
-- Examples: EU tariff changes, China market access, state regulations, port congestion, regional economics
-- IMPORTANT: If article discusses country NOT in Geographic Markets, note "Outside operating region" in relevance statement
+**7. Forecasts from Credible Sources**
+- Projections from official sources (IEA, EIA, IMF, World Bank, USDA, central banks, industry groups)
+- Extract: forecasted metrics, time horizons, assumptions, revisions from prior estimates
+- Examples: IEA oil demand 103M bpd 2025, USDA corn yield forecast, Fed dot plot, industry TAM projections
+- Only include: Government agencies, international bodies, major industry associations (not sell-side analysts)
 
-**8. Labor/Workforce Developments**
-- Changes affecting target company's ability to hire, retain, or deploy workers
-- Extract: union activities, labor regulations, workforce availability, wage pressures
-- Examples: strikes, collective bargaining, visa rules, safety requirements, minimum wage changes
+**8. Competitor Operational Data (if revealing sector driver trends)**
+- Peer volume, pricing, cost, or demand metrics indicating broader market dynamics
+- Extract: specific operational data, not financial metrics (exclude stock prices, valuations, P/E ratios)
+- Examples: Competitor reports 18% volume growth on strong China demand, competitor adds 500MW capacity
+- Include ONLY if: Reveals sector-wide driver trends applicable to target company
 
-**9. Financial Market/Capital Access Changes**
-- Developments affecting target company's ability to raise capital or manage financial risk
-- Extract: interest rates, credit conditions, regulatory capital, accounting rules
-- Examples: Fed decisions, Basel III, tax law changes, debt market access, credit ratings
-
-**10. Legal Precedents/Major Litigation**
-- Court decisions, settlements, or legal actions establishing precedents affecting target company
-- Extract: legal rulings, settlement terms, liability determinations
-- Examples: FDA enforcement, antitrust rulings, patent cases, securities litigation
-
-**Commodity/Product-Specific (for producers):**
-- Pricing, supply, demand for products/commodities target company produces or sells
-- Production volumes, inventory levels, capacity utilization in sector
-- For commodity companies: Commodity price/supply/demand IS relevant company information
+**Geographic Scope:**
+- For GLOBAL drivers (commodities, macro indicators): Include regardless of article geography
+- For LOCAL developments: Only include if region matches user-provided Geographic Markets
+- Explicitly note if article discusses regions outside target company's operating area
 
 **Exclusion Criteria (NOT Relevant):**
-❌ General macro news without sector implications
-❌ Competitor stock metrics without operational impact
-❌ Unrelated industries or sectors
-❌ Geographic regions outside target company's markets (check user-provided Geographic Markets)
-❌ Subsidiaries not owned by target company (check user-provided Subsidiaries)
-❌ Regulations for different industry categories/company sizes
-❌ Historical context not connected to current developments
-❌ Vague trend pieces without specific data/dates
-❌ Opinion/analysis without factual basis
+❌ Company-specific news: Target company or competitor earnings, M&A, appointments, guidance without driver context
+❌ Stock analysis: Valuations, price targets, technical analysis without operational driver data
+❌ Pure opinion: Speculation, predictions, trend forecasts without supporting data from credible sources
+❌ Vague commentary: "Industry facing headwinds" without specific metrics or quantified impacts
+❌ Historical retrospectives: Past trends without connection to current driver developments
+❌ Unrelated sectors: Articles about different industries without driver connection to target
+❌ Marketing content: Advertorials, sponsored posts, promotional materials
+❌ Local news without global impact: Regional developments in markets where target doesn't operate AND not affecting global driver metrics
 
 **Structure:**
 - Write 2-6 paragraphs in natural prose (no headers, no bullets)
-- Include specific numbers with units and time periods
-- Include dates, company names, locations, policy names
-- Include direct quotes with attribution
-- Cite source: (domain name)
-- Final paragraph: Brief relevance statement explaining factual connection to target company
+- Lead with most material driver data first
+- Include ALL specific numbers: prices, volumes, percentages, dates, time periods
+- Include units for all metrics ($/bbl, units, bps, %, YoY, QoQ, MoM)
+- Cite data sources and institutions when mentioned
+- Attribute quotes with speaker name and title
+- End with source: (domain name)
+- Final paragraph: Brief relevance statement explaining factual connection between driver and target company's financial performance
 
-**Relevance Statement Templates (use appropriate one):**
-- Direct mention: "Article directly discusses target company's [specific aspect]."
-- Regulation: "This [regulation] applies to [specific scope], which includes target company."
-- Competitor: "This discusses [Competitor]'s [action] in [market] where target company also [competes/operates]."
-- Customer: "This affects [industry/segment] that [purchases/uses] target company's [products/services]."
-- Supplier: "This impacts [input] costs or availability for target company's operations."
-- Technology: "This [tech/standard] affects [sector] operations, including target company's [activities]."
-- Geographic: "This affects [region] where target company operates [specific operations]."
-- Labor: "This affects [labor aspect] for [sector/geography], including target company's workforce."
-- Financial: "This affects [capital aspect] for [company type], including target company."
-- Legal: "This [ruling] affects [legal issue] for [sector], which includes target company."
+**Relevance Statement Templates:**
+- Commodity price: "This [commodity] price directly affects target company's [revenue/costs] as a [producer/consumer] of [product]."
+- Demand indicator: "This [metric] indicates demand trends for [end-market] that drives target company's [product/service] volumes."
+- Policy change: "This [policy] affects [driver metric] which impacts target company's [cost structure/pricing/margins]."
+- Supply event: "This [disruption/capacity change] affects [commodity/product] supply dynamics impacting target company's [input costs/competitive position]."
+- Input cost: "This [input] cost trend directly impacts target company's [cost structure/margins] as a [major/significant] expense."
+- End-market: "This affects [customer industry/geography] that purchases target company's [products/services]."
+- Forecast: "This [institution]'s projection for [metric] provides outlook for [driver] affecting target company's [financial aspect]."
+- Competitor data: "Competitor's [operational metric] reveals [sector trend] in [market] where target company also [operates/competes]."
 
 **Critical Rules:**
-✅ Extract ONLY explicitly stated facts
-✅ Every number needs: value, units, time period, source
+✅ Extract ONLY explicitly stated facts with supporting data
+✅ Every number requires: value, units, time period, comparison (YoY/QoQ/MoM/vs prior)
 ✅ Always cite source domain
-✅ Explain relevance using factual connections only
-✅ Scale length to amount of relevant information
+✅ Focus on QUANTIFIABLE driver data or MATERIAL qualitative developments
+✅ Explain relevance through factual connection to target company's revenue/cost drivers
 
-❌ NO speculation on target company's response or strategy
-❌ NO inferred competitive position unless explicitly stated
-❌ NO assumptions about target company's capabilities, market share, or cost structure
+❌ NO speculation about target company's strategy, response, or positioning
+❌ NO inferred impacts unless explicitly quantified in article
+❌ NO assumptions about target company's exposure, hedging, or competitive advantages
 ❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears, positioned, poised
-❌ NO tangential information beyond the 10 relevance categories
+❌ NO tangential information not directly related to fundamental drivers
+❌ NO discussion of target company operations unless article explicitly mentions them
 
-**Multi-Sector Note:** Target company may operate across multiple sectors. Consider relevance across all target company's known business activities, not just the specific industry keyword provided."""
+**Multi-Driver Note:** Target company may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively."""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
-**SECTOR FOCUS:** {industry_keyword}
+**FUNDAMENTAL DRIVER KEYWORD:** {industry_keyword}
 **GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
-**SUBSIDIARIES:** {subsidiaries if subsidiaries else 'None'}
 
 **ARTICLE TITLE:**
 {title}
 
 **ARTICLE CONTENT:**
-{scraped_content[:CONTENT_CHAR_LIMIT]}"""
+{scraped_content[:CONTENT_CHAR_LIMIT]}
+
+**YOUR TASK:**
+Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) that impact {target_company}'s financial performance. Focus on quantifiable data about external market forces driving revenue, costs, or margins."""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
-                "max_tokens": 8192,
+                "max_tokens": 2048,
                 "system": [
                     {
                         "type": "text",
@@ -7179,30 +7156,38 @@ The user will provide target company, ticker, industry keyword, geographic marke
             }
 
             session = get_http_session()
-            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
-                    if response.status == 200:
-                        result = await response.json()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=90)) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"Claude fundamental driver summary error {response.status} for {target_ticker}: {error_text[:500]}")
+                    return None
 
-                        # Track cost
-                        usage = result.get("usage", {})
-                        calculate_claude_api_cost(usage, "industry_summary")
+                result = await response.json()
 
-                        # Log cache performance
-                        cache_creation = usage.get("cache_creation_input_tokens", 0)
-                        cache_read = usage.get("cache_read_input_tokens", 0)
-                        if cache_creation > 0:
-                            LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (industry article summary)")
-                        elif cache_read > 0:
-                            LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (industry article summary) - 90% savings!")
+                # Track cost
+                usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "fundamental_driver_summary")
 
-                        summary = result.get("content", [{}])[0].get("text", "")
-                        if summary and len(summary.strip()) > 10:
-                            LOG.info(f"Claude industry summary: {industry_keyword} for {target_ticker} ({len(summary)} chars)")
-                            return summary.strip()
-                    else:
-                        LOG.error(f"Claude industry API error {response.status}")
+                # Log cache performance
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (fundamental driver summary)")
+                elif cache_read > 0:
+                    LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (fundamental driver summary) - 90% savings!")
+
+                content = result.get("content", [{}])[0].get("text", "")
+
+                if not content or len(content.strip()) < 50:
+                    LOG.warning(f"Claude returned insufficient summary for {target_ticker}")
+                    return None
+
+                return content.strip()
+
         except Exception as e:
-            LOG.error(f"Claude industry summary failed for {industry_keyword}/{target_ticker}: {e}")
+            LOG.error(f"Claude fundamental driver summary generation failed for {target_ticker}: {str(e)}")
+            return None
+
     return None
 
 
@@ -7432,129 +7417,124 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
         return None
 
-    # Get ticker config for geographic and subsidiary metadata
+    # Get ticker config for geographic metadata
     config = get_ticker_config(target_ticker) or {}
     geographic_markets = (config.get('geographic_markets') or '').strip()
-    subsidiaries = (config.get('subsidiaries') or '').strip()
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
-            prompt = f"""You are a research analyst extracting {industry_keyword} sector facts relevant to {target_company} ({target_ticker}).
+            prompt = f"""You are a research analyst extracting fundamental driver facts relevant to a target company's financial performance.
 
-**Company Context:**
-- Geographic Markets: {geographic_markets if geographic_markets else 'Unknown'}
-- Subsidiaries: {subsidiaries if subsidiaries else 'None'}
+**YOUR TASK:**
+Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact target company's revenue, costs, or margins.
 
-**Task:** Extract facts from this article relevant to {target_company}'s business operations, competitive position, costs, revenues, or regulatory environment.
+**Target Company:** {target_company} ({target_ticker})
+**Fundamental Driver Keyword:** {industry_keyword}
+**Geographic Markets:** {geographic_markets if geographic_markets else 'Unknown'}
 
-**What Counts as Relevant (10 Categories):**
+**What Counts as Relevant (8 Categories):**
 
-**1. Direct Mentions**
-- Article explicitly names {target_company} or {target_ticker}
-- Include: operational details, financial figures, strategic announcements, executive quotes, partnerships
+**1. Commodity/Asset Prices**
+- Price levels, changes, or trends for commodities/assets target company produces or consumes
+- Extract: specific prices with units, percentage changes, time periods, drivers of movement
+- Examples: Oil $78/bbl, copper $4.25/lb, natural gas $3.20/MMBtu, jet fuel $2.80/gal, gold $2,100/oz
+- For producers: Output prices drive revenue | For consumers: Input prices drive costs
 
-**2. Regulations/Policies Affecting {target_company}**
-- Government actions, rules, court decisions, regulatory guidance applying to {target_company}
-- Extract: scope, requirements, dates, compliance costs, penalties
-- Look for: "all publicly traded companies", "banks >$10B assets", "utilities in California", "pharma manufacturers", "EU entities"
+**2. Volume Metrics & Demand Indicators**
+- Production, sales, consumption data for relevant markets/products
+- Extract: volumes with units, growth rates, time periods, geographic breakdowns
+- Examples: Auto sales 16.2M units annualized, air travel 2.8M daily passengers, smartphone shipments 180M units
+- Include: PMI readings, industrial production, retail sales, housing starts, capacity utilization
 
-**3. Competitors' Operational Actions**
-- Moves by direct competitors for customers, market share, or resources
-- Extract: what, where, when, scale, strategic rationale
-- Include: product launches, facilities, M&A, capacity, pricing, market entries/exits
-- Exclude: stock performance, valuations, earnings metrics (unless tied to operational changes)
+**3. Policy & Regulatory Changes**
+- Government decisions directly affecting driver metrics (rates, tariffs, quotas, subsidies, standards)
+- Extract: specific policy details, effective dates, quantified impacts, compliance requirements
+- Examples: Fed rate decision, OPEC production cuts, tariff rates, emission standards, tax credits
+- Include: Central bank actions, trade policy, environmental regulations, industry-specific rules
 
-**4. Customer Demand/End-Market Developments**
-- Changes in industries/segments buying {target_company}'s products/services
-- Extract: demand trends, spending patterns, preference shifts, adoption rates
-- Examples: enterprise IT spending, auto production volumes, healthcare utilization, housing starts
+**4. Supply Events & Capacity Changes**
+- Disruptions, additions, or changes affecting supply of relevant commodities/products
+- Extract: facility capacities, production volumes, outage durations, resumption timelines
+- Examples: Mine closure (50k tons/year capacity), refinery maintenance (reducing output 15%), new fab (monthly wafer capacity)
+- Include: Natural disasters, strikes, trade restrictions, technology failures
 
-**5. Supplier/Input Developments**
-- Changes affecting materials, components, labor, or capital {target_company} requires
-- Extract: price changes, availability constraints, quality issues, new sourcing
-- Examples: commodity prices, wage trends, equipment costs, raw materials, energy prices, interest rates
+**5. End-Market Demand Trends**
+- Spending, consumption, or adoption patterns in markets driving demand for target company products
+- Extract: spending levels, growth rates, penetration metrics, regional variations
+- Examples: Smartphone unit sales, cloud infrastructure spending, prescription volumes, construction spending
+- Include: Consumer sentiment, B2B capital expenditure, inventory levels, order backlogs
 
-**6. Technology/Standards/Industry Practices**
-- New tech, standards, certifications, or practices affecting {target_company}'s sector
-- Extract: technical specs, adoption timelines, compatibility requirements
-- Examples: 5G rollout, cybersecurity standards, ESG frameworks, clinical protocols, accounting changes
+**6. Cost Structure Developments**
+- Labor, logistics, energy, or other operating costs affecting target company margins
+- Extract: wage rates, shipping costs, utility prices, productivity metrics
+- Examples: Container shipping $2,500/TEU, warehouse wages $18/hr (+6% YoY), electricity $0.12/kWh
+- Include: Union contracts, fuel surcharges, insurance premiums, compliance costs
 
-**7. Geographic/Market-Specific Developments**
-- Events in countries/regions where {target_company} operates (see Geographic Markets above)
-- Extract: infrastructure changes, regional regulations, local dynamics, geopolitical events
-- Examples: EU tariff changes, China market access, state regulations, port congestion, regional economics
-- IMPORTANT: If article discusses country NOT in Geographic Markets, note "Outside operating region" in relevance statement
+**7. Technology Adoption & Standards**
+- Deployment rates, migration timelines, or technical standards affecting demand or competitive dynamics
+- Extract: penetration rates, deployment schedules, interoperability requirements
+- Examples: EV penetration 12% of new sales (+3pp YoY), 5G coverage 65% population, chip node transition timelines
+- Include: Government mandates, industry certifications, platform migrations
 
-**8. Labor/Workforce Developments**
-- Changes affecting {target_company}'s ability to hire, retain, or deploy workers
-- Extract: union activities, labor regulations, workforce availability, wage pressures
-- Examples: strikes, collective bargaining, visa rules, safety requirements, minimum wage changes
+**8. Competitor/Industry Operational Metrics**
+- Industry-wide operational data revealing fundamental driver trends applicable to target company
+- Extract: capacity utilization rates, pricing trends, order patterns, margin pressures
+- Examples: Industry capacity utilization 78% (down from 82%), average selling prices -8% QoQ, lead times contracting
+- Include ONLY if revealing sector-wide driver trends (volumes, costs, demand signals, pricing power)
 
-**9. Financial Market/Capital Access Changes**
-- Developments affecting {target_company}'s ability to raise capital or manage financial risk
-- Extract: interest rates, credit conditions, regulatory capital, accounting rules
-- Examples: Fed decisions, Basel III, tax law changes, debt market access, credit ratings
+**GEOGRAPHY RULES (CRITICAL FOR MACRO DRIVERS):**
 
-**10. Legal Precedents/Major Litigation**
-- Court decisions, settlements, or legal actions establishing precedents affecting {target_company}
-- Extract: legal rulings, settlement terms, liability determinations
-- Examples: FDA enforcement, antitrust rulings, patent cases, securities litigation
+**ALWAYS INCLUDE - GLOBAL DRIVERS (exempt from geographic filter):**
+- Commodity prices: Oil, copper, gold, natural gas, steel, agriculture (global markets, affect all producers/consumers)
+- Global demand: China construction, worldwide auto sales, semiconductor demand, global cloud spending
+- International policy: Fed rates, OPEC output, WTO rules, IMF forecasts (affect all companies globally)
+- Supply metrics: Global mining output, refinery capacity, crop yields, manufacturing production
 
-**Commodity/Product-Specific (for producers):**
-- Pricing, supply, demand for products/commodities {target_company} produces or sells
-- Production volumes, inventory levels, capacity utilization in sector
-- For commodity companies: Commodity price/supply/demand IS relevant company information
+For GLOBAL drivers, extract ALL relevant data regardless of article geography. If article discusses "China copper demand," this is relevant to copper producers worldwide.
+
+**APPLY GEOGRAPHIC FILTER ONLY FOR:**
+- Country-specific regulations NOT affecting global commodity markets
+- Local market pricing disconnected from global benchmarks
+- Regional developments without international spillover
+
+If article focuses on country/region NOT in Geographic Markets above AND not a global driver → Note "Outside operating region" in relevance statement.
 
 **Exclusion Criteria (NOT Relevant):**
-❌ General macro news without sector implications
-❌ Competitor stock metrics without operational impact
-❌ Unrelated industries or sectors
-❌ Geographic regions outside {target_company}'s markets (check Geographic Markets above)
-❌ Subsidiaries not owned by {target_company} (check Subsidiaries above)
-❌ Regulations for different industry categories/company sizes
-❌ Historical context not connected to current developments
-❌ Vague trend pieces without specific data/dates
-❌ Opinion/analysis without factual basis
+❌ Company-specific news (earnings, guidance, M&A, appointments) without driver context
+❌ Pure stock analysis (valuations, price targets, technical charts) without operational data
+❌ Wrong keyword match (homonyms or coincidental matches)
+❌ Different industry without driver connection
+❌ Opinion without data (speculation, predictions, "future of industry" without facts)
+❌ Advertorial/promotional content
 
 **Structure:**
-- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Write 2-5 concise paragraphs in natural prose (no headers, no bullets)
 - Include specific numbers with units and time periods
-- Include dates, company names, locations, policy names
-- Include direct quotes with attribution
+- Include dates, locations, policy names, source attributions
 - Cite source: (domain name)
-- Final paragraph: Brief relevance statement explaining factual connection to {target_company}
+- Final paragraph: Relevance statement connecting driver facts to target company's financial performance
 
-**Relevance Statement Templates (use appropriate one):**
-- Direct mention: "Article directly discusses {target_company}'s [specific aspect]."
-- Regulation: "This [regulation] applies to [specific scope], which includes {target_company}."
-- Competitor: "This discusses [Competitor]'s [action] in [market] where {target_company} also [competes/operates]."
-- Customer: "This affects [industry/segment] that [purchases/uses] {target_company}'s [products/services]."
-- Supplier: "This impacts [input] costs or availability for {target_company}'s operations."
-- Technology: "This [tech/standard] affects [sector] operations, including {target_company}'s [activities]."
-- Geographic: "This affects [region] where {target_company} operates [specific operations]."
-- Labor: "This affects [labor aspect] for [sector/geography], including {target_company}'s workforce."
-- Financial: "This affects [capital aspect] for [company type], including {target_company}."
-- Legal: "This [ruling] affects [legal issue] for [sector], which includes {target_company}."
+**Relevance Statement Format:**
+Explain how extracted driver facts materially impact target company revenue, costs, or margins. Use factual connections only - no speculation about company response or strategy.
 
 **Critical Rules:**
-✅ Extract ONLY explicitly stated facts
-✅ Every number needs: value, units, time period, source
-✅ Always cite source domain
-✅ Explain relevance using factual connections only
-✅ Scale length to amount of relevant information
+✅ Extract ALL relevant driver data from article, not just primary keyword
+✅ Include specific numbers with units, time periods, and sources
+✅ For GLOBAL drivers (commodities, macro indicators): Include regardless of article geography
+✅ Cite source domain
+✅ Scale length to amount of relevant driver information
 
-❌ NO speculation on {target_company}'s response or strategy
+❌ NO speculation on target company's response or strategy
 ❌ NO inferred competitive position unless explicitly stated
-❌ NO assumptions about {target_company}'s capabilities, market share, or cost structure
-❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears, positioned, poised
-❌ NO tangential information beyond the 10 relevance categories
-
-**Multi-Sector Note:** {target_company} may operate across multiple sectors. Consider relevance across all {target_company}'s known business activities, not just {industry_keyword}.
+❌ NO assumptions about target company's capabilities or market share
+❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears
+❌ DO NOT exclude global driver data based on article geography
 
 TARGET COMPANY: {target_company} ({target_ticker})
-SECTOR FOCUS: {industry_keyword}
+FUNDAMENTAL DRIVER KEYWORD: {industry_keyword}
+GEOGRAPHIC MARKETS: {geographic_markets if geographic_markets else 'Unknown'}
 TITLE: {title}
 CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
 
@@ -8757,10 +8737,11 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
         LOG.warning("No OpenAI API key or no articles to triage")
         return []
 
-    # Get ticker config for geographic and subsidiary metadata
+    # Get ticker config for geographic metadata and fundamental driver keywords
     config = get_ticker_config(ticker) or {}
     geographic_markets = (config.get('geographic_markets') or '').strip()
-    subsidiaries = (config.get('subsidiaries') or '').strip()
+    industry_keywords = (config.get('industry_keywords') or [])
+    driver_keywords_display = ', '.join(industry_keywords) if industry_keywords else 'Not configured'
 
     # Prepare items for triage (title + description)
     items = []
@@ -8839,116 +8820,131 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
     # Format peer list for display
     peers_display = ', '.join(peers[:5]) if peers else 'None'
 
-    system_prompt = f"""You are a financial analyst selecting the {target_cap} most important INDUSTRY articles from {len(articles)} candidates based ONLY on titles and descriptions.
+    system_prompt = f"""You are a financial analyst selecting FUNDAMENTAL DRIVER articles based ONLY on titles and descriptions.
 
-TARGET COMPANY: {company_name} ({ticker})
-SECTOR: {sector}
-KNOWN PEERS: {peers_display}
-GEOGRAPHIC MARKETS: {geographic_markets if geographic_markets else 'Unknown'}
-SUBSIDIARIES: {subsidiaries if subsidiaries else 'None'}
+**YOUR TASK:**
+Select UP TO {target_cap} most important articles about fundamental market drivers affecting {company_name}'s financial performance from the {len(articles)} candidates below.
 
-INDUSTRY CONTEXT: Select articles about sector-wide trends, regulatory changes, supply/demand shifts, and competitive dynamics that affect {company_name}'s business environment. These should provide competitive intelligence, not just mention the sector in passing.
+**TARGET COMPANY:** {company_name} ({ticker})
+**FUNDAMENTAL DRIVER KEYWORDS:** {driver_keywords_display}
+**SECTOR:** {sector}
+**KNOWN PEERS:** {peers_display}
+**GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
+**ARTICLE COUNT:** {len(articles)}
+**TARGET CAP:** {target_cap}
 
-CRITICAL: Select UP TO {target_cap} articles, fewer if uncertain.
+**FUNDAMENTAL DRIVER CONTEXT:**
+Select articles LIKELY to contain quantifiable data about macro/market metrics that directly drive the target company's financial performance. Focus on EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that move the stock.
 
-PRIMARY CRITERION: Does this article reveal information about {company_name}'s competitive landscape, regulatory environment, or market opportunity?
+**PRIMARY CRITERION:**
+Based on title/description, is this article LIKELY to contain quantifiable data about metrics that directly impact target company revenue, costs, or margins?
+
+**TRIAGE PHILOSOPHY:**
+You are doing PRE-SCREENING, not final scoring. Be PERMISSIVE - cast a wider net:
+- Article mentions driver keyword + credible source → SELECT (body likely has data)
+- Article promises data/figures/analysis → SELECT (numbers probably inside)
+- Article discusses events/policy affecting drivers → SELECT (impact data likely included)
+- Only REJECT if clearly irrelevant
+
+The scoring function will be strict about requiring actual numbers. Your job: avoid missing high-value articles where quantifiable data is in the body, not the headline.
 
 SELECT (choose up to {target_cap}):
 
-TIER 1 - Hard industry events with quantified impact (scrape_priority=1):
-- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting target sector
-- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting target company sector
-- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting target sector
-- Standards: New requirements, certifications, compliance rules WITH deadlines/costs for {sector}
-- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines for {sector}
-- Financial: Interest rates, capital requirements, reserve rules affecting target sector
-- Technology shifts: Standards changes, platform migrations, protocol updates affecting target sector
+TIER 1 - High likelihood of quantifiable driver data (scrape_priority=1):
+- **Direct Driver Keywords:** Title/description explicitly references provided fundamental driver keywords
+- **Commodity/Asset Prices:** Price movements, levels, or trends for relevant commodities/services
+- **Policy/Regulatory Actions:** Government decisions, rate changes, new rules, tariffs, quotas, subsidies affecting drivers
+- **Standards/Certifications:** New requirements, compliance rules, safety standards WITH deadlines/cost implications
+- **Trade Developments:** Agreements, restrictions, sanctions, export controls affecting supply/demand/pricing
+- **Data Releases:** Official reports, statistics, economic indicators related to fundamental drivers
+- **Supply/Demand Events:** Disruptions, capacity changes, production shifts, outages affecting driver metrics
+- **Financial Policy:** Interest rates, capital requirements, reserve rules, monetary policy affecting drivers
 
-TIER 2 - Strategic sector developments (scrape_priority=2):
-- Major capacity additions/closures WITH impact metrics (e.g., "500MW," "1M units/year") in target sector
-- Industry consolidation WITH transaction values and market share implications
-- Technology adoption WITH implementation timelines and cost/efficiency impacts
-- Labor agreements WITH wage/benefit details affecting target sector economics
-- Infrastructure investments WITH budgets and completion dates for {sector}
-- Patent expirations, generic approvals, licensing changes WITH market impact
-- Major peer announcements revealing sector trends (from peers: {peers_display})
-- Geographic expansion patterns: Multiple companies entering/exiting same markets
-- Competitive dynamics: Pricing wars, margin pressure, customer switching patterns
+TIER 2 - Moderate likelihood of driver insights (scrape_priority=2):
+- **Market Trend Analysis:** In-depth pieces on driver dynamics from credible sources/trade publications
+- **Forecast Updates:** Projections from official sources (IEA, EIA, IMF, World Bank, USDA, industry associations)
+- **Capacity Changes:** Major additions/closures, expansions, facility changes affecting supply
+- **Labor Developments:** Union agreements, wage settlements, strikes affecting cost structures
+- **Technology Adoption:** Deployment metrics, penetration rates, migration timelines affecting demand
+- **Infrastructure Investments:** Government/private projects WITH budgets/timelines affecting drivers
+- **Competitive Dynamics:** Industry-wide pricing pressure, margin trends, capacity utilization patterns
+- **Policy Proposals:** Regulatory developments likely to affect driver metrics (not yet final)
+- **Geographic Demand Patterns:** Regional consumption/production trends for driver-relevant markets
 
-TIER 3 - Market intelligence and context (scrape_priority=3):
-- Market opportunity sizing WITH credible TAM/SAM figures for {company_name}'s addressable market
-- Economic indicators directly affecting target sector WITH specific data points
-- Government funding/initiatives WITH allocated budgets (not vague "plans")
-- Research findings WITH quantified sector implications
-- Adoption metrics: Customer/user growth rates, penetration figures for {sector}
-- Cost structure changes: Input prices, labor costs, logistics affecting target sector
-- Analyst sector reports WITH specific company mentions or competitive comparisons
+TIER 3 - Possible driver context worth checking (scrape_priority=3):
+- **Economic Indicators:** Macro data potentially affecting drivers (GDP, PMI, employment, spending, confidence)
+- **Market Sizing:** TAM/SAM analysis, growth projections for end-markets driving demand
+- **Structural Shifts:** Long-term changes in consumption/production patterns WITH supporting data
+- **Cost Structure Analysis:** Input cost trends, wage developments, logistics shifts across sector
+- **Government Initiatives:** Funding programs, incentives, strategic priorities WITH allocated budgets
+- **Adoption Metrics:** Customer/user growth rates, technology penetration, market share shifts
+- **Sector Reports:** Analyst research, industry studies WITH specific data points or competitive comparisons
 
-GEOGRAPHIC RELEVANCE CHECK:
-- If article focuses on SPECIFIC country/region (e.g., "India," "Pakistan," "Brazil," "China"):
-  → Check if country/region matches GEOGRAPHIC MARKETS above
-  → If NO match: Cap relevance score at 4.0 (reject - outside operating region)
-  → If YES match: Continue normal scoring (can reach 7-10)
-- If article about GLOBAL regulations (WTO, UN, ISO standards, international treaties):
-  → Always include (affects all companies regardless of geography)
+**FUNDAMENTAL DRIVER KEYWORDS:**
+User provides 3 driver keywords for target company. Prioritize articles mentioning these directly, but ALSO include closely related metrics materially impacting the same revenue/cost drivers.
 
-EXAMPLES:
-❌ "Amazon launches satellite in Pakistan" → 4.0 (Pakistan not in geographic markets)
-❌ "India satellite market to reach $15B" → 4.0 (India not in geographic markets)
-✅ "US FCC approves new spectrum rules" → 8.0 (US in geographic markets)
-✅ "ITU approves 6G standard globally" → 8.0 (global standard)
+**KEYWORD MATCHING - BE PERMISSIVE:**
+- **Direct Match:** Article explicitly mentions driver keyword → TIER 1
+- **Related Driver:** Article discusses adjacent metric affecting same business line → TIER 2
+- **Indirect Signal:** Article about end-market/input relevant to driver → TIER 2/3
+- **Tangential:** Vague sector mention without driver connection → REJECT
 
-SUBSIDIARY RECOGNITION:
-- If article mentions company in SUBSIDIARIES list above:
-  → Treat as DIRECT company news about {company_name} (not competitor/industry)
-  → Score as if it were about {ticker} itself
-  → Reason: "Article mentions {ticker} subsidiary - treat as company news"
+**SIGNALS OF HIGH-VALUE ARTICLES (select these):**
+- Credible sources on topic (IEA, USDA, Fed, Census, BLS, IHS Markit, trade associations)
+- Data-promising language ("data shows," "figures reveal," "report finds," "statistics indicate")
+- Action verbs (surge, fall, announce, release, cut, raise, expand, contract, tighten, ease)
+- Time-specificity ("Q3," "October," "2024," "latest," "monthly," "annual")
+- Official releases ("Fed announces," "OPEC decides," "EPA finalizes," "Census releases")
 
-EXAMPLE:
-✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary - treat as company news)
+**GEOGRAPHIC RELEVANCE FOR MACRO DRIVERS:**
+Fundamental driver articles about GLOBAL commodities and macro indicators should be INCLUDED even if discussing regions outside company's direct operations:
 
-ANALYTICAL CONTENT - Include sector analysis:
-✓ "Why [sector] companies are [performing/struggling]..." (explaining macro trends)
-✓ "[Sector] industry faces [challenge/opportunity]..." (structural shifts)
-✓ "Major players in [sector] [taking action]..." (coordinated industry moves)
-✓ "[Peer company] success/failure signals [trend]..." (competitive intelligence)
-✓ "Can [sector] sustain [growth/margins/demand]..." (industry viability questions)
+**ALWAYS INCLUDE (exempt from geographic filter):**
+- Commodity prices: Oil, copper, gold, lithium, natural gas, agricultural products, steel, metals
+- Global demand indicators: China construction, global auto sales, smartphone sales, semiconductor demand
+- International policy: Fed rates, ECB policy, OPEC decisions, WTO rules, UN standards, IMF/World Bank
+- Supply metrics: Mining output, refinery capacity, agricultural yields, manufacturing production
+- Technology adoption: EV penetration, cloud spending, 5G deployment, renewable energy growth
 
-REJECT COMPLETELY - Never select:
-- Generic market research: "Industry to reach $XB by 20YY" WITHOUT {company_name} positioning
-- Pure trend pieces: "Top 5 trends in [sector]," "Future of [industry]" WITHOUT specifics
-- Single company news: Peer earnings, appointments WITHOUT broader sector implications
-- Unrelated companies: Articles about non-peer companies outside {company_name}'s competitive set
-- Distant forecasts: "20XX outlook," "Next decade in [sector]" WITHOUT near-term catalysts
-- Pure opinion: "Analysis," "Commentary" WITHOUT hard data or specific sector insights
-- Small company routine news: Junior partnerships, minor financing rounds
-- Attribution confusion: Industry trade group reports where {sector} is just mentioned
+**APPLY GEOGRAPHIC FILTER ONLY FOR:**
+- Country-specific regulations NOT affecting global commodities/demand
+- Local market developments without global spillover
+- Regional pricing disconnected from global benchmarks
 
-COMPETITIVE INTELLIGENCE - Include when:
-✓ Peer company action indicates sector direction (new product categories, pricing changes, geographic priorities)
-✓ Regulatory action against competitor reveals industry-wide risks
-✓ Supply chain disruption at major player affects {sector} availability/pricing
-✓ Technology deployment shows sector-wide adoption affecting {company_name}
-✓ Financial performance reveals {sector} cost/margin/demand trends
-✓ Multiple peers make similar strategic moves (consolidation wave, geographic expansion)
+If article focuses on SPECIFIC country/region, check GEOGRAPHIC MARKETS:
+- Match found → Continue normal scoring
+- No match AND not global driver → Cap relevance at 4.0 (reject)
+- Global regulations (WTO, UN, ISO, international treaties) → Always include
 
-SCRAPE PRIORITY (assign integer 1-3):
-1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
-2 = Tier 2 (capacity, consolidation, policy WITH budgets, peer moves with sector implications)
-3 = Tier 3 (TAM sizing, economic indicators, adoption metrics, sector reports)
+**COMPETITOR/PEER ARTICLES - Include when revealing fundamental drivers:**
+Competitor operational reports, peer earnings, or industry leader actions often reveal sector-wide fundamental driver trends (costs, demand, pricing, supply). Include competitor articles when they discuss driver keywords or material operational metrics affecting the target company's business environment.
 
-For each article assess:
-- likely_repeat: Same sector event covered by multiple outlets?
-- repeat_key: Event identifier (e.g., "eu_ai_regulation_oct2025," "chip_shortage_q4")
-- confidence: 0.0-1.0, certainty this has implications for {company_name}'s competitive position
+**REJECT - Never select:**
+- Stock analysis: Price targets, technical analysis, valuation commentary without operational data
+- Pure opinion/predictions: Columnist views without supporting driver data or credible forecasts
+- Vague trend pieces: "Top 5 Trends" listicles, "Future of [Industry]" without specific data promises
+- Coincidental keyword matches: Homonyms or unrelated uses of driver keywords
+- Promotional content: Advertorials, sponsored content, stock promotion
 
-SELECTION STANDARD:
-- Prioritize sector-specific insights over general business news
-- A trade publication covering {sector} specifically > major outlet with tangential mention
-- Include if article reveals something material about {company_name}'s operating environment
-- Skip if industry mention is generic or doesn't connect to {company_name}'s business
+**SCRAPE PRIORITY (assign integer 1-3):**
+1 = TIER 1: Direct driver keyword, policy action, data release, commodity price, supply/demand event
+2 = TIER 2: Related driver analysis, forecasts from credible sources, sector trends, labor/capacity developments
+3 = TIER 3: Macro context, adoption metrics, market sizing, structural shifts, economic indicators
 
-CRITICAL CONSTRAINT: Return UP TO {target_cap} articles. Select fewer if uncertain about sector relevance to {company_name}."""
+**For each article assess (OpenAI-specific fields):**
+- likely_repeat: Is this same event covered by multiple outlets? (true/false)
+- repeat_key: Short identifier for event (e.g., "fed_rate_cut_nov2025", "copper_shortage_q4")
+- confidence: 0.0-1.0, certainty article contains driver data relevant to target company
+- why: Brief explanation of what driver data you expect to find in article body
+
+**SELECTION STANDARD:**
+- PERMISSIVE at triage: If article MIGHT have driver data in body, include it
+- Trust credible sources: Bloomberg/Reuters on commodities, trade pubs on sector data likely deliver
+- Prioritize specificity: "Q3 China PMI" > "China Economy Faces Headwinds"
+- Accept data promises: If title suggests analysis/figures, assume body delivers
+- When uncertain: SELECT if reasonable chance of driver data; REJECT only if clearly irrelevant
+
+Return JSON array with selected articles UP TO {target_cap}. Be PERMISSIVE - only reject clear mismatches. Each "why" should explain what driver data you expect to find in article body."""
 
     try:
         headers = {
@@ -9458,14 +9454,15 @@ Select the {target_cap} most important articles about {company_name} from the {l
         return []
 
 async def triage_industry_articles_claude(articles: List[Dict], ticker: str, company_name: str, sector: str, peers: List[str]) -> List[Dict]:
-    """Claude-based industry keyword triage"""
+    """Claude-based fundamental driver triage"""
     if not ANTHROPIC_API_KEY or not articles:
         return []
 
-    # Get ticker config for geographic and subsidiary metadata
+    # Get ticker config for geographic metadata and fundamental driver keywords
     config = get_ticker_config(ticker) or {}
     geographic_markets = (config.get('geographic_markets') or '').strip()
-    subsidiaries = (config.get('subsidiaries') or '').strip()
+    industry_keywords = (config.get('industry_keywords') or [])
+    driver_keywords_display = ', '.join(industry_keywords) if industry_keywords else 'Not configured'
 
     # Prepare items
     items = []
@@ -9483,123 +9480,132 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
     peers_display = ', '.join(peers[:5]) if peers else 'None'
 
     # Generic system prompt (cacheable across all tickers)
-    system_prompt = """You are a financial analyst selecting INDUSTRY articles based ONLY on titles and descriptions.
+    system_prompt = """You are a financial analyst selecting FUNDAMENTAL DRIVER articles based ONLY on titles and descriptions.
 
 **YOUR TASK:**
-The user will provide target company, sector, known peers, geographic markets, subsidiaries, article count, and target cap. Select the most important industry articles that affect the target company's business environment.
+The user will provide target company, fundamental driver keywords, geographic markets, article count, and target cap. Select articles LIKELY to contain quantifiable data about macro/market metrics that directly drive the target company's financial performance.
 
-**INDUSTRY CONTEXT:**
-Select articles about sector-wide trends, regulatory changes, supply/demand shifts, and competitive dynamics that provide competitive intelligence for the target company.
+**FUNDAMENTAL DRIVER CONTEXT:**
+Select articles about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that move the stock. Your job is to identify articles LIKELY to contain actionable data, even if specific numbers aren't in the title/description.
 
 **PRIMARY CRITERION:**
-Does this article reveal information about the target company's competitive landscape, regulatory environment, or market opportunity?
+Based on title/description, is this article LIKELY to contain quantifiable data about metrics that directly impact target company revenue, costs, or margins?
 
-SELECT (choose up to {target_cap}):
+**TRIAGE PHILOSOPHY:**
+You are doing PRE-SCREENING, not final scoring. Be PERMISSIVE - cast a wider net:
+- Article mentions driver keyword + credible source → SELECT (body likely has data)
+- Article promises data/figures/analysis → SELECT (numbers probably inside)
+- Article discusses events/policy affecting drivers → SELECT (impact data likely included)
+- Only REJECT if clearly irrelevant
 
-TIER 1 - Hard industry events with quantified impact (scrape_priority=1):
-- Regulatory/Policy: New laws, rules, tariffs, bans, quotas WITH specific rates/dates/costs affecting target sector
-- Pricing: Commodity/service prices, reimbursement rates WITH specific figures affecting target company sector
-- Supply/Demand: Production disruptions, capacity changes WITH volume/value numbers impacting target sector
-- Standards: New requirements, certifications, compliance rules WITH deadlines/costs for {sector}
-- Trade: Agreements, restrictions, sanctions WITH affected volumes or timelines for {sector}
-- Financial: Interest rates, capital requirements, reserve rules affecting target sector
-- Technology shifts: Standards changes, platform migrations, protocol updates affecting target sector
+The scoring function will be strict about requiring actual numbers. Your job: avoid missing high-value articles where quantifiable data is in the body, not the headline.
 
-TIER 2 - Strategic sector developments (scrape_priority=2):
-- Major capacity additions/closures WITH impact metrics (e.g., "500MW," "1M units/year") in target sector
-- Industry consolidation WITH transaction values and market share implications
-- Technology adoption WITH implementation timelines and cost/efficiency impacts
-- Labor agreements WITH wage/benefit details affecting target sector economics
-- Infrastructure investments WITH budgets and completion dates for {sector}
-- Patent expirations, generic approvals, licensing changes WITH market impact
-- Major peer announcements revealing sector trends (from peers: {peers_display})
-- Geographic expansion patterns: Multiple companies entering/exiting same markets
-- Competitive dynamics: Pricing wars, margin pressure, customer switching patterns
+SELECT (choose up to target cap):
 
-TIER 3 - Market intelligence and context (scrape_priority=3):
-- Market opportunity sizing WITH credible TAM/SAM figures for {company_name}'s addressable market
-- Economic indicators directly affecting target sector WITH specific data points
-- Government funding/initiatives WITH allocated budgets (not vague "plans")
-- Research findings WITH quantified sector implications
-- Adoption metrics: Customer/user growth rates, penetration figures for {sector}
-- Cost structure changes: Input prices, labor costs, logistics affecting target sector
-- Analyst sector reports WITH specific company mentions or competitive comparisons
+TIER 1 - High likelihood of quantifiable driver data (scrape_priority=1):
+- **Direct Driver Keywords:** Title/description explicitly references provided fundamental driver keywords
+- **Commodity/Asset Prices:** Price movements, levels, or trends for relevant commodities/services
+- **Policy/Regulatory Actions:** Government decisions, rate changes, new rules, tariffs, quotas, subsidies affecting drivers
+- **Standards/Certifications:** New requirements, compliance rules, safety standards WITH deadlines/cost implications
+- **Trade Developments:** Agreements, restrictions, sanctions, export controls affecting supply/demand/pricing
+- **Data Releases:** Official reports, statistics, economic indicators related to fundamental drivers
+- **Supply/Demand Events:** Disruptions, capacity changes, production shifts, outages affecting driver metrics
+- **Financial Policy:** Interest rates, capital requirements, reserve rules, monetary policy affecting drivers
 
-GEOGRAPHIC RELEVANCE CHECK:
-- If article focuses on SPECIFIC country/region (e.g., "India," "Pakistan," "Brazil," "China"):
-  → Check if country/region matches GEOGRAPHIC MARKETS above
-  → If NO match: Cap relevance score at 4.0 (reject - outside operating region)
-  → If YES match: Continue normal scoring (can reach 7-10)
-- If article about GLOBAL regulations (WTO, UN, ISO standards, international treaties):
-  → Always include (affects all companies regardless of geography)
+TIER 2 - Moderate likelihood of driver insights (scrape_priority=2):
+- **Market Trend Analysis:** In-depth pieces on driver dynamics from credible sources/trade publications
+- **Forecast Updates:** Projections from official sources (IEA, EIA, IMF, World Bank, USDA, industry associations)
+- **Capacity Changes:** Major additions/closures, expansions, facility changes affecting supply
+- **Labor Developments:** Union agreements, wage settlements, strikes affecting cost structures
+- **Technology Adoption:** Deployment metrics, penetration rates, migration timelines affecting demand
+- **Infrastructure Investments:** Government/private projects WITH budgets/timelines affecting drivers
+- **Competitive Dynamics:** Industry-wide pricing pressure, margin trends, capacity utilization patterns
+- **Policy Proposals:** Regulatory developments likely to affect driver metrics (not yet final)
+- **Geographic Demand Patterns:** Regional consumption/production trends for driver-relevant markets
 
-EXAMPLES:
-❌ "Amazon launches satellite in Pakistan" → 4.0 (Pakistan not in geographic markets)
-❌ "India satellite market to reach $15B" → 4.0 (India not in geographic markets)
-✅ "US FCC approves new spectrum rules" → 8.0 (US in geographic markets)
-✅ "ITU approves 6G standard globally" → 8.0 (global standard)
+TIER 3 - Possible driver context worth checking (scrape_priority=3):
+- **Economic Indicators:** Macro data potentially affecting drivers (GDP, PMI, employment, spending, confidence)
+- **Market Sizing:** TAM/SAM analysis, growth projections for end-markets driving demand
+- **Structural Shifts:** Long-term changes in consumption/production patterns WITH supporting data
+- **Cost Structure Analysis:** Input cost trends, wage developments, logistics shifts across sector
+- **Government Initiatives:** Funding programs, incentives, strategic priorities WITH allocated budgets
+- **Adoption Metrics:** Customer/user growth rates, technology penetration, market share shifts
+- **Sector Reports:** Analyst research, industry studies WITH specific data points or competitive comparisons
 
-SUBSIDIARY RECOGNITION:
-- If article mentions company in SUBSIDIARIES list above:
-  → Treat as DIRECT company news about {company_name} (not competitor/industry)
-  → Score as if it were about {ticker} itself
-  → Reason: "Article mentions {ticker} subsidiary - treat as company news"
+**FUNDAMENTAL DRIVER KEYWORDS:**
+User provides 3 driver keywords for target company. Prioritize articles mentioning these directly, but ALSO include closely related metrics materially impacting the same revenue/cost drivers.
 
-EXAMPLE:
-✅ "Hughes expands operations" → 8.0 (Hughes is {ticker} subsidiary - treat as company news)
+**KEYWORD MATCHING - BE PERMISSIVE:**
+- **Direct Match:** Article explicitly mentions driver keyword → TIER 1
+- **Related Driver:** Article discusses adjacent metric affecting same business line → TIER 2
+- **Indirect Signal:** Article about end-market/input relevant to driver → TIER 2/3
+- **Tangential:** Vague sector mention without driver connection → REJECT
 
-ANALYTICAL CONTENT - Include sector analysis:
-✓ "Why [sector] companies are [performing/struggling]..." (explaining macro trends)
-✓ "[Sector] industry faces [challenge/opportunity]..." (structural shifts)
-✓ "Major players in [sector] [taking action]..." (coordinated industry moves)
-✓ "[Peer company] success/failure signals [trend]..." (competitive intelligence)
-✓ "Can [sector] sustain [growth/margins/demand]..." (industry viability questions)
+**SIGNALS OF HIGH-VALUE ARTICLES (select these):**
+- Credible sources on topic (IEA, USDA, Fed, Census, BLS, IHS Markit, trade associations)
+- Data-promising language ("data shows," "figures reveal," "report finds," "statistics indicate")
+- Action verbs (surge, fall, announce, release, cut, raise, expand, contract, tighten, ease)
+- Time-specificity ("Q3," "October," "2024," "latest," "monthly," "annual")
+- Official releases ("Fed announces," "OPEC decides," "EPA finalizes," "Census releases")
 
-REJECT COMPLETELY - Never select:
-- Generic market research: "Industry to reach $XB by 20YY" WITHOUT {company_name} positioning
-- Pure trend pieces: "Top 5 trends in [sector]," "Future of [industry]" WITHOUT specifics
-- Single company news: Peer earnings, appointments WITHOUT broader sector implications
-- Unrelated companies: Articles about non-peer companies outside {company_name}'s competitive set
-- Distant forecasts: "20XX outlook," "Next decade in [sector]" WITHOUT near-term catalysts
-- Pure opinion: "Analysis," "Commentary" WITHOUT hard data or specific sector insights
-- Small company routine news: Junior partnerships, minor financing rounds
-- Attribution confusion: Industry trade group reports where {sector} is just mentioned
+**GEOGRAPHIC RELEVANCE FOR MACRO DRIVERS:**
+Fundamental driver articles about GLOBAL commodities and macro indicators should be INCLUDED even if discussing regions outside company's direct operations:
 
-COMPETITIVE INTELLIGENCE - Include when:
-✓ Peer company action indicates sector direction (new product categories, pricing changes, geographic priorities)
-✓ Regulatory action against competitor reveals industry-wide risks
-✓ Supply chain disruption at major player affects {sector} availability/pricing
-✓ Technology deployment shows sector-wide adoption affecting {company_name}
-✓ Financial performance reveals {sector} cost/margin/demand trends
-✓ Multiple peers make similar strategic moves (consolidation wave, geographic expansion)
+**ALWAYS INCLUDE (exempt from geographic filter):**
+- Commodity prices: Oil, copper, gold, lithium, natural gas, agricultural products, steel, metals
+- Global demand indicators: China construction, global auto sales, smartphone sales, semiconductor demand
+- International policy: Fed rates, ECB policy, OPEC decisions, WTO rules, UN standards, IMF/World Bank
+- Supply metrics: Mining output, refinery capacity, agricultural yields, manufacturing production
+- Technology adoption: EV penetration, cloud spending, 5G deployment, renewable energy growth
 
-SCRAPE PRIORITY (assign integer 1-3):
-1 = Tier 1 (regulatory, pricing, supply shocks WITH numbers)
-2 = Tier 2 (capacity, consolidation, policy WITH budgets, peer moves with sector implications)
-3 = Tier 3 (TAM sizing, economic indicators, adoption metrics, sector reports)
+**APPLY GEOGRAPHIC FILTER ONLY FOR:**
+- Country-specific regulations NOT affecting global commodities/demand
+- Local market developments without global spillover
+- Regional pricing disconnected from global benchmarks
 
-SELECTION STANDARD:
-- Prioritize sector-specific insights over general business news
-- A trade publication covering {sector} specifically > major outlet with tangential mention
-- Include if article reveals something material about {company_name}'s operating environment
-- Skip if industry mention is generic or doesn't connect to {company_name}'s business
+If article focuses on SPECIFIC country/region, check GEOGRAPHIC MARKETS:
+- Match found → Continue normal scoring
+- No match AND not global driver → Cap relevance at 4.0 (reject)
+- Global regulations (WTO, UN, ISO, international treaties) → Always include
 
-Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason"}}]
+**COMPETITOR/PEER ARTICLES - Include when revealing fundamental drivers:**
+Competitor operational reports, peer earnings, or industry leader actions often reveal sector-wide fundamental driver trends (costs, demand, pricing, supply). Include competitor articles when they discuss driver keywords or material operational metrics affecting the target company's business environment.
+
+**REJECT - Never select:**
+- Stock analysis: Price targets, technical analysis, valuation commentary without operational data
+- Pure opinion/predictions: Columnist views without supporting driver data or credible forecasts
+- Vague trend pieces: "Top 5 Trends" listicles, "Future of [Industry]" without specific data promises
+- Coincidental keyword matches: Homonyms or unrelated uses of driver keywords
+- Promotional content: Advertorials, sponsored content, stock promotion
+
+**SCRAPE PRIORITY (assign integer 1-3):**
+1 = TIER 1: Direct driver keyword, policy action, data release, commodity price, supply/demand event
+2 = TIER 2: Related driver analysis, forecasts from credible sources, sector trends, labor/capacity developments
+3 = TIER 3: Macro context, adoption metrics, market sizing, structural shifts, economic indicators
+
+**SELECTION STANDARD:**
+- PERMISSIVE at triage: If article MIGHT have driver data in body, include it
+- Trust credible sources: Bloomberg/Reuters on commodities, trade pubs on sector data likely deliver
+- Prioritize specificity: "Q3 China PMI" > "China Economy Faces Headwinds"
+- Accept data promises: If title suggests analysis/figures, assume body delivers
+- When uncertain: SELECT if reasonable chance of driver data; REJECT only if clearly irrelevant
+
+Return JSON array: [{{"id": 0, "scrape_priority": 1, "why": "brief reason explaining likelihood of driver data"}}]
 
 **OUTPUT FORMAT:**
-Return JSON array. Select UP TO the target cap. Select fewer if uncertain about sector relevance to target company."""
+Return JSON array. Select UP TO target cap. Be PERMISSIVE - only reject clear mismatches. Each "why" should explain what driver data you expect to find in article body."""
 
     # User message with ticker-specific context
     user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**FUNDAMENTAL DRIVER KEYWORDS:** {driver_keywords_display}
 **SECTOR:** {sector}
 **KNOWN PEERS:** {peers_display}
 **GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
-**SUBSIDIARIES:** {subsidiaries if subsidiaries else 'None'}
 **ARTICLE COUNT:** {len(articles)}
 **TARGET CAP:** {target_cap}
 
 **YOUR TASK:**
-Select the {target_cap} most important industry articles about {sector} that affect {company_name}'s business environment from the {len(articles)} candidates below.
+Select UP TO {target_cap} most important articles about fundamental market drivers affecting {company_name}'s financial performance from the {len(articles)} candidates below. You may select fewer if remaining articles are clearly irrelevant.
 
 **ARTICLES:**
 {json.dumps(items, separators=(',', ':'))}"""
@@ -9607,7 +9613,7 @@ Select the {target_cap} most important industry articles about {sector} that aff
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",  # Updated for prompt caching
+            "anthropic-version": "2023-06-01",  # Prompt caching support
             "content-type": "application/json"
         }
 
@@ -9627,22 +9633,22 @@ Select the {target_cap} most important industry articles about {sector} that aff
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
             async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
                 if response.status != 200:
-                    LOG.error(f"Claude industry triage error {response.status}")
+                    LOG.error(f"Claude fundamental driver triage error {response.status}")
                     return []
 
                 result = await response.json()
 
                 # Track cost
                 usage = result.get("usage", {})
-                calculate_claude_api_cost(usage, "triage_industry")
+                calculate_claude_api_cost(usage, "triage_fundamental_drivers")
 
                 # Log cache performance
                 cache_creation = usage.get("cache_creation_input_tokens", 0)
                 cache_read = usage.get("cache_read_input_tokens", 0)
                 if cache_creation > 0:
-                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (industry triage)")
+                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (fundamental driver triage)")
                 elif cache_read > 0:
-                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (industry triage) - 90% savings!")
+                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (fundamental driver triage) - 90% savings!")
 
                 content = result.get("content", [{}])[0].get("text", "")
 
@@ -9677,14 +9683,14 @@ Select the {target_cap} most important industry articles about {sector} that aff
 
                 # Cap at target after sorting (LOW-priority articles cut first)
                 if len(selected_articles) > target_cap:
-                    LOG.warning(f"Claude industry selected {len(selected_articles)}, capping to top {target_cap} by priority")
+                    LOG.warning(f"Claude fundamental driver triage selected {len(selected_articles)}, capping to top {target_cap} by priority")
                     selected_articles = selected_articles[:target_cap]
 
-                LOG.info(f"Claude triage industry: selected {len(selected_articles)}/{len(articles)} articles")
+                LOG.info(f"Claude triage fundamental drivers: selected {len(selected_articles)}/{len(articles)} articles")
                 return selected_articles
 
     except Exception as e:
-        LOG.error(f"Claude industry triage failed: {str(e)}")
+        LOG.error(f"Claude fundamental driver triage failed: {str(e)}")
         return []
 
 async def triage_competitor_articles_claude(articles: List[Dict], ticker: str, competitor_name: str, competitor_ticker: str) -> List[Dict]:
@@ -11378,7 +11384,7 @@ feed_manager = FeedManager()
 # ===== TICKER METADATA GENERATION WITH CLAUDE PRIMARY, OPENAI FALLBACK =====
 
 def generate_claude_ticker_metadata(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
-    """Generate ticker metadata using Claude API"""
+    """Generate ticker metadata using Claude API with optimized fundamental driver keywords"""
     if not ANTHROPIC_API_KEY:
         LOG.warning("Missing ANTHROPIC_API_KEY; skipping Claude metadata generation")
         return None
@@ -11386,21 +11392,19 @@ def generate_claude_ticker_metadata(ticker: str, company_name: str = None, secto
     if company_name is None:
         company_name = ticker
 
-    # Build context info
+    # Build context info for user prompt
     context_info = f"Company: {company_name} ({ticker})"
     if sector:
         context_info += f", Sector: {sector}"
     if industry:
         context_info += f", Industry: {industry}"
 
-    # Comprehensive prompt for Claude
-    prompt = f"""You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
-
-{context_info}
+    # Comprehensive system prompt for Claude (CACHED - optimized for prompt caching)
+    system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
 - All competitors must be currently publicly traded with valid ticker symbols
-- Industry keywords must be SPECIFIC enough to avoid false positives in news filtering, but not so narrow that they miss material news
+- Fundamental driver keywords must capture QUANTIFIABLE market forces that move the stock (NOT industry labels)
 - Benchmarks must be sector-specific, not generic market indices
 - All information must be factually accurate
 - The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
@@ -11414,78 +11418,107 @@ TICKER FORMAT REQUIREMENTS:
 - Other international: Use appropriate Yahoo Finance suffix
 - Special classes: Use dash format (BRK-A, BRK-B, TECK-A.TO)
 
-INDUSTRY KEYWORDS (exactly 3):
-- Must be SPECIFIC to the company's primary business
-- Use proper capitalization like "Digital Advertising"
-- Avoid generic terms like "Technology", "Healthcare", "Energy", "Oil", "Services"
-- Use compound terms or specific product categories
-- Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
+FUNDAMENTAL DRIVER KEYWORDS (exactly 3):
+⭐ **CRITICAL SHIFT:** Generate keywords that track EXTERNAL market forces that drive stock performance, NOT industry category labels.
 
-KEYWORD EFFECTIVENESS TEST:
-Before finalizing keywords, ask yourself:
-1. JOURNALIST TEST: Would Bloomberg/Reuters use this exact phrase in a headline?
-   ✅ "Cloud Infrastructure" → YES (common in headlines)
-   ❌ "Infrastructure as a Service" → NO (too technical)
+**What Are Fundamental Drivers?**
+Quantifiable metrics that:
+1. Directly impact revenue, costs, or margins (10%+ move affects earnings)
+2. Are reported with numbers in news (prices, volumes, percentages)
+3. Change frequently (weekly/monthly volatility)
+4. Are EXTERNAL to company (market-level, not company-specific)
+5. Traders actively monitor (Bloomberg KPIs, analyst models)
 
-2. FALSE POSITIVE TEST: Will this keyword pull irrelevant articles?
-   ✅ "Smartphone Manufacturing" → LOW false positives (specific)
-   ❌ "Mobile Technology" → HIGH false positives (too broad)
+**Scope Rules:**
+❌ NO company-specific: "Apple iPhone sales", "Tesla deliveries", "Exxon production"
+✅ YES category-specific: "smartphone sales", "electric vehicle sales", "oil production"
+✅ YES niche-specific if dominates: "CPAP device sales" (ResMed), "GLP-1 drug demand" (Novo)
+❌ NO industry labels: "Technology Sector", "Copper Mining", "Banking Industry"
+✅ YES market drivers: "cloud infrastructure spending", "copper price", "interest rates"
 
-3. COVERAGE TEST: Will this catch ALL material news about this business?
-   ✅ "Electric Vehicle Production" → Catches Tesla factory news, sales, recalls
-   ❌ "Battery Technology" → Misses most Tesla news (too narrow)
+**Format:**
+- Use 2-4 words maximum
+- Lowercase for commodities/rates: "copper price", "jet fuel prices", "bitcoin price"
+- Title Case for categories: "Enterprise Software Spending", "Auto Sales"
+- Phrase as journalist writes headlines: "bitcoin price" not "BTC/USD"
 
-BALANCE: Specific enough to avoid noise, broad enough to catch material developments
+**Framework by Business Type:**
 
-INDUSTRY KEYWORDS - SECTOR EXAMPLES:
+COMMODITY PRODUCERS (mining, oil, agriculture):
+• Copper miners (FCX): ["copper price", "China construction", "copper supply"]
+• Oil producers (XOM): ["oil price", "refining margins", "natural gas price"]
+• Gold miners (NEM): ["gold price", "mining costs", "central bank policy"]
 
-Technology/Software:
-✅ "Cloud Infrastructure" (for AWS/Azure/GCP)
-✅ "Enterprise Software" (for Salesforce/SAP)
-✅ "Semiconductor Manufacturing" (for TSMC/Intel)
-❌ "Technology", "Software", "Computers"
+CONSUMER (retail, restaurants, apparel):
+• Apparel (NKE): ["athletic footwear sales", "China consumer spending", "cotton prices"]
+• Restaurants (MCD): ["restaurant traffic", "food commodity prices", "labor costs"]
+• E-commerce (AMZN): ["e-commerce sales", "consumer spending", "shipping costs"]
 
-Financials:
-✅ "Investment Banking" (for Goldman/Morgan Stanley)
-✅ "Wealth Management" (for Morgan Stanley/UBS)
-✅ "Commercial Real Estate Lending" (for regional banks)
-❌ "Banking", "Financial Services", "Loans"
+TRANSPORTATION (airlines, rails, trucking):
+• Airlines (DAL): ["airline passenger demand", "jet fuel prices", "airline capacity"]
+• Rail (UNP): ["rail freight volumes", "diesel fuel prices", "intermodal shipping"]
 
-Energy:
-✅ "Upstream Oil Production" (for Exxon/Chevron/ConocoPhillips)
-✅ "Liquefied Natural Gas" (for Cheniere)
-✅ "Renewable Energy Development" (for NextEra)
-❌ "Oil", "Energy", "Petroleum"
+TECHNOLOGY (hardware, software, semiconductors):
+• Cloud (MSFT): ["cloud infrastructure spending", "enterprise IT budgets", "AI infrastructure demand"]
+• Semiconductors (NVDA): ["GPU demand", "AI chip demand", "data center spending"]
+• Internet (META): ["digital advertising spending", "social media ad rates", "e-commerce advertising"]
 
-Utilities:
-✅ "Electric Power Generation" (for Southern Company/Duke)
-✅ "Natural Gas Distribution" (for Sempra/Atmos)
-✅ "Renewable Energy Transition" (for utilities adding wind/solar)
-❌ "Utilities", "Power", "Energy"
+FINANCIALS (banks, asset managers, insurance):
+• Banks (JPM): ["interest rates", "loan demand", "credit quality"]
+• Asset managers (BLK): ["asset management flows", "equity market performance", "ETF flows"]
+• Insurance (PGR): ["insurance premiums", "catastrophic weather events", "investment yields"]
 
-Real Estate:
-✅ "Industrial REITs" (for Prologis/Duke Realty)
-✅ "Data Center REITs" (for Equinix/Digital Realty)
-✅ "Cell Tower Infrastructure" (for American Tower/Crown Castle)
-❌ "Real Estate", "REITs", "Property"
+UTILITIES (electric, gas, renewables):
+• Regulated (SO): ["electricity demand", "natural gas prices", "utility rate cases"]
+• Independent power (VST): ["power prices", "natural gas prices", "electricity demand"]
 
-Healthcare:
-✅ "Biologics Manufacturing" (for Amgen/Biogen)
-✅ "Pharmacy Benefits Management" (for CVS/Cigna)
-✅ "Medical Device Innovation" (for Medtronic/Boston Scientific)
-❌ "Healthcare", "Pharmaceuticals", "Medicine"
+HEALTHCARE (pharma, biotech, devices):
+• Pharma (PFE): ["drug pricing policy", "prescription volumes", "patent expiration"]
+• Devices (MDT): ["medical device sales", "cardiology procedures", "hospital capital spending"]
 
-Consumer/Retail:
-✅ "Quick Service Restaurants" (for McDonald's/Yum Brands)
-✅ "Athletic Footwear" (for Nike/Adidas)
-✅ "E-commerce Marketplace" (for Amazon/eBay)
-❌ "Restaurants", "Shoes", "Retail"
+REAL ESTATE (REITs):
+• Industrial (PLD): ["industrial real estate demand", "warehouse vacancy rates", "e-commerce logistics"]
+• Data centers (EQIX): ["data center demand", "cloud infrastructure spending", "AI data center requirements"]
 
-Industrials:
-✅ "Aerospace Manufacturing" (for Boeing/Lockheed)
-✅ "Industrial Automation" (for Rockwell/Emerson)
-✅ "Freight Transportation" (for UPS/FedEx)
-❌ "Manufacturing", "Industrial", "Logistics"
+INDUSTRIALS (aerospace, defense, automation):
+• Aerospace (BA): ["aircraft orders", "defense spending", "commercial aviation demand"]
+• Construction (CAT): ["construction activity", "equipment rental rates", "infrastructure spending"]
+
+**Special Cases:**
+
+DIVERSIFIED COMPANIES - Allocate by profit contribution:
+• Amazon (AWS 60% profit): ["cloud infrastructure spending", "e-commerce sales", "digital advertising spending"]
+• Alphabet (Ads 80%): ["digital advertising spending", "search advertising rates", "cloud infrastructure growth"]
+
+COMMODITY PROCESSORS - Focus on SPREADS not absolute prices:
+• Oil refiners (VLO): ["refining margins", "gasoline demand", "crude oil prices"]
+
+CYCLICALS - Lead with demand, then financing/inputs:
+• Homebuilders (DHI): ["housing starts", "mortgage rates", "lumber prices"]
+• Autos (GM): ["auto sales", "EV adoption", "semiconductor supply"]
+
+REGULATORY-DRIVEN - If >30% value from policy:
+• Pharma pricing risk: ["drug pricing policy", "prescription volumes", "biosimilar competition"]
+
+NICHE LEADERS - If >70% market share, allow category-specific:
+• ResMed: ["sleep apnea treatment", "CPAP reimbursement", "respiratory device sales"]
+
+**Validation (Score 0-10):**
+1. Headline Frequency: Daily (10), weekly (7-9), monthly (4-6), rare (0-3)
+2. Quantifiable: Always has figures (10), usually (7-9), sometimes (4-6), rarely (0-3)
+3. Stock Impact: 10% move = >10% EPS (10), 5-10% EPS (7-9), 2-5% EPS (4-6), <2% EPS (0-3)
+4. Trader Monitoring: Core KPI (10), important (7-9), secondary (4-6), ignored (0-3)
+
+Examples:
+✅ "copper price" (FCX): 40/40 excellent
+❌ "mining technology": 12/40 reject (use "copper supply")
+✅ "cloud infrastructure spending" (MSFT): 37/40 excellent
+
+**Common Mistakes:**
+❌ "Copper Mining" → ✅ "copper price"
+❌ "Apple iPhone sales" → ✅ "smartphone sales"
+❌ "Supply Chain" → ✅ "semiconductor supply"
+❌ "Battery Technology" → ✅ "electric vehicle sales"
 
 BUSINESS STRUCTURE GUIDANCE:
 
@@ -11578,17 +11611,31 @@ Return ONLY valid JSON in this exact format:
     "subsidiaries": "Subsidiary Name 1, Subsidiary Name 2, Subsidiary Name 3"
 }}"""
 
+    # User prompt with company-specific context
+    user_prompt = f"""Generate metadata for this company:
+
+{context_info}
+
+Return ONLY valid JSON with no additional commentary."""
+
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2023-06-01",  # Prompt caching support
             "content-type": "application/json"
         }
 
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
-            "messages": [{"role": "user", "content": prompt}]
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}  # Cache the system prompt
+                }
+            ],
+            "messages": [{"role": "user", "content": user_prompt}]
         }
 
         response = requests.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=(10, 180))
@@ -11702,78 +11749,107 @@ TICKER FORMAT REQUIREMENTS:
 - Other international: Use appropriate Yahoo Finance suffix
 - Special classes: Use dash format (BRK-A, BRK-B, TECK-A.TO)
 
-INDUSTRY KEYWORDS (exactly 3):
-- Must be SPECIFIC to the company's primary business
-- Return proper capitalization format like "Digital Advertising"
-- Avoid generic terms like "Technology", "Healthcare", "Energy", "Oil", "Services"
-- Use compound terms or specific product categories
-- Examples: "Smartphone Manufacturing" not "Technology", "Upstream Oil Production" not "Oil"
+FUNDAMENTAL DRIVER KEYWORDS (exactly 3):
+⭐ **CRITICAL SHIFT:** Generate keywords that track EXTERNAL market forces that drive stock performance, NOT industry category labels.
 
-KEYWORD EFFECTIVENESS TEST:
-Before finalizing keywords, ask yourself:
-1. JOURNALIST TEST: Would Bloomberg/Reuters use this exact phrase in a headline?
-   ✅ "Cloud Infrastructure" → YES (common in headlines)
-   ❌ "Infrastructure as a Service" → NO (too technical)
+**What Are Fundamental Drivers?**
+Quantifiable metrics that:
+1. Directly impact revenue, costs, or margins (10%+ move affects earnings)
+2. Are reported with numbers in news (prices, volumes, percentages)
+3. Change frequently (weekly/monthly volatility)
+4. Are EXTERNAL to company (market-level, not company-specific)
+5. Traders actively monitor (Bloomberg KPIs, analyst models)
 
-2. FALSE POSITIVE TEST: Will this keyword pull irrelevant articles?
-   ✅ "Smartphone Manufacturing" → LOW false positives (specific)
-   ❌ "Mobile Technology" → HIGH false positives (too broad)
+**Scope Rules:**
+❌ NO company-specific: "Apple iPhone sales", "Tesla deliveries", "Exxon production"
+✅ YES category-specific: "smartphone sales", "electric vehicle sales", "oil production"
+✅ YES niche-specific if dominates: "CPAP device sales" (ResMed), "GLP-1 drug demand" (Novo)
+❌ NO industry labels: "Technology Sector", "Copper Mining", "Banking Industry"
+✅ YES market drivers: "cloud infrastructure spending", "copper price", "interest rates"
 
-3. COVERAGE TEST: Will this catch ALL material news about this business?
-   ✅ "Electric Vehicle Production" → Catches Tesla factory news, sales, recalls
-   ❌ "Battery Technology" → Misses most Tesla news (too narrow)
+**Format:**
+- Use 2-4 words maximum
+- Lowercase for commodities/rates: "copper price", "jet fuel prices", "bitcoin price"
+- Title Case for categories: "Enterprise Software Spending", "Auto Sales"
+- Phrase as journalist writes headlines: "bitcoin price" not "BTC/USD"
 
-BALANCE: Specific enough to avoid noise, broad enough to catch material developments
+**Framework by Business Type:**
 
-INDUSTRY KEYWORDS - SECTOR EXAMPLES:
+COMMODITY PRODUCERS (mining, oil, agriculture):
+• Copper miners (FCX): ["copper price", "China construction", "copper supply"]
+• Oil producers (XOM): ["oil price", "refining margins", "natural gas price"]
+• Gold miners (NEM): ["gold price", "mining costs", "central bank policy"]
 
-Technology/Software:
-✅ "Cloud Infrastructure" (for AWS/Azure/GCP)
-✅ "Enterprise Software" (for Salesforce/SAP)
-✅ "Semiconductor Manufacturing" (for TSMC/Intel)
-❌ "Technology", "Software", "Computers"
+CONSUMER (retail, restaurants, apparel):
+• Apparel (NKE): ["athletic footwear sales", "China consumer spending", "cotton prices"]
+• Restaurants (MCD): ["restaurant traffic", "food commodity prices", "labor costs"]
+• E-commerce (AMZN): ["e-commerce sales", "consumer spending", "shipping costs"]
 
-Financials:
-✅ "Investment Banking" (for Goldman/Morgan Stanley)
-✅ "Wealth Management" (for Morgan Stanley/UBS)
-✅ "Commercial Real Estate Lending" (for regional banks)
-❌ "Banking", "Financial Services", "Loans"
+TRANSPORTATION (airlines, rails, trucking):
+• Airlines (DAL): ["airline passenger demand", "jet fuel prices", "airline capacity"]
+• Rail (UNP): ["rail freight volumes", "diesel fuel prices", "intermodal shipping"]
 
-Energy:
-✅ "Upstream Oil Production" (for Exxon/Chevron/ConocoPhillips)
-✅ "Liquefied Natural Gas" (for Cheniere)
-✅ "Renewable Energy Development" (for NextEra)
-❌ "Oil", "Energy", "Petroleum"
+TECHNOLOGY (hardware, software, semiconductors):
+• Cloud (MSFT): ["cloud infrastructure spending", "enterprise IT budgets", "AI infrastructure demand"]
+• Semiconductors (NVDA): ["GPU demand", "AI chip demand", "data center spending"]
+• Internet (META): ["digital advertising spending", "social media ad rates", "e-commerce advertising"]
 
-Utilities:
-✅ "Electric Power Generation" (for Southern Company/Duke)
-✅ "Natural Gas Distribution" (for Sempra/Atmos)
-✅ "Renewable Energy Transition" (for utilities adding wind/solar)
-❌ "Utilities", "Power", "Energy"
+FINANCIALS (banks, asset managers, insurance):
+• Banks (JPM): ["interest rates", "loan demand", "credit quality"]
+• Asset managers (BLK): ["asset management flows", "equity market performance", "ETF flows"]
+• Insurance (PGR): ["insurance premiums", "catastrophic weather events", "investment yields"]
 
-Real Estate:
-✅ "Industrial REITs" (for Prologis/Duke Realty)
-✅ "Data Center REITs" (for Equinix/Digital Realty)
-✅ "Cell Tower Infrastructure" (for American Tower/Crown Castle)
-❌ "Real Estate", "REITs", "Property"
+UTILITIES (electric, gas, renewables):
+• Regulated (SO): ["electricity demand", "natural gas prices", "utility rate cases"]
+• Independent power (VST): ["power prices", "natural gas prices", "electricity demand"]
 
-Healthcare:
-✅ "Biologics Manufacturing" (for Amgen/Biogen)
-✅ "Pharmacy Benefits Management" (for CVS/Cigna)
-✅ "Medical Device Innovation" (for Medtronic/Boston Scientific)
-❌ "Healthcare", "Pharmaceuticals", "Medicine"
+HEALTHCARE (pharma, biotech, devices):
+• Pharma (PFE): ["drug pricing policy", "prescription volumes", "patent expiration"]
+• Devices (MDT): ["medical device sales", "cardiology procedures", "hospital capital spending"]
 
-Consumer/Retail:
-✅ "Quick Service Restaurants" (for McDonald's/Yum Brands)
-✅ "Athletic Footwear" (for Nike/Adidas)
-✅ "E-commerce Marketplace" (for Amazon/eBay)
-❌ "Restaurants", "Shoes", "Retail"
+REAL ESTATE (REITs):
+• Industrial (PLD): ["industrial real estate demand", "warehouse vacancy rates", "e-commerce logistics"]
+• Data centers (EQIX): ["data center demand", "cloud infrastructure spending", "AI data center requirements"]
 
-Industrials:
-✅ "Aerospace Manufacturing" (for Boeing/Lockheed)
-✅ "Industrial Automation" (for Rockwell/Emerson)
-✅ "Freight Transportation" (for UPS/FedEx)
-❌ "Manufacturing", "Industrial", "Logistics"
+INDUSTRIALS (aerospace, defense, automation):
+• Aerospace (BA): ["aircraft orders", "defense spending", "commercial aviation demand"]
+• Construction (CAT): ["construction activity", "equipment rental rates", "infrastructure spending"]
+
+**Special Cases:**
+
+DIVERSIFIED COMPANIES - Allocate by profit contribution:
+• Amazon (AWS 60% profit): ["cloud infrastructure spending", "e-commerce sales", "digital advertising spending"]
+• Alphabet (Ads 80%): ["digital advertising spending", "search advertising rates", "cloud infrastructure growth"]
+
+COMMODITY PROCESSORS - Focus on SPREADS not absolute prices:
+• Oil refiners (VLO): ["refining margins", "gasoline demand", "crude oil prices"]
+
+CYCLICALS - Lead with demand, then financing/inputs:
+• Homebuilders (DHI): ["housing starts", "mortgage rates", "lumber prices"]
+• Autos (GM): ["auto sales", "EV adoption", "semiconductor supply"]
+
+REGULATORY-DRIVEN - If >30% value from policy:
+• Pharma pricing risk: ["drug pricing policy", "prescription volumes", "biosimilar competition"]
+
+NICHE LEADERS - If >70% market share, allow category-specific:
+• ResMed: ["sleep apnea treatment", "CPAP reimbursement", "respiratory device sales"]
+
+**Validation (Score 0-10):**
+1. Headline Frequency: Daily (10), weekly (7-9), monthly (4-6), rare (0-3)
+2. Quantifiable: Always has figures (10), usually (7-9), sometimes (4-6), rarely (0-3)
+3. Stock Impact: 10% move = >10% EPS (10), 5-10% EPS (7-9), 2-5% EPS (4-6), <2% EPS (0-3)
+4. Trader Monitoring: Core KPI (10), important (7-9), secondary (4-6), ignored (0-3)
+
+Examples:
+✅ "copper price" (FCX): 40/40 excellent
+❌ "mining technology": 12/40 reject (use "copper supply")
+✅ "cloud infrastructure spending" (MSFT): 37/40 excellent
+
+**Common Mistakes:**
+❌ "Copper Mining" → ✅ "copper price"
+❌ "Apple iPhone sales" → ✅ "smartphone sales"
+❌ "Supply Chain" → ✅ "semiconductor supply"
+❌ "Battery Technology" → ✅ "electric vehicle sales"
 
 BUSINESS STRUCTURE GUIDANCE:
 
@@ -14567,15 +14643,15 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     html += build_section("🔴 Major Developments" if not strip_emojis else "Major Developments",
                          sections.get("major_developments", []), use_bullets=True, bold_labels=True)
     html += build_section("📊 Financial/Operational Performance" if not strip_emojis else "Financial/Operational Performance",
-                         sections.get("financial_operational", []), use_bullets=True, bold_labels=False)
+                         sections.get("financial_operational", []), use_bullets=True, bold_labels=True)
     html += build_section("⚠️ Risk Factors" if not strip_emojis else "Risk Factors",
                          sections.get("risk_factors", []), use_bullets=True, bold_labels=True)
     html += build_section("📈 Wall Street Sentiment" if not strip_emojis else "Wall Street Sentiment",
-                         sections.get("wall_street", []), use_bullets=True, bold_labels=False)
+                         sections.get("wall_street", []), use_bullets=True, bold_labels=True)
     html += build_section("⚡ Competitive/Industry Dynamics" if not strip_emojis else "Competitive/Industry Dynamics",
                          sections.get("competitive_industry", []), use_bullets=True, bold_labels=True)
     html += build_section("📅 Upcoming Catalysts" if not strip_emojis else "Upcoming Catalysts",
-                         sections.get("upcoming_catalysts", []), use_bullets=True, bold_labels=False)
+                         sections.get("upcoming_catalysts", []), use_bullets=True, bold_labels=True)
 
     # Investment Implications parent header (only if has content)
     if any([parsed_investment['bull_case'], parsed_investment['bear_case'],

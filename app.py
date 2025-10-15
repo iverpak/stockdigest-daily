@@ -20985,7 +20985,6 @@ async def regenerate_email_api(request: Request):
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
-                       a.description, a.content,
                        ta.category, ta.search_keyword, ta.competitor_ticker,
                        ta.relevance_score, ta.relevance_reason, ta.flagged,
                        ta.summary as ai_summary

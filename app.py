@@ -16801,6 +16801,25 @@ async def startup_event():
         LOG.error("   Check database status and retry")
         LOG.error("=" * 80)
         raise  # Re-raise to fail FastAPI startup
+
+    # Initialize database schema ONCE at startup (CRITICAL: Prevents lock contention during concurrent processing)
+    LOG.info("=" * 80)
+    LOG.info("🔄 Ensuring database schema is initialized...")
+    try:
+        ensure_schema()
+        LOG.info("✅ Database schema verified/created successfully")
+        LOG.info("=" * 80)
+    except Exception as e:
+        LOG.error("=" * 80)
+        LOG.error(f"💥 STARTUP FAILED: Cannot initialize database schema")
+        LOG.error(f"   Error: {e}")
+        LOG.error(f"   Stacktrace: {traceback.format_exc()}")
+        LOG.error("=" * 80)
+        LOG.error("🚨 APPLICATION WILL NOT START - Schema required for operation")
+        LOG.error("   Check database permissions and retry")
+        LOG.error("=" * 80)
+        raise  # Re-raise to fail FastAPI startup
+
     LOG.info("🔧 Initializing job queue system...")
 
     # Reclaim orphaned jobs from previous worker instance (handles Render restarts)
@@ -17948,7 +17967,8 @@ async def admin_migrate_feeds(request: Request):
 
     try:
         # Step 1: Ensure schema is up to date (includes feeds + ticker_feeds tables)
-        ensure_schema()
+        # NOTE: Schema initialization removed from here (was causing lock timeouts during concurrent processing)
+        # Schema is now initialized once at application startup in startup_event() - see line ~16805
 
         # Step 2: Verify new architecture exists
         with db() as conn, conn.cursor() as cur:
@@ -18146,8 +18166,9 @@ async def cron_ingest(
     
     start_time = time.time()
     require_admin(request)
-    ensure_schema()
-    
+    # NOTE: Schema initialization removed from here (was causing lock timeouts during concurrent processing)
+    # Schema is now initialized once at application startup in startup_event() - see line ~16805
+
     # Initialize memory monitoring with error handling
     try:
         memory_monitor.start_monitoring()
@@ -18699,7 +18720,8 @@ async def cron_digest(
 ):
     """Generate and send email digest with content scraping data and AI summaries"""
     require_admin(request)
-    ensure_schema()
+    # NOTE: Schema initialization removed from here (was causing lock timeouts during concurrent processing)
+    # Schema is now initialized once at application startup in startup_event() - see line ~16805
 
     try:
         LOG.info(f"=== DIGEST GENERATION STARTING ===")
@@ -19073,8 +19095,9 @@ async def get_stats(
     async with TICKER_PROCESSING_LOCK:
         """Get system statistics"""
         require_admin(request)
-        ensure_schema()
-        
+        # NOTE: Schema initialization removed from here (was causing lock timeouts during concurrent processing)
+        # Schema is now initialized once at application startup in startup_event() - see line ~16805
+
         with db() as conn, conn.cursor() as cur:
             # Build queries based on tickers
             if tickers:
@@ -22455,7 +22478,8 @@ def cli_run(request: Request, body: CLIRequest):
     
     if body.action in ["ingest", "both"]:
         # Initialize feeds using NEW ARCHITECTURE V2
-        ensure_schema()
+        # NOTE: Schema initialization removed from here (was causing lock timeouts during concurrent processing)
+        # Schema is now initialized once at application startup in startup_event() - see line ~16805
         for ticker in body.tickers:
             metadata = ticker_manager.get_or_create_metadata(ticker)
             create_feeds_for_ticker_new_architecture(ticker, metadata)
@@ -22642,7 +22666,7 @@ def process_hourly_alerts():
                 with db() as conn, conn.cursor() as cur:
                     cur.execute("""
                         SELECT DISTINCT ON (a.id)
-                            a.id, a.title, a.resolved_url, a.domain, a.published_at,
+                            a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
                             ta.ticker, ta.category, ta.search_keyword, ta.competitor_ticker
                         FROM articles a
                         JOIN ticker_articles ta ON a.id = ta.article_id

@@ -585,6 +585,7 @@
                                 ${ticker.status === 'ready' ? `<button class="btn btn-warning btn-sm" onclick="cancelTicker('${ticker.ticker}')">❌ Cancel</button>` : ''}
                                 ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
                                 ${ticker.status !== 'processing' ? `
+                                    <button class="btn btn-warning btn-sm" onclick="regenerateEmail('${ticker.ticker}')" title="Regenerate executive summary and Email #3">♻️ Regenerate Email #3</button>
                                     <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail1('${ticker.ticker}')">
                                         <span class="btn-wrapped-line1">QA:</span>
                                         <span class="btn-wrapped-line2">Article</span>
@@ -999,6 +1000,39 @@
                 }
             } catch (error) {
                 alert('Failed to send ticker');
+            }
+        }
+
+        async function regenerateEmail(ticker) {
+            if (!confirm(`♻️ Regenerate Email #3 for ${ticker}?\n\nThis will:\n• Re-generate executive summary using existing articles\n• Update Email #3 HTML in queue\n• Send preview to your inbox\n\nEstimated time: 30-60 seconds\n\nContinue?`)) return;
+
+            try {
+                // Show loading state
+                const btn = event.target;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '⏳ Processing...';
+                btn.disabled = true;
+
+                const response = await fetch('/api/regenerate-email', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, ticker})
+                });
+
+                const result = await response.json();
+
+                // Restore button
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+
+                if (result.status === 'success') {
+                    alert(`✅ Email #3 regenerated for ${ticker}\n\n• ${result.article_count} articles analyzed\n• Preview sent to your inbox\n• Email queue updated\n\nRefresh the page to see updated content.`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to regenerate email: ' + error.message);
             }
         }
 

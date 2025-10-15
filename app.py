@@ -12852,7 +12852,7 @@ As you read the article stream, actively look for these patterns to create insig
    Example: Peer costs $29K/unit; {ticker} costs $56K/unit
 
 3. **Recovery Context** - Show distance from peak/trough when relevant
-   Example: "Recovered to $116K" → "Recovered to $116K (still 8% below $126K peak)"
+   Example: "Recovered to $116K (still 8% below $126K peak)"
 
 4. **Duration Signals** - Preserve time phrases showing temporary vs structural
    Example: "through 2027," "since 2021," "began 2022"
@@ -12860,22 +12860,29 @@ As you read the article stream, actively look for these patterns to create insig
 5. **Causal Chains** - Connect related events across articles
    Example: Fire Sept 16 → Premium spike Oct 6 → Production cuts Oct 13
 
-When 3+ articles cover same topic: Synthesize into one insight rather than separate bullets.
+6. **Sequential Data** - Show progression when multiple data points exist
+   Example: "Q1 revenue $10B → Q2 $11B (+10%) → Q3 $12.8B (+16%)"
 
----
+7. **Magnitude Context** - Scale numbers against relevant baselines if appropriate data points exist
+   Example: "$500M EBIT impact (8% of $6.5B annual guidance)"
 
-🔍 CONTRADICTION TAXONOMY:
+SYNTHESIS DECISION HIERARCHY:
 
-Actively identify and surface these contradiction types:
+When 2+ articles cover same topic, apply this decision tree:
 
-**Price/Sentiment vs. Supply Reality:**
-- Pattern: "Price rallied to $X; however, [expert/data] notes supply remains ample"
+1. **If contradiction exists** → Report separately to preserve contradiction (trumps all other rules)
+   Example: "Price rallied to $X; however, analyst notes supply remains ample"
 
-**Recovery Claims vs. Peak Context:**
-- Pattern: "Recovered to $X (still Y% below peak $Z)"
+2. **If dates >3 days apart AND materially different events** → Separate bullets
+   Example: Oct 8 guidance vs Oct 15 revised guidance = two separate announcements
 
-**Headline Narrative vs. Behavioral Data:**
-- Pattern: "Despite [headline event], [behavioral data] indicates [contrarian signal]"
+3. **If dates >3 days apart BUT same ongoing story** → Synthesize with date range
+   Example: "Investigation progressed: Initial filing Oct 8 → Discovery phase began Oct 12 → Hearing scheduled Nov 15" (Oct 8-15)
+
+DO NOT synthesize:
+- Different topics that happen to share a keyword
+- Events with materially different dates (>3 days apart)
+- Contradictory information (report separately to preserve the contradiction)
 
 ---
 
@@ -12892,16 +12899,6 @@ Compress or omit:
 ⚠ Mechanism explanations: HOW things work (state outcome only unless novel/material)
 ⚠ Repeated metrics: Same number across sections (state once with full context, reference elsewhere)
 ⚠ Generic commentary: "Expects growth" without specifics
-
----
-
-📊 COMPETITIVE BENCHMARKING GUIDELINES:
-
-When competitor growth trajectory exists:
-- Show full arc: "Competitor: $X current revenue → $Y projected (2027) at Z% margins"
-
-When multiple peer metrics exist:
-- Present comparatively: "Peer A costs $29K/unit; Peer B $31K/unit; {ticker} costs [disclosed/undisclosed]"
 
 ---
 
@@ -12926,11 +12923,23 @@ Include contradictions if present: "X rallied though expert notes Y"
 
 🔴 MAJOR DEVELOPMENTS (Only if material developments exist - 3-6 bullets max)
 
+SCOPE: Company-specific events, announcements, actions by {ticker}
+
+SECTION ASSIGNMENT RULE:
+Major Developments:
+✓ {ticker} is the primary ACTOR (company takes action)
+✓ {ticker} is the primary TARGET (regulatory action, lawsuit, analyst coverage)
+✓ {ticker}-specific announcements (M&A, earnings, products, contracts)
+
+BRIGHT-LINE TEST:
+Ask: "If I removed {ticker}'s name from this headline, would it still be news?"
+- NO → Major Developments (it's {ticker}-specific)
+- YES → Competitive Dynamics (it's industry-wide or competitor-specific)
+
 CRITICAL MATERIALITY RULES:
 - ALL flagged articles have already passed AI triage for materiality
 - Regulatory investigations, safety recalls, antitrust actions: ALWAYS include in Major Developments
 - M&A deals, earnings reports, product launches: ALWAYS include in Major Developments
-- Competitive/industry context: May include here OR in Competitive Dynamics section
 
 PRIORITIZATION:
 - Newest articles first when multiple cover same topic
@@ -12938,7 +12947,7 @@ PRIORITIZATION:
 - If articles span multiple days within lookback window, group by topic rather than forcing all into one section
 
 SYNTHESIS RULES:
-- If 3+ articles cover same development: Combine into ONE bullet with full context
+- If 2+ articles cover same development: Combine into ONE bullet with full context
 - If contradiction exists: Present as "[Development]; however, [contrarian signal]"
 - If causal chain exists: Connect temporally "[Event A] → [Impact B] → [Response C]"
 
@@ -12950,15 +12959,16 @@ Include:
 - {ticker} leadership: VP level and above
 - {ticker} regulatory: Investigations, litigation, approvals
 - {ticker} contracts: Dollar amounts or strategic significance
-- Competitor moves with direct {ticker} implications
 
-Format (use • bullet with TOPIC LABEL):
-• [Topic Label]: [Development with context, amounts, dates] (Oct 10)
+Format (use • bullet with TOPIC LABEL and sentiment tag):
+• Topic Label (sentiment - reason): [Development with context, amounts, dates] (Oct 10)
 
-Topic Label: 2-5 words describing the development (e.g., "AI acquisition", "Regulatory investigation", "India expansion")
+Topic Label: 2-5 words describing the development
+Sentiment options: bullish, bearish, neutral, mixed
+Reason: 2-4 word rationale (e.g., "capacity expansion", "execution risk", "information event")
 
 Example:
-✅ CORRECT: • AI acquisition announced: Purchased startup for $4.2B; transaction closes Q1 2026 pending regulatory approval (Oct 10)
+• Gas plant acquisitions (bullish - capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy; closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
@@ -12976,7 +12986,7 @@ Include:
 - Capex, debt, buybacks, dividends (amounts)
 - Stock performance with context
 
-Format (use • bullet):
+Format (use • bullet, NO sentiment tags):
 • [Metric]: [Value with context] [vs. comparison if provided] (Oct 10)
 
 Example:
@@ -12986,11 +12996,12 @@ Example:
 
 Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
 
-CRITICAL RULES:
+CRITICAL RULES - MAXIMUM 10-20% INFERENCE:
 - Report facts separately without connecting them
-- NO causal interpretation ("creates," "threatens," "forces")
-- NO competitive implications analysis ("validates," "demonstrates")
+- NO causal interpretation ("creates," "threatens," "forces," "validates," "demonstrates")
+- NO competitive implications analysis
 - List Company A facts; Company B facts; Regulatory facts separately
+- CAN duplicate from Major Developments or Competitive Dynamics BUT must add risk context (the "so what?")
 
 Include (report factually, no causal connection):
 - {ticker} operational developments: Production issues, supply chain disruptions, quality problems with specific metrics
@@ -12999,26 +13010,27 @@ Include (report factually, no causal connection):
 - Industry regulatory facts: New rules, tariffs, policy changes with specific terms
 - Insider transactions: C-suite buys/sells with amounts and dates
 
-Format (use • bullet with TOPIC LABEL):
-• [Topic Label]: [Company facts]; [Competitor facts]; [Regulatory facts] (Oct 10)
+Format (use • bullet with TOPIC LABEL, NO sentiment tags):
+• Topic Label: [Brief factual summary with cross-reference to detailed section]; [Why this is a risk] (Oct 10)
 
-Topic Label: 2-5 words describing the risk (e.g., "EU antitrust investigation", "Production disruption", "Insider selling")
+Topic Label: 2-5 words describing the risk
 
 Examples:
+✅ CORRECT: • Production capacity constraints: Novelis declared force majeure on automotive shipments; F-150 is Ford's most profitable vehicle and America's top-selling pickup; aluminum body panels critical to weight reduction strategy; Ford exploring alternatives but domestic aluminum supply limited (Oct 8-14)
 ✅ CORRECT: • EU antitrust investigation: Commission issued formal information request Oct 10 covering cloud division practices; potential fines €100M-€5B under DSA framework (Oct 10)
-✅ CORRECT: • Production disruption: Plant shutdown Oct 8-12 affecting 15,000 units; Q4 delivery guidance reduced to 285K-295K from 310K-320K (Oct 10)
+✅ CORRECT: • Cybertruck volume decline: Q3 2025 sales approximately 5,400 units; year-to-date through September 16,097 units (-38% vs. same period 2024) per Cox Automotive; competitor Ford F-150 Lightning sold over 10,000 units Q3, over 23,000 units through September (Oct 14)
 
 DO NOT write:
 ✗ "threatens {ticker} positioning"
 ✗ "creates competitive pressure"
 ✗ "forces {ticker} to respond"
-✗ "demonstrates operational leverage {ticker} lacks"
+✗ "validates strategy"
 
 📈 WALL STREET SENTIMENT (Only if analyst activity - 1-4 bullets max)
 
 Source: [COMPANY] articles only
 
-Format (use • bullet):
+Format (use • bullet, NO sentiment tags):
 • [Firm] [action] to [rating/target], [rationale if provided] (Oct 10)
 
 If 3+ analysts moved same direction:
@@ -13031,10 +13043,26 @@ Example:
 
 Source: [INDUSTRY] and [COMPETITOR] articles
 
-CRITICAL RULES:
+SCOPE: Competitor actions, industry trends, market dynamics, regulatory changes affecting sector
+
+SECTION ASSIGNMENT RULE:
+Competitive/Industry Dynamics:
+✓ Competitor is the primary ACTOR (competitor takes action)
+✓ Industry-wide events (regulations, market trends, sector metrics)
+✓ Market dynamics (pricing, capacity, production figures)
+
+BRIGHT-LINE TEST:
+Ask: "If I removed {ticker}'s name from this headline, would it still be news?"
+- YES → Competitive Dynamics (it's industry-wide or competitor-specific)
+- NO → Major Developments (it's {ticker}-specific)
+
+Default rule: If uncertain which section → Competitive Dynamics (not Major Developments)
+
+CRITICAL RULES - MAXIMUM 10-20% INFERENCE:
 - Report developments factually
 - NO analysis of impact on {ticker}
-- NO interpretive verbs ("validates," "threatens," "creates")
+- NO interpretive verbs ("validates," "threatens," "creates," "forces")
+- ZERO repetition with Major Developments (if unsure which section → default to Competitive Dynamics)
 
 SYNTHESIS OPPORTUNITIES:
 - When competitor metric + {ticker} metric both exist: Present comparatively
@@ -13046,9 +13074,6 @@ SYNTHESIS OPPORTUNITIES:
 - When industry trend + multiple data points: Synthesize
   Example: "Industry analysts project market growing X% through 2027; Competitor A announced $Y investment; Competitor B reported Z% growth"
 
-- When competitor trajectory exists: Show full arc
-  Example: "Competitor: $X current revenue → $Y projected (2027) at Z% margins"
-
 Include (report developments only):
 - Competitor M&A: Transaction details, amounts, companies involved
 - Industry regulation: New rules, effective dates, affected parties
@@ -13056,14 +13081,16 @@ Include (report developments only):
 - Market data: Pricing changes, capacity additions, production figures
 - Executive commentary: Direct quotes from earnings calls/statements
 
-Format (use • bullet with TOPIC LABEL):
-• [Topic Label]: [What happened]. [Additional facts] (Oct 10)
+Format (use • bullet with TOPIC LABEL and sentiment tag):
+• Topic Label (sentiment - reason): [What happened]. [Additional facts] (Oct 10)
 
-Topic Label: 2-5 words describing the development (e.g., "Competitor acquisition", "Tariff update", "Earnings report")
+Topic Label: 2-5 words describing the development
+Sentiment options: bullish, bearish, neutral, mixed
+Reason examples: "industry tailwind", "competitive threat", "sector development", "regulatory change"
 
 Examples:
-✅ CORRECT: • Competitor acquisition: Acquired startup for $2B; transaction adds 450 engineers and cloud management platform; closes Q4 2025 (Oct 10)
-✅ CORRECT: • Industry leader earnings: Reported Q3 revenue $47.5B (+22% YoY), operating margin 43% (+500 bps YoY); management guided Q4 revenue $49-51B (Oct 10)
+✅ CORRECT: • PJM capacity prices (bullish - industry tailwind): PJM Interconnection capacity prices rose 900% from 2024 to 2025 year-to-date following years of generally low and stable pricing; energy prices increased approximately 100% over same period; PJM warns of electrical capacity shortfalls as early as 2026-2027 (Oct 10)
+✅ CORRECT: • GM affordable EV offensive (bearish - competitive threat): 2027 Chevrolet Bolt launching Q1 2026 at $29,990 ($28,995 LT variant later); 65-kWh LFP battery delivers 255 miles range (highest under $30K); 150+ kW DC fast charging; native NACS port for Tesla Supercharger access (Oct 10)
 
 DO NOT write:
 ✗ "threatening {ticker}'s market share"
@@ -13087,82 +13114,50 @@ Example:
 
 🎯 INVESTMENT IMPLICATIONS (Always - adapt length to news volume)
 
-CRITICAL: Stay factual. Cite specific developments from today's news. Acceptable inference: 25-30% in Bull/Bear cases only.
+CRITICAL: Maximum 10-20% inference. Cite specific developments from today's news.
 
-CRITICAL: Write sub-headers exactly as shown with emojis: "📈 BULL CASE:", "📉 BEAR CASE:", "🔍 KEY VARIABLES TO MONITOR:"
+CRITICAL: Write sub-headers exactly as shown with emojis: "📈 UPSIDE SCENARIO:", "📉 DOWNSIDE SCENARIO:", "🔍 KEY VARIABLES TO MONITOR:"
 
 For Material News Days (1+ flagged articles):
 
-📈 BULL CASE:
+📈 UPSIDE SCENARIO:
 
-Format (use • bullet with TOPIC LABEL):
-• [Topic Label]: [Factual development from today with specific numbers/dates supporting upside]
+Format: Single paragraph, 3-4 sentences (~80-100 words)
+Reference items from above sections WITHOUT repeating specific numbers/details
+Maximum 10-20% inference - synthesize stated facts, don't speculate beyond logical extensions
 
-Topic Label: 2-5 words describing the bullish development (e.g., "Revenue growth", "Market expansion", "Cost reduction")
+Example structure:
+"[Development from Major Developments] positions company to [stated outcome]. [Financial metric from Financial Performance] demonstrates [factual trend]. [Competitive dynamic] supports [direct implication]. [Catalyst] will provide [stated visibility]."
 
-Example:
-✅ CORRECT: • AI acquisition announced: Purchased startup for $4.2B; transaction closes Q1 2026 and adds 600 AI engineers (Oct 10)
+DO NOT write:
+✗ Bullet points
+✗ Detailed repetition of numbers already stated above
+✗ Multi-step speculative cascades
+✗ "If X then Y then Z" conditionals
 
-Structure:
-• [Factual development from today with specific numbers/dates supporting upside]
-• [Factual development from today with specific numbers/dates supporting upside]
-• [Additional factual development if relevant]
-• Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
+📉 DOWNSIDE SCENARIO:
 
-📉 BEAR CASE:
+Format: Single paragraph, 3-4 sentences (~80-100 words)
+Reference items from above sections WITHOUT repeating specific numbers/details
+Maximum 10-20% inference - stick to stated risks and direct implications
 
-Format (use • bullet with TOPIC LABEL):
-• [Topic Label]: [Factual development from today with specific numbers/dates supporting downside]
-
-Topic Label: 2-5 words describing the bearish risk (e.g., "Regulatory investigation", "Revenue miss", "Margin pressure")
-
-Example:
-✅ CORRECT: • DOJ antitrust probe: Investigation announced targeting cloud practices; hearing scheduled Nov 15; potential remedies include behavioral constraints (Oct 10)
-
-Structure:
-• [Factual development from today with specific numbers/dates supporting downside]
-• [Factual development from today with specific numbers/dates supporting downside]
-• [Additional factual development if relevant]
-• Potential outcome: [Specific events/metrics from articles occurring; NOT forecasts of invented numbers]
+Example structure:
+"[Risk from Risk Factors] constrains [stated capability]. [Competitive threat from Competitive Dynamics] creates [direct pressure]. [Financial headwind] continues [stated trajectory]. [Catalyst] may reveal [stated concerns]."
 
 🔍 KEY VARIABLES TO MONITOR:
 
 Format (use • bullet with TOPIC LABEL):
-• [Topic Label]: [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
+• Topic Label: [Specific metric/event from articles] - Timeline: [Date/period from articles]
 
-Topic Label: 2-5 words describing the catalyst (e.g., "Earnings report", "FDA decision", "Contract renewal")
+Topic Label: 2-5 words describing the catalyst
+State variable and timeline ONLY - NO analysis of why it matters
 
-Example:
-✅ CORRECT: • Q4 earnings release: Revenue and margin guidance will clarify demand trajectory - Timeline: Feb 15, 2026
+Examples:
+✅ CORRECT: • Q3 earnings aluminum quantification: Actual EBIT impact vs Evercore $500M-$1B estimate range; alternative sourcing agreements announced; production recovery timeline and affected unit volumes - Timeline: October 21 earnings call
+✅ CORRECT: • Wheeler River permitting: Federal approval expected - Timeline: 2025-2026
 
-Structure:
-• [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
-• [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
-• [Specific metric/event from articles that will determine which scenario materializes] - Timeline: [Date/period from articles]
-
----
-
-OUTCOME STATEMENT RULES:
-
-Remove "if" conditionals. State outcomes directly using events from articles.
-
-✓ GOOD:
-"BVNK acquisition closes at reported $1.5-2.5B valuation range; x402 protocol maintains growth from current 38,000 monthly transactions (+90%)"
-
-✗ BAD:
-"If BVNK closes and x402 adoption accelerates as developers integrate protocol"
-
----
-
-KEY VARIABLES FORMAT:
-
-State variable and timeline ONLY. NO analysis of why it matters.
-
-✓ GOOD:
-"Wheeler River permitting and construction decision - Timeline: Federal approval expected 2025-2026"
-
-✗ BAD:
-"Wheeler River permitting - impacts ability to capture current pricing vs. extended development exposing to volatility"
+DO NOT write:
+✗ Analysis of why variable matters or how it impacts stock
 
 ---
 
@@ -13199,7 +13194,7 @@ BANNED INTERPRETIVE LANGUAGE:
 In Risk Factors, Competitive Dynamics, Financial Performance sections, NEVER use:
 ✗ validates, demonstrates, threatens, signals, suggests, indicates, implies
 ✗ requires, forces, necessitates, creates, provides, establishes
-✗ de-risks, enables, supports (except "factors supporting" in Bull/Bear)
+✗ de-risks, enables, supports (except in Upside/Downside Scenarios)
 ✗ limits, constrains, advantages, disadvantages, benefits, harms
 ✗ despite, while (contrasting), however, yet
 
@@ -13207,39 +13202,33 @@ Transform interpretive statements to factual:
 ✗ "Revenue fell 12% despite competitor growing 15%"
 ✓ "Revenue fell 12%; competitor revenue grew 15%"
 
-✗ "Cameco's profit creates resource advantage for expansion"
-✓ "Cameco generated $320.89M quarterly profit (+791% YoY); DNN reported $1.28M operating revenue"
-
 ---
 
 REDUNDANCY PREVENTION:
 
-If fact is detailed in one section, cross-reference in others:
-- Instead of repeating: "FSD investigation (see Major Developments) focuses on traffic light recognition"
-- Only repeat when adding NEW context
+CRITICAL RULE: Each fact appears in FULL DETAIL exactly once. Other sections reference it.
 
-DETAIL COMPRESSION:
-When 3+ articles cover same topic (e.g., price movement):
-1. State current level with context ONCE: "$10,775 (within 3% of ATH $11,104)"
-2. Add contrarian signal if exists: "though [expert quote]"
-3. Add supply/demand context: "[stakeholder] behavior at current levels"
-4. Reference in other sections rather than repeat full details
+If detailed in one section:
+✓ First mention: "Novelis fire destroyed hot mill Sept 16, eliminating 40% U.S. auto aluminum sheet capacity (350,000 metric tons annually); facility offline through Q1 2026; Evercore projects $500M-$1B EBIT impact"
+✓ Subsequent mentions: "Aluminum supply crisis (see Major Developments) intensifies" OR "Novelis disruption through Q1 2026"
+
+Only repeat when adding NEW context not previously stated.
 
 ---
 
 CRITICAL WRITING RULES:
 
 0. NO MARKDOWN - Section headers are emoji only (🔴, 📊, etc.)
-1. BULLET FORMAT - Use • character for ALL bulleted sections (Major Developments, Financial, Risk Factors, Wall Street, Competitive, Catalysts, Bull/Bear, Key Variables)
+1. BULLET FORMAT - Use • character for ALL bulleted sections
 
-   CRITICAL: EVERY point under 📈 BULL CASE, 📉 BEAR CASE, and 🔍 KEY VARIABLES TO MONITOR must start with • character
-   - NO paragraphs, NO plain text lines - only bullets
-   - Add blank line between 📈 BULL CASE and 📉 BEAR CASE, between 📉 BEAR CASE and 🔍 KEY VARIABLES
+   CRITICAL: EVERY point under 🔍 KEY VARIABLES TO MONITOR must start with • character
+   - 📈 UPSIDE SCENARIO and 📉 DOWNSIDE SCENARIO use PARAGRAPHS (not bullets)
+   - Add blank line between Upside and Downside, between Downside and Key Variables
 
 2. End bullets with dates - (Oct 10) or (Oct 9-10)
 3. NO source names in bullets - Exception: when figures conflict
 4. Newest first within sections
-5. Combine related facts - One story per bullet (synthesize 3+ articles on same topic)
+5. Combine related facts - One story per bullet (synthesize 2+ articles on same topic)
 6. Quantify everything - Exact figures ("12.7%", "$4.932B")
 7. Active voice - "Company launched X" not "X was launched"
 8. Use past tense for historical data - "reported," "achieved"
@@ -13287,8 +13276,8 @@ NEVER use:
 - "Take profits now"
 
 ALWAYS use:
-- "Bull case factors"
-- "Bear case factors"
+- "Upside scenario"
+- "Downside scenario"
 - "Potential outcome"
 - "Key variables"
 - "Next catalyst"
@@ -13298,11 +13287,11 @@ Frame as: Educational presentation of scenarios based on factual developments, n
 INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
 1. Reporting facts separately without connecting them interpretively
 2. Citing specific numbers, dates, and quotes from articles
-3. Avoiding causal language and competitive analysis
-4. Letting readers draw their own conclusions from presented facts
-5. Using synthesis patterns (contradictions, benchmarks, duration) to create insights without speculation
+3. Avoiding causal language and competitive analysis in factual sections
+4. Letting readers draw conclusions from presented facts
+5. Limiting inference to Upside/Downside Scenarios only
 
-Generate summary. Synthesize related articles. Surface contradictions. Benchmark competition. Contextualize trajectories. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets. Scale to content volume.
+Generate summary. Synthesize related articles. Surface contradictions. Benchmark competition. Contextualize trajectories. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets. Scale to content volume. Maximum 10-20% inference.
 
 ---
 
@@ -13313,15 +13302,15 @@ SECTION RULES:
 ⚠️ All other sections - Include ONLY if you have actual content
 
 CRITICAL: IF you include 🎯 INVESTMENT IMPLICATIONS section, you MUST include ALL THREE sub-headers with exact emojis:
-   📈 BULL CASE:
-   📉 BEAR CASE:
+   📈 UPSIDE SCENARIO:
+   📉 DOWNSIDE SCENARIO:
    🔍 KEY VARIABLES TO MONITOR:
 
 DO NOT write Investment Implications content without these three emoji sub-headers.
-DO NOT merge bull/bear/variables into unlabeled bullets - use the three distinct sub-headers above.
+DO NOT merge upside/downside/variables into unlabeled content - use the three distinct sub-headers above.
 
 SYNTHESIS QUALITY CHECK:
-✅ If 3+ articles on same topic: Combined into ONE insight (not separate bullets)
+✅ If 2+ articles on same topic: Combined into ONE insight (not separate bullets)
 ✅ If contradictions exist: Explicitly surfaced (not ignored)
 ✅ If competitor benchmarks available: Contextualized comparatively (not listed separately)
 ✅ If recovery/growth mentioned: Distance from peak/trough shown
@@ -20944,17 +20933,18 @@ async def rerun_ticker_api(request: Request):
 @APP.post("/api/regenerate-email")
 async def regenerate_email_api(request: Request):
     """
-    Regenerate Email #3 for a ticker using existing articles and summaries.
+    Regenerate Email #3 for a ticker using the SAME articles from the original run.
 
     This endpoint:
-    1. Fetches flagged articles from today
-    2. Regenerates executive summary using Claude AI
-    3. Saves new summary to database
-    4. Generates new Email #3 HTML
-    5. Updates email_queue
-    6. Sends preview to admin
+    1. Fetches original article IDs from executive_summaries table
+    2. Fetches those exact articles with AI summaries
+    3. Regenerates executive summary using Claude AI
+    4. Saves new summary to database
+    5. Generates new Email #3 HTML
+    6. Updates email_queue
+    7. Sends preview to admin
 
-    Separate implementation - does NOT modify existing codebase structure.
+    Key: Uses article IDs as source of truth (not date filters).
     """
     body = await request.json()
     token = body.get('token')
@@ -20981,9 +20971,29 @@ async def regenerate_email_api(request: Request):
         if not config:
             return {"status": "error", "message": f"No config found for {ticker}"}
 
-        # Step 2: Fetch flagged articles from target date
-        # NOTE: Articles with ta.ai_summary IS NOT NULL are the "flagged" articles from original run
-        # (Only flagged articles get scraped and have AI summaries generated)
+        # Step 2: Fetch original article IDs from executive_summaries table
+        # This is the source of truth - tells us exactly which articles were used in the original run
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT article_ids
+                FROM executive_summaries
+                WHERE ticker = %s AND summary_date = %s
+                ORDER BY generated_at DESC LIMIT 1
+            """, (ticker, target_date))
+
+            summary_row = cur.fetchone()
+
+        if not summary_row or not summary_row['article_ids']:
+            return {
+                "status": "error",
+                "message": f"No original article IDs found for {ticker} on {target_date}. Run full processing first."
+            }
+
+        # Parse JSON to get list of article IDs
+        original_article_ids = json.loads(summary_row['article_ids'])
+        LOG.info(f"[{ticker}] Using {len(original_article_ids)} article IDs from original run")
+
+        # Step 3: Fetch those exact articles (by ID, not by date)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
@@ -20993,23 +21003,26 @@ async def regenerate_email_api(request: Request):
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.ticker = %s
+                AND a.id = ANY(%s)
                 AND ta.ai_summary IS NOT NULL
-                AND DATE(a.published_at AT TIME ZONE 'America/Toronto') = %s
                 AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                 ORDER BY a.published_at DESC
-            """, (ticker, target_date))
+            """, (ticker, original_article_ids))
 
             articles = cur.fetchall()
 
         if not articles:
             return {
                 "status": "error",
-                "message": f"No flagged articles found for {ticker} on {target_date}"
+                "message": f"No articles found with IDs from original run. Data may have been deleted."
             }
 
-        LOG.info(f"[{ticker}] Found {len(articles)} flagged articles")
+        if len(articles) != len(original_article_ids):
+            LOG.warning(f"[{ticker}] Expected {len(original_article_ids)} articles, found {len(articles)}")
 
-        # Step 3: Group articles by category for executive summary generation
+        LOG.info(f"[{ticker}] Found {len(articles)} flagged articles with AI summaries")
+
+        # Step 4: Group articles by category for executive summary generation
         categories = {"company": [], "industry": [], "competitor": []}
         flagged_article_ids = []
 
@@ -21019,7 +21032,7 @@ async def regenerate_email_api(request: Request):
                 categories[category].append(dict(article))
             flagged_article_ids.append(article['id'])
 
-        # Step 4: Regenerate executive summary using Claude
+        # Step 5: Regenerate executive summary using Claude
         LOG.info(f"[{ticker}] Regenerating executive summary with {len(flagged_article_ids)} articles")
 
         summary_text = generate_claude_executive_summary(ticker, categories, config)
@@ -21035,14 +21048,12 @@ async def regenerate_email_api(request: Request):
                 "message": "Failed to generate executive summary (both Claude and OpenAI failed)"
             }
 
-        # Step 5: Save executive summary to database
+        # Step 6: Save executive summary to database
         company_count = len(categories['company'])
         industry_count = len(categories['industry'])
         competitor_count = len(categories['competitor'])
 
-        ai_provider = "claude" if summary_text else "openai"  # This won't work as intended - keeping for consistency
-        # Actually we know it's claude if generate_claude_executive_summary worked
-        ai_provider = "claude"
+        ai_provider = "claude"  # Primary provider (fallback to OpenAI happens above)
 
         save_executive_summary(
             ticker=ticker,
@@ -21056,12 +21067,18 @@ async def regenerate_email_api(request: Request):
 
         LOG.info(f"✅ [{ticker}] Executive summary saved")
 
-        # Step 6: Generate new Email #3 HTML
-        # Calculate hours to ensure cutoff is BEFORE target_date midnight (captures ALL articles from target_date)
-        days_since_target = (datetime.now().date() - target_date).days
-        hours = (days_since_target + 1) * 24  # Ensures cutoff is before target_date start
-        LOG.info(f"[{ticker}] Calculated hours={hours} to include all articles from {target_date}")
+        # Step 7: Calculate lookback hours from actual article date range (for display text only)
+        hours = 168  # Default 7 days
+        if articles:
+            published_dates = [a['published_at'] for a in articles if a['published_at']]
+            if published_dates:
+                oldest = min(published_dates)
+                newest = max(published_dates)
+                hours_range = (newest - oldest).total_seconds() / 3600
+                hours = int(hours_range) + 24  # Add 1-day buffer
+                LOG.info(f"[{ticker}] Calculated hours={hours} from article range ({oldest.date()} to {newest.date()})")
 
+        # Step 8: Generate new Email #3 HTML
         email_data = generate_email_html_core(
             ticker=ticker,
             hours=hours,
@@ -21072,7 +21089,7 @@ async def regenerate_email_api(request: Request):
         if not email_data:
             return {"status": "error", "message": "Failed to generate Email #3 HTML"}
 
-        # Step 7: Update email_queue with new HTML
+        # Step 9: Update email_queue with new HTML
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 UPDATE email_queue
@@ -21100,10 +21117,9 @@ async def regenerate_email_api(request: Request):
 
         LOG.info(f"✅ [{ticker}] Email queue updated")
 
-        # Step 8: Send preview to admin
+        # Step 10: Send preview to admin
         admin_email = os.getenv("ADMIN_EMAIL")
         if admin_email:
-            # Use production subject (same as original email)
             preview_subject = email_data['subject']
             preview_html = email_data['html']
 

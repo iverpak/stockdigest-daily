@@ -14591,16 +14591,16 @@ def parse_investment_implications_subsections(content: List[str]) -> Dict[str, a
     {
         'is_quiet_day': bool,
         'quiet_day_text': str (if quiet day),
-        'bull_case': [...bullets...],
-        'bear_case': [...bullets...],
+        'upside_scenario': [...paragraphs...],
+        'downside_scenario': [...paragraphs...],
         'key_variables': [...bullets...]
     }
     """
     result = {
         'is_quiet_day': False,
         'quiet_day_text': '',
-        'bull_case': [],
-        'bear_case': [],
+        'upside_scenario': [],
+        'downside_scenario': [],
         'key_variables': []
     }
 
@@ -14625,22 +14625,30 @@ def parse_investment_implications_subsections(content: List[str]) -> Dict[str, a
             continue
 
         # Check for sub-section headers (with or without emojis)
-        # Support both "BULL CASE" and "📈 BULL CASE"
-        if 'BULL CASE' in line:
-            current_subsection = 'bull_case'
+        # Support BOTH old and new terminology for backward compatibility
+        if 'UPSIDE SCENARIO' in line or 'BULL CASE' in line:
+            current_subsection = 'upside_scenario'
             continue
-        elif 'BEAR CASE' in line:
-            current_subsection = 'bear_case'
+        elif 'DOWNSIDE SCENARIO' in line or 'BEAR CASE' in line:
+            current_subsection = 'downside_scenario'
             continue
         elif 'KEY VARIABLES TO MONITOR' in line:
             current_subsection = 'key_variables'
             continue
 
-        # Extract bullet content
-        if current_subsection and (line.startswith('•') or line.startswith('-')):
-            bullet_text = line.lstrip('•- ').strip()
-            if bullet_text:
-                result[current_subsection].append(bullet_text)
+        # Extract content based on subsection type
+        if current_subsection:
+            # Upside/Downside are PARAGRAPHS (capture all lines, not just bullets)
+            if current_subsection in ['upside_scenario', 'downside_scenario']:
+                # Avoid re-capturing section headers (lines starting with emoji markers)
+                if not any(line.startswith(marker) for marker in ['📈', '📉', '🔍', '📌', '🔴', '📊', '⚠️', '📅', '⚡', '🎯']):
+                    result[current_subsection].append(line)
+            # Key Variables are BULLETS
+            elif current_subsection == 'key_variables':
+                if line.startswith('•') or line.startswith('-'):
+                    bullet_text = line.lstrip('•- ').strip()
+                    if bullet_text:
+                        result[current_subsection].append(bullet_text)
 
     return result
 
@@ -14795,16 +14803,18 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                          sections.get("upcoming_catalysts", []), use_bullets=True, bold_labels=True)
 
     # Investment Implications parent header (only if has content)
-    if any([parsed_investment['bull_case'], parsed_investment['bear_case'],
+    if any([parsed_investment['upside_scenario'], parsed_investment['downside_scenario'],
             parsed_investment['key_variables']]):
         html += build_section("🎯 Investment Implications" if not strip_emojis else "Investment Implications",
                              [], use_bullets=False, bold_labels=False)  # Empty content, just header
 
-    # Investment Implications sub-sections as top-level sections (bullet format)
-    html += build_section("Bull Case" if strip_emojis else "📈 Bull Case",
-                         parsed_investment['bull_case'], use_bullets=True, bold_labels=True)
-    html += build_section("Bear Case" if strip_emojis else "📉 Bear Case",
-                         parsed_investment['bear_case'], use_bullets=True, bold_labels=True)
+    # Investment Implications sub-sections as top-level sections
+    # Upside/Downside are PARAGRAPHS (use_bullets=False, bold_labels=False)
+    # Key Variables are BULLETS (use_bullets=True, bold_labels=True)
+    html += build_section("Upside Scenario" if strip_emojis else "📈 Upside Scenario",
+                         parsed_investment['upside_scenario'], use_bullets=False, bold_labels=False)
+    html += build_section("Downside Scenario" if strip_emojis else "📉 Downside Scenario",
+                         parsed_investment['downside_scenario'], use_bullets=False, bold_labels=False)
     html += build_section("Key Variables to Monitor" if strip_emojis else "🔍 Key Variables to Monitor",
                          parsed_investment['key_variables'], use_bullets=True, bold_labels=True)
 

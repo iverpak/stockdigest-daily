@@ -782,9 +782,9 @@ def get_ticker_ingestion_stats(ticker: str) -> dict:
             "industry_ingested_by_keyword": {},
             "competitor_ingested_by_keyword": {},
             "limits": {
-                "company": 50,
-                "industry_per_keyword": 25,
-                "competitor_per_keyword": 25
+                "company": 100,
+                "industry_per_keyword": 50,
+                "competitor_per_keyword": 50
             }
         }
     return ticker_ingestion_stats[ticker]
@@ -795,9 +795,9 @@ ingestion_stats = {
     "industry_ingested_by_keyword": {},
     "competitor_ingested_by_keyword": {},
     "limits": {
-        "company": 50,
-        "industry_per_keyword": 25,
-        "competitor_per_keyword": 25
+        "company": 100,
+        "industry_per_keyword": 50,
+        "competitor_per_keyword": 50
     }
 }
 

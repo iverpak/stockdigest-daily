@@ -48,6 +48,7 @@ python app.py commit    # 6:30 AM - Daily GitHub CSV commit (triggers deployment
 python app.py process   # 7:00 AM - Process all active beta users
 python app.py send      # 8:30 AM - Auto-send emails to users
 python app.py export    # 11:59 PM - Backup beta users to CSV
+python app.py alerts    # Hourly (9 AM - 10 PM EST) - Real-time article alerts (NEW - Oct 2025)
 ```
 
 **Key Features:**
@@ -62,7 +63,7 @@ python app.py export    # 11:59 PM - Backup beta users to CSV
 **Admin Dashboard:**
 - `/admin` - Stats overview and navigation (4 cards: Users, Queue, Settings, Test)
 - `/admin/users` - Beta user approval interface with bulk selection (Oct 2025)
-- `/admin/queue` - Email queue management with 8 smart buttons and real-time counts (Oct 2025)
+- `/admin/queue` - Email queue management with 8 smart buttons + ♻️ Regenerate Email #3 button per ticker (Oct 2025)
 - `/admin/settings` - System configuration: Lookback window + GitHub CSV backup (Oct 2025)
 - `/admin/test` - Web-based test runner (replaces PowerShell setup_job_queue.ps1) (Oct 2025)
 
@@ -260,6 +261,7 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 **Email Queue Management (Oct 2025):**
 - **`POST /api/generate-user-reports`**: Generate reports for selected users (bulk processing)
 - **`POST /api/generate-all-reports`**: Generate reports for all active users (= `python app.py process`)
+- **`POST /api/regenerate-email`**: Regenerate Email #3 using existing articles (fixes bad summaries without reprocessing)
 - **`POST /api/cancel-ready-emails`**: Cancel ready emails to prevent 8:30am auto-send (tracks previous_status)
 - **`POST /api/undo-cancel-ready-emails`**: Smart restore cancelled emails to previous status
 - **`POST /api/cancel-in-progress-runs`**: Cancel all ticker processing jobs (stops current runs)
@@ -1056,6 +1058,96 @@ Total for 4 tickers: ~30 minutes (4x faster!)
 POLYGON_API_KEY=your_api_key_here  # Get free key at polygon.io
 ```
 
+## Hourly Alerts System (NEW - October 2025)
+
+**Purpose:** Real-time article delivery to beta users throughout the trading day.
+
+### Overview
+
+Lightweight, fast article alerting system that sends cumulative emails every hour from 9 AM - 10 PM EST.
+
+**Key Characteristics:**
+- ✅ No AI triage, no scraping, no analysis = fast processing (~2-5 min/hour)
+- ✅ Cumulative sending (each email shows ALL articles from midnight to current hour)
+- ✅ Stores in existing `articles` and `ticker_articles` tables
+- ✅ 7 AM daily workflow automatically finds these articles (zero duplicate work!)
+- ✅ One email per user with all 3 tickers jumbled together
+- ✅ Sorted newest to oldest across all tickers
+
+### Architecture
+
+**Schedule:** Hourly cron job (9 AM - 10 PM EST = 14 emails per day)
+
+**Processing Flow:**
+```
+1. Check time (9 AM - 10 PM EST) → Exit if outside window
+2. Load active beta users from database
+3. Deduplicate tickers across all users
+4. For each unique ticker:
+   - Parse RSS feeds (11 feeds per ticker)
+   - Resolve Google News URLs (3-tier: Advanced API → HTTP → ScrapFly)
+   - Filter spam domains (exclude Tier 4 only)
+   - Store in articles table (ON CONFLICT skips duplicates)
+   - Link to ticker in ticker_articles (flagged=FALSE)
+5. For each user:
+   - Query cumulative articles (midnight to now) for their 3 tickers
+   - Generate HTML email using Jinja2 template
+   - Send with unique unsubscribe token
+   - BCC admin
+```
+
+**Email Format:**
+- Subject: `📰 Hourly Alerts: JPM, AAPL, TSLA (47 articles) - 3:00 PM`
+- Template: `templates/email_hourly_alert.html`
+- Content:
+  - `[JPM - Company]` ticker badge before each article
+  - ★ Star for quality domains (WSJ, Bloomberg, Reuters, etc.)
+  - PAYWALL badge (red, inline after title)
+  - Domain name • Date • Time (EST)
+  - Newest to oldest, jumbled across tickers
+
+**Cron Setup (Render):**
+```
+Name: Hourly Alerts
+Schedule: 0 * * * *
+Command: python app.py alerts
+```
+
+### Database Integration
+
+**Articles Storage:**
+- Inserts into existing `articles` table with `ON CONFLICT (url_hash) DO NOTHING`
+- Links to `ticker_articles` with `flagged=FALSE` (not triaged)
+- 7 AM daily workflow finds these articles automatically
+- No duplicate URL resolutions = cost savings (~$0.88/day offset)
+
+**Cost Impact:**
+- Resolution: ~10 URLs/hour × 14 hours = ~140 resolutions/day × $0.008 = **$1.12/day**
+- Offset: 7 AM workflow skips ~110 duplicates/day = **-$0.88/day**
+- **Net cost: ~$0.24/day = $7/month**
+
+### Functions
+
+**Core Processing:**
+- `process_hourly_alerts()` - Line 22479 (Main orchestrator, checks time window)
+- `insert_article_minimal()` - Line 22760 (Minimal insertion, no scraping)
+- `link_article_to_ticker_minimal()` - Line 22790 (Link with flagged=FALSE)
+
+**CLI Handler:**
+- `python app.py alerts` - Line 22837
+
+**Template:**
+- `templates/email_hourly_alert.html` - Jinja2 template with ticker badges
+
+### Features
+
+✅ **Cumulative Display** - Users see full day's articles in each email
+✅ **No Tracking Table** - Simple timestamp queries
+✅ **Zero Duplicate Work** - Articles reused by daily workflow
+✅ **Fast Processing** - No AI = ~2-5 min per hourly run
+✅ **Same Unsubscribe** - Reuses existing token system
+✅ **Quality/Paywall Badges** - Visual indicators preserved
+
 ## Key Function Locations
 
 **3-Email System:**
@@ -1075,6 +1167,19 @@ POLYGON_API_KEY=your_api_key_here  # Get free key at polygon.io
 - `generate_unsubscribe_token(email)` - Line 13055 (Generate cryptographic token)
 - `get_or_create_unsubscribe_token(email)` - Line 13085 (Get existing or create new token)
 - `/unsubscribe` endpoint handler - Line 12981 (Token validation + unsubscribe processing)
+
+**Regenerate Email #3 (NEW - Oct 2025):**
+- `POST /api/regenerate-email` - Line 20921 (Backend endpoint for regenerating Email #3)
+  - Fetches existing flagged articles from today
+  - Regenerates executive summary using Claude/OpenAI
+  - Updates email_queue with new HTML
+  - Sends preview to admin
+
+**Hourly Alerts System (NEW - Oct 2025):**
+- `process_hourly_alerts()` - Line 22479 (Main orchestrator, runs 9 AM - 10 PM EST)
+- `insert_article_minimal()` - Line 22760 (Lightweight article insertion)
+- `link_article_to_ticker_minimal()` - Line 22790 (Link articles without AI scoring)
+- `templates/email_hourly_alert.html` - Cumulative alert email template
 
 **Job Queue System:**
 - `process_digest_phase()` - Line 11626 (Main digest phase orchestrator)

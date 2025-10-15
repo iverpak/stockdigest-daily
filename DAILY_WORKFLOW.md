@@ -1,9 +1,10 @@
 # StockDigest Daily Workflow System
 
-**Version:** 1.0
+**Version:** 1.1
 **Created:** October 8, 2025
+**Last Updated:** October 15, 2025
 **Status:** Production Ready
-**Purpose:** Automated daily email delivery to beta users with admin review queue
+**Purpose:** Automated daily email delivery to beta users with admin review queue + real-time hourly alerts
 
 ---
 
@@ -14,12 +15,13 @@
 3. [Database Schema](#database-schema)
 4. [Admin Dashboard](#admin-dashboard)
 5. [Daily Timeline](#daily-timeline)
-6. [API Endpoints](#api-endpoints)
-7. [Core Functions](#core-functions)
-8. [Safety Systems](#safety-systems)
-9. [Cron Jobs Setup](#cron-jobs-setup)
-10. [Testing Guide](#testing-guide)
-11. [Troubleshooting](#troubleshooting)
+6. [Hourly Alerts System](#hourly-alerts-system) ⭐ **NEW**
+7. [API Endpoints](#api-endpoints)
+8. [Core Functions](#core-functions)
+9. [Safety Systems](#safety-systems)
+10. [Cron Jobs Setup](#cron-jobs-setup)
+11. [Testing Guide](#testing-guide)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -31,6 +33,7 @@ The Daily Workflow System automates the process of:
 3. Processing tickers (RSS feeds → AI triage → Email generation)
 4. Queuing emails for admin review
 5. Auto-sending emails at 8:30 AM (or manual send)
+6. **NEW:** Sending real-time hourly alerts (9 AM - 10 PM EST)
 
 ### Key Features
 
@@ -41,6 +44,8 @@ The Daily Workflow System automates the process of:
 ✅ **Server Restart Recovery** - Automatically handles crashed jobs
 ✅ **Heartbeat Monitoring** - Detects stalled processing
 ✅ **Manual Override** - Admin can send early, re-run, or cancel anytime
+✅ **Regenerate Email #3** - Fix bad summaries without reprocessing entire workflow ⭐ **NEW**
+✅ **Hourly Alerts** - Real-time article delivery throughout trading day (9 AM - 10 PM EST) ⭐ **NEW**
 
 ---
 
@@ -424,6 +429,181 @@ AND is_production = TRUE
 
 ---
 
+## Hourly Alerts System
+
+**NEW: October 15, 2025** - Real-time article alerts delivered hourly throughout the trading day.
+
+### Overview
+
+Lightweight article alerting system that sends cumulative emails every hour from 9 AM - 10 PM EST.
+
+**Key Differences from Daily Workflow:**
+- ❌ No AI triage, no scraping, no analysis
+- ❌ No executive summaries
+- ✅ Just title + URL + basic metadata
+- ✅ Cumulative (each email shows ALL articles from midnight to current hour)
+- ✅ Fast processing (~2-5 min per hourly run)
+- ✅ Stores in same database tables (reused by 7 AM workflow)
+
+### Schedule
+
+**Frequency:** Every hour (14 emails per day)
+**Time Window:** 9 AM - 10 PM EST
+**Auto-Exit:** Outside time window, function exits immediately
+
+**Cron Setup:**
+```
+Name: Hourly Alerts
+Schedule: 0 * * * *  (every hour)
+Command: python app.py alerts
+```
+
+### Processing Flow
+
+```
+1. Check Time
+   ↓
+   9 AM - 10 PM EST? → No → Exit
+   ↓ Yes
+2. Load Active Beta Users (status='active')
+   ↓
+3. Deduplicate Tickers Across All Users
+   ↓
+4. For Each Unique Ticker:
+   - Parse RSS feeds (11 feeds per ticker)
+   - Resolve Google News URLs (3-tier fallback)
+   - Filter spam domains (Tier 4 excluded)
+   - Store in articles table (ON CONFLICT skips duplicates)
+   - Link to ticker_articles (flagged=FALSE)
+   ↓
+5. For Each User:
+   - Query cumulative articles (midnight → now) for their 3 tickers
+   - Generate HTML email from template
+   - Send with unique unsubscribe token
+   - BCC admin
+```
+
+### Email Format
+
+**Subject:** `📰 Hourly Alerts: JPM, AAPL, TSLA (47 articles) - 3:00 PM`
+
+**Template:** `templates/email_hourly_alert.html`
+
+**Content Structure:**
+- Header with current time
+- Summary box (tickers, total count, time range)
+- Article list (jumbled across all 3 tickers):
+  - `[JPM - Company]` ticker badge
+  - ★ Star for quality domains (WSJ, Bloomberg, Reuters, etc.)
+  - Hyperlinked article title
+  - `PAYWALL` badge (red, inline after title)
+  - Domain name • Date • Time (EST)
+- Sorted: Newest to oldest
+- Footer with next alert time + unsubscribe link
+
+**Example:**
+```
+[JPM - Company] ★ JPMorgan Beats Q3 Earnings Estimates PAYWALL
+Wall Street Journal • Oct 14 • 3:42 PM EST
+
+[AAPL - Industry] Tech Stocks Rally on Fed Comments
+Reuters • Oct 14 • 2:15 PM EST
+
+[TSLA - Competitor] Ford Announces EV Price Cuts
+CNBC • Oct 14 • 1:08 PM EST
+```
+
+### Database Integration
+
+**Articles Storage:**
+```sql
+-- Hourly alerts insert into existing tables
+INSERT INTO articles (...) ON CONFLICT (url_hash) DO NOTHING
+INSERT INTO ticker_articles (...) WHERE flagged = FALSE
+
+-- 7 AM daily workflow finds these articles
+SELECT * FROM articles WHERE published_at >= cutoff
+-- Skips duplicates via ON CONFLICT
+-- Result: Zero duplicate URL resolutions!
+```
+
+**Benefits:**
+- ✅ Articles stored once, reused by daily workflow
+- ✅ No duplicate URL resolutions (~$0.88/day cost savings)
+- ✅ 7 AM workflow has more complete article history
+- ✅ No new tables needed
+
+### Cost Analysis
+
+**Resolution Costs:**
+- New articles: ~10 URLs/hour × 14 hours = 140 URLs/day
+- Cost: 140 × $0.008 = $1.12/day = **$33/month**
+
+**Offset from Daily Workflow:**
+- 7 AM workflow skips ~110 duplicates/day
+- Savings: 110 × $0.008 = $0.88/day = **$26/month**
+
+**Net Impact:**
+- **$7/month additional cost**
+- 14 real-time emails per day for users
+- Better article coverage for daily workflow
+
+### Cumulative vs Incremental
+
+**Why Cumulative?**
+- Users don't need to check old emails
+- Easier to catch up if they missed morning alerts
+- Simple query logic (no tracking table needed)
+
+**Email Sizes:**
+- 9 AM: ~15 articles (overnight + morning)
+- 12 PM: ~35 articles (full morning)
+- 3 PM: ~50 articles (most of day)
+- 7 PM: ~70 articles (full trading day)
+- 10 PM: ~90 articles (complete day)
+
+### Functions
+
+**Core Processing:**
+- `process_hourly_alerts()` - Line 22479 (Main orchestrator)
+- `insert_article_minimal()` - Line 22760 (Minimal insertion, no scraping)
+- `link_article_to_ticker_minimal()` - Line 22790 (Link with flagged=FALSE)
+
+**CLI Handler:**
+- `python app.py alerts` - Line 22837
+
+**Template:**
+- `templates/email_hourly_alert.html` - Jinja2 template
+
+### Testing
+
+**Manual Test (Any Time):**
+```bash
+# Temporarily comment out time check at line 22500
+python app.py alerts
+```
+
+**Production Test:**
+Wait for next hour between 9 AM - 10 PM EST after setting up cron.
+
+**What to Check:**
+1. Logs: `📰 Starting hourly alerts processing at X:XX PM EST`
+2. Database: `SELECT COUNT(*) FROM articles WHERE created_at > NOW() - INTERVAL '1 hour'`
+3. Email: Check inbox for `📰 Hourly Alerts: [TICKERS] (X articles) - X:00 PM`
+4. Admin BCC: Verify you received BCC copy
+
+### Features
+
+✅ **14 Emails Per Day** - 9 AM through 10 PM EST
+✅ **Cumulative Display** - See full day's articles in each email
+✅ **Zero Duplicate Work** - Articles reused by 7 AM daily workflow
+✅ **Fast Processing** - No AI analysis = 2-5 min per run
+✅ **Same Unsubscribe** - Reuses existing token system
+✅ **Quality Indicators** - ★ and PAYWALL badges preserved
+✅ **Jumbled Tickers** - All 3 tickers in one email, sorted by time
+
+---
+
 ## API Endpoints
 
 ### Authentication
@@ -567,6 +747,51 @@ Send all ready emails immediately.
 - BCCs admin on all sends
 - Marks as sent (status='sent', sent_at=NOW())
 - Can be called multiple times (only sends unsent emails)
+
+#### `POST /api/regenerate-email`
+
+⭐ **NEW** - Regenerate Email #3 for a ticker using existing articles (fixes bad summaries without reprocessing).
+
+**Request:**
+```json
+{
+  "token": "YOUR_ADMIN_TOKEN",
+  "ticker": "AAPL",
+  "date": "2025-10-14"  // optional, defaults to today
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Email #3 regenerated for AAPL",
+  "ticker": "AAPL",
+  "article_count": 25,
+  "preview_sent": true,
+  "date": "2025-10-14"
+}
+```
+
+**Behavior:**
+1. Fetches flagged articles from database (for specified date)
+2. Regenerates executive summary using Claude API (with OpenAI fallback)
+3. Saves new summary to `executive_summaries` table (overwrites existing)
+4. Generates full Email #3 HTML using `generate_email_html_core()`
+5. Updates `email_queue` table with new HTML
+6. Sends preview email to admin
+
+**Use Cases:**
+- Executive summary quality issues (hallucinations, formatting problems)
+- Want to test different AI prompt changes
+- Need to regenerate after article corrections
+- Don't want to re-run entire 30-minute processing workflow
+
+**Frontend:**
+- Click ♻️ **"Regenerate Email #3"** button in `/admin/queue`
+- Confirmation dialog with estimated time (30-60 seconds)
+- Loading state during processing
+- Success notification with preview confirmation
 
 #### `POST /api/emergency-stop`
 

@@ -22543,42 +22543,6 @@ def parse_rss_feed_fast(feed_url: str, feed_name: str) -> List[Dict]:
         return []
 
 
-def extract_domain_from_url(url: str) -> str:
-    """
-    Extract and normalize domain from URL.
-    Returns normalized domain string or empty string if invalid.
-    """
-    try:
-        if not url:
-            return ""
-
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-
-        if not domain:
-            return ""
-
-        # Use existing normalization function
-        return normalize_domain(domain)
-
-    except Exception as e:
-        LOG.debug(f"Error extracting domain from URL '{url}': {e}")
-        return ""
-
-
-def is_tier4_spam_domain(domain: str) -> bool:
-    """
-    Check if domain is in the spam list (Tier 4).
-    Returns True if domain should be filtered out.
-    """
-    if not domain:
-        return False
-
-    # Use existing SPAM_DOMAINS set
-    domain_lower = domain.lower()
-    return any(spam in domain_lower for spam in SPAM_DOMAINS)
-
-
 def process_hourly_alerts():
     """
     Process hourly stock alerts for active beta users.
@@ -22696,14 +22660,10 @@ def process_hourly_alerts():
                         resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
 
                         # If resolution failed completely, skip this article
+                        # Note: domain_resolver already filters spam domains (returns None for spam)
                         if not resolved_url or not domain:
-                            LOG.debug(f"[{ticker}] Skipping article - resolution failed: {url[:80]}")
+                            LOG.debug(f"[{ticker}] Skipping article - resolution failed or spam domain: {url[:80]}")
                             continue
-
-                        # Filter spam domains
-                        if is_tier4_spam_domain(domain):
-                            LOG.debug(f"[{ticker}] Skipping spam domain: {domain}")
-                            continue  # Skip spam
 
                         # Store article in existing articles table
                         try:

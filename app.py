@@ -22500,6 +22500,85 @@ def cli_run(request: Request, body: CLIRequest):
 # Hourly Alerts System (Separate Implementation)
 # ------------------------------------------------------------------------------
 
+def parse_rss_feed_fast(feed_url: str, feed_name: str) -> List[Dict]:
+    """
+    Fast RSS feed parser for hourly alerts (no AI, no scraping).
+    Returns list of articles with basic metadata.
+    """
+    try:
+        parsed = feedparser.parse(feed_url)
+
+        if not hasattr(parsed, 'entries') or not parsed.entries:
+            return []
+
+        articles = []
+        for entry in parsed.entries:
+            # Extract basic fields
+            url = getattr(entry, "link", None)
+            title = getattr(entry, "title", "Untitled")
+            description = getattr(entry, "summary", "") if hasattr(entry, "summary") else ""
+
+            # Parse publication date
+            pub_date = None
+            if hasattr(entry, "published_parsed") and entry.published_parsed:
+                try:
+                    pub_date = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc)
+                except:
+                    pub_date = datetime.now(timezone.utc)
+            else:
+                pub_date = datetime.now(timezone.utc)
+
+            if url and title:
+                articles.append({
+                    'url': url,
+                    'title': title,
+                    'description': description,
+                    'published_at': pub_date
+                })
+
+        return articles
+
+    except Exception as e:
+        LOG.error(f"Error parsing RSS feed '{feed_name}': {e}")
+        return []
+
+
+def extract_domain_from_url(url: str) -> str:
+    """
+    Extract and normalize domain from URL.
+    Returns normalized domain string or empty string if invalid.
+    """
+    try:
+        if not url:
+            return ""
+
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+
+        if not domain:
+            return ""
+
+        # Use existing normalization function
+        return normalize_domain(domain)
+
+    except Exception as e:
+        LOG.debug(f"Error extracting domain from URL '{url}': {e}")
+        return ""
+
+
+def is_tier4_spam_domain(domain: str) -> bool:
+    """
+    Check if domain is in the spam list (Tier 4).
+    Returns True if domain should be filtered out.
+    """
+    if not domain:
+        return False
+
+    # Use existing SPAM_DOMAINS set
+    domain_lower = domain.lower()
+    return any(spam in domain_lower for spam in SPAM_DOMAINS)
+
+
 def process_hourly_alerts():
     """
     Process hourly stock alerts for active beta users.

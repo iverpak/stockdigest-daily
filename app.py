@@ -20982,16 +20982,18 @@ async def regenerate_email_api(request: Request):
             return {"status": "error", "message": f"No config found for {ticker}"}
 
         # Step 2: Fetch flagged articles from target date
+        # NOTE: Articles with ta.summary IS NOT NULL are the "flagged" articles from original run
+        # (Only flagged articles get scraped and have AI summaries generated)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
                        ta.category, ta.search_keyword, ta.competitor_ticker,
-                       ta.relevance_score, ta.relevance_reason, ta.flagged,
+                       ta.relevance_score, ta.relevance_reason,
                        ta.summary as ai_summary
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.ticker = %s
-                AND ta.flagged = TRUE
+                AND ta.summary IS NOT NULL
                 AND DATE(a.published_at AT TIME ZONE 'America/Toronto') = %s
                 AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                 ORDER BY a.published_at DESC

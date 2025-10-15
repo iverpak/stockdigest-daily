@@ -22481,7 +22481,7 @@ def process_hourly_alerts():
     Process hourly stock alerts for active beta users.
 
     This function:
-    1. Checks if current time is 9 AM - 7 PM EST
+    1. Checks if current time is 9 AM - 10 PM EST
     2. Loads active beta users
     3. Deduplicates tickers across users
     4. Processes RSS feeds and stores articles in existing tables
@@ -22496,8 +22496,8 @@ def process_hourly_alerts():
     now_est = datetime.now(timezone.utc).astimezone(eastern)
     current_hour = now_est.hour
 
-    # Check if we're in the alert window (9 AM - 7 PM EST inclusive)
-    if not (9 <= current_hour <= 19):
+    # Check if we're in the alert window (9 AM - 10 PM EST inclusive)
+    if not (9 <= current_hour <= 22):
         LOG.info(f"⏸️ Hourly alerts: Outside alert window (current hour: {current_hour} EST). Exiting.")
         return
 
@@ -22710,8 +22710,8 @@ def process_hourly_alerts():
                 current_time_str = f"{now_est.strftime('%B %d, %Y')} • {hour_str} EST"
                 tickers_str = ', '.join(tickers)
 
-                # Next alert time (next hour, or "Tomorrow 9 AM" if after 7 PM)
-                next_alert_time = "Tomorrow 9:00 AM EST" if current_hour >= 19 else f"{(current_hour + 1) % 12 or 12}:00 {'PM' if current_hour >= 11 else 'AM'} EST"
+                # Next alert time (next hour, or "Tomorrow 9 AM" if after 10 PM)
+                next_alert_time = "Tomorrow 9:00 AM EST" if current_hour >= 22 else f"{(current_hour + 1) % 12 or 12}:00 {'PM' if current_hour >= 11 else 'AM'} EST"
 
                 # Get or create unsubscribe token
                 unsubscribe_token = get_or_create_unsubscribe_token(user_email)
@@ -22835,7 +22835,7 @@ if __name__ == "__main__":
                 print(f"❌ Error: {result['message']}")
                 sys.exit(1)
         elif func_name == "alerts":
-            # Hourly alerts (9 AM - 7 PM EST)
+            # Hourly alerts (9 AM - 10 PM EST)
             process_hourly_alerts()
         else:
             print(f"Unknown function: {func_name}")

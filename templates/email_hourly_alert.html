@@ -28,29 +28,26 @@
                         </td>
                     </tr>
 
-                    <!-- Content -->
+                    <!-- Compact Summary -->
                     <tr>
-                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
-
-                            <!-- Summary Box (matches Email #3 transition box) -->
-                            <div style="margin: 0 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    <strong>Your Tickers:</strong> {{ tickers_str }} • <strong>Total Articles:</strong> {{ total_articles }} • <strong>Time Range:</strong> Midnight - {{ hour_str }} EST
-                                </p>
+                        <td style="padding: 10px 20px; background-color: #f0f9ff; border-bottom: 1px solid #e5e7eb;">
+                            <div style="font-size: 11px; color: #1e40af; font-weight: 600;">
+                                {{ tickers_str }} • {{ total_articles }} articles • 12am-{{ hour_str }} EST
                             </div>
+                        </td>
+                    </tr>
 
-                            <!-- Divider (matches Email #3) -->
-                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
+                    <!-- Compact Articles -->
+                    <tr>
+                        <td class="content-padding" style="padding: 20px;">
 
-                            <!-- Articles List -->
                             {% if articles and articles|length > 0 %}
                             <div style="margin-bottom: 0;">
                                 {% for article in articles %}
-                                <div style="padding: 10px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                    <div style="margin-bottom: 4px;">
-                                        <span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-right: 6px;">{{ article.ticker }} - {{ article.category_display }}</span>
+                                <div style="padding: 6px 0; margin-bottom: 2px; border-bottom: 1px solid #e5e7eb;">
+                                    <div>
+                                        <span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{{ article.ticker }}</span><a href="{{ article.resolved_url }}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{% if article.is_quality %}<span style="color: #f59e0b;">★</span> {% endif %}{{ article.title }}{% if article.is_paywall %} <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>{% endif %}</a>
                                     </div>
-                                    <a href="{{ article.resolved_url }}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{% if article.is_quality %}<span style="color: #f59e0b;">★</span> {% endif %}{{ article.title }}{% if article.is_paywall %} <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>{% endif %}</a>
                                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{{ article.domain_name }} • {{ article.date_str }} • {{ article.time_str }} EST</div>
                                 </div>
                                 {% endfor %}

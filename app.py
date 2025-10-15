@@ -21057,7 +21057,10 @@ async def regenerate_email_api(request: Request):
         LOG.info(f"✅ [{ticker}] Executive summary saved")
 
         # Step 6: Generate new Email #3 HTML
-        hours = get_lookback_minutes() // 60 or 24  # Convert lookback window to hours
+        # Calculate hours to ensure cutoff is BEFORE target_date midnight (captures ALL articles from target_date)
+        days_since_target = (datetime.now().date() - target_date).days
+        hours = (days_since_target + 1) * 24  # Ensures cutoff is before target_date start
+        LOG.info(f"[{ticker}] Calculated hours={hours} to include all articles from {target_date}")
 
         email_data = generate_email_html_core(
             ticker=ticker,
@@ -21100,7 +21103,8 @@ async def regenerate_email_api(request: Request):
         # Step 8: Send preview to admin
         admin_email = os.getenv("ADMIN_EMAIL")
         if admin_email:
-            preview_subject = f"🔄 REGENERATED Email #3: {ticker} - {target_date}"
+            # Use production subject (same as original email)
+            preview_subject = email_data['subject']
             preview_html = email_data['html']
 
             send_success = send_email(

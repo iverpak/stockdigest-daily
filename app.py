@@ -22687,19 +22687,22 @@ def process_hourly_alerts():
                     LOG.info(f"[{ticker}] Feed '{feed['name']}' returned {len(articles)} articles")
 
                     for article in articles:
-                        # Resolve Google News URLs if needed
+                        # Resolve URLs using production domain resolver (handles Google News, Yahoo, direct URLs)
                         url = article.get('url', '')
-                        resolved_url = url
+                        title = article.get('title', 'Untitled')
 
-                        if 'news.google.com' in url:
-                            # Use 3-tier resolution
-                            resolved_url = resolve_google_news_url_with_scrapfly(url)
-                            if not resolved_url:
-                                resolved_url = url  # Fallback to original
+                        # Use synchronous domain resolver (matches production workflow)
+                        # Returns: (resolved_url, domain, source_url)
+                        resolved_url, domain, source_url = domain_resolver.resolve_url_and_domain(url, title)
+
+                        # If resolution failed completely, skip this article
+                        if not resolved_url or not domain:
+                            LOG.debug(f"[{ticker}] Skipping article - resolution failed: {url[:80]}")
+                            continue
 
                         # Filter spam domains
-                        domain = extract_domain_from_url(resolved_url)
                         if is_tier4_spam_domain(domain):
+                            LOG.debug(f"[{ticker}] Skipping spam domain: {domain}")
                             continue  # Skip spam
 
                         # Store article in existing articles table

@@ -6426,7 +6426,11 @@ Example endings:
 {title}
 
 **ARTICLE CONTENT:**
-{scraped_content[:CONTENT_CHAR_LIMIT]}"""
+{scraped_content[:CONTENT_CHAR_LIMIT]}
+
+🚨 CRITICAL REMINDER: You MUST end your response with quality score JSON on the absolute final line:
+{{"quality": X.X}}
+Omitting this will cause processing failure. This is MANDATORY for every article."""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
@@ -6610,7 +6614,11 @@ Example endings:
 {scraped_content[:CONTENT_CHAR_LIMIT]}
 
 **YOUR TASK:**
-Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}."""
+Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}.
+
+🚨 CRITICAL REMINDER: You MUST end your response with quality score JSON on the absolute final line:
+{{"quality": X.X}}
+Omitting this will cause processing failure. This is MANDATORY for every article."""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
@@ -7381,7 +7389,11 @@ Example endings:
 {scraped_content[:CONTENT_CHAR_LIMIT]}
 
 **YOUR TASK:**
-Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) that impact {target_company}'s financial performance. Focus on quantifiable data about external market forces driving revenue, costs, or margins."""
+Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) that impact {target_company}'s financial performance. Focus on quantifiable data about external market forces driving revenue, costs, or margins.
+
+🚨 CRITICAL REMINDER: You MUST end your response with quality score JSON on the absolute final line:
+{{"quality": X.X}}
+Omitting this will cause processing failure. This is MANDATORY for every article."""
 
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {

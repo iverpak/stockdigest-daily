@@ -13176,6 +13176,49 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 - [INDUSTRY - keyword] = Fundamental value drivers for {ticker} (prices, costs, demand, supply, regulation)
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
+🚨 INFERENCE FLAGGING - MANDATORY
+
+You will synthesize articles and make analytical connections - this is expected and necessary for quality intelligence. However, readers must distinguish your analysis from reported facts.
+
+WHAT IS INFERENCE:
+Any statement where you connect facts to implications that weren't explicitly stated in source articles.
+
+THE TEST:
+Before writing any sentence, ask: "Did an article explicitly state this conclusion, or am I deriving it by connecting/analyzing facts?"
+• Article explicitly stated it → Report as fact (no flag)
+• You derived it by analysis → Flag it: (inference: 2-7 word explanation)
+
+EXAMPLES:
+
+Facts (no flag needed):
+• "Q3 revenue $12.8B (+15% YoY)" - reported in article
+• "Company acquired 3 facilities for $2.1B" - stated in article
+• "CEO said 'expect strong demand through 2027'" - direct quote
+
+Inference (requires flag):
+• "positions company to capture demand growth" - YOU connected capacity to revenue
+  → (inference: connecting capacity addition to revenue opportunity)
+• "demonstrates competitive advantage" - YOU interpreted data as proof of advantage
+  → (inference: interpreting margin data as competitive strength)
+• "threatens market share" - YOU projected competitive impact
+  → (inference: projecting competitor action to market share risk)
+• "implies 18% margin" - YOU calculated this (article gave revenue + profit separately)
+  → (inference: margin calculation from separate revenue/profit figures)
+
+CRITICAL: Flag your analytical connections inline immediately after the statement.
+Format: (inference: 2-7 word explanation)
+
+This applies to ALL sections equally - Bottom Line, Risk Factors, Competitive Dynamics, Investment Implications all use the same standard.
+
+INFERENCE APPROACH:
+Target 10% analytical content maximum across the entire summary - prioritize factual reporting over interpretation. The majority of your summary (90%) should be direct reporting of facts from articles. When you do make analytical connections to create insights, flag every single one inline with (inference: explanation).
+
+Balance: Mostly facts (90%) + limited analysis (10%, all flagged)
+
+News volume naturally determines flag count: 1 routine article might need 2 flags; heavy synthesis of 20 articles might need 25 flags. Both are correct if all analytical connections are flagged.
+
+---
+
 🎯 INTELLIGENCE SYNTHESIS APPROACH:
 
 As you read the article stream, actively look for these patterns to create insights (not just lists):
@@ -13307,11 +13350,8 @@ DO NOT: (bullish, capacity utilization) - too vague, (bearish, investigation) - 
 CRITICAL: For competitor news, assess impact on TARGET COMPANY.
 Competitor problem: (bullish, competitor disadvantage) | Competitor success: (bearish, competitive threat)
 
-CRITICAL: (sentiment, reason) and (inference: explanation) are INDEPENDENT systems - use BOTH when applicable.
-Example: "may pressure Q4 (bullish, timing) (inference: demand pull-forward hypothesis)"
-
-Example:
-• Gas plant acquisitions (bullish, capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy; closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
+Example with proper inference flagging:
+• Gas plant acquisitions (bullish, capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy, positioning company to capture data center power demand growth (inference: connecting capacity additions to revenue opportunity); closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
@@ -13339,12 +13379,7 @@ Example:
 
 Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
 
-CRITICAL RULES - MAXIMUM 10-20% INFERENCE:
-- Report facts separately without connecting them
-- NO causal interpretation ("creates," "threatens," "forces," "validates," "demonstrates")
-- NO competitive implications analysis
-- List Company A facts; Company B facts; Regulatory facts separately
-- CAN duplicate from Major Developments or Competitive Dynamics BUT must add risk context (the "so what?")
+APPROACH: Report developments and explain why they constitute risks to {ticker}. Flag analytical assessments inline.
 
 Competitor disadvantage (NOT a target risk):
 If competitor loses advantage/faces handicap → Belongs in Competitive Dynamics as (bullish, competitor disadvantage)
@@ -13354,9 +13389,7 @@ Only include if development directly threatens target or affects entire sector e
 SENTIMENT VALIDATION: Tag must match YOUR bullet's factual content.
 If bullet contains BOTH weakness + strength → use (mixed, clarifying balance)
 
-CRITICAL: (sentiment, reason) and (inference: explanation) are INDEPENDENT systems - use BOTH when applicable.
-
-Include (report factually, no causal connection):
+Include (report factually PLUS analytical risk assessment):
 - {ticker} operational developments: Production issues, supply chain disruptions, quality problems with specific metrics
 - {ticker} regulatory/legal actions: Investigation announcements, lawsuit filings, compliance notices with amounts/scope
 - Competitor operational facts: Their announcements, their metrics, their actions
@@ -13364,20 +13397,14 @@ Include (report factually, no causal connection):
 - Insider transactions: C-suite buys/sells with amounts and dates
 
 Format (use • bullet with TOPIC LABEL, NO sentiment tags):
-• Topic Label: [Brief factual summary with cross-reference to detailed section]; [Why this is a risk] (Oct 10)
+• Topic Label: [Brief factual summary with cross-reference to detailed section]; [Why this is a risk - flag inferences here] (Oct 10)
 
 Topic Label: 2-5 words describing the risk
 
-Examples:
-✅ CORRECT: • Production capacity constraints: Novelis declared force majeure on automotive shipments; F-150 is Ford's most profitable vehicle and America's top-selling pickup; aluminum body panels critical to weight reduction strategy; Ford exploring alternatives but domestic aluminum supply limited (Oct 8-14)
-✅ CORRECT: • EU antitrust investigation: Commission issued formal information request Oct 10 covering cloud division practices; potential fines €100M-€5B under DSA framework (Oct 10)
-✅ CORRECT: • Cybertruck volume decline: Q3 2025 sales approximately 5,400 units; year-to-date through September 16,097 units (-38% vs. same period 2024) per Cox Automotive; competitor Ford F-150 Lightning sold over 10,000 units Q3, over 23,000 units through September (Oct 14)
+Examples with proper inference flagging:
+✅ CORRECT: • Production capacity constraints: Novelis declared force majeure on automotive shipments; F-150 is Ford's most profitable vehicle and America's top-selling pickup; aluminum body panels critical to weight reduction strategy, creating supply vulnerability that threatens production continuity (inference: connecting supplier disruption to revenue risk); Ford exploring alternatives but domestic aluminum supply limited (Oct 8-14)
 
-DO NOT write:
-✗ "threatens {ticker} positioning"
-✗ "creates competitive pressure"
-✗ "forces {ticker} to respond"
-✗ "validates strategy"
+✅ CORRECT: • Cybertruck volume decline: Q3 2025 sales approximately 5,400 units; year-to-date through September 16,097 units (-38% vs. same period 2024) per Cox Automotive, suggesting demand weakness may pressure revenue guidance (inference: extrapolating sales trend to financial impact); competitor Ford F-150 Lightning sold over 10,000 units Q3, over 23,000 units through September (Oct 14)
 
 📈 WALL STREET SENTIMENT (Only if analyst activity - 1-4 bullets max)
 
@@ -13411,11 +13438,7 @@ Ask: "If I removed {ticker}'s name from this headline, would it still be news?"
 
 Default rule: If uncertain which section → Competitive Dynamics (not Major Developments)
 
-CRITICAL RULES - MAXIMUM 10-20% INFERENCE:
-- Report developments factually
-- NO analysis of impact on {ticker}
-- NO interpretive verbs ("validates," "threatens," "creates," "forces")
-- ZERO repetition with Major Developments (if unsure which section → default to Competitive Dynamics)
+APPROACH: Report developments factually AND assess strategic implications for {ticker}. Flag all analytical assessments inline.
 
 SYNTHESIS OPPORTUNITIES:
 - When competitor metric + {ticker} metric both exist: Present comparatively
@@ -13427,7 +13450,7 @@ SYNTHESIS OPPORTUNITIES:
 - When industry trend + multiple data points: Synthesize
   Example: "Industry analysts project market growing X% through 2027; Competitor A announced $Y investment; Competitor B reported Z% growth"
 
-Include (report developments only):
+Include (report developments AND strategic implications):
 - Competitor M&A: Transaction details, amounts, companies involved
 - Industry regulation: New rules, effective dates, affected parties
 - Technology announcements: Product launches, specifications, availability
@@ -13435,7 +13458,7 @@ Include (report developments only):
 - Executive commentary: Direct quotes from earnings calls/statements
 
 Format (use • bullet with TOPIC LABEL and sentiment tag):
-• Topic Label (sentiment, reason): [What happened]. [Additional facts] (Oct 10)
+• Topic Label (sentiment, reason): [What happened]. [Additional facts]. [Strategic implication - flag inferences] (Oct 10)
 
 Sentiment options: bullish, bearish, neutral, mixed (ALWAYS from target company investor perspective)
 Reason: 2-4 words explaining INVESTOR IMPACT (not topic restatement)
@@ -13446,25 +13469,17 @@ DO NOT: (bullish, capacity utilization) - too vague, (bearish, investigation) - 
 CRITICAL: For competitor news, assess impact on TARGET COMPANY.
 Competitor problem: (bullish, competitor disadvantage) | Competitor success: (bearish, competitive threat)
 
-Examples:
-✅ CORRECT: • PJM capacity prices (bullish, industry tailwind): PJM Interconnection capacity prices rose 900% from 2024 to 2025 year-to-date following years of generally low and stable pricing; energy prices increased approximately 100% over same period; PJM warns of electrical capacity shortfalls as early as 2026-2027 (Oct 10)
-✅ CORRECT: • GM affordable EV offensive (bearish, competitive threat): 2027 Chevrolet Bolt launching Q1 2026 at $29,990 ($28,995 LT variant later); 65-kWh LFP battery delivers 255 miles range (highest under $30K); 150+ kW DC fast charging; native NACS port for Tesla Supercharger access (Oct 10)
+Examples with proper inference flagging:
+✅ CORRECT: • PJM capacity prices (bullish, industry tailwind): PJM Interconnection capacity prices rose 900% from 2024 to 2025 year-to-date following years of generally low and stable pricing, creating significant margin expansion opportunity for power generators (inference: connecting price surge to profit potential); energy prices increased approximately 100% over same period; PJM warns of electrical capacity shortfalls as early as 2026-2027, potentially benefiting existing capacity owners (inference: supply shortage implication for incumbent advantage) (Oct 10)
 
-DO NOT write:
-✗ "threatening {ticker}'s market share"
-✗ "validates {ticker}'s strategy"
-✗ "forces {ticker} to match pricing"
-✗ "creates opportunity for {ticker}"
+✅ CORRECT: • GM affordable EV offensive (bearish, competitive threat): 2027 Chevrolet Bolt launching Q1 2026 at $29,990 ($28,995 LT variant later); 65-kWh LFP battery delivers 255 miles range (highest under $30K); 150+ kW DC fast charging; native NACS port for Tesla Supercharger access, positioning GM to capture price-sensitive EV buyers (inference: connecting product specs to market positioning threat) (Oct 10)
 
 SENTIMENT VALIDATION: Tag must match YOUR bullet's factual content.
 If bullet contains BOTH weakness + strength → use (mixed, clarifying balance)
-NOT: (bearish, competitor strength) when facts show "sales decline + Berkshire exit"
 
 Competitor disadvantage classification:
 If competitor loses advantage/faces handicap → Tag as (bullish, competitor disadvantage)
 Example: Ford/GM cancelled lease programs = competitor-specific handicap benefiting target
-
-CRITICAL: (sentiment, reason) and (inference: explanation) are INDEPENDENT systems - use BOTH when applicable.
 
 📅 UPCOMING CATALYSTS (Only if events mentioned - 1-3 bullets max)
 
@@ -13482,10 +13497,6 @@ Example:
 
 🎯 INVESTMENT IMPLICATIONS (Always - adapt length to news volume)
 
-CRITICAL: Maximum 10-20% inference. Cite specific developments from today's news.
-
-CRITICAL: Apply (inference, explanation) flags inline for ALL forward-looking connections and analytical interpretations per INFERENCE FLAGGING rules above.
-
 CRITICAL: Write sub-headers exactly as shown with emojis: "📈 UPSIDE SCENARIO:", "📉 DOWNSIDE SCENARIO:", "🔍 KEY VARIABLES TO MONITOR:"
 
 For Material News Days (1+ flagged articles):
@@ -13494,27 +13505,21 @@ For Material News Days (1+ flagged articles):
 
 Format: Single paragraph, 3-4 sentences (~80-100 words)
 Reference items from above sections WITHOUT repeating specific numbers/details AND without section citations
-Maximum 10-20% inference - synthesize stated facts, don't speculate beyond logical extensions
+Flag all analytical connections inline
 Focus on 3 strongest supporting points only
 
-Example structure:
-"[Development from Major Developments] positions company to [stated outcome]. [Financial metric from Financial Performance] demonstrates [factual trend]. [Competitive dynamic] supports [direct implication]. [Catalyst] will provide [stated visibility]."
-
-DO NOT write:
-✗ Bullet points
-✗ Detailed repetition of numbers already stated above
-✗ Multi-step speculative cascades
-✗ "If X then Y then Z" conditionals
+Example structure with proper flagging:
+"[Development from Major Developments] positions company to [stated outcome] (inference: connecting event to opportunity). [Financial metric from Financial Performance] demonstrates [factual trend], supporting [forward projection] (inference: extrapolating data to outcome). [Competitive dynamic] creates [advantage] (inference: competitive assessment). [Catalyst] will provide [stated visibility]."
 
 📉 DOWNSIDE SCENARIO:
 
 Format: Single paragraph, 3-4 sentences (~80-100 words)
 Reference items from above sections WITHOUT repeating specific numbers/details
-Maximum 10-20% inference - stick to stated risks and direct implications
+Flag all analytical connections inline
 Focus on 3 strongest risk factors only
 
-Example structure:
-"[Risk from Risk Factors] constrains [stated capability]. [Competitive threat from Competitive Dynamics] creates [direct pressure]. [Financial headwind] continues [stated trajectory]. [Catalyst] may reveal [stated concerns]."
+Example structure with proper flagging:
+"[Risk from Risk Factors] constrains [stated capability] (inference: limitation assessment). [Competitive threat from Competitive Dynamics] creates [direct pressure] (inference: competitive threat projection). [Financial headwind] continues [stated trajectory], potentially pressuring [outcome] (inference: financial impact extrapolation). [Catalyst] may reveal [stated concerns]."
 
 🔍 KEY VARIABLES TO MONITOR:
 
@@ -13527,9 +13532,6 @@ State variable and timeline ONLY - NO analysis of why it matters
 Examples:
 ✅ CORRECT: • Q3 earnings aluminum quantification: Actual EBIT impact vs Evercore $500M-$1B estimate range; alternative sourcing agreements announced; production recovery timeline and affected unit volumes - Timeline: October 21 earnings call
 ✅ CORRECT: • Wheeler River permitting: Federal approval expected - Timeline: 2025-2026
-
-DO NOT write:
-✗ Analysis of why variable matters or how it impacts stock
 
 ---
 
@@ -13559,43 +13561,26 @@ Use qualitative language: "significant portion," "substantial market," "material
 
 VERIFICATION: Before including ANY specific number, confirm: "Did I read this exact number in an article?"
 
-INFERENCE FLAGGING - MANDATORY:
-Flag ALL analytical interpretations, calculations, and forward-looking connections INLINE immediately after the inferential statement.
-
-(sentiment, reason) and (inference, explanation) are INDEPENDENT systems:
-- Sentiment tags: After title, before colon - classify development type
-- Inference flags: INLINE in body wherever inferential content occurs - applies to bullets AND paragraphs
-
-FORMAT: Use comma, match sentiment tag format: (inference, explanation)
-
-When to Flag:
-1. Forward-Looking Connections: "position company to capture growth" → (inference, connecting capacity to revenue opportunity)
-2. Analytical Interpretations: "demonstrates valuation risk" → (inference, peer comparison indicating downside)
-3. Calculations/Aggregations: "estimated $240B combined value" → (inference, aggregating separate deals)
-4. Causal Projections: "potentially benefiting utilization" → (inference, extrapolating crisis dynamics to future)
-
-Examples (note comma format and inline placement):
-
-September delivery surge (bullish, demand timing): Orders jumped 47% potentially pulling forward Q4 demand (inference, forward-looking demand timing hypothesis); CEO cited strong backlog extending through year-end; wholesale inventory down 15% (Sep 30)
-
-Pipeline projects position company to capture LNG demand growth (inference, connecting capacity additions to revenue opportunity), while revenue stability supports projected growth through decade.
-
-Target: ALL inferential statements must be flagged. Total inference should remain 10-20% maximum per INFERENCE TARGET section below.
-
 ---
 
-BANNED INTERPRETIVE LANGUAGE:
+🔍 MANDATORY FINAL CHECK - INFERENCE FLAGS
 
-In Risk Factors, Competitive Dynamics, Financial Performance sections, NEVER use:
-✗ validates, demonstrates, threatens, signals, suggests, indicates, implies
-✗ requires, forces, necessitates, creates, provides, establishes
-✗ de-risks, enables, supports (except in Upside/Downside Scenarios)
-✗ limits, constrains, advantages, disadvantages, benefits, harms
-✗ despite, while (contrasting), however, yet
+Before submitting your summary, perform this review:
 
-Transform interpretive statements to factual:
-✗ "Revenue fell 12% despite competitor growing 15%"
-✓ "Revenue fell 12%; competitor revenue grew 15%"
+Read through each section and ask: "Did I make analytical connections, interpret implications, or project forward impacts in this section?"
+
+If YES, verify those analytical statements have (inference: explanation) flags immediately after them.
+
+Common analytical patterns that need flags:
+• Connecting separate facts to strategic implications
+• Interpreting what data/events mean for the company
+• Projecting how developments might affect future performance
+• Making competitive assessments or comparisons
+• Explaining why something constitutes a risk or opportunity
+
+If you find analytical language without a flag, add it before submitting.
+
+The goal: Readers can clearly distinguish what articles reported (facts) from what you concluded by analyzing those facts (inference).
 
 ---
 
@@ -13679,14 +13664,7 @@ ALWAYS use:
 
 Frame as: Educational presentation of scenarios based on factual developments, not predictions or recommendations.
 
-INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
-1. Reporting facts separately without connecting them interpretively
-2. Citing specific numbers, dates, and quotes from articles
-3. Avoiding causal language and competitive analysis in factual sections
-4. Letting readers draw conclusions from presented facts
-5. Limiting inference to Upside/Downside Scenarios only
-
-Generate summary. Synthesize related articles. Surface contradictions. Benchmark competition. Contextualize trajectories. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets. Scale to content volume. Maximum 10-20% inference.
+Generate summary. Synthesize related articles. Surface contradictions. Benchmark competition. Contextualize trajectories. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets. Scale to content volume. Flag all analytical connections inline with (inference: explanation) format.
 
 ---
 
@@ -13711,7 +13689,7 @@ SYNTHESIS QUALITY CHECK:
 ✅ If recovery/growth mentioned: Distance from peak/trough shown
 ✅ If time phrases exist: Duration signals preserved ("through 2027," "since 2021")
 ✅ If behavioral data exists: Prioritized over sentiment data (exchange flows > ETF inflows)
-✅ (inference: explanation) flags present inline for calculations, forward-looking connections, analytical interpretations (target 10-20%)
+✅ (inference: explanation) flags present for ALL analytical statements, forward-looking connections, interpretive conclusions
 ✅ Both systems used independently: (sentiment, reason) in title + (inference: explanation) inline where applicable"""
 
     return (system_prompt, user_content, company_name)

@@ -476,7 +476,9 @@ def clean_null_bytes(text: str) -> str:
 
 def parse_quality_score(ai_summary: str) -> tuple[str, float]:
     """
-    Parse quality score from AI summary response.
+    Parse quality score from AI summary response using JSON format.
+
+    Expected format: Summary ends with JSON on last line: {"quality": 7.5}
 
     Returns:
         (cleaned_summary, quality_score) where quality_score is None if not found
@@ -484,10 +486,36 @@ def parse_quality_score(ai_summary: str) -> tuple[str, float]:
     if not ai_summary:
         return ai_summary, None
 
-    lines = ai_summary.split('\n')
-    summary_lines = []
+    # Try to extract JSON from last line
+    lines = ai_summary.strip().split('\n')
+    if not lines:
+        return ai_summary, None
+
+    last_line = lines[-1].strip()
     quality_score = None
 
+    # Try JSON format first (new format)
+    try:
+        # Handle markdown code blocks if present
+        if last_line.startswith('```'):
+            # JSON might be wrapped in code block
+            if len(lines) >= 3 and lines[-1] == '```':
+                last_line = lines[-2].strip()
+                lines = lines[:-2]  # Remove closing ``` and JSON line
+
+        quality_data = json.loads(last_line)
+        if "quality" in quality_data:
+            quality_score = float(quality_data["quality"])
+            # Clamp to 0-10 range
+            quality_score = max(0.0, min(10.0, quality_score))
+            # Remove JSON line from summary
+            cleaned_summary = '\n'.join(lines[:-1]).strip()
+            return cleaned_summary, quality_score
+    except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+        pass  # Not JSON format, try legacy format
+
+    # Fallback: Try legacy plain text format "QUALITY: X.X"
+    summary_lines = []
     for line in lines:
         if line.strip().startswith('QUALITY:'):
             try:
@@ -6363,8 +6391,12 @@ The user will provide company name, ticker, article title, and content. Extract 
 ❌ NEVER round numbers differently than article presents them
 ❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)
 
-**QUALITY SCORING:**
-After summary, output a single quality score (0-10) on next line as: QUALITY: X.X
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{"quality": X.X}
 
 Score based on:
 - 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
@@ -6373,7 +6405,14 @@ Score based on:
 - 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
 - 1-2: Press release rewrite, advertorial, obvious AI-generated content
 
-AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes."""
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
+
+Example endings:
+...announced $500M investment (businesswire.com).
+{"quality": 4.5}
+
+...reported strong Q3 results with EPS of $2.45 (reuters.com).
+{"quality": 7.0}"""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
@@ -6527,8 +6566,12 @@ Choose appropriate template:
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
 ❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
 
-**QUALITY SCORING:**
-After summary, output a single quality score (0-10) on next line as: QUALITY: X.X
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{"quality": X.X}
 
 Score based on:
 - 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
@@ -6537,7 +6580,14 @@ Score based on:
 - 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
 - 1-2: Press release rewrite, advertorial, obvious AI-generated content
 
-AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes."""
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
+
+Example endings:
+...Williams Companies and Enbridge Inc. both operate in the North American midstream energy infrastructure sector (theglobeandmail.com).
+{"quality": 3.5}
+
+...TC Energy's strategic initiative to divest pipeline assets viewed favorably (globeandmail.com).
+{"quality": 4.5}"""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
@@ -7281,8 +7331,12 @@ The user will provide target company, ticker, driver keyword, geographic markets
 
 **Multi-Driver Note:** Target company may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively.
 
-**QUALITY SCORING:**
-After summary, output a single quality score (0-10) on next line as: QUALITY: X.X
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{"quality": X.X}
 
 Score based on:
 - 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
@@ -7291,7 +7345,14 @@ Score based on:
 - 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
 - 1-2: Press release rewrite, advertorial, obvious AI-generated content
 
-AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes."""
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
+
+Example endings:
+...This natural gas price directly affects target company's revenue as a gas transmission operator (naturalgasintel.com).
+{"quality": 6.5}
+
+...IEA's projection for oil demand provides outlook affecting target company's pipeline utilization (iea.org).
+{"quality": 7.5}"""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
@@ -7310,7 +7371,7 @@ Extract fundamental driver facts (commodity prices, volume metrics, policy chang
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
-                "max_tokens": 2048,
+                "max_tokens": 8192,  # Increased from 2048 to match company/competitor articles
                 "system": [
                     {
                         "type": "text",
@@ -7481,11 +7542,25 @@ Extract and summarize all material facts about {company_name}'s actions, perform
 ❌ NEVER round numbers differently than article presents them
 ❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)
 
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{{"quality": X.X}}
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
 TARGET COMPANY: {company_name} ({ticker})
 ARTICLE TITLE: {title}
 ARTICLE CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
 
-Extract all material facts about {company_name}'s actions, performance, and developments. Present information factually without speculation or editorial commentary."""
+Extract all material facts about {company_name}'s actions, performance, and developments. Present information factually without speculation or editorial commentary. End with quality score JSON."""
 
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
@@ -7605,12 +7680,26 @@ Choose appropriate template:
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
 ❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
 
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{{"quality": X.X}}
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
 TARGET COMPANY: {target_company} ({target_ticker})
 COMPETITOR: {competitor_name} ({competitor_ticker})
 ARTICLE TITLE: {title}
 ARTICLE CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
 
-Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}."""
+Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}. End with quality score JSON."""
 
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}
@@ -7763,6 +7852,20 @@ If article focuses on country/region NOT in Geographic Markets above AND not a g
 
 **Multi-Driver Note:** {target_company} may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively.
 
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{{"quality": X.X}}
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
 TARGET COMPANY: {target_company} ({target_ticker})
 FUNDAMENTAL DRIVER KEYWORD: {industry_keyword}
 GEOGRAPHIC MARKETS: {geographic_markets if geographic_markets else 'Unknown'}
@@ -7774,7 +7877,7 @@ ARTICLE CONTENT:
 {scraped_content[:CONTENT_CHAR_LIMIT]}
 
 YOUR TASK:
-Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) that impact {target_company}'s financial performance. Focus on quantifiable data about external market forces driving revenue, costs, or margins."""
+Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) that impact {target_company}'s financial performance. Focus on quantifiable data about external market forces driving revenue, costs, or margins. End with quality score JSON."""
 
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}

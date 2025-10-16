@@ -21892,7 +21892,7 @@ async def get_domain_stats_api(token: str = Query(...)):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
-        with db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with db() as conn, conn.cursor() as cur:
             # Get domains with stats
             cur.execute("""
                 SELECT

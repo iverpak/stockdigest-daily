@@ -642,6 +642,7 @@ SPAM_DOMAINS = {
     "stocktitan.net", "www.stocktitan.net",
     "insidermonkey.com", "www.insidermonkey.com",
     "zacks.com", "www.zacks.com",
+    "markets.financialcontent.com", "www.markets.financialcontent.com",  # Added Oct 2025
 }
 
 QUALITY_DOMAINS = {
@@ -5444,46 +5445,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                             LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
                             continue
                         
-                        # Count existing articles for this category/keyword combination
-                        if category == "company":
-                            cur.execute("""
-                                SELECT COUNT(DISTINCT a.id) as count FROM articles a
-                                JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.ticker = %s AND ta.category = 'company'
-                            """, (feed["ticker"],))
-                        elif category == "industry":
-                            cur.execute("""
-                                SELECT COUNT(DISTINCT a.id) as count FROM articles a
-                                JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.ticker = %s AND ta.category = 'industry' AND ta.search_keyword = %s
-                            """, (feed["ticker"], feed_keyword))
-                        elif category == "competitor":
-                            cur.execute("""
-                                SELECT COUNT(DISTINCT a.id) as count FROM articles a
-                                JOIN ticker_articles ta ON a.id = ta.article_id
-                                WHERE ta.ticker = %s AND ta.category = 'competitor' AND ta.competitor_ticker = %s
-                            """, (feed["ticker"], feed_keyword))
-                        
-                        result = cur.fetchone()
-                        existing_count = result["count"] if result and result["count"] is not None else 0
-
-                        # Check if we've already hit the limit (BEFORE inserting this article)
-                        limit_reached = False
-                        if category == "company" and existing_count >= ingestion_stats["limits"]["company"]:
-                            limit_reached = True
-                            LOG.info(f"COMPANY LIMIT ALREADY REACHED: {existing_count} >= {ingestion_stats['limits']['company']} - stopping ingestion for this feed")
-                            break
-                        elif category == "industry" and existing_count >= ingestion_stats["limits"]["industry_per_keyword"]:
-                            limit_reached = True
-                            LOG.info(f"INDUSTRY LIMIT ALREADY REACHED for '{feed_keyword}': {existing_count} >= {ingestion_stats['limits']['industry_per_keyword']} - stopping ingestion")
-                            break
-                        elif category == "competitor" and existing_count >= ingestion_stats["limits"]["competitor_per_keyword"]:
-                            limit_reached = True
-                            LOG.info(f"COMPETITOR LIMIT ALREADY REACHED for '{feed_keyword}': {existing_count} >= {ingestion_stats['limits']['competitor_per_keyword']} - stopping ingestion")
-                            break
-
-                        # COUNT THIS NEW UNIQUE URL for tracking
-                        _update_ingestion_stats(category, feed_keyword)
+                        # HOURLY ALERTS: No ingestion limits (lightweight, no scraping/AI)
+                        # Articles are processed quickly and cumulative display is expected
                         
                         # Parse publish date
                         published_at = None
@@ -22741,6 +22704,43 @@ def process_hourly_alerts():
 
         feed_processing_time = time.time() - feed_processing_start
         LOG.info(f"✅ Feed processing complete in {feed_processing_time:.1f}s - Total inserted: {total_stats['inserted']}, duplicates: {total_stats['duplicates']}")
+
+        # Step 3.5: Resolve Google News URLs (Phase 1.5)
+        # Reuse production infrastructure to resolve Google News URLs that may have been ingested
+        LOG.info("🔗 Phase 1.5: Resolving Google News URLs for hourly alerts...")
+        resolution_start = time.time()
+
+        # Convert midnight EST to UTC for database query
+        midnight_utc = midnight_est.astimezone(timezone.utc)
+
+        for ticker in unique_tickers:
+            try:
+                # Get unresolved Google News articles for this ticker from today
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT DISTINCT a.id
+                        FROM articles a
+                        JOIN ticker_articles ta ON a.id = ta.article_id
+                        WHERE ta.ticker = %s
+                        AND a.published_at >= %s
+                        AND a.url LIKE '%%news.google.com%%'
+                        AND a.resolved_url IS NULL
+                    """, (ticker, midnight_utc))
+
+                    article_ids = [row['id'] for row in cur.fetchall()]
+
+                if article_ids:
+                    LOG.info(f"[{ticker}] Resolving {len(article_ids)} Google News URLs...")
+                    # Use asyncio.run() to call async function from sync context
+                    import asyncio
+                    asyncio.run(resolve_flagged_google_news_urls(ticker, article_ids))
+                    LOG.info(f"[{ticker}] ✅ Resolution complete")
+            except Exception as e:
+                LOG.error(f"[{ticker}] ❌ Resolution failed: {e}")
+                # Continue processing other tickers
+
+        resolution_time = time.time() - resolution_start
+        LOG.info(f"✅ Phase 1.5 complete in {resolution_time:.1f}s")
 
         # Step 4: For each user, query cumulative articles and send email
         for user_email, tickers in user_tickers.items():

@@ -6390,6 +6390,11 @@ The user will provide company name, ticker, article title, and content. Extract 
 ❌ NEVER editorialize on whether developments are "positive", "negative", "strong", or "weak" unless quoting source
 ❌ NEVER round numbers differently than article presents them
 ❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "next year" → Write "next year" (not "2024" or "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year"
+   - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 
 **QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
 ❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
@@ -6565,6 +6570,11 @@ Choose appropriate template:
 ❌ NEVER compare competitor's metrics to target company unless article does so explicitly
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
 ❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "next year" → Write "next year" (not "2024" or "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year"
+   - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 
 **QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
 ❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
@@ -7328,6 +7338,11 @@ The user will provide target company, ticker, driver keyword, geographic markets
 ❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears, positioned, poised
 ❌ NO tangential information not directly related to fundamental drivers
 ❌ NO discussion of target company operations unless article explicitly mentions them
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "next year" → Write "next year" (not "2024" or "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year"
+   - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 
 **Multi-Driver Note:** Target company may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively.
 

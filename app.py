@@ -7346,49 +7346,101 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
     # with OPENAI_SEM:
     if True:  # Maintain indentation
         try:
-            prompt = f"""You are a research analyst extracting information about {competitor_name} ({competitor_ticker}) for a {target_company} ({target_ticker}) competitive intelligence report.
+            prompt = f"""You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
-**Your Task:** Extract and summarize facts from this article about {competitor_name}'s actions, performance, or developments.
+**YOUR TASK:**
+Extract and summarize facts from the article about {competitor_name} ({competitor_ticker})'s actions, performance, or developments. Focus on operational and strategic information that provides competitive context for {target_company} ({target_ticker}).
 
 **What to Extract:**
 
-**1. Strategic Actions:** M&A, product launches, capacity changes, market entries/exits, organizational changes
-**2. Operational Performance:** Volume metrics, market share, pricing actions, service levels, efficiency
-**3. Financial Performance:** Revenue, profitability, cash flow, guidance, balance sheet
-**4. Technology/Product Capabilities:** R&D progress, patents, product performance, innovation pipeline
-**5. Analyst Commentary:** Rating changes, price targets, analyst rationale
-**6. Challenges/Headwinds:** Operational issues, regulatory actions, legal issues, market headwinds
+**1. Strategic Actions**
+- M&A: acquisitions, divestitures, joint ventures, strategic partnerships
+- Product/Service Launches: new offerings, feature additions, discontinuations
+- Capacity Changes: facility openings/closures, expansion/contraction, capex announcements
+- Market Entries/Exits: new geographies, new segments, market withdrawals
+- Organizational Changes: leadership appointments, restructuring, workforce changes
+- Extract: what, where, when, scale/investment amount, stated strategic rationale
 
-**Exclusion:**
-❌ Pure stock performance without operational context
-❌ Valuation analysis unless tied to strategic actions
-❌ General market commentary
-❌ Speculation about future actions
+**2. Operational Performance**
+- Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
+- Market Share: share gains/losses with specific percentages and time periods
+- Pricing Actions: price increases/decreases, promotional activity, pricing model changes
+- Service Levels: delivery times, quality metrics, customer satisfaction scores
+- Efficiency Metrics: cost per unit, productivity measures, operational KPIs
+- Extract: specific numbers with units, time periods, year-over-year or sequential comparisons
+
+**3. Financial Performance**
+- Revenue: total and by segment, with growth rates and time periods
+- Profitability: gross margin, EBITDA, operating margin, net income with specific percentages
+- Cash Flow: operating cash flow, free cash flow, capex levels
+- Guidance: forward revenue/earnings projections, outlook commentary
+- Balance Sheet: debt levels, liquidity, credit ratings if mentioned
+- Extract: exact figures with time periods, comparison to prior periods or guidance
+
+**4. Technology and Product Capabilities**
+- Technology Developments: R&D progress, patents, technical milestones
+- Product Performance: benchmark results, specifications, feature comparisons
+- Innovation Pipeline: products in development, expected launch timelines
+- Technical Standards: certifications achieved, compliance milestones
+- Extract: specific capabilities, performance metrics, competitive positioning if stated
+
+**5. Analyst or Market Commentary**
+- Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate)
+- Price Targets: specific targets, changes from prior targets
+- Analyst Rationale: reasons given for rating/target (operational, financial, valuation)
+- Extract: specific ratings, targets, rationale as stated
+
+**6. Challenges or Headwinds**
+- Operational Issues: production problems, service disruptions, quality issues
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
+- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
+- Extract: specific issues, financial impacts if quantified, timelines
+
+**Exclusion Criteria:**
+❌ Pure stock performance (price movements, technical analysis) without operational context
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to strategic actions
+❌ General market commentary not specific to competitor
+❌ Historical background not relevant to current developments
+❌ Speculation about future actions not based on company statements
+❌ Opinion pieces without factual content
 
 **Structure:**
 - Write 2-6 paragraphs in natural prose (no headers, no bullets)
-- Include specific numbers, dates, names, locations with units and time periods
-- Include executive quotes with attribution
+- Include specific numbers, dates, names, locations
+- Include direct quotes from executives or analysts (with attribution)
 - Cite source: (domain name)
-- Final paragraph: Note factual competitive relationship (e.g., "{competitor_name} and {target_company} compete in [sector/market]")
+- Present facts in logical flow (financial results, then strategic actions, then outlook)
+
+**Final Paragraph - Competitive Context Statement:**
+Choose appropriate template:
+- Direct competition stated: "{competitor_name} and {target_company} compete in [specific market/geography/segment] as stated in the article."
+- Direct competition known: "{competitor_name} and {target_company} both operate in [sector/industry] and compete for [customers/market share]."
+- Geographic overlap: "{competitor_name}'s [action/development] in [region/market] where {target_company} also operates."
+- Product overlap: "{competitor_name}'s [product/service category] competes with {target_company}'s [product/service category] offerings."
+- Financial data: "This article provides operational data on {competitor_name}, a competitor to {target_company}."
 
 **Critical Rules:**
-✅ Extract ONLY facts explicitly stated about {competitor_name}
-✅ Every number needs: value, units, time period, source
-✅ Present competitor facts objectively
+✅ ONLY extract facts explicitly stated about {competitor_name}
+✅ Every quantitative claim must include: number, units, time period, source
+✅ Always cite source domain in parentheses
+✅ Include executive quotes verbatim with attribution
+✅ Present competitor facts objectively without editorializing
+✅ Note the competitive relationship factually in final paragraph
 
 ❌ NEVER speculate on {target_company}'s response or strategy
 ❌ NEVER infer impact on {target_company}'s competitive position unless article explicitly states it
-❌ NEVER write what {target_company} "faces" or "must do"
-❌ NEVER assume {target_company}'s capabilities or relative positioning
-❌ NEVER compare {competitor_name}'s metrics to {target_company} unless article does
-❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for"
-❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure)
+❌ NEVER write about what {target_company} "faces" or "must do" or "needs to" in response
+❌ NEVER assume {target_company}'s capabilities, market share, or relative positioning
+❌ NEVER create competitive implications beyond factual competitive relationship
+❌ NEVER compare {competitor_name}'s metrics to {target_company} unless article does so explicitly
+❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
+❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
 
 TARGET COMPANY: {target_company} ({target_ticker})
 COMPETITOR: {competitor_name} ({competitor_ticker})
-TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
+ARTICLE TITLE: {title}
+ARTICLE CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}
 
 Extract facts about {competitor_name}'s actions and performance. Do not speculate on impact to {target_company}."""
 
@@ -7508,33 +7560,53 @@ If article focuses on country/region NOT in Geographic Markets above AND not a g
 ❌ Advertorial/promotional content
 
 **Structure:**
-- Write 2-5 concise paragraphs in natural prose (no headers, no bullets)
-- Include specific numbers with units and time periods
-- Include dates, locations, policy names, source attributions
-- Cite source: (domain name)
-- Final paragraph: Relevance statement connecting driver facts to target company's financial performance
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Lead with most material driver data first
+- Include ALL specific numbers: prices, volumes, percentages, dates, time periods
+- Include units for all metrics ($/bbl, units, bps, %, YoY, QoQ, MoM)
+- Cite data sources and institutions when mentioned
+- Attribute quotes with speaker name and title
+- End with source: (domain name)
+- Final paragraph: Brief relevance statement explaining factual connection between driver and target company's financial performance
 
-**Relevance Statement Format:**
-Explain how extracted driver facts materially impact target company revenue, costs, or margins. Use factual connections only - no speculation about company response or strategy.
+**Relevance Statement Templates:**
+- Commodity price: "This [commodity] price directly affects {target_company}'s [revenue/costs] as a [producer/consumer] of [product]."
+- Demand indicator: "This [metric] indicates demand trends for [end-market] that drives {target_company}'s [product/service] volumes."
+- Policy change: "This [policy] affects [driver metric] which impacts {target_company}'s [cost structure/pricing/margins]."
+- Supply event: "This [disruption/capacity change] affects [commodity/product] supply dynamics impacting {target_company}'s [input costs/competitive position]."
+- Input cost: "This [input] cost trend directly impacts {target_company}'s [cost structure/margins] as a [major/significant] expense."
+- End-market: "This affects [customer industry/geography] that purchases {target_company}'s [products/services]."
+- Forecast: "This [institution]'s projection for [metric] provides outlook for [driver] affecting {target_company}'s [financial aspect]."
+- Competitor data: "Competitor's [operational metric] reveals [sector trend] in [market] where {target_company} also [operates/competes]."
 
 **Critical Rules:**
-✅ Extract ALL relevant driver data from article, not just primary keyword
-✅ Include specific numbers with units, time periods, and sources
-✅ For GLOBAL drivers (commodities, macro indicators): Include regardless of article geography
-✅ Cite source domain
-✅ Scale length to amount of relevant driver information
+✅ Extract ONLY explicitly stated facts with supporting data
+✅ Every number requires: value, units, time period, comparison (YoY/QoQ/MoM/vs prior)
+✅ Always cite source domain
+✅ Focus on QUANTIFIABLE driver data or MATERIAL qualitative developments
+✅ Explain relevance through factual connection to target company's revenue/cost drivers
 
-❌ NO speculation on target company's response or strategy
-❌ NO inferred competitive position unless explicitly stated
-❌ NO assumptions about target company's capabilities or market share
-❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears
-❌ DO NOT exclude global driver data based on article geography
+❌ NO speculation about target company's strategy, response, or positioning
+❌ NO inferred impacts unless explicitly quantified in article
+❌ NO assumptions about target company's exposure, hedging, or competitive advantages
+❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears, positioned, poised
+❌ NO tangential information not directly related to fundamental drivers
+❌ NO discussion of target company operations unless article explicitly mentions them
+
+**Multi-Driver Note:** {target_company} may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively.
 
 TARGET COMPANY: {target_company} ({target_ticker})
 FUNDAMENTAL DRIVER KEYWORD: {industry_keyword}
 GEOGRAPHIC MARKETS: {geographic_markets if geographic_markets else 'Unknown'}
-TITLE: {title}
-CONTENT: {scraped_content[:CONTENT_CHAR_LIMIT]}"""
+
+ARTICLE TITLE:
+{title}
+
+ARTICLE CONTENT:
+{scraped_content[:CONTENT_CHAR_LIMIT]}
+
+YOUR TASK:
+Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) that impact {target_company}'s financial performance. Focus on quantifiable data about external market forces driving revenue, costs, or margins."""
 
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
             data = {"model": OPENAI_MODEL, "input": prompt, "max_output_tokens": 8000, "reasoning": {"effort": "medium"}, "text": {"verbosity": "low"}, "truncation": "auto"}

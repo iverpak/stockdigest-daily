@@ -13331,6 +13331,14 @@ CRITICAL RULES - MAXIMUM 10-20% INFERENCE:
 - List Company A facts; Company B facts; Regulatory facts separately
 - CAN duplicate from Major Developments or Competitive Dynamics BUT must add risk context (the "so what?")
 
+Competitor disadvantage (NOT a target risk):
+If competitor loses advantage/faces handicap → Belongs in Competitive Dynamics as (bullish, competitor disadvantage)
+Example: Ford/GM cancelled lease programs = competitor-specific handicap, not target risk
+Only include if development directly threatens target or affects entire sector equally.
+
+SENTIMENT VALIDATION: Tag must match YOUR bullet's factual content.
+If bullet contains BOTH weakness + strength → use (mixed, clarifying balance)
+
 Include (report factually, no causal connection):
 - {ticker} operational developments: Production issues, supply chain disruptions, quality problems with specific metrics
 - {ticker} regulatory/legal actions: Investigation announcements, lawsuit filings, compliance notices with amounts/scope
@@ -13431,6 +13439,14 @@ DO NOT write:
 ✗ "forces {ticker} to match pricing"
 ✗ "creates opportunity for {ticker}"
 
+SENTIMENT VALIDATION: Tag must match YOUR bullet's factual content.
+If bullet contains BOTH weakness + strength → use (mixed, clarifying balance)
+NOT: (bearish, competitor strength) when facts show "sales decline + Berkshire exit"
+
+Competitor disadvantage classification:
+If competitor loses advantage/faces handicap → Tag as (bullish, competitor disadvantage)
+Example: Ford/GM cancelled lease programs = competitor-specific handicap benefiting target
+
 📅 UPCOMING CATALYSTS (Only if events mentioned - 1-3 bullets max)
 
 Source: [COMPANY] articles only
@@ -13474,6 +13490,7 @@ DO NOT write:
 Format: Single paragraph, 3-4 sentences (~80-100 words)
 Reference items from above sections WITHOUT repeating specific numbers/details
 Maximum 10-20% inference - stick to stated risks and direct implications
+Focus on 3 strongest risk factors only
 
 Example structure:
 "[Risk from Risk Factors] constrains [stated capability]. [Competitive threat from Competitive Dynamics] creates [direct pressure]. [Financial headwind] continues [stated trajectory]. [Catalyst] may reveal [stated concerns]."
@@ -13520,6 +13537,12 @@ If uncertain whether number was stated:
 Use qualitative language: "significant portion," "substantial market," "material exposure"
 
 VERIFICATION: Before including ANY specific number, confirm: "Did I read this exact number in an article?"
+
+CALCULATION & AGGREGATION INFERENCE:
+When combining multiple facts into single derived figure, flag methodology:
+- Aggregated totals: "estimated at $240B (inference, calculation: $40B deal + $200B estimated value for 200K units + partnership)"
+- Impact projections: "potential displacement (inference: analytical interpretation based on deal scope)"
+- Multi-step causation: "may create Q4 headwind (inference: connecting Sept surge timing to potential demand pull-forward)"
 
 ---
 
@@ -13624,6 +13647,10 @@ INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
 3. Avoiding causal language and competitive analysis in factual sections
 4. Letting readers draw conclusions from presented facts
 5. Limiting inference to Upside/Downside Scenarios only
+
+When connecting present fact to future outcome, use "may" + flag:
+- "Sept surge may pressure Q4 (inference: demand pull-forward hypothesis)"
+NOT: "Sept surge pulled forward Q4 demand"
 
 Generate summary. Synthesize related articles. Surface contradictions. Benchmark competition. Contextualize trajectories. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets. Scale to content volume. Maximum 10-20% inference.
 

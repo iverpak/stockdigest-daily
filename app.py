@@ -14931,10 +14931,10 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         text = strip_markdown_formatting(text)
 
         # Then apply HTML bold tags to topic label (text before colon)
-        # Match pattern: start of text followed by 2-80 chars, then colon
+        # Match pattern: start of text followed by 2-130 chars, then colon
         # Capture the topic label (everything before the colon, including the colon)
-        # 80-char limit prevents bolding entire sentences while capturing longer labels
-        pattern = r'^([^:]{2,80}?:)(\s)'
+        # 130-char limit prevents bolding entire sentences while capturing longer contextual labels
+        pattern = r'^([^:]{2,130}?:)(\s)'
         replacement = r'<strong>\1</strong>\2'
         return re.sub(pattern, replacement, text)
 

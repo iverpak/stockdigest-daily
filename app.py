@@ -22103,6 +22103,7 @@ async def cancel_in_progress_runs_api(request: Request):
 
             # Cancel all active jobs across all batches
             total_cancelled = 0
+            affected_tickers = []
             for batch in active_batches:
                 cur.execute("""
                     UPDATE ticker_processing_jobs
@@ -22111,8 +22112,21 @@ async def cancel_in_progress_runs_api(request: Request):
                         last_updated = NOW()
                     WHERE batch_id = %s
                       AND status IN ('queued', 'processing')
+                    RETURNING ticker
                 """, (batch['batch_id'],))
-                total_cancelled += cur.rowcount
+                cancelled = cur.fetchall()
+                total_cancelled += len(cancelled)
+                affected_tickers.extend([row['ticker'] for row in cancelled])
+
+            # Also delete orphaned email_queue entries for cancelled tickers
+            if affected_tickers:
+                cur.execute("""
+                    DELETE FROM email_queue
+                    WHERE ticker = ANY(%s)
+                      AND status IN ('queued', 'processing')
+                """, (affected_tickers,))
+                deleted_queue = cur.rowcount
+                LOG.info(f"🗑️ Deleted {deleted_queue} orphaned email_queue entries for cancelled tickers")
 
             conn.commit()
 

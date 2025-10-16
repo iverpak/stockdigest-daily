@@ -13295,6 +13295,9 @@ DO NOT: (bullish, capacity utilization) - too vague, (bearish, investigation) - 
 CRITICAL: For competitor news, assess impact on TARGET COMPANY.
 Competitor problem: (bullish, competitor disadvantage) | Competitor success: (bearish, competitive threat)
 
+CRITICAL: (sentiment, reason) and (inference: explanation) are INDEPENDENT systems - use BOTH when applicable.
+Example: "may pressure Q4 (bullish, timing) (inference: demand pull-forward hypothesis)"
+
 Example:
 • Gas plant acquisitions (bullish, capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy; closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
 
@@ -13338,6 +13341,8 @@ Only include if development directly threatens target or affects entire sector e
 
 SENTIMENT VALIDATION: Tag must match YOUR bullet's factual content.
 If bullet contains BOTH weakness + strength → use (mixed, clarifying balance)
+
+CRITICAL: (sentiment, reason) and (inference: explanation) are INDEPENDENT systems - use BOTH when applicable.
 
 Include (report factually, no causal connection):
 - {ticker} operational developments: Production issues, supply chain disruptions, quality problems with specific metrics
@@ -13447,6 +13452,8 @@ Competitor disadvantage classification:
 If competitor loses advantage/faces handicap → Tag as (bullish, competitor disadvantage)
 Example: Ford/GM cancelled lease programs = competitor-specific handicap benefiting target
 
+CRITICAL: (sentiment, reason) and (inference: explanation) are INDEPENDENT systems - use BOTH when applicable.
+
 📅 UPCOMING CATALYSTS (Only if events mentioned - 1-3 bullets max)
 
 Source: [COMPANY] articles only
@@ -13538,11 +13545,26 @@ Use qualitative language: "significant portion," "substantial market," "material
 
 VERIFICATION: Before including ANY specific number, confirm: "Did I read this exact number in an article?"
 
-CALCULATION & AGGREGATION INFERENCE:
-When combining multiple facts into single derived figure, flag methodology:
-- Aggregated totals: "estimated at $240B (inference, calculation: $40B deal + $200B estimated value for 200K units + partnership)"
-- Impact projections: "potential displacement (inference: analytical interpretation based on deal scope)"
-- Multi-step causation: "may create Q4 headwind (inference: connecting Sept surge timing to potential demand pull-forward)"
+INFERENCE FLAGGING - MANDATORY:
+Flag ALL analytical interpretations, calculations, and forward-looking connections INLINE immediately after the inferential statement.
+
+(sentiment, reason) and (inference: explanation) are INDEPENDENT systems:
+- Sentiment tags: After title, before colon - classify development type
+- Inference flags: INLINE in body wherever inferential content occurs - can appear beginning, middle, or end
+
+When to Flag:
+1. Calculations/Aggregations: Combining multiple figures into derived total
+2. Forward-Looking: Connecting present fact to future outcome
+3. Analytical Interpretation: Drawing conclusion beyond stated facts
+4. Undisclosed Links: Connecting events without explicit causation in source
+
+Examples (note inline placement):
+
+September delivery surge (bullish, demand timing): Orders jumped 47% potentially pulling forward Q4 demand (inference, forward-looking demand timing hypothesis); CEO cited strong backlog extending through year-end; wholesale inventory down 15% (Sep 30)
+
+BYD partnerships (mixed, scale vs. competition): Announced $40B deal plus partnership estimated $240B combined value (inference, aggregating disclosed deal with estimated partnership value); may displace 30% market share (inference, competitive impact projection) (Oct 8)
+
+Target: 10-20% of bullets should contain (inference: explanation) flags. Multiple flags per bullet allowed when multiple inferential statements present.
 
 ---
 
@@ -13648,10 +13670,6 @@ INFERENCE TARGET: 10-20% maximum across all sections. Achieve this by:
 4. Letting readers draw conclusions from presented facts
 5. Limiting inference to Upside/Downside Scenarios only
 
-When connecting present fact to future outcome, use "may" + flag:
-- "Sept surge may pressure Q4 (inference: demand pull-forward hypothesis)"
-NOT: "Sept surge pulled forward Q4 demand"
-
 Generate summary. Synthesize related articles. Surface contradictions. Benchmark competition. Contextualize trajectories. Extract signals. Filter noise. Omit empty sections. Stay factual. Use bullets. Scale to content volume. Maximum 10-20% inference.
 
 ---
@@ -13676,7 +13694,9 @@ SYNTHESIS QUALITY CHECK:
 ✅ If competitor benchmarks available: Contextualized comparatively (not listed separately)
 ✅ If recovery/growth mentioned: Distance from peak/trough shown
 ✅ If time phrases exist: Duration signals preserved ("through 2027," "since 2021")
-✅ If behavioral data exists: Prioritized over sentiment data (exchange flows > ETF inflows)"""
+✅ If behavioral data exists: Prioritized over sentiment data (exchange flows > ETF inflows)
+✅ (inference: explanation) flags present inline for calculations, forward-looking connections, analytical interpretations (target 10-20%)
+✅ Both systems used independently: (sentiment, reason) in title + (inference: explanation) inline where applicable"""
 
     return (system_prompt, user_content, company_name)
 

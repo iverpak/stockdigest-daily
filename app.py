@@ -13735,7 +13735,14 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
             LOG.info(f"✅ EXECUTIVE SUMMARY ({model_used}) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
 
             # Save to database with model tracking
-            article_ids = [a.get("id") for a in all_articles if a.get("id")]
+            # CRITICAL: Save ALL flagged article IDs (not just those with ai_summary)
+            # This ensures regenerate shows same articles as original Email #3
+            article_ids = []
+            for category in ["company", "industry", "competitor"]:
+                for article in categories.get(category, []):
+                    if article.get("id"):
+                        article_ids.append(article.get("id"))
+
             company_count = len([a for a in categories.get("company", []) if a.get("ai_summary")])
             industry_count = len([a for a in categories.get("industry", []) if a.get("ai_summary")])
             competitor_count = len([a for a in categories.get("competitor", []) if a.get("ai_summary")])

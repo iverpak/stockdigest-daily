@@ -474,6 +474,35 @@ def clean_null_bytes(text: str) -> str:
     cleaned = ''.join(char for char in cleaned if ord(char) >= 32 or char in '\n\r\t')
     return cleaned
 
+def parse_quality_score(ai_summary: str) -> tuple[str, float]:
+    """
+    Parse quality score from AI summary response.
+
+    Returns:
+        (cleaned_summary, quality_score) where quality_score is None if not found
+    """
+    if not ai_summary:
+        return ai_summary, None
+
+    lines = ai_summary.split('\n')
+    summary_lines = []
+    quality_score = None
+
+    for line in lines:
+        if line.strip().startswith('QUALITY:'):
+            try:
+                score_str = line.replace('QUALITY:', '').strip()
+                quality_score = float(score_str)
+                # Clamp to 0-10 range
+                quality_score = max(0.0, min(10.0, quality_score))
+            except (ValueError, AttributeError):
+                pass  # Invalid format, skip
+        else:
+            summary_lines.append(line)
+
+    cleaned_summary = '\n'.join(summary_lines).strip()
+    return cleaned_summary, quality_score
+
 def normalize_priority_to_int(priority):
     """Normalize priority to consistent integer format (1=High, 2=Medium, 3=Low)"""
     if isinstance(priority, int):
@@ -1158,6 +1187,9 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
 
+                -- Add quality score column to articles (Oct 2025)
+                ALTER TABLE articles ADD COLUMN IF NOT EXISTS quality_score NUMERIC(3,1);
+
                 -- Add financial data columns to ticker_reference if they don't exist
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_last_price NUMERIC(15, 2);
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_price_change_pct NUMERIC(10, 4);
@@ -1286,6 +1318,13 @@ def ensure_schema():
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
+
+                -- Add quality and scrape tracking columns to domain_names (Oct 2025)
+                ALTER TABLE domain_names ADD COLUMN IF NOT EXISTS quality_score_avg NUMERIC(3,1);
+                ALTER TABLE domain_names ADD COLUMN IF NOT EXISTS quality_count INTEGER DEFAULT 0;
+                ALTER TABLE domain_names ADD COLUMN IF NOT EXISTS scrape_attempts INTEGER DEFAULT 0;
+                ALTER TABLE domain_names ADD COLUMN IF NOT EXISTS scrape_failures INTEGER DEFAULT 0;
+                ALTER TABLE domain_names ADD COLUMN IF NOT EXISTS scrape_success_rate NUMERIC(5,2);
 
                 -- All indexes for performance
                 CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash);
@@ -1578,14 +1617,71 @@ def update_article_content(article_id: int, scraped_content: str = None, ai_summ
             """, params)
 
 @with_deadlock_retry()
-def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str, ai_model: str) -> None:
-    """Update ticker-specific AI summary (POV-based analysis)"""
+def update_domain_quality_stats(domain: str) -> None:
+    """Recalculate domain quality stats from articles table"""
+    if not domain:
+        return
+
     with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            UPDATE domain_names SET
+                quality_count = (
+                    SELECT COUNT(*)
+                    FROM articles
+                    WHERE domain = %s AND quality_score IS NOT NULL
+                ),
+                quality_score_avg = (
+                    SELECT AVG(quality_score)
+                    FROM articles
+                    WHERE domain = %s AND quality_score IS NOT NULL
+                ),
+                updated_at = NOW()
+            WHERE domain = %s
+        """, (domain, domain, domain))
+
+@with_deadlock_retry()
+def track_scrape_attempt(domain: str, success: bool) -> None:
+    """Track scrape attempt and update domain stats"""
+    if not domain:
+        return
+
+    with db() as conn, conn.cursor() as cur:
+        # Increment attempts
+        cur.execute("""
+            UPDATE domain_names
+            SET scrape_attempts = scrape_attempts + 1,
+                scrape_failures = scrape_failures + CASE WHEN %s THEN 0 ELSE 1 END,
+                scrape_success_rate =
+                    CASE
+                        WHEN (scrape_attempts + 1) > 0
+                        THEN ((scrape_attempts - scrape_failures + CASE WHEN %s THEN 1 ELSE 0 END) * 100.0 / (scrape_attempts + 1))
+                        ELSE 0
+                    END,
+                updated_at = NOW()
+            WHERE domain = %s
+        """, (success, success, domain))
+
+def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str, ai_model: str, quality_score: float = None, domain: str = None) -> None:
+    """Update ticker-specific AI summary and article quality score"""
+    with db() as conn, conn.cursor() as cur:
+        # Update ticker_articles with AI summary
         cur.execute("""
             UPDATE ticker_articles
             SET ai_summary = %s, ai_model = %s
             WHERE ticker = %s AND article_id = %s
         """, (ai_summary, ai_model, ticker, article_id))
+
+        # Update articles with quality score
+        if quality_score is not None:
+            cur.execute("""
+                UPDATE articles
+                SET quality_score = %s
+                WHERE id = %s
+            """, (quality_score, article_id))
+
+            # Update domain aggregation stats
+            if domain:
+                update_domain_quality_stats(domain)
 
 @with_deadlock_retry()
 def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
@@ -4788,10 +4884,14 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                     article = articles_batch[result["article_idx"]]
 
                     clean_content = clean_null_bytes(result["scraped_content"]) if result["scraped_content"] else None
-                    clean_summary = clean_null_bytes(result["ai_summary"]) if result["ai_summary"] else None
+                    raw_summary = clean_null_bytes(result["ai_summary"]) if result["ai_summary"] else None
+
+                    # Parse quality score from AI summary
+                    clean_summary, quality_score = parse_quality_score(raw_summary) if raw_summary else (None, None)
 
                     # Articles already exist - use their IDs directly
                     article_id = article.get("id")
+                    domain = article.get("domain")
 
                     # Update article with scraped content and error status
                     if article_id:
@@ -4800,6 +4900,10 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                             None, False, None
                         )
 
+                        # Track successful scrape
+                        if domain:
+                            track_scrape_attempt(domain, success=True)
+
                         # Ensure ticker relationship exists (don't pass category - it's immutable)
                         link_article_to_ticker(
                             article_id, analysis_ticker,
@@ -4807,10 +4911,11 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                             competitor_ticker=article.get("competitor_ticker")
                         )
 
-                        # Update ticker-specific AI summary (POV-based)
+                        # Update ticker-specific AI summary and quality score
                         if clean_summary and result.get("ai_model"):
                             update_ticker_article_summary(
-                                analysis_ticker, article_id, clean_summary, result.get("ai_model")
+                                analysis_ticker, article_id, clean_summary, result.get("ai_model"),
+                                quality_score=quality_score, domain=domain
                             )
 
                         successful_updates += 1
@@ -4820,6 +4925,7 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
 
                     # Articles already exist - use their IDs directly
                     article_id = article.get("id")
+                    domain = article.get("domain")
 
                     # Update article with scraping failure
                     if article_id:
@@ -4827,6 +4933,10 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                             article_id, None, None, None,
                             True, clean_null_bytes(result.get("error", ""))
                         )
+
+                        # Track failed scrape
+                        if domain:
+                            track_scrape_attempt(domain, success=False)
 
                         # Ensure ticker relationship exists (don't pass category - it's immutable)
                         link_article_to_ticker(
@@ -5645,7 +5755,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         else:
             badge_style = "background-color: #e6ffed; color: #22543d; border: 1px solid #9ae6b4;"
             badge_icon = "✓"
-            badge_label = f"ACCEPTED ({score:.1f}/10)"
+            badge_label = f"RELEVANCE ({score:.1f}/10)"
 
         relevance_badge_html = f'<span style="display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; {badge_style}">{badge_icon} {badge_label}</span>'
         header_badges.append(relevance_badge_html)
@@ -5653,6 +5763,28 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         # Relevance reason shown below badges, above AI summary
         reason_escaped = html.escape(reason)
         relevance_reason_html = f"<br><div style='color: #718096; font-size: 11px; font-style: italic; margin-top: 4px; padding: 6px 8px; background-color: #f7fafc; border-left: 3px solid {'#fc8181' if is_rejected else '#9ae6b4'}; border-radius: 3px;'><strong>Relevance:</strong> {reason_escaped}</div>"
+
+    # 7. Quality score badge (NEW - Oct 2025)
+    quality_badge_html = ""
+    if article.get('quality_score') is not None:
+        score = article.get('quality_score')
+
+        # Color based on score
+        if score >= 7.0:
+            badge_color = "#22543d"  # Green
+            bg_color = "#e6ffed"
+            border_color = "#9ae6b4"
+        elif score >= 5.0:
+            badge_color = "#744210"  # Yellow
+            bg_color = "#fefcbf"
+            border_color = "#f6e05e"
+        else:
+            badge_color = "#c53030"  # Red
+            bg_color = "#fee"
+            border_color = "#fc8181"
+
+        quality_badge_html = f'<span style="display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: {bg_color}; color: {badge_color}; border: 1px solid {border_color};">QUALITY ({score:.1f}/10)</span>'
+        header_badges.append(quality_badge_html)
 
     # AI Summary section - check for ai_summary field (conditional based on show_ai_analysis)
     ai_summary_html = ""
@@ -6229,7 +6361,19 @@ The user will provide company name, ticker, article title, and content. Extract 
 ❌ NEVER combine facts from general knowledge with article facts - extract ONLY from provided content
 ❌ NEVER editorialize on whether developments are "positive", "negative", "strong", or "weak" unless quoting source
 ❌ NEVER round numbers differently than article presents them
-❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)"""
+❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)
+
+**QUALITY SCORING:**
+After summary, output a single quality score (0-10) on next line as: QUALITY: X.X
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes."""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
@@ -6381,7 +6525,19 @@ Choose appropriate template:
 ❌ NEVER create competitive implications beyond factual competitive relationship
 ❌ NEVER compare competitor's metrics to target company unless article does so explicitly
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
-❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article"""
+❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
+
+**QUALITY SCORING:**
+After summary, output a single quality score (0-10) on next line as: QUALITY: X.X
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes."""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
@@ -7123,7 +7279,19 @@ The user will provide target company, ticker, driver keyword, geographic markets
 ❌ NO tangential information not directly related to fundamental drivers
 ❌ NO discussion of target company operations unless article explicitly mentions them
 
-**Multi-Driver Note:** Target company may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively."""
+**Multi-Driver Note:** Target company may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively.
+
+**QUALITY SCORING:**
+After summary, output a single quality score (0-10) on next line as: QUALITY: X.X
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes."""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
@@ -11475,6 +11643,7 @@ def generate_claude_ticker_metadata(ticker: str, company_name: str = None, secto
 CRITICAL REQUIREMENTS:
 - All competitors must be currently publicly traded with valid ticker symbols
 - Fundamental driver keywords must capture QUANTIFIABLE market forces that move the stock (NOT industry labels)
+- Industry keywords MUST be in Title Case (e.g., "Loan Growth", "EV Adoption", "Copper Prices")
 - Benchmarks must be sector-specific, not generic market indices
 - All information must be factually accurate
 - The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
@@ -11807,6 +11976,7 @@ CRITICAL REQUIREMENTS:
 - All competitors must be currently publicly traded with valid ticker symbols
 - Industry keywords must be SPECIFIC enough to avoid false positives in news filtering, but not so narrow that they miss material news.
 - Benchmarks must be sector-specific, not generic market indices
+- Industry keywords MUST be in Title Case (e.g., "Loan Growth", "EV Adoption", "Copper Prices")
 - All information must be factually accurate
 - The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
 - If any field is unknown, output an empty array for lists and omit optional fields. Never refuse; always return a valid JSON object.

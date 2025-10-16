@@ -20610,6 +20610,17 @@ def admin_settings_page(request: Request, token: str = Query(...)):
         "token": token
     })
 
+@APP.get("/admin/domains")
+def admin_domains_page(request: Request, token: str = Query(...)):
+    """Domain Analytics - Quality rankings and scrape health"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_domains.html", {
+        "request": request,
+        "token": token
+    })
+
 # Admin API endpoints
 @APP.get("/api/admin/stats")
 def get_admin_stats(token: str = Query(...)):
@@ -21872,6 +21883,43 @@ async def commit_ticker_csv_api(request: Request):
     except Exception as e:
         LOG.error(f"Manual GitHub commit failed: {e}")
         LOG.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/get-domain-stats")
+async def get_domain_stats_api(token: str = Query(...)):
+    """Get domain quality and scrape stats"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Get domains with stats
+            cur.execute("""
+                SELECT
+                    domain,
+                    formal_name,
+                    quality_score_avg,
+                    quality_count,
+                    scrape_attempts,
+                    scrape_failures,
+                    scrape_success_rate,
+                    updated_at
+                FROM domain_names
+                WHERE quality_count >= 5 OR scrape_attempts >= 5
+                ORDER BY quality_score_avg DESC NULLS LAST
+                LIMIT 250
+            """)
+
+            domains = cur.fetchall()
+
+            return {
+                "status": "success",
+                "domains": [dict(d) for d in domains],
+                "count": len(domains)
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to get domain stats: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.get("/api/get-lookback-window")

@@ -14552,6 +14552,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         ta.found_at, ta.category,
                         ta.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        a.quality_score,
                         ta.competitor_ticker,
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
@@ -14577,6 +14578,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         ta.found_at, ta.category,
                         ta.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
+                        a.quality_score,
                         ta.competitor_ticker,
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a

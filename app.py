@@ -20977,7 +20977,6 @@ async def regenerate_email_api(request: Request):
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.ticker = %s
                 AND a.id = ANY(%s)
-                AND ta.ai_summary IS NOT NULL
                 AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                 ORDER BY a.published_at DESC
             """, (ticker, original_article_ids))
@@ -20993,7 +20992,7 @@ async def regenerate_email_api(request: Request):
         if len(articles) != len(original_article_ids):
             LOG.warning(f"[{ticker}] Expected {len(original_article_ids)} articles, found {len(articles)}")
 
-        LOG.info(f"[{ticker}] Found {len(articles)} flagged articles with AI summaries")
+        LOG.info(f"[{ticker}] Found {len(articles)} flagged articles from original run")
 
         # Step 4: Group articles by category for executive summary generation
         categories = {"company": [], "industry": [], "competitor": []}

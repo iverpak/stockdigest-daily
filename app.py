@@ -23130,7 +23130,10 @@ def process_hourly_alerts():
 
                     article_data.append({
                         'ticker': article['ticker'],
+                        'category': article['category'],  # Raw category for template conditionals
                         'category_display': category_display,
+                        'search_keyword': article.get('search_keyword'),  # For industry badge
+                        'competitor_ticker': article.get('competitor_ticker'),  # For competitor badge
                         'title': article['title'],
                         'resolved_url': article.get('resolved_url') or article.get('url', '#'),
                         'domain_name': domain_name,

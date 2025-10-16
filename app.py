@@ -12924,14 +12924,19 @@ Include:
 - {ticker} contracts: Dollar amounts or strategic significance
 
 Format (use • bullet with TOPIC LABEL and sentiment tag):
-• Topic Label (sentiment - reason): [Development with context, amounts, dates] (Oct 10)
+• Topic Label (sentiment, reason): [Development with context, amounts, dates] (Oct 10)
 
-Topic Label: 2-5 words describing the development
-Sentiment options: bullish, bearish, neutral, mixed
-Reason: 2-4 word rationale (e.g., "capacity expansion", "execution risk", "information event")
+Sentiment options: bullish, bearish, neutral, mixed (ALWAYS from target company investor perspective)
+Reason: 2-4 words explaining INVESTOR IMPACT (not topic restatement)
+
+Examples: (bullish, market share gains), (bearish, regulatory risk), (neutral, organizational change)
+DO NOT: (bullish, capacity utilization) - too vague, (bearish, investigation) - restates topic
+
+CRITICAL: For competitor news, assess impact on TARGET COMPANY.
+Competitor problem: (bullish, competitor disadvantage) | Competitor success: (bearish, competitive threat)
 
 Example:
-• Gas plant acquisitions (bullish - capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy; closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
+• Gas plant acquisitions (bullish, capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy; closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
@@ -13045,15 +13050,20 @@ Include (report developments only):
 - Executive commentary: Direct quotes from earnings calls/statements
 
 Format (use • bullet with TOPIC LABEL and sentiment tag):
-• Topic Label (sentiment - reason): [What happened]. [Additional facts] (Oct 10)
+• Topic Label (sentiment, reason): [What happened]. [Additional facts] (Oct 10)
 
-Topic Label: 2-5 words describing the development
-Sentiment options: bullish, bearish, neutral, mixed
-Reason examples: "industry tailwind", "competitive threat", "sector development", "regulatory change"
+Sentiment options: bullish, bearish, neutral, mixed (ALWAYS from target company investor perspective)
+Reason: 2-4 words explaining INVESTOR IMPACT (not topic restatement)
+
+Examples: (bullish, market share gains), (bearish, regulatory risk), (neutral, organizational change)
+DO NOT: (bullish, capacity utilization) - too vague, (bearish, investigation) - restates topic
+
+CRITICAL: For competitor news, assess impact on TARGET COMPANY.
+Competitor problem: (bullish, competitor disadvantage) | Competitor success: (bearish, competitive threat)
 
 Examples:
-✅ CORRECT: • PJM capacity prices (bullish - industry tailwind): PJM Interconnection capacity prices rose 900% from 2024 to 2025 year-to-date following years of generally low and stable pricing; energy prices increased approximately 100% over same period; PJM warns of electrical capacity shortfalls as early as 2026-2027 (Oct 10)
-✅ CORRECT: • GM affordable EV offensive (bearish - competitive threat): 2027 Chevrolet Bolt launching Q1 2026 at $29,990 ($28,995 LT variant later); 65-kWh LFP battery delivers 255 miles range (highest under $30K); 150+ kW DC fast charging; native NACS port for Tesla Supercharger access (Oct 10)
+✅ CORRECT: • PJM capacity prices (bullish, industry tailwind): PJM Interconnection capacity prices rose 900% from 2024 to 2025 year-to-date following years of generally low and stable pricing; energy prices increased approximately 100% over same period; PJM warns of electrical capacity shortfalls as early as 2026-2027 (Oct 10)
+✅ CORRECT: • GM affordable EV offensive (bearish, competitive threat): 2027 Chevrolet Bolt launching Q1 2026 at $29,990 ($28,995 LT variant later); 65-kWh LFP battery delivers 255 miles range (highest under $30K); 150+ kW DC fast charging; native NACS port for Tesla Supercharger access (Oct 10)
 
 DO NOT write:
 ✗ "threatening {ticker}'s market share"
@@ -13086,8 +13096,9 @@ For Material News Days (1+ flagged articles):
 📈 UPSIDE SCENARIO:
 
 Format: Single paragraph, 3-4 sentences (~80-100 words)
-Reference items from above sections WITHOUT repeating specific numbers/details
+Reference items from above sections WITHOUT repeating specific numbers/details AND without section citations
 Maximum 10-20% inference - synthesize stated facts, don't speculate beyond logical extensions
+Focus on 3 strongest supporting points only
 
 Example structure:
 "[Development from Major Developments] positions company to [stated outcome]. [Financial metric from Financial Performance] demonstrates [factual trend]. [Competitive dynamic] supports [direct implication]. [Catalyst] will provide [stated visibility]."

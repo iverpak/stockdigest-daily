@@ -13472,6 +13472,8 @@ Example:
 
 CRITICAL: Maximum 10-20% inference. Cite specific developments from today's news.
 
+CRITICAL: Apply (inference, explanation) flags inline for ALL forward-looking connections and analytical interpretations per INFERENCE FLAGGING rules above.
+
 CRITICAL: Write sub-headers exactly as shown with emojis: "📈 UPSIDE SCENARIO:", "📉 DOWNSIDE SCENARIO:", "🔍 KEY VARIABLES TO MONITOR:"
 
 For Material News Days (1+ flagged articles):
@@ -13548,23 +13550,25 @@ VERIFICATION: Before including ANY specific number, confirm: "Did I read this ex
 INFERENCE FLAGGING - MANDATORY:
 Flag ALL analytical interpretations, calculations, and forward-looking connections INLINE immediately after the inferential statement.
 
-(sentiment, reason) and (inference: explanation) are INDEPENDENT systems:
+(sentiment, reason) and (inference, explanation) are INDEPENDENT systems:
 - Sentiment tags: After title, before colon - classify development type
-- Inference flags: INLINE in body wherever inferential content occurs - can appear beginning, middle, or end
+- Inference flags: INLINE in body wherever inferential content occurs - applies to bullets AND paragraphs
+
+FORMAT: Use comma, match sentiment tag format: (inference, explanation)
 
 When to Flag:
-1. Calculations/Aggregations: Combining multiple figures into derived total
-2. Forward-Looking: Connecting present fact to future outcome
-3. Analytical Interpretation: Drawing conclusion beyond stated facts
-4. Undisclosed Links: Connecting events without explicit causation in source
+1. Forward-Looking Connections: "position company to capture growth" → (inference, connecting capacity to revenue opportunity)
+2. Analytical Interpretations: "demonstrates valuation risk" → (inference, peer comparison indicating downside)
+3. Calculations/Aggregations: "estimated $240B combined value" → (inference, aggregating separate deals)
+4. Causal Projections: "potentially benefiting utilization" → (inference, extrapolating crisis dynamics to future)
 
-Examples (note inline placement):
+Examples (note comma format and inline placement):
 
 September delivery surge (bullish, demand timing): Orders jumped 47% potentially pulling forward Q4 demand (inference, forward-looking demand timing hypothesis); CEO cited strong backlog extending through year-end; wholesale inventory down 15% (Sep 30)
 
-BYD partnerships (mixed, scale vs. competition): Announced $40B deal plus partnership estimated $240B combined value (inference, aggregating disclosed deal with estimated partnership value); may displace 30% market share (inference, competitive impact projection) (Oct 8)
+Pipeline projects position company to capture LNG demand growth (inference, connecting capacity additions to revenue opportunity), while revenue stability supports projected growth through decade.
 
-Target: 10-20% of bullets should contain (inference: explanation) flags. Multiple flags per bullet allowed when multiple inferential statements present.
+Target: ALL inferential statements must be flagged. Total inference should remain 10-20% maximum per INFERENCE TARGET section below.
 
 ---
 

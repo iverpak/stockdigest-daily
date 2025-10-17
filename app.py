@@ -6425,7 +6425,7 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
     # with CLAUDE_SEM:
     if True:  # Maintain indentation
         try:
-            # System prompt (generic - cacheable, ~1800 tokens - optimized for caching and comprehensive extraction)
+            # System prompt (generic - cacheable, ~3500 tokens - optimized for caching and comprehensive extraction)
             system_prompt = """You are a hedge fund analyst extracting information about a target company for an investment research report.
 
 **YOUR TASK:**
@@ -7182,6 +7182,7 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 512,
+                "temperature": 0.1,
                 "system": [
                     {
                         "type": "text",
@@ -10146,6 +10147,7 @@ Select the {target_cap} most important articles about {company_name} from the {l
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
+            "temperature": 0.4,
             "system": [
                 {
                     "type": "text",
@@ -10406,6 +10408,7 @@ Select UP TO {target_cap} most important articles about fundamental market drive
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
+            "temperature": 0.4,
             "system": [
                 {
                     "type": "text",
@@ -10595,6 +10598,7 @@ Select the {target_cap} most important articles about {competitor_name} from the
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
+            "temperature": 0.4,
             "system": [
                 {
                     "type": "text",
@@ -12415,6 +12419,7 @@ Return ONLY valid JSON with no additional commentary."""
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
+            "temperature": 0.5,
             "system": [
                 {
                     "type": "text",
@@ -13671,6 +13676,40 @@ Never create multi-hop logical chains:
 ✅ ALLOWED: "X happened → affects Y per [Article author]"
 
 Stop at the first connection articles don't explicitly make.
+<<<<<<< Updated upstream
+=======
+
+---
+
+🎯 INTELLIGENCE SYNTHESIS APPROACH
+
+As you read articles, look for these patterns:
+
+1. **Contradictions** - Opposing signals from different sources
+   Example: "Price rallied to $X per [Source A]; however, [Expert] notes supply remains ample per [Source B]"
+
+2. **Comparative Benchmarks** - When sources provide direct comparisons
+   Example: "Peer A costs $29K/unit per [Article 1]; {ticker} costs $56K/unit per [Article 2]"
+
+3. **Recovery Context** - When sources provide historical reference points
+   Example: "Recovered to $116K, still 8% below $126K peak per [Source]"
+
+4. **Sequential Developments** - When sources describe temporal progression
+   Example: "Investigation filed Oct 8 per [Source A]; discovery phase began Oct 12 per [Source B]"
+
+5. **Expert Commentary** - Preserve direct quotes and attributions
+   Example: "[Analyst name] from [Firm] stated 'expects strong demand through 2027'"
+
+SYNTHESIS DECISION RULES:
+
+When 2+ articles cover same topic:
+
+1. **If contradiction exists** → Report separately to preserve both views
+2. **If same event** → Combine with full attribution to all sources
+3. **If same framework/conclusion** → Synthesize with attribution
+4. **If dates >3 days apart AND different events** → Separate bullets
+5. **If different topics** → Never synthesize (even if they share keywords)
+>>>>>>> Stashed changes
 
 ---
 
@@ -14668,6 +14707,7 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 10000,
+            "temperature": 0.3,
             "system": [
                 {
                     "type": "text",

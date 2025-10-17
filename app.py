@@ -13188,6 +13188,11 @@ Before writing any sentence, ask: "Did an article explicitly state this conclusi
 • Article explicitly stated it → Report as fact (no flag)
 • You derived it by analysis → Flag it: (inference: 2-7 word explanation)
 
+INFERENCE HIERARCHY (within 10% budget):
+- Direct causation (cost→margin, volume→revenue): Strongly preferred - use as primary analysis tool
+- Single extrapolation (sector trend→company, competitor→positioning): Use sparingly when necessary
+- Multi-step chains (A→B→C, stock performance→psychology→strategy): Avoid unless critical to thesis
+
 EXAMPLES:
 
 Facts (no flag needed):

@@ -15905,7 +15905,9 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
         "wall_street": [],
         "competitive_industry": [],
         "upcoming_catalysts": [],
-        "investment_implications": []
+        "upside_scenario": [],
+        "downside_scenario": [],
+        "key_variables": []
     }
 
     if not summary_text:
@@ -15920,7 +15922,9 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
         ("📈 WALL STREET SENTIMENT", "wall_street"),
         ("⚡ COMPETITIVE/INDUSTRY DYNAMICS", "competitive_industry"),
         ("📅 UPCOMING CATALYSTS", "upcoming_catalysts"),
-        ("🎯 INVESTMENT IMPLICATIONS", "investment_implications")
+        ("📈 UPSIDE SCENARIO", "upside_scenario"),
+        ("📉 DOWNSIDE SCENARIO", "downside_scenario"),
+        ("🔍 KEY VARIABLES TO MONITOR", "key_variables")
     ]
 
     current_section = None
@@ -15940,8 +15944,8 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
         if not is_header and current_section:
             # Line is content, not a header
 
-            # Special handling for bottom_line and investment_implications: capture ALL text
-            if current_section in ['bottom_line', 'investment_implications']:
+            # Special handling for paragraphs: capture ALL text (not just bullets)
+            if current_section in ['bottom_line', 'upside_scenario', 'downside_scenario']:
                 # Skip lines that start with section markers (shouldn't happen but be safe)
                 if not line.startswith(section_marker_prefixes):
                     # Skip empty lines at start, but keep them once content exists
@@ -15957,76 +15961,6 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
                         sections[current_section].append(bullet_text)
 
     return sections
-
-
-def parse_investment_implications_subsections(content: List[str]) -> Dict[str, any]:
-    """
-    Parse Investment Implications section into sub-sections.
-
-    Returns:
-    {
-        'is_quiet_day': bool,
-        'quiet_day_text': str (if quiet day),
-        'upside_scenario': [...paragraphs...],
-        'downside_scenario': [...paragraphs...],
-        'key_variables': [...bullets...]
-    }
-    """
-    result = {
-        'is_quiet_day': False,
-        'quiet_day_text': '',
-        'upside_scenario': [],
-        'downside_scenario': [],
-        'key_variables': []
-    }
-
-    if not content:
-        return result
-
-    # Join content to check for quiet day
-    full_text = '\n'.join(content)
-
-    # Check if it's a quiet day
-    if 'NO MATERIAL DEVELOPMENTS' in full_text:
-        result['is_quiet_day'] = True
-        result['quiet_day_text'] = full_text.strip()
-        return result
-
-    # Parse material news day sub-sections
-    current_subsection = None
-
-    for line in content:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Check for sub-section headers (with or without emojis)
-        # Support BOTH old and new terminology for backward compatibility
-        if 'UPSIDE SCENARIO' in line or 'BULL CASE' in line:
-            current_subsection = 'upside_scenario'
-            continue
-        elif 'DOWNSIDE SCENARIO' in line or 'BEAR CASE' in line:
-            current_subsection = 'downside_scenario'
-            continue
-        elif 'KEY VARIABLES TO MONITOR' in line:
-            current_subsection = 'key_variables'
-            continue
-
-        # Extract content based on subsection type
-        if current_subsection:
-            # Upside/Downside are PARAGRAPHS (capture all lines, not just bullets)
-            if current_subsection in ['upside_scenario', 'downside_scenario']:
-                # Avoid re-capturing section headers (lines starting with emoji markers)
-                if not any(line.startswith(marker) for marker in ['📈', '📉', '🔍', '📌', '🔴', '📊', '⚠️', '📅', '⚡', '🎯']):
-                    result[current_subsection].append(line)
-            # Key Variables are BULLETS
-            elif current_subsection == 'key_variables':
-                if line.startswith('•') or line.startswith('-'):
-                    bullet_text = line.lstrip('•- ').strip()
-                    if bullet_text:
-                        result[current_subsection].append(bullet_text)
-
-    return result
 
 
 def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
@@ -16218,20 +16152,14 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 </div>
             '''
 
-    # Check for quiet day
-    investment_impl = sections.get("investment_implications", [])
-    parsed_investment = parse_investment_implications_subsections(investment_impl)
+    # Check for quiet day (FLAGGED ARTICLE COUNT = 0)
+    bottom_line_content = sections.get("bottom_line", [])
+    is_quiet_day = any("QUIET DAY - NO MATERIAL DEVELOPMENTS" in line for line in bottom_line_content)
 
-    if parsed_investment['is_quiet_day']:
-        # Quiet day: just return plain paragraph text (no headers, no sections)
-        quiet_text = parsed_investment['quiet_day_text']
-        # Strip any markdown formatting AI may have added
-        quiet_text = strip_markdown_formatting(quiet_text)
-        return f'''
-            <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">
-                {quiet_text.replace(chr(10), '<br>')}
-            </div>
-        '''
+    if is_quiet_day:
+        # Quiet day: render ONLY bottom line section (3 lines)
+        return build_section("📌 Bottom Line" if not strip_emojis else "Bottom Line",
+                           bottom_line_content, use_bullets=False)
 
     # Material news day: build sections
     html = ""
@@ -16254,21 +16182,15 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     html += build_section("📅 Upcoming Catalysts" if not strip_emojis else "Upcoming Catalysts",
                          sections.get("upcoming_catalysts", []), use_bullets=True, bold_labels=True)
 
-    # Investment Implications parent header (only if has content)
-    if any([parsed_investment['upside_scenario'], parsed_investment['downside_scenario'],
-            parsed_investment['key_variables']]):
-        html += build_section("🎯 Investment Implications" if not strip_emojis else "Investment Implications",
-                             [], use_bullets=False, bold_labels=False)  # Empty content, just header
-
-    # Investment Implications sub-sections as top-level sections
-    # Upside/Downside are PARAGRAPHS (use_bullets=False, bold_labels=False)
+    # Three new top-level sections (Oct 2025 - upgraded from sub-sections)
+    # Upside/Downside are PARAGRAPHS (use_bullets=False)
     # Key Variables are BULLETS (use_bullets=True, bold_labels=True)
-    html += build_section("Upside Scenario" if strip_emojis else "📈 Upside Scenario",
-                         parsed_investment['upside_scenario'], use_bullets=False, bold_labels=False)
-    html += build_section("Downside Scenario" if strip_emojis else "📉 Downside Scenario",
-                         parsed_investment['downside_scenario'], use_bullets=False, bold_labels=False)
-    html += build_section("Key Variables to Monitor" if strip_emojis else "🔍 Key Variables to Monitor",
-                         parsed_investment['key_variables'], use_bullets=True, bold_labels=True)
+    html += build_section("📈 Upside Scenario" if not strip_emojis else "Upside Scenario",
+                         sections.get("upside_scenario", []), use_bullets=False)
+    html += build_section("📉 Downside Scenario" if not strip_emojis else "Downside Scenario",
+                         sections.get("downside_scenario", []), use_bullets=False)
+    html += build_section("🔍 Key Variables to Monitor" if not strip_emojis else "Key Variables to Monitor",
+                         sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
     return html
 

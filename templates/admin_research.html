@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Tools - StockDigest Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #ffffff;
+            padding: 24px 32px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .header .back-link {
+            display: inline-block;
+            color: #ffffff;
+            text-decoration: none;
+            margin-bottom: 12px;
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .header .back-link:hover {
+            opacity: 1;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .card {
+            background: #ffffff;
+            padding: 32px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 12px;
+            font-size: 14px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #1e40af;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 24px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .radio-option input[type="radio"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .radio-option label {
+            margin: 0;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .btn {
+            display: inline-block;
+            background: #1e40af;
+            color: #ffffff;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #1e3a8a;
+        }
+
+        .btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #6b7280;
+            margin-left: 12px;
+        }
+
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+
+        .validation-result {
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .validation-result.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
+
+        .validation-result.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
+        }
+
+        .validation-result.warning {
+            background: #fef3c7;
+            color: #92400e;
+            border: 1px solid #f59e0b;
+        }
+
+        .status-message {
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .status-message.processing {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #3b82f6;
+        }
+
+        .status-message.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
+
+        .status-message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #1e40af;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6b7280;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/admin?token={{ token }}" class="back-link">← Back to Dashboard</a>
+        <h1>📑 Research Tools</h1>
+        <p>Generate AI summaries of earnings call transcripts and press releases</p>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <form id="research-form">
+                <!-- Ticker Input -->
+                <div class="form-group">
+                    <label for="ticker">Ticker Symbol</label>
+                    <input type="text" id="ticker" name="ticker" placeholder="e.g., AAPL, RY.TO" required>
+                    <button type="button" id="validate-btn" class="btn" style="margin-top: 12px;">Validate Ticker</button>
+                    <div id="validation-result"></div>
+                </div>
+
+                <!-- Report Type -->
+                <div class="form-group">
+                    <label>Report Type</label>
+                    <div class="radio-group">
+                        <div class="radio-option">
+                            <input type="radio" id="type-transcript" name="report_type" value="transcript" checked>
+                            <label for="type-transcript">Earnings Call Transcript</label>
+                        </div>
+                        <div class="radio-option">
+                            <input type="radio" id="type-press-release" name="report_type" value="press_release">
+                            <label for="type-press-release">Press Release</label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quarter Selection (Transcripts) -->
+                <div class="form-group" id="quarter-section">
+                    <label for="quarter">Select Quarter</label>
+                    <select id="quarter" name="quarter" required>
+                        <option value="">Validate ticker first...</option>
+                    </select>
+                </div>
+
+                <!-- Press Release Selection -->
+                <div class="form-group" id="press-release-section" style="display: none;">
+                    <label for="press-release">Select Press Release</label>
+                    <select id="press-release" name="press_release" required>
+                        <option value="">Validate ticker first...</option>
+                    </select>
+                </div>
+
+                <!-- Submit Button -->
+                <div style="margin-top: 32px;">
+                    <button type="submit" id="submit-btn" class="btn" disabled>Generate Summary</button>
+                    <button type="button" onclick="resetForm()" class="btn btn-secondary">Reset</button>
+                </div>
+
+                <!-- Status Message -->
+                <div id="status-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>StockDigest Research Tools | <a href="mailto:stockdigest.research@gmail.com" style="color: #1e40af;">Contact Support</a></p>
+    </div>
+
+    <script>
+        const token = '{{ token }}';
+        let validationData = null;
+
+        // Toggle sections based on report type
+        document.querySelectorAll('input[name="report_type"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                const quarterSection = document.getElementById('quarter-section');
+                const prSection = document.getElementById('press-release-section');
+
+                if (this.value === 'transcript') {
+                    quarterSection.style.display = 'block';
+                    prSection.style.display = 'none';
+                    document.getElementById('quarter').required = true;
+                    document.getElementById('press-release').required = false;
+                } else {
+                    quarterSection.style.display = 'none';
+                    prSection.style.display = 'block';
+                    document.getElementById('quarter').required = false;
+                    document.getElementById('press-release').required = true;
+                }
+
+                // Clear validation when switching types
+                validationData = null;
+                document.getElementById('submit-btn').disabled = true;
+            });
+        });
+
+        // Auto-validate on blur
+        document.getElementById('ticker').addEventListener('blur', validateTicker);
+
+        // Validate ticker button
+        document.getElementById('validate-btn').addEventListener('click', validateTicker);
+
+        async function validateTicker() {
+            const ticker = document.getElementById('ticker').value.trim().toUpperCase();
+            const type = document.querySelector('input[name="report_type"]:checked').value;
+            const resultDiv = document.getElementById('validation-result');
+
+            if (!ticker) {
+                resultDiv.innerHTML = '';
+                return;
+            }
+
+            resultDiv.innerHTML = '<div class="validation-result"><span class="loading"></span> Validating...</div>';
+
+            try {
+                const response = await fetch(`/api/fmp-validate-ticker?ticker=${ticker}&type=${type}`);
+                const data = await response.json();
+
+                if (data.valid) {
+                    validationData = data;
+
+                    if (type === 'transcript') {
+                        // Populate quarter dropdown
+                        const select = document.getElementById('quarter');
+                        select.innerHTML = '';
+
+                        if (data.available_quarters && data.available_quarters.length > 0) {
+                            data.available_quarters.forEach((q, index) => {
+                                const option = document.createElement('option');
+                                option.value = q;
+                                option.textContent = q + (index === 0 ? ' (Latest)' : '');
+                                select.appendChild(option);
+                            });
+
+                            resultDiv.innerHTML = `<div class="validation-result success">✅ ${ticker} (${data.company_name}) | ${data.available_quarters.length} transcripts available</div>`;
+                            document.getElementById('submit-btn').disabled = false;
+                        } else {
+                            resultDiv.innerHTML = `<div class="validation-result warning">⚠️ ${ticker} (${data.company_name}) found, but no transcripts available from FMP</div>`;
+                            select.innerHTML = '<option value="">No transcripts available</option>';
+                            document.getElementById('submit-btn').disabled = true;
+                        }
+                    } else {
+                        // Populate press release dropdown
+                        const select = document.getElementById('press-release');
+                        select.innerHTML = '';
+
+                        if (data.available_releases && data.available_releases.length > 0) {
+                            data.available_releases.forEach(r => {
+                                const option = document.createElement('option');
+                                option.value = r.date;
+                                option.textContent = `${r.date} - ${r.title}`;
+                                select.appendChild(option);
+                            });
+
+                            resultDiv.innerHTML = `<div class="validation-result success">✅ ${ticker} (${data.company_name}) | ${data.available_releases.length} press releases available</div>`;
+                            document.getElementById('submit-btn').disabled = false;
+                        } else {
+                            resultDiv.innerHTML = `<div class="validation-result warning">⚠️ ${ticker} (${data.company_name}) found, but no press releases available from FMP</div>`;
+                            select.innerHTML = '<option value="">No press releases available</option>';
+                            document.getElementById('submit-btn').disabled = true;
+                        }
+                    }
+                } else {
+                    resultDiv.innerHTML = `<div class="validation-result error">❌ ${data.error || 'Ticker not found'}</div>`;
+                    document.getElementById('submit-btn').disabled = true;
+                }
+            } catch (error) {
+                console.error('Validation error:', error);
+                resultDiv.innerHTML = `<div class="validation-result error">❌ Validation failed. Please try again.</div>`;
+                document.getElementById('submit-btn').disabled = true;
+            }
+        }
+
+        // Form submission (will integrate with job queue in next step)
+        document.getElementById('research-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const statusDiv = document.getElementById('status-message');
+            const submitBtn = document.getElementById('submit-btn');
+            const ticker = document.getElementById('ticker').value.trim().toUpperCase();
+            const reportType = document.querySelector('input[name="report_type"]:checked').value;
+
+            submitBtn.disabled = true;
+            statusDiv.innerHTML = '<div class="status-message processing"><span class="loading"></span> Submitting job to queue...</div>';
+
+            try {
+                // Get selected quarter or press release
+                let quarter = null;
+                let year = null;
+                let prDate = null;
+
+                if (reportType === 'transcript') {
+                    const quarterStr = document.getElementById('quarter').value; // e.g., "Q3 2024"
+                    const match = quarterStr.match(/Q(\d+)\s+(\d{4})/);
+                    if (match) {
+                        quarter = parseInt(match[1]);
+                        year = parseInt(match[2]);
+                    }
+                } else {
+                    prDate = document.getElementById('press-release').value;
+                }
+
+                // Submit to API endpoint
+                const payload = {
+                    token: token,
+                    ticker: ticker,
+                    report_type: reportType,
+                    quarter: quarter,
+                    year: year,
+                    pr_date: prDate
+                };
+
+                const response = await fetch('/api/admin/generate-research-summary', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    statusDiv.innerHTML = `<div class="status-message success">✅ ${data.message}</div>`;
+                } else {
+                    statusDiv.innerHTML = `<div class="status-message error">❌ Error: ${data.message}</div>`;
+                    submitBtn.disabled = false;
+                }
+
+            } catch (error) {
+                console.error('Submission error:', error);
+                statusDiv.innerHTML = `<div class="status-message error">❌ Failed to submit job: ${error.message}</div>`;
+                submitBtn.disabled = false;
+            }
+        });
+
+        function resetForm() {
+            document.getElementById('research-form').reset();
+            document.getElementById('validation-result').innerHTML = '';
+            document.getElementById('status-message').innerHTML = '';
+            document.getElementById('submit-btn').disabled = true;
+            validationData = null;
+
+            // Reset dropdowns
+            document.getElementById('quarter').innerHTML = '<option value="">Validate ticker first...</option>';
+            document.getElementById('press-release').innerHTML = '<option value="">Validate ticker first...</option>';
+
+            // Show transcript section by default
+            document.getElementById('quarter-section').style.display = 'block';
+            document.getElementById('press-release-section').style.display = 'none';
+        }
+    </script>
+</body>
+</html>

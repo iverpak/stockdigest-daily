@@ -15816,6 +15816,215 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     return html
 
 
+def build_research_summary_html(sections: Dict[str, List[str]], content_type: str) -> str:
+    """
+    Build HTML for research summary (earnings transcript or press release).
+    Strips emojis from section headers.
+    Handles special Q&A format for transcripts and Investment Implications sub-sections.
+
+    Args:
+        sections: Parsed sections from parse_research_summary_sections()
+        content_type: 'transcript' or 'press_release'
+
+    Returns:
+        HTML string with all sections rendered
+    """
+    # Import helper functions (defined within scope for encapsulation)
+    def strip_emoji(text: str) -> str:
+        """Remove emoji characters from text"""
+        import re
+        emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            u"\U00002702-\U000027B0"
+            u"\U000024C2-\U0001F251"
+            u"\U0001F900-\U0001F9FF"  # supplemental symbols
+            u"\U00002600-\U000026FF"  # misc symbols
+            "]+", flags=re.UNICODE)
+        return emoji_pattern.sub('', text).strip()
+
+    def strip_markdown_formatting(text: str) -> str:
+        """Strip markdown formatting (bold, italic) that AI sometimes adds"""
+        import re
+        text = re.sub(r'\*\*([^*]+?)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+?)__', r'\1', text)
+        text = re.sub(r'\*([^*]+?)\*', r'\1', text)
+        text = re.sub(r'_([^_]+?)_', r'\1', text)
+        return text
+
+    def bold_bullet_labels(text: str) -> str:
+        """Bold topic labels in format 'Topic Label: Details'"""
+        import re
+        text = strip_markdown_formatting(text)
+        pattern = r'^([^:]{2,130}?:)(\s)'
+        replacement = r'<strong>\1</strong>\2'
+        return re.sub(pattern, replacement, text)
+
+    def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
+        """Build section with consistent styling (always strips emojis for research reports)"""
+        if not content:
+            return ""
+
+        # Always strip emojis from title
+        display_title = strip_emoji(title)
+
+        if use_bullets:
+            # Bullet list format
+            bullet_html = ""
+            for item in content:
+                processed_item = bold_bullet_labels(item) if bold_labels else item
+                bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{processed_item}</li>'
+
+            return f'''
+                <div style="margin-bottom: 20px;">
+                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h2>
+                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+                        {bullet_html}
+                    </ul>
+                </div>
+            '''
+        else:
+            # Paragraph format
+            content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
+            text = "<br>".join(content_filtered)
+
+            return f'''
+                <div style="margin-bottom: 20px;">
+                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h2>
+                    <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">{text}</div>
+                </div>
+            '''
+
+    def build_qa_section(qa_content: List[str]) -> str:
+        """Build Q&A section with Q:/A: paragraph format"""
+        if not qa_content:
+            return ""
+
+        html = '<div style="margin-bottom: 20px;">'
+        html += '<h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Q&A Highlights</h2>'
+
+        for line in qa_content:
+            line_stripped = line.strip()
+            if line_stripped.startswith("Q:"):
+                # Bold Q only
+                html += f'<p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.6; color: #374151;"><strong>{line_stripped}</strong></p>'
+            elif line_stripped.startswith("A:"):
+                # Regular A
+                html += f'<p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.6; color: #374151;">{line_stripped}</p>'
+            elif not line_stripped:
+                # Blank line between Q&A pairs
+                html += '<br>'
+
+        html += '</div>'
+        return html
+
+    def build_investment_section(inv_content: List[str]) -> str:
+        """Build Investment Implications with 3 sub-sections"""
+        if not inv_content:
+            return ""
+
+        # Parse sub-sections
+        upside_scenario = []
+        downside_scenario = []
+        key_variables = []
+        current_subsection = None
+
+        for line in inv_content:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Check for sub-section headers
+            if 'UPSIDE SCENARIO' in line:
+                current_subsection = 'upside'
+                continue
+            elif 'DOWNSIDE SCENARIO' in line:
+                current_subsection = 'downside'
+                continue
+            elif 'KEY VARIABLES TO MONITOR' in line:
+                current_subsection = 'variables'
+                continue
+
+            # Extract content based on subsection type
+            if current_subsection == 'upside':
+                upside_scenario.append(line)
+            elif current_subsection == 'downside':
+                downside_scenario.append(line)
+            elif current_subsection == 'variables':
+                # Key Variables are BULLETS
+                if line.startswith('•') or line.startswith('-'):
+                    bullet_text = line.lstrip('•- ').strip()
+                    if bullet_text:
+                        key_variables.append(bullet_text)
+
+        # Build HTML
+        html = ''
+
+        # Parent header
+        if upside_scenario or downside_scenario or key_variables:
+            html += '''
+                <div style="margin-bottom: 20px;">
+                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Investment Implications</h2>
+                </div>
+            '''
+
+        # Upside/Downside are PARAGRAPHS
+        html += build_section("📈 Upside Scenario", upside_scenario, use_bullets=False, bold_labels=False)
+        html += build_section("📉 Downside Scenario", downside_scenario, use_bullets=False, bold_labels=False)
+
+        # Key Variables are BULLETS with bold labels
+        html += build_section("🔍 Key Variables to Monitor", key_variables, use_bullets=True, bold_labels=True)
+
+        return html
+
+    # Build HTML in order
+    html = ""
+
+    # 1. Bottom Line (always, paragraph format)
+    if "bottom_line" in sections:
+        html += build_section("📌 Bottom Line", sections["bottom_line"], use_bullets=False)
+
+    # 2-10. Conditional sections (bullet format with bold labels)
+    if "financial_results" in sections:
+        html += build_section("💰 Financial Results", sections["financial_results"], use_bullets=True, bold_labels=True)
+
+    if "major_developments" in sections:
+        html += build_section("🏢 Major Developments", sections["major_developments"], use_bullets=True, bold_labels=True)
+
+    if "operational_metrics" in sections:
+        html += build_section("📊 Operational Metrics", sections["operational_metrics"], use_bullets=True, bold_labels=True)
+
+    if "guidance" in sections:
+        html += build_section("📈 Guidance", sections["guidance"], use_bullets=True, bold_labels=True)
+
+    if "strategic_initiatives" in sections:
+        html += build_section("🎯 Strategic Initiatives", sections["strategic_initiatives"], use_bullets=True, bold_labels=True)
+
+    if "management_sentiment" in sections:
+        html += build_section("💼 Management Sentiment & Tone", sections["management_sentiment"], use_bullets=True, bold_labels=True)
+
+    if "risk_factors" in sections:
+        html += build_section("⚠️ Risk Factors & Headwinds", sections["risk_factors"], use_bullets=True, bold_labels=True)
+
+    if "industry_competitive" in sections:
+        html += build_section("🏭 Industry & Competitive Landscape", sections["industry_competitive"], use_bullets=True, bold_labels=True)
+
+    if "capital_allocation" in sections:
+        html += build_section("💡 Capital Allocation & Balance Sheet", sections["capital_allocation"], use_bullets=True, bold_labels=True)
+
+    # 11. Q&A Highlights (transcripts only, special format)
+    if content_type == 'transcript' and "qa_highlights" in sections:
+        html += build_qa_section(sections["qa_highlights"])
+
+    # 12. Investment Implications (always, special format with 3 sub-sections)
+    if "investment_implications" in sections:
+        html += build_investment_section(sections["investment_implications"])
+
+    return html
+
+
 def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     """
     Convert articles by category into HTML string for email template.
@@ -16169,6 +16378,197 @@ def generate_email_html_core(
         "company_name": company_name,
         "article_count": analyzed_count
     }
+
+def generate_research_email(
+    ticker: str,
+    company_name: str,
+    report_type: str,  # 'transcript' or 'press_release'
+    quarter: str = None,  # 'Q3' for transcripts, None for PRs
+    year: int = None,
+    report_date: str = None,  # 'Oct 25, 2024'
+    pr_title: str = None,
+    summary_text: str = None,
+    fmp_url: str = None
+) -> Dict[str, str]:
+    """
+    Generate research summary email HTML for earnings transcripts or press releases.
+
+    Args:
+        ticker: Stock ticker symbol
+        company_name: Company name
+        report_type: 'transcript' or 'press_release'
+        quarter: Quarter string (e.g., 'Q3') - for transcripts only
+        year: Year (e.g., 2024) - for transcripts only
+        report_date: Formatted date string (e.g., 'Oct 25, 2024')
+        pr_title: Press release title - for press releases only
+        summary_text: AI-generated summary text with emoji section headers
+        fmp_url: FMP API URL for source reference
+
+    Returns:
+        {
+            "html": Full email HTML string,
+            "subject": Email subject line
+        }
+    """
+    LOG.info(f"Generating research email for {ticker} ({report_type})")
+
+    # Parse sections from summary text
+    sections = parse_research_summary_sections(summary_text)
+
+    # Build summary HTML
+    summary_html = build_research_summary_html(sections, report_type)
+
+    # Get stock price from ticker_reference (reuse from existing logic)
+    stock_price = "$0.00"
+    price_change_pct = None
+    price_change_color = "#4ade80"  # Green default
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT financial_last_price, financial_price_change_pct
+            FROM ticker_reference
+            WHERE ticker = %s
+        """, (ticker,))
+        price_data = cur.fetchone()
+
+        if price_data and price_data['financial_last_price']:
+            stock_price = f"${price_data['financial_last_price']:.2f}"
+
+            if price_data['financial_price_change_pct'] is not None:
+                pct = price_data['financial_price_change_pct']
+                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+    # Header labels based on report type
+    if report_type == 'transcript':
+        report_label = "EARNINGS CALL TRANSCRIPT"
+        current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
+        date_label = f"Generated: {current_date} | Call Date: {report_date}"
+        transition_text = f"Summary generated from {company_name} {quarter} {year} earnings call transcript."
+        fmp_link_text = "View full transcript on FMP"
+    else:  # press_release
+        report_label = "PRESS RELEASE"
+        current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
+        date_label = f"Generated: {current_date} | Release Date: {report_date}"
+        transition_text = f"Summary generated from {company_name} press release dated {report_date}."
+        fmp_link_text = "View original release on FMP"
+
+    # Build full HTML (follows same structure as generate_email_html_core)
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{ticker} Research Summary</title>
+    <style>
+        @media only screen and (max-width: 600px) {{
+            .content-padding {{ padding: 16px !important; }}
+            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
+            .price-box {{ padding: 8px 10px !important; }}
+            .company-name {{ font-size: 20px !important; }}
+        }}
+    </style>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+
+                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
+
+                    <!-- Header -->
+                    <tr>
+                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="width: 58%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{report_label}</div>
+                                    </td>
+                                    <td align="right" style="width: 42%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{date_label}</div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="width: 58%; vertical-align: top;">
+                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
+                                        <div style="font-size: 13px; margin-top: 2px; opacity: 0.9; color: #ffffff;">{ticker}</div>
+                                    </td>
+                                    <td align="right" style="width: 42%; vertical-align: top;">
+                                        <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff; margin-bottom: 2px;">{stock_price}</div>
+                                        {f'<div style="font-size: 13px; font-weight: 600; color: {price_change_color};">{price_change_pct}</div>' if price_change_pct else ''}
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td class="content-padding" style="padding: 24px;">
+
+                            <!-- Summary Sections -->
+                            {summary_html}
+
+                            <!-- Transition Box with FMP Link -->
+                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+                                    {transition_text} <a href="{fmp_url}" style="color: #1e40af; text-decoration: none;">→ {fmp_link_text}</a>
+                                </p>
+                            </div>
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9); border-radius: 0 0 8px 8px;">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td>
+                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest Research Tools</div>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Earnings & Press Release Analysis</div>
+
+                                        <!-- Legal Disclaimer -->
+                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
+                                            For informational and educational purposes only. Not investment advice. See Terms of Service for full disclaimer.
+                                        </div>
+
+                                        <!-- Links -->
+                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Contact</a>
+                                        </div>
+
+                                        <!-- Copyright -->
+                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
+                                            © 2025 StockDigest. All rights reserved.
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>'''
+
+    # Subject line
+    if report_type == 'transcript':
+        subject = f"📊 Earnings Call Summary: {company_name} ({ticker}) {quarter} {year}"
+    else:
+        subject = f"📰 Press Release Summary: {company_name} ({ticker}) - {report_date}"
+
+    return {"html": html, "subject": subject}
 
 def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, flagged_article_ids: List[int] = None, mode: str = 'daily'):
     """Save Email #3 to email_queue table for daily workflow
@@ -18251,6 +18651,94 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
             "valid": False,
             "message": "Validation error. Please try again."
         }
+
+
+@APP.get("/api/fmp-validate-ticker")
+async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
+    """
+    Validate ticker for research summaries and return available transcripts or press releases.
+
+    Query params:
+        ticker: Stock ticker (AAPL, RY.TO, etc.)
+        type: 'transcript' or 'press_release'
+
+    Returns:
+        {
+            "valid": true,
+            "company_name": "Apple Inc.",
+            "latest_quarter": "Q3 2024",
+            "available_quarters": ["Q3 2024", "Q2 2024", ...],
+            "ticker": "AAPL"
+        }
+        OR
+        {
+            "valid": true,
+            "company_name": "Apple Inc.",
+            "available_releases": [
+                {"date": "2024-10-15 09:00:00", "title": "Apple Announces..."},
+                ...
+            ],
+            "ticker": "AAPL"
+        }
+    """
+    try:
+        # Validate ticker exists in database
+        config = get_ticker_config(ticker)
+        if not config or not config.get('has_full_config', True):
+            return {"valid": False, "error": "Ticker not found in database"}
+
+        company_name = config.get("company_name", ticker)
+
+        if type == 'transcript':
+            # Fetch transcript list from FMP
+            transcripts = fetch_fmp_transcript_list(ticker)
+            if not transcripts:
+                return {
+                    "valid": True,
+                    "company_name": company_name,
+                    "latest_quarter": None,
+                    "available_quarters": [],
+                    "warning": "No transcripts available from FMP",
+                    "ticker": ticker
+                }
+
+            # Format quarters (most recent first, limit to 8)
+            quarters = [f"Q{t['quarter']} {t['year']}" for t in transcripts[:8]]
+            latest = quarters[0] if quarters else None
+
+            return {
+                "valid": True,
+                "company_name": company_name,
+                "latest_quarter": latest,
+                "available_quarters": quarters,
+                "ticker": ticker
+            }
+
+        else:  # press_release
+            # Fetch press releases from FMP
+            releases = fetch_fmp_press_releases(ticker, limit=20)
+            if not releases:
+                return {
+                    "valid": True,
+                    "company_name": company_name,
+                    "available_releases": [],
+                    "warning": "No press releases available from FMP",
+                    "ticker": ticker
+                }
+
+            return {
+                "valid": True,
+                "company_name": company_name,
+                "available_releases": [
+                    {"date": r["date"], "title": r["title"][:80] + "..." if len(r["title"]) > 80 else r["title"]}
+                    for r in releases
+                ],
+                "ticker": ticker
+            }
+
+    except Exception as e:
+        LOG.error(f"FMP validation failed for {ticker}: {e}")
+        return {"valid": False, "error": str(e)}
 
 
 class BetaSignupRequest(BaseModel):
@@ -21400,6 +21888,17 @@ def admin_domains_page(request: Request, token: str = Query(...)):
         "token": token
     })
 
+@APP.get("/admin/research")
+def admin_research_page(request: Request, token: str = Query(...)):
+    """Research Tools - Generate AI summaries of transcripts and press releases"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_research.html", {
+        "request": request,
+        "token": token
+    })
+
 # Admin API endpoints
 @APP.get("/api/admin/stats")
 def get_admin_stats(token: str = Query(...)):
@@ -21647,6 +22146,118 @@ async def delete_user(request: Request):
             return {"status": "success", "message": f"Deleted {email}"}
     except Exception as e:
         LOG.error(f"Failed to delete user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/generate-research-summary")
+async def generate_research_summary_api(request: Request):
+    """Generate AI summary of earnings transcript or press release"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    report_type = body.get('report_type')  # 'transcript' or 'press_release'
+    quarter = body.get('quarter')  # Integer (3) for transcripts
+    year = body.get('year')  # Integer (2024) for transcripts
+    pr_date = body.get('pr_date')  # String date for press releases
+
+    try:
+        LOG.info(f"📊 Generating research summary for {ticker} ({report_type})")
+
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+
+        company_name = config.get("company_name", ticker)
+
+        # Fetch content from FMP
+        if report_type == 'transcript':
+            data = fetch_fmp_transcript(ticker, quarter, year)
+            if not data:
+                return {"status": "error", "message": f"No transcript found for {ticker} Q{quarter} {year}"}
+
+            content = data['content']
+            report_date = data.get('date', f"{year}-{quarter*3:02d}-01")  # Approximate date
+            fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
+            pr_title = None
+
+        else:  # press_release
+            data = fetch_fmp_press_release_by_date(ticker, pr_date)
+            if not data:
+                return {"status": "error", "message": f"No press release found for {ticker} on {pr_date}"}
+
+            content = data['text']
+            report_date = pr_date.split()[0]  # Extract date part (YYYY-MM-DD)
+            pr_title = data['title']
+            fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
+
+        # Summarize with Claude
+        LOG.info(f"🤖 Summarizing with Claude (content length: {len(content)} chars)")
+        summary_text = summarize_research_with_claude(ticker, content, config, report_type)
+
+        if not summary_text:
+            return {"status": "error", "message": "Claude summarization failed"}
+
+        # Save to database
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO research_summaries (
+                    ticker, company_name, report_type, quarter, year,
+                    report_date, pr_title, summary_text, source_url,
+                    ai_provider
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, report_type, quarter, year)
+                DO UPDATE SET
+                    summary_text = EXCLUDED.summary_text,
+                    generated_at = NOW()
+            """, (
+                ticker, company_name, report_type,
+                quarter, year,
+                report_date, pr_title,
+                summary_text, fmp_url, 'claude'
+            ))
+            conn.commit()
+
+        LOG.info(f"💾 Saved summary to database")
+
+        # Generate and send email
+        email_data = generate_research_email(
+            ticker=ticker,
+            company_name=company_name,
+            report_type=report_type,
+            quarter=f"Q{quarter}" if quarter else None,
+            year=year,
+            report_date=report_date,
+            pr_title=pr_title,
+            summary_text=summary_text,
+            fmp_url=fmp_url
+        )
+
+        # Send to admin email
+        success = send_email(
+            subject=email_data['subject'],
+            html=email_data['html'],
+            to='stockdigest.research@gmail.com'
+        )
+
+        if success:
+            LOG.info(f"✅ Research summary email sent successfully")
+            return {
+                "status": "success",
+                "message": f"Summary generated and sent to stockdigest.research@gmail.com",
+                "ticker": ticker,
+                "company_name": company_name,
+                "report_type": report_type
+            }
+        else:
+            return {"status": "error", "message": "Email sending failed"}
+
+    except Exception as e:
+        LOG.error(f"Failed to generate research summary: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/restart-worker")

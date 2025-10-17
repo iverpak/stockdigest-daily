@@ -22240,7 +22240,7 @@ async def generate_research_summary_api(request: Request):
         # Send to admin email
         success = send_email(
             subject=email_data['subject'],
-            html=email_data['html'],
+            html_body=email_data['html'],
             to='stockdigest.research@gmail.com'
         )
 

@@ -14010,9 +14010,12 @@ Format (use • bullet):
 Example:
 - Q3 Earnings: Oct 24 - Q4 guidance and margin outlook per company announcement (Oct 10)
 
-📈 UPSIDE SCENARIO (Only if bullish author views exist - single paragraph, 80-100 words)
+📈 UPSIDE SCENARIO (Only if bullish developments exist - single paragraph, 80-100 words)
 
-CRITICAL: This reports what article authors with bullish views explicitly stated, NOT your analysis.
+CRITICAL: Synthesize developments tagged as bullish in sections above. Present what article authors stated about these positive developments.
+If you tagged developments as (bullish, [reason]) in Major Developments or Competitive/Industry Dynamics sections, synthesize those author statements here.
+Format: "[Source/Author] noted [bullish development]. [Another source/author] highlighted [positive metric]. [Third source] stated [favorable trend]."
+DO NOT include this section if no bullish-tagged developments exist in your summary above.
 
 Format: Single paragraph, 3-4 sentences
 Reference developments from above sections WITHOUT repeating specific numbers
@@ -14029,9 +14032,12 @@ Example structure:
 
 DO NOT include this section if no bullish author views exist in articles.
 
-📉 DOWNSIDE SCENARIO (Only if bearish author views exist - single paragraph, 80-100 words)
+📉 DOWNSIDE SCENARIO (Only if bearish developments exist - single paragraph, 80-100 words)
 
-CRITICAL: This reports what article authors with bearish views explicitly stated, NOT your analysis.
+CRITICAL: Synthesize developments tagged as bearish in sections above. Present what article authors stated about these negative developments or risks.
+If you tagged developments as (bearish, [reason]) in Major Developments, Risk Factors, or Competitive/Industry Dynamics sections, synthesize those author statements here.
+Format: "[Source/Author] flagged [bearish development]. [Another source/author] noted [negative metric or risk]. [Third source] warned [concerning trend]."
+DO NOT include this section if no bearish-tagged developments exist in your summary above.
 
 Format: Single paragraph, 3-4 sentences
 Reference developments from above sections WITHOUT repeating specific numbers
@@ -14048,10 +14054,11 @@ Example structure:
 
 DO NOT include this section if no bearish author views exist in articles.
 
-🔍 KEY VARIABLES TO MONITOR (Only if catalysts mentioned - 3-5 bullets max)
+🔍 KEY VARIABLES TO MONITOR (Include if you have Upcoming Catalysts section - 3-5 bullets max)
 
+CRITICAL: If you included an 📅 UPCOMING CATALYSTS section above, you MUST also include this 🔍 KEY VARIABLES TO MONITOR section.
+Transform the catalyst events into monitoring variables with specific metrics to track.
 Source: All articles
-
 CRITICAL: Report what article authors explicitly identified as important upcoming events/metrics to watch.
 
 Format (use • bullet with TOPIC LABEL):

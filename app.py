@@ -643,6 +643,7 @@ USE_CLAUDE_FOR_SUMMARIES = os.getenv("USE_CLAUDE_FOR_SUMMARIES", "true").lower()
 USE_CLAUDE_FOR_METADATA = os.getenv("USE_CLAUDE_FOR_METADATA", "true").lower() == "true"
 
 SCRAPFLY_API_KEY = os.getenv("SCRAPFLY_API_KEY")
+FMP_API_KEY = os.getenv("FMP_API_KEY")  # Financial Modeling Prep API key
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Personal Access Token
 GITHUB_REPO = os.getenv("GITHUB_REPO")    # e.g., "username/repo-name"
@@ -1459,6 +1460,34 @@ def ensure_schema():
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_exec_summ_ticker_date ON executive_summaries(ticker, summary_date DESC);
+
+                -- RESEARCH SUMMARIES: Store earnings transcript and press release summaries
+                CREATE TABLE IF NOT EXISTS research_summaries (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) NOT NULL,
+                    company_name VARCHAR(255),
+                    report_type VARCHAR(20) NOT NULL,  -- 'transcript' or 'press_release'
+                    quarter VARCHAR(10),  -- 'Q3' or NULL for press releases
+                    year INTEGER,  -- 2024 or NULL for press releases
+                    report_date DATE,  -- Date of transcript/PR
+                    pr_title VARCHAR(500),  -- Press release title (NULL for transcripts)
+                    summary_text TEXT NOT NULL,  -- Full AI-generated summary
+                    source_url TEXT,  -- FMP API URL for reference
+                    ai_provider VARCHAR(20) NOT NULL,  -- 'claude' or 'openai'
+                    generated_at TIMESTAMPTZ DEFAULT NOW(),
+
+                    -- Job tracking
+                    job_id VARCHAR(50),
+                    processing_duration_seconds INTEGER,
+
+                    -- UPSERT constraint: One summary per ticker+type+quarter+year
+                    UNIQUE(ticker, report_type, quarter, year)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_research_summaries_ticker ON research_summaries(ticker);
+                CREATE INDEX IF NOT EXISTS idx_research_summaries_quarter ON research_summaries(quarter, year);
+                CREATE INDEX IF NOT EXISTS idx_research_summaries_type ON research_summaries(report_type);
+                CREATE INDEX IF NOT EXISTS idx_research_summaries_date ON research_summaries(report_date DESC);
 
                 -- Beta users table for landing page signups
                 CREATE TABLE IF NOT EXISTS beta_users (
@@ -2968,6 +2997,127 @@ def store_ticker_reference(ticker_data: dict) -> bool:
     except Exception as e:
         LOG.error(f"Failed to store ticker reference for {ticker_data.get('ticker')}: {e}")
         return False
+
+# ==============================================================================
+# FMP API INTEGRATION - Transcripts & Press Releases
+# ==============================================================================
+
+def fetch_fmp_transcript_list(ticker: str) -> List[Dict]:
+    """
+    Fetch list of available transcripts for a ticker from FMP API.
+    Returns list of dicts with {quarter, year, date}.
+    """
+    if not FMP_API_KEY:
+        LOG.error("FMP_API_KEY not configured")
+        return []
+
+    try:
+        url = f"https://financialmodelingprep.com/api/v4/earning_call_transcript"
+        params = {"symbol": ticker, "apikey": FMP_API_KEY}
+
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code != 200:
+            LOG.error(f"FMP transcript list API error {response.status_code}: {response.text[:200]}")
+            return []
+
+        data = response.json()
+
+        # FMP returns: [[quarter, year, date], ...]
+        # Convert to dict format
+        transcripts = []
+        for item in data:
+            if len(item) >= 3:
+                transcripts.append({
+                    "quarter": item[0],
+                    "year": item[1],
+                    "date": item[2]
+                })
+
+        LOG.info(f"Found {len(transcripts)} transcripts for {ticker}")
+        return transcripts
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch FMP transcript list for {ticker}: {e}")
+        return []
+
+def fetch_fmp_transcript(ticker: str, quarter: int, year: int) -> Optional[Dict]:
+    """
+    Fetch specific earnings transcript from FMP API.
+    Returns dict with {quarter, year, date, content} or None if not found.
+    """
+    if not FMP_API_KEY:
+        LOG.error("FMP_API_KEY not configured")
+        return None
+
+    try:
+        url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}"
+        params = {"quarter": quarter, "year": year, "apikey": FMP_API_KEY}
+
+        response = requests.get(url, params=params, timeout=30)
+
+        if response.status_code != 200:
+            LOG.error(f"FMP transcript API error {response.status_code}: {response.text[:200]}")
+            return None
+
+        data = response.json()
+
+        # FMP returns array with single item
+        if not data or not isinstance(data, list) or len(data) == 0:
+            LOG.warning(f"No transcript found for {ticker} Q{quarter} {year}")
+            return None
+
+        transcript = data[0]
+        LOG.info(f"Fetched transcript for {ticker} Q{quarter} {year} ({len(transcript.get('content', ''))} chars)")
+        return transcript
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch FMP transcript for {ticker} Q{quarter} {year}: {e}")
+        return None
+
+def fetch_fmp_press_releases(ticker: str, limit: int = 20) -> List[Dict]:
+    """
+    Fetch press releases for a ticker from FMP API.
+    Returns list of dicts with {date, title, text}.
+    """
+    if not FMP_API_KEY:
+        LOG.error("FMP_API_KEY not configured")
+        return []
+
+    try:
+        url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
+        params = {"page": 0, "apikey": FMP_API_KEY}
+
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code != 200:
+            LOG.error(f"FMP press release API error {response.status_code}: {response.text[:200]}")
+            return []
+
+        data = response.json()
+
+        # Return latest N releases
+        releases = data[:limit] if isinstance(data, list) else []
+        LOG.info(f"Fetched {len(releases)} press releases for {ticker}")
+        return releases
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch FMP press releases for {ticker}: {e}")
+        return []
+
+def fetch_fmp_press_release_by_date(ticker: str, target_date: str) -> Optional[Dict]:
+    """
+    Fetch specific press release by date.
+    target_date format: 'YYYY-MM-DD HH:MM:SS'
+    """
+    releases = fetch_fmp_press_releases(ticker, limit=50)
+
+    for release in releases:
+        if release.get('date') == target_date:
+            return release
+
+    LOG.warning(f"Press release not found for {ticker} on {target_date}")
+    return None
 
 # 3. CSV IMPORT - With 6 competitor fields support
 def import_ticker_reference_from_csv_content(csv_content: str):

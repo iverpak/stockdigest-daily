@@ -22260,6 +22260,46 @@ async def generate_research_summary_api(request: Request):
         LOG.error(f"Failed to generate research summary: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+@APP.get("/api/admin/debug-research-summary")
+async def debug_research_summary(ticker: str, token: str):
+    """Debug endpoint to view raw research summary from database"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, company_name, report_type, quarter, year,
+                       report_date, summary_text, ai_provider, generated_at
+                FROM research_summaries
+                WHERE ticker = %s
+                ORDER BY generated_at DESC
+                LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+
+            if result:
+                # Return first 1000 chars of summary for preview
+                return {
+                    "status": "success",
+                    "ticker": result['ticker'],
+                    "company_name": result['company_name'],
+                    "report_type": result['report_type'],
+                    "quarter": result['quarter'],
+                    "year": result['year'],
+                    "report_date": str(result['report_date']),
+                    "summary_preview": result['summary_text'][:2000] + "..." if len(result['summary_text']) > 2000 else result['summary_text'],
+                    "summary_length": len(result['summary_text']),
+                    "ai_provider": result['ai_provider'],
+                    "generated_at": str(result['generated_at'])
+                }
+            else:
+                return {"status": "error", "message": f"No summary found for {ticker}"}
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch research summary: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/admin/restart-worker")
 async def restart_worker_api(request: Request):
     """Restart worker thread only (gentle, 0 downtime)"""

@@ -14182,7 +14182,7 @@ def summarize_research_with_claude(
 
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2024-10-22",  # Prompt caching support
+            "anthropic-version": "2023-06-01",  # Prompt caching support
             "content-type": "application/json"
         }
 

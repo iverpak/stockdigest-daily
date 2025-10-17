@@ -14212,15 +14212,22 @@ def summarize_research_with_claude(
             LOG.warning(f"Claude returned empty summary for {ticker}")
             return None
 
-        # Log cache performance
+        # Track cost
         usage = result.get("usage", {})
+        cost_info = calculate_claude_api_cost(usage, "research_summary")
+
+        # Log cache performance and cost
         cache_read = usage.get("cache_read_input_tokens", 0)
         cache_creation = usage.get("cache_creation_input_tokens", 0)
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+
         if cache_read > 0:
             LOG.info(f"✅ Prompt cache hit: {cache_read} tokens read from cache (90% cost savings)")
         elif cache_creation > 0:
             LOG.info(f"📝 Prompt cache created: {cache_creation} tokens cached for future use")
 
+        LOG.info(f"💵 Claude API cost: ${cost_info['call_cost']:.4f} (in: {input_tokens}, out: {output_tokens}, cached: {cache_read})")
         LOG.info(f"✅ Generated {content_type} summary for {ticker} ({len(summary)} chars)")
         return summary
 
@@ -15908,14 +15915,14 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
         for line in qa_content:
             line_stripped = line.strip()
             if line_stripped.startswith("Q:"):
-                # Bold Q only
-                html += f'<p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.6; color: #374151;"><strong>{line_stripped}</strong></p>'
+                # Bold Q, no bottom margin (A will follow immediately)
+                html += f'<p style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;"><strong>{line_stripped}</strong></p>'
             elif line_stripped.startswith("A:"):
-                # Regular A
-                html += f'<p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.6; color: #374151;">{line_stripped}</p>'
+                # Regular A, with bottom margin (creates space before next Q)
+                html += f'<p style="margin: 0 0 16px 0; font-size: 13px; line-height: 1.6; color: #374151;">{line_stripped}</p>'
             elif not line_stripped:
-                # Blank line between Q&A pairs
-                html += '<br>'
+                # Blank lines are ignored (spacing controlled by A margin)
+                pass
 
         html += '</div>'
         return html

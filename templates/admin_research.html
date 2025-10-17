@@ -347,10 +347,12 @@
                                 const option = document.createElement('option');
                                 option.value = q;
                                 option.textContent = q + (index === 0 ? ' (Latest)' : '');
+                                if (index === 0) option.selected = true; // Select first option by default
                                 select.appendChild(option);
                             });
 
                             resultDiv.innerHTML = `<div class="validation-result success">✅ ${ticker} (${data.company_name}) | ${data.available_quarters.length} transcripts available</div>`;
+                            console.log('Submit button enabled, first quarter selected:', select.value); // Debug log
                             document.getElementById('submit-btn').disabled = false;
                         } else {
                             resultDiv.innerHTML = `<div class="validation-result warning">⚠️ ${ticker} (${data.company_name}) found, but no transcripts available from FMP</div>`;
@@ -363,14 +365,16 @@
                         select.innerHTML = '';
 
                         if (data.available_releases && data.available_releases.length > 0) {
-                            data.available_releases.forEach(r => {
+                            data.available_releases.forEach((r, index) => {
                                 const option = document.createElement('option');
                                 option.value = r.date;
                                 option.textContent = `${r.date} - ${r.title}`;
+                                if (index === 0) option.selected = true; // Select first option by default
                                 select.appendChild(option);
                             });
 
                             resultDiv.innerHTML = `<div class="validation-result success">✅ ${ticker} (${data.company_name}) | ${data.available_releases.length} press releases available</div>`;
+                            console.log('Submit button enabled, first release selected:', select.value); // Debug log
                             document.getElementById('submit-btn').disabled = false;
                         } else {
                             resultDiv.innerHTML = `<div class="validation-result warning">⚠️ ${ticker} (${data.company_name}) found, but no press releases available from FMP</div>`;
@@ -389,17 +393,20 @@
             }
         }
 
-        // Form submission (will integrate with job queue in next step)
+        // Form submission
         document.getElementById('research-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+            console.log('Form submitted!'); // Debug log
 
             const statusDiv = document.getElementById('status-message');
             const submitBtn = document.getElementById('submit-btn');
             const ticker = document.getElementById('ticker').value.trim().toUpperCase();
             const reportType = document.querySelector('input[name="report_type"]:checked').value;
 
+            console.log('Ticker:', ticker, 'Type:', reportType); // Debug log
+
             submitBtn.disabled = true;
-            statusDiv.innerHTML = '<div class="status-message processing"><span class="loading"></span> Submitting job to queue...</div>';
+            statusDiv.innerHTML = '<div class="status-message processing"><span class="loading"></span> Generating AI summary with Claude... This may take 30-60 seconds.</div>';
 
             try {
                 // Get selected quarter or press release
@@ -409,13 +416,27 @@
 
                 if (reportType === 'transcript') {
                     const quarterStr = document.getElementById('quarter').value; // e.g., "Q3 2024"
+                    console.log('Quarter string:', quarterStr); // Debug log
+
+                    if (!quarterStr || quarterStr === '') {
+                        throw new Error('Please select a quarter');
+                    }
+
                     const match = quarterStr.match(/Q(\d+)\s+(\d{4})/);
                     if (match) {
                         quarter = parseInt(match[1]);
                         year = parseInt(match[2]);
+                        console.log('Parsed quarter:', quarter, 'year:', year); // Debug log
+                    } else {
+                        throw new Error('Invalid quarter format');
                     }
                 } else {
                     prDate = document.getElementById('press-release').value;
+                    console.log('Press release date:', prDate); // Debug log
+
+                    if (!prDate || prDate === '') {
+                        throw new Error('Please select a press release');
+                    }
                 }
 
                 // Submit to API endpoint
@@ -428,16 +449,27 @@
                     pr_date: prDate
                 };
 
+                console.log('Sending payload:', payload); // Debug log
+
+                statusDiv.innerHTML = '<div class="status-message processing"><span class="loading"></span> Sending request to server...</div>';
+
                 const response = await fetch('/api/admin/generate-research-summary', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
+                console.log('Response status:', response.status); // Debug log
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
                 const data = await response.json();
+                console.log('Response data:', data); // Debug log
 
                 if (data.status === 'success') {
-                    statusDiv.innerHTML = `<div class="status-message success">✅ ${data.message}</div>`;
+                    statusDiv.innerHTML = `<div class="status-message success">✅ ${data.message}<br><br>Company: ${data.company_name}<br>Type: ${data.report_type}</div>`;
                 } else {
                     statusDiv.innerHTML = `<div class="status-message error">❌ Error: ${data.message}</div>`;
                     submitBtn.disabled = false;

@@ -15572,6 +15572,82 @@ def parse_investment_implications_subsections(content: List[str]) -> Dict[str, a
     return result
 
 
+def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
+    """
+    Parse research summary text (transcript or press release) into sections by emoji headers.
+    Handles special Q&A format (Q:/A: paragraphs) and Investment Implications sub-sections.
+    Returns dict: {section_name: [line1, line2, ...]}
+    """
+    sections = {
+        "bottom_line": [],
+        "financial_results": [],
+        "major_developments": [],
+        "operational_metrics": [],
+        "guidance": [],
+        "strategic_initiatives": [],
+        "management_sentiment": [],
+        "risk_factors": [],
+        "industry_competitive": [],
+        "capital_allocation": [],
+        "qa_highlights": [],
+        "investment_implications": []
+    }
+
+    if not summary_text:
+        return sections
+
+    # Split by emoji headers
+    section_markers = [
+        ("📌 BOTTOM LINE", "bottom_line"),
+        ("💰 FINANCIAL RESULTS", "financial_results"),
+        ("🏢 MAJOR DEVELOPMENTS", "major_developments"),
+        ("📊 OPERATIONAL METRICS", "operational_metrics"),
+        ("📈 GUIDANCE", "guidance"),
+        ("🎯 STRATEGIC INITIATIVES", "strategic_initiatives"),
+        ("💼 MANAGEMENT SENTIMENT", "management_sentiment"),
+        ("⚠️ RISK FACTORS", "risk_factors"),
+        ("🏭 INDUSTRY", "industry_competitive"),  # Matches "INDUSTRY & COMPETITIVE"
+        ("💡 CAPITAL ALLOCATION", "capital_allocation"),
+        ("💬 Q&A HIGHLIGHTS", "qa_highlights"),
+        ("🎯 INVESTMENT IMPLICATIONS", "investment_implications")  # Has 3 sub-sections
+    ]
+
+    current_section = None
+    section_marker_prefixes = tuple(marker for marker, _ in section_markers)
+
+    for line in summary_text.split('\n'):
+        line_stripped = line.strip()
+
+        # Check if line is a section header
+        is_header = False
+        for marker, section_key in section_markers:
+            if line_stripped.startswith(marker):
+                current_section = section_key
+                is_header = True
+                break
+
+        if not is_header and current_section:
+            # Line is content, not a header
+
+            # Special handling for sections that capture ALL text (paragraphs + bullets)
+            if current_section in ['bottom_line', 'qa_highlights', 'investment_implications']:
+                # Skip lines that start with section markers
+                if not line_stripped.startswith(section_marker_prefixes):
+                    # Skip empty lines at start, but keep them once content exists
+                    if line_stripped or sections[current_section]:
+                        sections[current_section].append(line_stripped)
+
+            # Standard handling for bullet sections
+            else:
+                if line_stripped.startswith('•') or line_stripped.startswith('-'):
+                    # Extract bullet text
+                    bullet_text = line_stripped.lstrip('•- ').strip()
+                    if bullet_text:
+                        sections[current_section].append(bullet_text)
+
+    return sections
+
+
 def is_paywall_article(domain: str) -> bool:
     """Check if domain is a known paywall using PAYWALL_DOMAINS constant"""
     if not domain:

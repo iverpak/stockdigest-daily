@@ -14100,22 +14100,22 @@ No Q&A section (reduce total accordingly).
 SECTION RULES:
 
 ALWAYS include (if content exists):
-- 📌 Bottom Line
-- 💰 Financial Results (if financial data)
-- 🎯 Investment Implications
+- 📌 BOTTOM LINE
+- 💰 FINANCIAL RESULTS (if financial data)
+- 🎯 INVESTMENT IMPLICATIONS
 
 TRANSCRIPTS ONLY:
-- 💬 Q&A Highlights (ALWAYS for transcripts, NEVER for press releases)
+- 💬 Q&A HIGHLIGHTS (ALWAYS for transcripts, NEVER for press releases)
 
 Include ONLY if content exists:
-- 🏢 Major Developments
-- 📊 Operational Metrics
-- 📈 Guidance
-- 🎯 Strategic Initiatives
-- 💼 Management Sentiment & Tone
-- ⚠️ Risk Factors & Headwinds
-- 🏭 Industry & Competitive Landscape
-- 💡 Capital Allocation
+- 🏢 MAJOR DEVELOPMENTS
+- 📊 OPERATIONAL METRICS
+- 📈 GUIDANCE
+- 🎯 STRATEGIC INITIATIVES
+- 💼 MANAGEMENT SENTIMENT & TONE
+- ⚠️ RISK FACTORS & HEADWINDS
+- 🏭 INDUSTRY & COMPETITIVE LANDSCAPE
+- 💡 CAPITAL ALLOCATION & BALANCE SHEET
 
 Omit empty section headers entirely.
 

@@ -6440,7 +6440,16 @@ The user will provide company name, ticker, article title, and content. Extract 
 - Market Entries/Exits: new geographies, new segments, market withdrawals
 - Organizational Changes: leadership appointments, restructuring, workforce changes
 - Capital Allocation: share buybacks, dividend changes, debt issuance/repayment
-- Extract: what, where, when, scale/investment amount, stated strategic rationale
+- Extract: what, where, when, scale/investment amount, executive statements about purpose (verbatim or very close paraphrase)
+
+"Executive statements about purpose" means:
+✅ CEO stated "expansion targets data center demand"
+✅ CFO said "acquisition strengthens position in European market"
+✅ Company press release stated "investment will enable X capability"
+❌ NOT: Your interpretation of strategic purpose from context
+❌ NOT: "Strategic rationale appears to be..." or "Likely intended to..."
+
+If no explicit statement of purpose → just report the action without speculating on strategy.
 
 **2. Operational Performance**
 - Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
@@ -6465,23 +6474,58 @@ The user will provide company name, ticker, article title, and content. Extract 
 - Product Performance: benchmark results, specifications, feature comparisons
 - Innovation Pipeline: products in development, expected launch timelines
 - Technical Standards: certifications achieved, compliance milestones
-- Competitive Positioning: stated advantages, differentiation claims by company
+- Competitive Positioning: ONLY if company explicitly claims competitive advantage or differentiation
 - Extract: specific capabilities, performance metrics, launch dates, investment levels
+
+For competitive positioning:
+✅ Include if: Company states "only provider with X capability" or "differentiates us from competitors" or "competitive advantage in Y"
+✅ Include if: Executive quote explicitly claims superiority or unique positioning
+❌ Skip if: Article lists features/capabilities without company claiming competitive advantage
+❌ Skip if: You must infer advantage from feature descriptions
 
 **5. Analyst or Market Commentary**
 - Analyst Actions: firm name, analyst name, rating changes (upgrade/downgrade/initiate/reiterate)
 - Price Targets: specific targets, changes from prior targets, high/low ranges
-- Analyst Rationale: reasons given for rating/target (operational, financial, valuation)
+- Analyst Rationale: Complete rationale as stated by analyst (verbatim or very close paraphrase - do NOT summarize into condensed bullet points)
 - Consensus Changes: moves in consensus estimates, revision trends
-- Extract: specific ratings, targets, rationale as stated, date of action
+- Extract: specific ratings, targets, full rationale with key supporting points analyst provided, date of action
+
+For analyst rationale:
+✅ Report their complete reasoning flow as they stated it
+✅ Include all the supporting points they mentioned
+❌ Don't reduce multi-point argument to single conclusion
+❌ Don't cherry-pick the points that seem most important
+❌ Don't summarize "analyst cited operational improvements" when they gave specific metrics
 
 **6. Challenges or Headwinds**
-- Operational Issues: production problems, service disruptions, quality issues, recalls
-- Regulatory Actions: investigations, fines, consent decrees, compliance failures
-- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
-- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
-- Macro Impacts: interest rate effects, currency impacts, commodity cost pressures
-- Extract: specific issues, financial impacts if quantified, timelines, resolution status
+- Operational Issues: production problems, service disruptions, quality issues, recalls (these are categorical challenges)
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures (these are categorical challenges)
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs (these are categorical challenges)
+- Market Headwinds: ONLY if article or company explicitly frames as headwind/challenge/pressure
+- Macro Impacts: ONLY if article explicitly connects macro factor to company impact
+
+CRITICAL: Do not categorize neutral operational facts as "challenges" unless article frames them that way.
+
+Categorical challenges (always include):
+- Product recalls, safety incidents
+- Regulatory investigations, lawsuits, compliance violations
+- Production halts, supply disruptions, force majeure
+- Cybersecurity breaches, data incidents
+- C-suite departures (unplanned)
+
+Explicit framing required (only include if article uses challenge language):
+- Declining sales/volumes - Include ONLY if article says "faces headwinds", "demand weakness", "challenging environment"
+- Price changes - Include ONLY if article says "pricing pressure", "margin pressure", "forced concessions"
+- Competitive dynamics - Include ONLY if article says "competitive threat", "losing share", "market pressure"
+
+Examples:
+❌ WRONG: "Sales declined 5%" → categorize as "market headwind" (just performance data - goes in section 2)
+✅ CORRECT: "Sales declined 5%" → report in Operational Performance section
+✅ CORRECT: "CEO cited weak demand as headwind to growth targets" → this IS explicitly framed challenge
+
+❌ WRONG: "Company lowers prices" → infer "pricing pressure" (neutral action - goes in section 2)
+✅ CORRECT: "Company lowers prices" → report in Operational Performance (pricing actions)
+✅ CORRECT: "CFO noted pricing pressure forced margin concessions" → this IS explicitly stated challenge
 
 **7. Competitive and Industry Context**
 - Competitor Actions: direct mentions of competitor moves, market share dynamics
@@ -6546,6 +6590,51 @@ The user will provide company name, ticker, article title, and content. Extract 
    - Article says "later this year" → Write "later this year"
    - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 
+**CRITICAL FABRICATION PREVENTION:**
+
+❌ NEVER claim information was "not disclosed" or "undisclosed" unless article explicitly states this
+❌ Article silence ≠ information absence
+
+If article omits details (names, amounts, dates) that aren't material to the story:
+✅ Simply don't mention those details
+❌ Don't write "without disclosed names", "article did not provide", "undisclosed amount"
+
+Only note omission if:
+- Article explicitly states information is undisclosed/withheld
+- Or analyst/source flags the non-disclosure as unusual/noteworthy
+
+Examples:
+❌ WRONG: "Announced acquisition without disclosed purchase price"
+❌ WRONG: "Executive changes announced; article did not provide names or roles"
+✅ CORRECT: "Announced acquisition of [Company]" (if price not mentioned, just omit it)
+✅ CORRECT: "Announced executive leadership changes" (if names not mentioned, just omit them)
+✅ CORRECT: "Announced $2B acquisition; company declined to disclose target's name per press release" (if article explicitly says this)
+✅ CORRECT: "Analyst noted company's refusal to provide guidance was unusual for the sector" (if analyst flagged this)
+
+**SELF-CHECK BEFORE FINALIZING:**
+
+Review your summary against these questions:
+
+Attribution Check:
+□ Every causal connection has attribution ("CEO stated", "Analyst projected", "Per [Source]")?
+□ No unattributed forward-looking statements ("positions company to", "will drive", "expected to")?
+
+Challenge/Risk Framing Check:
+□ Only categorical challenges (recalls, lawsuits, investigations, force majeure) OR explicitly framed challenges?
+□ No neutral performance facts miscategorized as challenges without explicit framing language?
+
+Fabrication Check:
+□ No "undisclosed", "without disclosed", "article did not provide" phrases unless article explicitly stated this?
+□ Article silence not interpreted as information absence or non-disclosure?
+
+Speculative Language Check:
+□ No hedge words: "may", "could", "likely", "positioned", "poised", "suggests", "appears", "indicates"?
+□ Exception: Only in direct quotes with full attribution
+
+Temporal Phrasing Check:
+□ Preserved article's exact temporal phrasing without resolving to specific years?
+□ "Next year" stays "next year" (not "2026"), "November" stays "November" (not "November 2024")?
+
 **QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
 ❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
 ❗ This is required for all articles without exception.
@@ -6563,10 +6652,10 @@ Score based on:
 AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
 
 Example endings:
-...announced $500M investment (businesswire.com).
+...announced $500M investment in manufacturing capacity (businesswire.com).
 {"quality": 4.5}
 
-...reported strong Q3 results with EPS of $2.45 (reuters.com).
+...reported Q3 EPS of $2.45, beating consensus $2.38, and raised full-year guidance (reuters.com).
 {"quality": 7.0}"""
 
             # User content (ticker-specific)
@@ -6586,6 +6675,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
+                "temperature": 0.2,  # ADDED: Low temperature for factual extraction
                 "system": [
                     {
                         "type": "text",
@@ -6623,7 +6713,6 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             LOG.error(f"Claude company summary failed for {ticker}: {e}")
     return None
 
-
 async def generate_claude_competitor_article_summary(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
     """Generate Claude summary for competitor article with target company POV"""
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
@@ -6647,7 +6736,16 @@ The user will provide target company, competitor name and ticker, article title,
 - Capacity Changes: facility openings/closures, expansion/contraction, capex announcements
 - Market Entries/Exits: new geographies, new segments, market withdrawals
 - Organizational Changes: leadership appointments, restructuring, workforce changes
-- Extract: what, where, when, scale/investment amount, stated strategic rationale
+- Extract: what, where, when, scale/investment amount, executive statements about purpose (verbatim or very close paraphrase)
+
+"Executive statements about purpose" means:
+✅ CEO stated "expansion targets data center demand"
+✅ CFO said "acquisition strengthens position in European market"
+✅ Company press release stated "investment will enable X capability"
+❌ NOT: Your interpretation of strategic purpose from context
+❌ NOT: "Strategic rationale appears to be..." or "Likely intended to..."
+
+If no explicit statement of purpose → just report the action without speculating on strategy.
 
 **2. Operational Performance**
 - Volume/Activity Metrics: units sold, customers served, transactions, utilization rates
@@ -6679,18 +6777,33 @@ The user will provide target company, competitor name and ticker, article title,
 - Extract: specific ratings, targets, rationale as stated
 
 **6. Challenges or Headwinds**
-- Operational Issues: production problems, service disruptions, quality issues
-- Regulatory Actions: investigations, fines, consent decrees, compliance failures
-- Legal Issues: lawsuits filed/settled, liability determinations, legal costs
-- Market Headwinds: demand weakness, competitive pressure, pricing challenges as stated
-- Extract: specific issues, financial impacts if quantified, timelines
+- Operational Issues: production problems, service disruptions, quality issues, recalls (categorical challenges)
+- Regulatory Actions: investigations, fines, consent decrees, compliance failures (categorical challenges)
+- Legal Issues: lawsuits filed/settled, liability determinations, legal costs (categorical challenges)
+- Market Headwinds: ONLY if article explicitly frames as headwind/challenge with specific language like "faces challenges", "demand weakness", "margin pressure"
+
+CRITICAL: Do not infer challenges from neutral facts.
+
+Categorical challenges (always include):
+- Product recalls, safety incidents
+- Regulatory investigations, lawsuits, compliance violations
+- Production halts, supply disruptions, force majeure
+- Cybersecurity breaches, data incidents
+
+Explicit framing required (only include if article uses challenge language):
+- Declining sales/volumes - Include ONLY if article says "faces headwinds", "demand weakness", "challenging environment"
+- Price changes - Include ONLY if article says "pricing pressure", "margin pressure", "forced concessions"
+
+❌ WRONG: "Company lowers prices" → infer "facing competitive pressure"
+✅ CORRECT: "Company lowers prices" → report as pricing action (section 2)
+Only categorize as "challenge" if article frames it that way.
 
 **Exclusion Criteria:**
 ❌ Pure stock performance (price movements, technical analysis) without operational context
 ❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to strategic actions
 ❌ General market commentary not specific to competitor
 ❌ Historical background not relevant to current developments
-❌ Speculation about future actions not based on company statements
+❌ Speculation about future actions not based on explicit company statements
 ❌ Opinion pieces without factual content
 
 **Structure:**
@@ -6700,13 +6813,18 @@ The user will provide target company, competitor name and ticker, article title,
 - Cite source: (domain name)
 - Present facts in logical flow (financial results, then strategic actions, then outlook)
 
-**Final Paragraph - Competitive Context Statement:**
-Choose appropriate template:
-- Direct competition stated: "Competitor and target company compete in [specific market/geography/segment] as stated in the article."
-- Direct competition known: "Competitor and target company both operate in [sector/industry] and compete for [customers/market share]."
-- Geographic overlap: "Competitor's [action/development] in [region/market] where target company also operates."
-- Product overlap: "Competitor's [product/service category] competes with target company's [product/service category] offerings."
-- Financial data: "This article provides operational data on competitor, a competitor to target company."
+**Final Sentence - Source Citation Only:**
+
+End with source citation in parentheses: (domain.com)
+
+DO NOT add competitive framing, market context, or relationship statements unless the article explicitly provided detailed competitive analysis comparing the two companies.
+
+RARE EXCEPTION - Only if article extensively discusses both companies:
+If article dedicates substantial content to direct comparison between competitor and target company (not just mentioning both in passing), you may note: "Article compared [specific metrics/strategies] between {competitor_name} and {target_company}." (domain.com)
+
+Otherwise, simply end with: (domain.com)
+
+This summary will be labeled as [COMPETITOR] content in the executive summary system, which already knows the competitive relationship. Your job is to extract facts about the competitor only.
 
 **Critical Rules:**
 ✅ ONLY extract facts explicitly stated about competitor
@@ -6714,14 +6832,13 @@ Choose appropriate template:
 ✅ Always cite source domain in parentheses
 ✅ Include executive quotes verbatim with attribution
 ✅ Present competitor facts objectively without editorializing
-✅ Note the competitive relationship factually in final paragraph
 
 ❌ NEVER speculate on target company's response or strategy
 ❌ NEVER infer impact on target company's competitive position unless article explicitly states it
 ❌ NEVER write about what target company "faces" or "must do" or "needs to" in response
 ❌ NEVER assume target company's capabilities, market share, or relative positioning
-❌ NEVER create competitive implications beyond factual competitive relationship
-❌ NEVER compare competitor's metrics to target company unless article does so explicitly
+❌ NEVER create competitive implications beyond what article explicitly states
+❌ NEVER compare competitor's metrics to target company unless article does so explicitly with specific comparative data
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
 ❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
 ❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
@@ -6729,6 +6846,58 @@ Choose appropriate template:
    - Article says "November" → Write "November" (not "November 2024")
    - Article says "later this year" → Write "later this year"
    - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
+❌ NEVER add competitive context statements like "both operate in [sector]", "compete for [customers]", "competes with [target company's products]" unless article explicitly makes these specific comparisons
+❌ NEVER infer geographic overlap (don't assume target company operates in same regions)
+❌ NEVER infer product overlap (don't assume target company has competing products)
+
+**CRITICAL FABRICATION PREVENTION:**
+
+❌ NEVER claim information was "not disclosed" or "undisclosed" unless article explicitly states this
+❌ Article silence ≠ information absence
+
+If article omits details (names, amounts, dates) that aren't material to the story:
+✅ Simply don't mention those details
+❌ Don't write "without disclosed names", "article did not provide", "undisclosed amount"
+
+Only note omission if:
+- Article explicitly states information is undisclosed/withheld
+- Or analyst/source flags the non-disclosure as unusual/noteworthy
+
+Examples:
+❌ WRONG: "Announced acquisition without disclosed purchase price"
+❌ WRONG: "Partnership announced; article did not provide partner name"
+✅ CORRECT: "Announced acquisition" (if price not mentioned, just omit it)
+✅ CORRECT: "Announced strategic partnership" (if partner not named, just omit it)
+✅ CORRECT: "Company declined to disclose acquisition terms per press release" (if article explicitly says this)
+
+**SELF-CHECK BEFORE FINALIZING:**
+
+Review your summary against these questions:
+
+Attribution Check:
+□ Every causal connection has attribution ("CEO stated", "Analyst projected", "Per [Source]")?
+□ No unattributed forward-looking statements ("positions company to", "will enable", "expected to")?
+
+Target Company Separation Check:
+□ No claims about impact on target company unless article explicitly stated it?
+□ No competitive framing statements ("competes with", "threatens", "creates pressure for target company")?
+□ Purely factual competitor data extraction without target company implications?
+
+Fabrication Check:
+□ No "undisclosed", "without disclosed", "article did not provide" phrases unless article explicitly stated this?
+□ Article silence not interpreted as information absence or non-disclosure?
+
+Speculative Language Check:
+□ No hedge words: "may", "could", "likely", "positioned", "poised", "suggests", "appears", "indicates"?
+□ Exception: Only in direct quotes with full attribution
+
+Temporal Phrasing Check:
+□ Preserved article's exact temporal phrasing without resolving to specific years?
+□ "Next year" stays "next year" (not "2026"), "November" stays "November" (not "November 2024")?
+
+Challenge Framing Check:
+□ Only categorical challenges (recalls, lawsuits, investigations) OR explicitly framed challenges?
+□ No neutral operational facts miscategorized as challenges without explicit framing?
 
 **QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
 ❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
@@ -6747,11 +6916,11 @@ Score based on:
 AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
 
 Example endings:
-...Williams Companies and Enbridge Inc. both operate in the North American midstream energy infrastructure sector (theglobeandmail.com).
-{"quality": 3.5}
+...Williams announced plans to expand pipeline capacity in Northeast region (theglobeandmail.com).
+{"quality": 6.5}
 
-...TC Energy's strategic initiative to divest pipeline assets viewed favorably (globeandmail.com).
-{"quality": 4.5}"""
+...TC Energy reported Q3 revenue of $3.2B, up 8% year-over-year, and reaffirmed full-year guidance (reuters.com).
+{"quality": 7.5}"""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
@@ -6774,6 +6943,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
+                "temperature": 0.2,  # ADDED: Low temperature for factual extraction
                 "system": [
                     {
                         "type": "text",
@@ -6785,30 +6955,38 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             }
 
             session = get_http_session()
-            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=180)) as response:
-                    if response.status == 200:
-                        result = await response.json()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=90)) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"Claude competitor summary error {response.status} for {target_ticker}: {error_text[:500]}")
+                    return None
 
-                        # Track cost
-                        usage = result.get("usage", {})
-                        calculate_claude_api_cost(usage, "competitor_summary")
+                result = await response.json()
 
-                        # Log cache performance
-                        cache_creation = usage.get("cache_creation_input_tokens", 0)
-                        cache_read = usage.get("cache_read_input_tokens", 0)
-                        if cache_creation > 0:
-                            LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (competitor article summary)")
-                        elif cache_read > 0:
-                            LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (competitor article summary) - 90% savings!")
+                # Track cost
+                usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "competitor_summary")
 
-                        summary = result.get("content", [{}])[0].get("text", "")
-                        if summary and len(summary.strip()) > 10:
-                            LOG.info(f"Claude competitor summary: {competitor_ticker} ({len(summary)} chars)")
-                            return summary.strip()
-                    else:
-                        LOG.error(f"Claude competitor API error {response.status}")
+                # Log cache performance
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (competitor summary)")
+                elif cache_read > 0:
+                    LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (competitor summary) - 90% savings!")
+
+                content = result.get("content", [{}])[0].get("text", "")
+
+                if not content or len(content.strip()) < 50:
+                    LOG.warning(f"Claude returned insufficient competitor summary for {target_ticker}")
+                    return None
+
+                return content.strip()
+
         except Exception as e:
-            LOG.error(f"Claude competitor summary failed for {competitor_ticker}: {e}")
+            LOG.error(f"Claude competitor summary generation failed for {target_ticker}: {str(e)}")
+            return None
+
     return None
 
 
@@ -7393,45 +7571,47 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
     if True:  # Maintain indentation
         try:
             # System prompt (generic - cacheable)
-            system_prompt = """You are a research analyst extracting fundamental driver facts relevant to a target company's financial performance.
+            system_prompt = """You are a research analyst extracting fundamental driver facts for a competitive intelligence report.
 
 **YOUR TASK:**
-The user will provide target company, ticker, driver keyword, geographic markets, article title, and content. Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact target company's revenue, costs, or margins.
+The user will provide target company, ticker, driver keyword, article title, and content. Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that relate to the fundamental driver keyword provided.
 
 **What Counts as Relevant (8 Categories):**
 
 **1. Commodity/Asset Prices**
-- Price levels, changes, or trends for commodities/assets target company produces or consumes
-- Extract: specific prices with units, percentage changes, time periods, drivers of movement
+- Price levels, changes, or trends for commodities/assets related to the driver keyword
+- Extract: specific prices with units, percentage changes, time periods, drivers of movement stated in article
 - Examples: Oil $78/bbl, copper $4.25/lb, natural gas $3.20/MMBtu, jet fuel $2.80/gal, gold $2,100/oz
-- For producers: Output prices drive revenue | For consumers: Input prices drive costs
+- Include context: supply/demand factors, market conditions, trading dynamics as stated
 
 **2. Volume Metrics & Demand Indicators**
-- Production, sales, consumption data for relevant markets/products
+- Production, sales, consumption data for markets/products related to driver keyword
 - Extract: volumes with units, growth rates, time periods, geographic breakdowns
 - Examples: Auto sales 16.2M units annualized, air travel 2.8M daily passengers, smartphone shipments 180M units
 - Include: PMI readings, industrial production, retail sales, housing starts, capacity utilization
 
 **3. Policy & Regulatory Changes**
-- Government decisions directly affecting driver metrics (rates, tariffs, quotas, subsidies, standards)
+- Government decisions directly affecting the driver keyword (rates, tariffs, quotas, subsidies, standards)
 - Extract: specific policy details, effective dates, quantified impacts, compliance requirements
 - Examples: Fed rate decision, OPEC production cuts, tariff rates, emission standards, tax credits
 - Include: Central bank actions, trade policy, environmental regulations, industry-specific rules
+- Must include: Explicit rules, dates, requirements - not vague policy discussion
 
 **4. Supply Events & Capacity Changes**
-- Disruptions, additions, or changes affecting supply of relevant commodities/products
+- Disruptions, additions, or changes affecting supply related to driver keyword
 - Extract: volume impacts, duration, affected regions/products, capacity numbers
 - Examples: Mine strikes, refinery outages, crop failures, facility expansions, technology deployments
 - Include: Production cuts/additions, inventory levels, logistics disruptions, export restrictions
 
 **5. End-Market Developments**
-- Demand trends in industries/geographies that consume target company's products
+- Demand trends in industries/sectors that consume products related to driver keyword
 - Extract: spending patterns, growth rates, consumption data, adoption metrics
 - Examples: Enterprise IT spending $850B, China construction investment -8% YoY, EV adoption 18% penetration
 - Include: Consumer confidence, business investment, infrastructure spending, technology adoption
+- Report end-market data factually - do NOT filter based on whether target company serves this market
 
 **6. Input Cost Trends**
-- Price/availability changes for materials, labor, energy, capital target company requires
+- Price/availability changes for materials, labor, energy, capital related to driver keyword
 - Extract: cost levels, percentage changes, availability constraints, wage data
 - Examples: Steel $850/ton, trucking wages +8% YoY, shipping rates, electricity prices, borrowing costs
 - Include: Raw materials, components, labor costs, logistics, utilities, financing costs
@@ -7440,28 +7620,53 @@ The user will provide target company, ticker, driver keyword, geographic markets
 - Projections from official sources (IEA, EIA, IMF, World Bank, USDA, central banks, industry groups)
 - Extract: forecasted metrics, time horizons, assumptions, revisions from prior estimates
 - Examples: IEA oil demand 103M bpd 2025, USDA corn yield forecast, Fed dot plot, industry TAM projections
-- Only include: Government agencies, international bodies, major industry associations (not sell-side analysts)
+- Only include: Government agencies, international bodies, major industry associations
+- Exclude: Sell-side analyst price targets, individual firm projections
 
-**8. Competitor Operational Data (if revealing sector driver trends)**
-- Peer volume, pricing, cost, or demand metrics indicating broader market dynamics
-- Extract: specific operational data, not financial metrics (exclude stock prices, valuations, P/E ratios)
-- Examples: Competitor reports 18% volume growth on strong China demand, competitor adds 500MW capacity
-- Include ONLY if: Reveals sector-wide driver trends applicable to target company
+**8. Competitor/Industry Operational Data (only if article frames as sector trend)**
+
+Include operational metrics ONLY if article explicitly frames data as sector-wide or industry trend.
+
+Must have sector framing language:
+- "across the industry"
+- "sector-wide"
+- "industry participants"
+- "peers reported similar"
+- "market-wide trend"
+- "[Industry] operators saw..."
+
+DO NOT include if:
+- Article discusses single company's results without sector framing
+- Must infer that trend applies broadly
+- Article provides company-specific data without market context
+
+❌ WRONG: "Competitor A reports 18% volume growth" → skip (company-specific)
+✅ CORRECT: "Industry analysts noted sector-wide volume growth of 18% with multiple operators reporting similar gains" → include (explicit sector trend)
 
 **Geographic Scope:**
-- For GLOBAL drivers (commodities, macro indicators): Include regardless of article geography
-- For LOCAL developments: Only include if region matches user-provided Geographic Markets
-- Explicitly note if article discusses regions outside target company's operating area
+
+For GLOBAL drivers (commodity prices, central bank policy, international forecasts):
+- Include regardless of article geography
+- These affect global markets
+
+For LOCAL/REGIONAL developments (local regulations, regional demand, country-specific events):
+- Include with CLEAR geographic labels in your summary
+- State geography explicitly: "China demand declined 8%", "EU implements new standards"
+- DO NOT filter out based on target company's stated markets
+- Report the geographic fact; executive summary will determine relevance
+
+Example: Article discusses "China steel demand down 12%"
+✅ CORRECT: Extract with clear China label
+❌ WRONG: Skip because target company's config says "North America only"
 
 **Exclusion Criteria (NOT Relevant):**
-❌ Company-specific news: Target company or competitor earnings, M&A, appointments, guidance without driver context
-❌ Stock analysis: Valuations, price targets, technical analysis without operational driver data
-❌ Pure opinion: Speculation, predictions, trend forecasts without supporting data from credible sources
-❌ Vague commentary: "Industry facing headwinds" without specific metrics or quantified impacts
+❌ Company-specific news: Individual company earnings, M&A, appointments, guidance (unless explicitly sector trend)
+❌ Stock analysis: Valuations, price targets, technical analysis, P/E ratios, stock performance
+❌ Pure opinion: Speculation, predictions without data from credible sources
+❌ Vague commentary: "Industry facing headwinds" without specific metrics
 ❌ Historical retrospectives: Past trends without connection to current driver developments
-❌ Unrelated sectors: Articles about different industries without driver connection to target
+❌ Unrelated sectors: Articles about different industries with no driver connection
 ❌ Marketing content: Advertorials, sponsored posts, promotional materials
-❌ Local news without global impact: Regional developments in markets where target doesn't operate AND not affecting global driver metrics
 
 **Structure:**
 - Write 2-6 paragraphs in natural prose (no headers, no bullets)
@@ -7470,39 +7675,101 @@ The user will provide target company, ticker, driver keyword, geographic markets
 - Include units for all metrics ($/bbl, units, bps, %, YoY, QoQ, MoM)
 - Cite data sources and institutions when mentioned
 - Attribute quotes with speaker name and title
-- End with source: (domain name)
-- Final paragraph: Brief relevance statement explaining factual connection between driver and target company's financial performance
+- End with factual summary and source citation
 
-**Relevance Statement Templates:**
-- Commodity price: "This [commodity] price directly affects target company's [revenue/costs] as a [producer/consumer] of [product]."
-- Demand indicator: "This [metric] indicates demand trends for [end-market] that drives target company's [product/service] volumes."
-- Policy change: "This [policy] affects [driver metric] which impacts target company's [cost structure/pricing/margins]."
-- Supply event: "This [disruption/capacity change] affects [commodity/product] supply dynamics impacting target company's [input costs/competitive position]."
-- Input cost: "This [input] cost trend directly impacts target company's [cost structure/margins] as a [major/significant] expense."
-- End-market: "This affects [customer industry/geography] that purchases target company's [products/services]."
-- Forecast: "This [institution]'s projection for [metric] provides outlook for [driver] affecting target company's [financial aspect]."
-- Competitor data: "Competitor's [operational metric] reveals [sector trend] in [market] where target company also [operates/competes]."
+**Final Paragraph - Driver Facts Summary Only:**
+
+End with brief factual summary of the driver data extracted, then cite source in parentheses.
+
+Format: "Article reported [commodity/metric] at [price/level] ([change]) for [time period]." (domain.com)
+
+Examples:
+✅ "Article reported natural gas at $2.90/MMBtu, down 15% month-over-month due to above-average storage levels." (naturalgasintel.com)
+✅ "IEA forecast global oil demand at 103M bpd for 2025, up from 101M bpd in 2024, citing transportation sector recovery." (iea.org)
+✅ "Article reported copper prices at $4.25/lb, near five-year highs on supply constraints and EV demand growth." (bloomberg.com)
+✅ "OPEC announced production cuts of 1.2M bpd effective April 2025 to stabilize markets." (reuters.com)
+
+Simply end with: (domain.com)
+
+DO NOT add relevance statements like:
+❌ "This affects target company's revenue as a producer"
+❌ "This impacts target company's cost structure as a consumer"
+❌ "This drives target company's volumes"
+❌ "This is a major/significant expense for target company"
+
+This summary will be labeled as [INDUSTRY - keyword] content in the executive summary system. Your job is to extract driver facts only. The executive summary will determine relevance and impact to target company.
 
 **Critical Rules:**
 ✅ Extract ONLY explicitly stated facts with supporting data
 ✅ Every number requires: value, units, time period, comparison (YoY/QoQ/MoM/vs prior)
-✅ Always cite source domain
-✅ Focus on QUANTIFIABLE driver data or MATERIAL qualitative developments
-✅ Explain relevance through factual connection to target company's revenue/cost drivers
+✅ Always cite source domain in parentheses at end
+✅ Focus on QUANTIFIABLE driver data
+✅ Include qualitative developments ONLY if: policy changes with explicit rules/dates, supply disruptions with stated impacts, official forecasts from credible institutions
+✅ State geographic context clearly when relevant
+✅ Stick to the driver keyword the article was flagged for
 
 ❌ NO speculation about target company's strategy, response, or positioning
-❌ NO inferred impacts unless explicitly quantified in article
-❌ NO assumptions about target company's exposure, hedging, or competitive advantages
+❌ NO inferred impacts on target company unless article explicitly discussed target company
+❌ NO assumptions about target company's exposure, production, consumption, or competitive position
 ❌ NO speculative language: may, could, likely, possibly, suggests, indicates, implies, appears, positioned, poised
-❌ NO tangential information not directly related to fundamental drivers
+❌ NO tangential information not directly related to the fundamental driver keyword
 ❌ NO discussion of target company operations unless article explicitly mentions them
+❌ NO filtering content based on your judgment of target company's markets/products
+❌ NO claims about what "affects target company" or "impacts target company" unless article stated this
 ❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
    - Article says "next year" → Write "next year" (not "2024" or "2026")
    - Article says "November" → Write "November" (not "November 2024")
    - Article says "later this year" → Write "later this year"
    - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 
-**Multi-Driver Note:** Target company may be affected by multiple fundamental drivers. Extract ALL relevant driver data from article, not just the specific keyword provided. Consider revenue drivers (output prices, volumes, demand) and cost drivers (inputs, labor, capital) comprehensively.
+**CRITICAL FABRICATION PREVENTION:**
+
+❌ NEVER claim information was "not disclosed" or "undisclosed" unless article explicitly states this
+❌ Article silence ≠ information absence
+
+If article omits details (specific amounts, dates, sources) that aren't material:
+✅ Simply don't mention those details
+❌ Don't write "without disclosed amounts", "article did not provide", "undisclosed figures"
+
+Only note omission if:
+- Article explicitly states information is undisclosed/withheld
+- Or source flags the non-disclosure as unusual/noteworthy
+
+Examples:
+❌ WRONG: "Forecast provided without disclosed methodology"
+❌ WRONG: "Price increase reported; article did not provide specific percentage"
+✅ CORRECT: "Forecast provided for 2025 demand" (if methodology not mentioned, just omit it)
+✅ CORRECT: "Prices increased" (if percentage not mentioned, just omit it)
+✅ CORRECT: "IEA declined to disclose methodology per press briefing" (if article explicitly says this)
+
+**SELF-CHECK BEFORE FINALIZING:**
+
+Review your summary against these questions:
+
+Attribution Check:
+□ Every causal connection has attribution ("IEA stated", "Per OPEC report", "Article cited [Source]")?
+□ No unattributed forward-looking statements ("will drive demand", "expected to pressure", "positioned to")?
+
+Target Company Separation Check:
+□ No claims about how this "affects target company" or "impacts target company"?
+□ No assumptions about target company's exposure to this driver?
+□ Purely factual driver data extraction without target company implications?
+
+Fabrication Check:
+□ No "undisclosed", "without disclosed", "article did not provide" phrases unless article explicitly stated this?
+□ Article silence not interpreted as information absence or non-disclosure?
+
+Speculative Language Check:
+□ No hedge words: "may", "could", "likely", "positioned", "poised", "suggests", "appears", "indicates"?
+□ Exception: Only in direct quotes with full attribution
+
+Temporal Phrasing Check:
+□ Preserved article's exact temporal phrasing without resolving to specific years?
+□ "Next year" stays "next year" (not "2026"), "November" stays "November" (not "November 2024")?
+
+Sector Framing Check:
+□ Competitor/industry data included ONLY if article explicitly framed as sector-wide trend?
+□ No company-specific data miscategorized as sector trend without explicit framing?
 
 **QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
 ❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
@@ -7521,16 +7788,16 @@ Score based on:
 AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
 
 Example endings:
-...This natural gas price directly affects target company's revenue as a gas transmission operator (naturalgasintel.com).
+...Article reported natural gas at $2.90/MMBtu, down 15% from prior month on storage surplus (naturalgasintel.com).
 {"quality": 6.5}
 
-...IEA's projection for oil demand provides outlook affecting target company's pipeline utilization (iea.org).
-{"quality": 7.5}"""
+...IEA forecast oil demand at 103M bpd for 2025, up 2% from 2024 levels (iea.org).
+{"quality": 8.0}"""
 
             # User content (ticker-specific)
             user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
 **FUNDAMENTAL DRIVER KEYWORD:** {industry_keyword}
-**GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
+**TARGET COMPANY GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
 
 **ARTICLE TITLE:**
 {title}
@@ -7539,7 +7806,7 @@ Example endings:
 {scraped_content[:CONTENT_CHAR_LIMIT]}
 
 **YOUR TASK:**
-Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) that impact {target_company}'s financial performance. Focus on quantifiable data about external market forces driving revenue, costs, or margins.
+Extract fundamental driver facts (commodity prices, volume metrics, policy changes, supply/demand events, cost trends, forecasts) related to the keyword "{industry_keyword}". Focus on quantifiable data about external market forces. Do NOT infer relevance to {target_company} - just extract the driver facts.
 
 🚨 CRITICAL REMINDER: You MUST end your response with quality score JSON on the absolute final line:
 {{"quality": X.X}}
@@ -7548,7 +7815,8 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
             data = {
                 "model": ANTHROPIC_MODEL,
-                "max_tokens": 8192,  # Increased from 2048 to match company/competitor articles
+                "max_tokens": 8192,
+                "temperature": 0.2,  # ADDED: Low temperature for factual extraction
                 "system": [
                     {
                         "type": "text",

@@ -17186,45 +17186,22 @@ async def startup_event():
         raise  # Re-raise to fail FastAPI startup
 
     # Initialize database schema ONCE at startup (CRITICAL: Prevents lock contention during concurrent processing)
-    # RETRY LOGIC: Rolling deployments may have lock contention with old container
     LOG.info("=" * 80)
     LOG.info("🔄 Ensuring database schema is initialized...")
-    schema_retry_count = 0
-    schema_max_retries = 5
-    schema_retry_delay = 10  # seconds
-
-    while schema_retry_count < schema_max_retries:
-        try:
-            ensure_schema()
-            LOG.info("✅ Database schema verified/created successfully")
-            LOG.info("=" * 80)
-            break  # Success, exit retry loop
-        except Exception as e:
-            schema_retry_count += 1
-            error_msg = str(e)
-
-            # Check if it's a lock timeout error (common during rolling deployments)
-            is_lock_error = 'lock timeout' in error_msg.lower() or 'LockNotAvailable' in str(type(e).__name__)
-
-            if is_lock_error and schema_retry_count < schema_max_retries:
-                LOG.warning("=" * 80)
-                LOG.warning(f"⚠️  Schema lock timeout (attempt {schema_retry_count}/{schema_max_retries})")
-                LOG.warning(f"   Likely cause: Rolling deployment - old container still holding locks")
-                LOG.warning(f"   Retrying in {schema_retry_delay} seconds...")
-                LOG.warning("=" * 80)
-                time.sleep(schema_retry_delay)
-                continue  # Retry
-            else:
-                # Not a lock error, or max retries exceeded
-                LOG.error("=" * 80)
-                LOG.error(f"💥 STARTUP FAILED: Cannot initialize database schema")
-                LOG.error(f"   Error: {e}")
-                LOG.error(f"   Stacktrace: {traceback.format_exc()}")
-                LOG.error("=" * 80)
-                LOG.error("🚨 APPLICATION WILL NOT START - Schema required for operation")
-                LOG.error("   Check database permissions and retry")
-                LOG.error("=" * 80)
-                raise  # Re-raise to fail FastAPI startup
+    try:
+        ensure_schema()
+        LOG.info("✅ Database schema verified/created successfully")
+        LOG.info("=" * 80)
+    except Exception as e:
+        LOG.error("=" * 80)
+        LOG.error(f"💥 STARTUP FAILED: Cannot initialize database schema")
+        LOG.error(f"   Error: {e}")
+        LOG.error(f"   Stacktrace: {traceback.format_exc()}")
+        LOG.error("=" * 80)
+        LOG.error("🚨 APPLICATION WILL NOT START - Schema required for operation")
+        LOG.error("   Check database permissions and retry")
+        LOG.error("=" * 80)
+        raise  # Re-raise to fail FastAPI startup
 
     LOG.info("🔧 Initializing job queue system...")
 

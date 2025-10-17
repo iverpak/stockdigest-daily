@@ -13190,8 +13190,10 @@ Before writing any sentence, ask: "Did an article explicitly state this conclusi
 
 INFERENCE HIERARCHY (within 10% budget):
 - Direct causation (cost→margin, volume→revenue): Strongly preferred - use as primary analysis tool
-- Single extrapolation (sector trend→company, competitor→positioning): Use sparingly when necessary
+- Single extrapolation (sector trend→company, competitor→positioning): Use sparingly when necessary; must have clear business relevance to target company
 - Multi-step chains (A→B→C, stock performance→psychology→strategy): Avoid unless critical to thesis
+
+VALIDITY TEST: For any inference beyond direct causation, verify the connection is supported by operational/geographic/business model overlap. Flag speculative connections with caveats: (inference: potential impact though direct exposure unclear)
 
 EXAMPLES:
 

@@ -288,6 +288,9 @@
         const token = '{{ token }}';
         let validationData = null;
 
+        // DEBUG: Verify script loaded
+        console.log('Research page JavaScript loaded! Token:', token ? 'present' : 'missing');
+
         // Toggle sections based on report type
         document.querySelectorAll('input[name="report_type"]').forEach(radio => {
             radio.addEventListener('change', function() {
@@ -394,9 +397,12 @@
         }
 
         // Form submission
-        document.getElementById('research-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            console.log('Form submitted!'); // Debug log
+        const formElement = document.getElementById('research-form');
+        console.log('Form element found:', formElement ? 'YES' : 'NO'); // Debug log
+
+        async function handleFormSubmit(e) {
+            if (e) e.preventDefault();
+            console.log('Form submit handler called!'); // Debug log
 
             const statusDiv = document.getElementById('status-message');
             const submitBtn = document.getElementById('submit-btn');
@@ -404,6 +410,7 @@
             const reportType = document.querySelector('input[name="report_type"]:checked').value;
 
             console.log('Ticker:', ticker, 'Type:', reportType); // Debug log
+            console.log('Button disabled state:', submitBtn.disabled); // Debug log
 
             submitBtn.disabled = true;
             statusDiv.innerHTML = '<div class="status-message processing"><span class="loading"></span> Generating AI summary with Claude... This may take 30-60 seconds.</div>';
@@ -480,7 +487,24 @@
                 statusDiv.innerHTML = `<div class="status-message error">❌ Failed to submit job: ${error.message}</div>`;
                 submitBtn.disabled = false;
             }
+        }
+
+        // Attach form event listener
+        formElement.addEventListener('submit', handleFormSubmit);
+        console.log('Form submit event listener attached!'); // Debug log
+
+        // BACKUP: Also attach click handler directly to button
+        const submitBtn = document.getElementById('submit-btn');
+        submitBtn.addEventListener('click', function(e) {
+            console.log('Button click detected!'); // Debug log
+            if (!submitBtn.disabled) {
+                console.log('Button not disabled, calling handleFormSubmit'); // Debug log
+                handleFormSubmit(e);
+            } else {
+                console.log('Button is disabled, click ignored'); // Debug log
+            }
         });
+        console.log('Button click handler attached!'); // Debug log
 
         function resetForm() {
             document.getElementById('research-form').reset();

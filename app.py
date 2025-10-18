@@ -14325,6 +14325,11 @@ Format (use • bullet, NO sentiment tags):
 Example:
 - Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B per [Source]; full-year guidance raised to $52B from $50B (Oct 10)
 
+EXCLUDE:
+- Proprietary valuation models without named analyst (e.g., "DCF model suggests $X")
+- Automated financial scores or stock screener rankings
+- Technical analysis indicators without analyst context
+
 ⚠️ RISK FACTORS (Only if risks identified - 2-4 bullets max)
 
 Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
@@ -14387,6 +14392,11 @@ If 3+ analysts moved same direction:
 
 Example:
 - Goldman Sachs upgraded to Buy from Neutral, $450 target (from $380), citing AI infrastructure demand per analyst report (Oct 10)
+
+EXCLUDE:
+- Aggregated consensus without named analyst/firm (e.g., "Average of 12 analyst ratings")
+- Automated ratings from retail sites (GuruFocus, Simply Wall St, Zacks, TipRanks)
+- Unnamed price targets or fair value estimates without analyst attribution
 
 ⚡ COMPETITIVE/INDUSTRY DYNAMICS (Only if developments exist - 2-5 bullets max)
 

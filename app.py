@@ -18308,8 +18308,7 @@ OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
             LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Cleaned up temp file: {file_path}")
 
         # Mark complete
-        update_job_status(job_id, phase='complete', progress=100)
-        mark_job_complete(job_id)
+        update_job_status(job_id, status='completed', phase='complete', progress=100)
 
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company profile generation complete")
 
@@ -18324,7 +18323,12 @@ OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
         stop_heartbeat_thread(job_id)
 
         # Mark failed
-        mark_job_failed(job_id, str(e), traceback.format_exc())
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],  # Limit size
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
 
 
 async def process_ticker_job(job: dict):

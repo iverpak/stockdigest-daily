@@ -140,7 +140,6 @@ def generate_company_profile_with_gemini(
             'profile_markdown': str,
             'metadata': {
                 'model': str,
-                'thinking_budget': int,
                 'generation_time_seconds': int,
                 'token_count_input': int,
                 'token_count_output': int
@@ -164,8 +163,7 @@ def generate_company_profile_with_gemini(
 
         generation_config = {
             "temperature": 0.3,
-            "max_output_tokens": 8000,
-            "thinking_budget": 8192  # Medium thinking budget (balance quality/cost)
+            "max_output_tokens": 8000
         }
 
         start_time = datetime.now()
@@ -196,7 +194,6 @@ def generate_company_profile_with_gemini(
         # Extract metadata
         metadata = {
             'model': 'gemini-2.5-flash',
-            'thinking_budget': 8192,
             'generation_time_seconds': generation_time,
             'token_count_input': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
             'token_count_output': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
@@ -390,11 +387,11 @@ def save_company_profile_to_database(
             INSERT INTO company_profiles (
                 ticker, company_name, industry, fiscal_year, filing_date,
                 profile_markdown, source_file,
-                ai_provider, gemini_model, thinking_budget,
+                ai_provider, gemini_model,
                 generation_time_seconds, token_count_input, token_count_output,
                 status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (ticker) DO UPDATE SET
                 company_name = EXCLUDED.company_name,
                 industry = EXCLUDED.industry,
@@ -404,7 +401,6 @@ def save_company_profile_to_database(
                 source_file = EXCLUDED.source_file,
                 ai_provider = EXCLUDED.ai_provider,
                 gemini_model = EXCLUDED.gemini_model,
-                thinking_budget = EXCLUDED.thinking_budget,
                 generation_time_seconds = EXCLUDED.generation_time_seconds,
                 token_count_input = EXCLUDED.token_count_input,
                 token_count_output = EXCLUDED.token_count_output,
@@ -421,7 +417,6 @@ def save_company_profile_to_database(
             config.get('source_file'),
             'gemini',
             metadata.get('model'),
-            metadata.get('thinking_budget'),
             metadata.get('generation_time_seconds'),
             metadata.get('token_count_input'),
             metadata.get('token_count_output'),

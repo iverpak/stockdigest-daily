@@ -253,6 +253,76 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `GET /admin/ticker-metadata/{ticker}`: Retrieve ticker configuration
 - **`POST /admin/export-user-csv`**: Export beta users to CSV for daily processing
 
+**Company Profiles & Research Summaries (NEW - Oct 2025):**
+
+StockDigest provides AI-powered research tools for analyzing 10-K filings, earnings transcripts, and press releases.
+
+**Company Profiles (FMP + SEC.gov Integration):**
+- **`GET /api/fmp-validate-ticker?ticker=AAPL&type=profile`**: Validate ticker and fetch available 10-K filings from FMP
+  - Returns: Array of `available_years` with fiscal year, filing date, and SEC.gov HTML URL
+  - Uses FMP `/api/v3/sec_filings` endpoint (included in Starter plan)
+  - Example response:
+    ```json
+    {
+      "valid": true,
+      "company_name": "Apple Inc.",
+      "industry": "Consumer Electronics",
+      "available_years": [
+        {"year": 2024, "filing_date": "2024-11-01", "sec_html_url": "https://..."},
+        {"year": 2023, "filing_date": "2023-11-03", "sec_html_url": "https://..."}
+      ]
+    }
+    ```
+
+- **`POST /api/admin/generate-company-profile`**: Generate AI company profile from 10-K filing (uses job queue)
+  - **FMP Mode (recommended):** Send `sec_html_url` from validation response → Fetches HTML from SEC.gov
+  - **File Upload Mode (fallback):** Send `file_content` (base64) + `file_name` → Extracts from PDF/TXT
+  - Processing: 5-10 minutes (Gemini 2.5 Flash with thinking mode)
+  - Returns: `job_id` for status polling via `/jobs/{job_id}`
+
+**Transcript Summaries:**
+- **`GET /api/fmp-validate-ticker?ticker=AAPL&type=transcript`**: Fetch available earnings transcripts from FMP
+- **`GET /api/fmp-validate-ticker?ticker=AAPL&type=press_release`**: Fetch available press releases from FMP
+- **`POST /api/admin/generate-transcript-summary`**: Generate AI summary (Claude) of transcript/press release
+  - Parameters: `ticker`, `report_type` (transcript/press_release), `quarter`, `year`, `pr_date`
+  - Synchronous processing (30-60 seconds)
+  - Stores in `transcript_summaries` table
+
+**Key Functions (modules/company_profiles.py):**
+- `fetch_sec_html_text(url)`: Fetch 10-K HTML from SEC.gov and extract plain text
+  - Uses proper User-Agent: "StockDigest/1.0 (stockdigest.research@gmail.com)"
+  - BeautifulSoup HTML parsing with script/style removal
+  - Returns cleaned plain text for AI processing
+- `generate_company_profile_with_gemini()`: Generate 14-section company profile using Gemini 2.5 Flash
+  - Model: gemini-2.5-flash with thinking_budget=8192
+  - Temperature: 0.3 (consistent outputs)
+  - Max output tokens: 8000 (~3,000-5,000 words)
+- `generate_company_profile_email()`: Create HTML email with profile preview and legal disclaimers
+
+**User Workflow (20x faster than manual file upload):**
+1. Navigate to `/admin_research` → Click "Company Profiles" tab
+2. Enter ticker → Click "Validate Ticker"
+3. FMP returns list of available 10-K years (dropdown auto-populates)
+4. Select year from dropdown: "2023 (Filed: Nov 3, 2023)"
+5. Click "Generate Profile (5-10 min)"
+6. Backend fetches HTML from SEC.gov → Gemini generates profile → Email sent
+7. Profile saved to `company_profiles` table with UNIQUE(ticker) constraint
+
+**Database Schema:**
+- `company_profiles`: Stores AI-generated 10-K profiles
+  - ticker (UNIQUE), company_name, industry, fiscal_year, filing_date
+  - profile_markdown (TEXT), profile_summary (TEXT), key_metrics (JSONB)
+  - ai_provider='gemini', gemini_model='gemini-2.5-flash', thinking_budget=8192
+  - generation_time_seconds, token counts, status
+- `transcript_summaries`: Stores earnings transcript and press release summaries
+  - ticker, report_type (transcript/press_release), quarter, year, report_date
+  - summary_text, ai_provider (claude/openai), UNIQUE(ticker, report_type, quarter, year)
+
+**Cost Analysis:**
+- Gemini API: FREE during experimental phase (will be ~$0.24/profile when pricing launches)
+- FMP API: $0 (SEC filings included in Starter plan)
+- Processing time: 5-10 minutes per profile (most time spent in Gemini generation)
+
 **System Configuration Endpoints (NEW - Oct 2025):**
 - **`GET /api/get-lookback-window`**: Get current production lookback window
 - **`POST /api/set-lookback-window`**: Update production lookback window (60-10080 minutes)
@@ -283,6 +353,8 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `DATABASE_URL`: PostgreSQL connection string (required)
 - `OPENAI_API_KEY`: OpenAI API access (required for AI features)
 - `SCRAPFLY_API_KEY`: ScrapFly API for Google News URL resolution (required - cost: ~$86/month)
+- `FMP_API_KEY`: Financial Modeling Prep API key (required - provides 10-K filings, transcripts, press releases)
+- `GEMINI_API_KEY`: Google Gemini API key (required for company profiles - get from https://aistudio.google.com/app/apikey)
 - `ADMIN_TOKEN`: Authentication for admin endpoints
 - Email configuration: `SMTP_*` variables for digest delivery
 - `MAX_CONCURRENT_JOBS`: Number of tickers to process simultaneously (default: 2, recommended: 4)

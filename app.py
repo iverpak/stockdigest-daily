@@ -23386,6 +23386,67 @@ async def generate_company_profile_api(request: Request):
         LOG.error(f"Failed to create company profile job: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+@APP.get("/api/admin/company-profiles")
+async def get_company_profiles_api(token: str = None):
+    """Get all company profiles from database"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ticker,
+                    company_name,
+                    industry,
+                    fiscal_year,
+                    filing_date,
+                    profile_markdown,
+                    source_file,
+                    ai_provider,
+                    gemini_model,
+                    generation_time_seconds,
+                    token_count_input,
+                    token_count_output,
+                    status,
+                    generated_at
+                FROM company_profiles
+                ORDER BY generated_at DESC
+            """)
+
+            profiles = cur.fetchall()
+
+            # Convert to list of dicts with metadata
+            result = []
+            for profile in profiles:
+                result.append({
+                    "ticker": profile['ticker'],
+                    "company_name": profile['company_name'],
+                    "industry": profile['industry'],
+                    "fiscal_year": profile['fiscal_year'],
+                    "filing_date": str(profile['filing_date']) if profile['filing_date'] else None,
+                    "profile_markdown": profile['profile_markdown'],
+                    "source_file": profile['source_file'],
+                    "ai_provider": profile['ai_provider'],
+                    "gemini_model": profile['gemini_model'],
+                    "generation_time_seconds": profile['generation_time_seconds'],
+                    "token_count_input": profile['token_count_input'],
+                    "token_count_output": profile['token_count_output'],
+                    "status": profile['status'],
+                    "generated_at": str(profile['generated_at']),
+                    "char_count": len(profile['profile_markdown']) if profile['profile_markdown'] else 0
+                })
+
+            return {
+                "status": "success",
+                "profiles": result,
+                "count": len(result)
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch company profiles: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/admin/restart-worker")
 async def restart_worker_api(request: Request):
     """Restart worker thread only (gentle, 0 downtime)"""

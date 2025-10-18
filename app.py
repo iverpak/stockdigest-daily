@@ -23447,6 +23447,166 @@ async def get_company_profiles_api(token: str = None):
         LOG.error(f"Failed to fetch company profiles: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+@APP.post("/api/admin/delete-company-profile")
+async def delete_company_profile_api(request: Request):
+    """Delete a company profile from database"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM company_profiles WHERE ticker = %s", (ticker,))
+            conn.commit()
+
+            if cur.rowcount > 0:
+                LOG.info(f"🗑️ Deleted company profile for {ticker}")
+                return {"status": "success", "message": f"Profile for {ticker} deleted successfully"}
+            else:
+                return {"status": "error", "message": f"No profile found for {ticker}"}
+
+    except Exception as e:
+        LOG.error(f"Failed to delete company profile for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/regenerate-company-profile")
+async def regenerate_company_profile_api(request: Request):
+    """Regenerate an existing company profile using same source"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        # Get existing profile to reuse fiscal_year and filing_date
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT fiscal_year, filing_date, source_file
+                FROM company_profiles
+                WHERE ticker = %s
+            """, (ticker,))
+
+            existing = cur.fetchone()
+            if not existing:
+                return {"status": "error", "message": f"No existing profile found for {ticker}"}
+
+            fiscal_year = existing['fiscal_year']
+            filing_date = existing['filing_date']
+            source_file = existing['source_file']
+
+        # Check if source was from SEC.gov (FMP mode) or file upload
+        # For now, we'll only support regenerating FMP mode profiles
+        # File upload mode would require the user to re-upload the file
+        if not source_file or 'SEC.gov' not in source_file:
+            return {
+                "status": "error",
+                "message": "Regeneration only supported for SEC.gov profiles. Please upload a new file for file-based profiles."
+            }
+
+        # For FMP mode, we need to fetch the SEC HTML URL again
+        # This is a simplified version - in production you'd want to store the sec_html_url in the database
+        return {
+            "status": "info",
+            "message": f"To regenerate {ticker}, please use the 'Company Profiles' tab and generate a new profile. Automatic regeneration coming soon!"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to regenerate company profile for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/email-company-profile")
+async def email_company_profile_api(request: Request):
+    """Email a company profile to admin"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        # Get profile from database
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ticker, company_name, industry, fiscal_year, filing_date,
+                    profile_markdown, source_file, ai_provider, gemini_model,
+                    generation_time_seconds, token_count_input, token_count_output
+                FROM company_profiles
+                WHERE ticker = %s
+            """, (ticker,))
+
+            profile = cur.fetchone()
+            if not profile:
+                return {"status": "error", "message": f"No profile found for {ticker}"}
+
+        # Import the email generation function from company_profiles module
+        from modules.company_profiles import generate_company_profile_email
+
+        # Get stock price for email header
+        stock_price = "$0.00"
+        price_change_pct = None
+        price_change_color = "#4ade80"
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT financial_last_price, financial_price_change_pct
+                FROM ticker_reference
+                WHERE ticker = %s
+            """, (ticker,))
+            price_data = cur.fetchone()
+
+            if price_data and price_data['financial_last_price']:
+                stock_price = f"${price_data['financial_last_price']:.2f}"
+                if price_data['financial_price_change_pct'] is not None:
+                    pct = price_data['financial_price_change_pct']
+                    price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                    price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+        # Generate email HTML
+        email_data = generate_company_profile_email(
+            ticker=profile['ticker'],
+            company_name=profile['company_name'],
+            industry=profile['industry'] or 'N/A',
+            fiscal_year=profile['fiscal_year'],
+            filing_date=str(profile['filing_date']) if profile['filing_date'] else None,
+            profile_markdown=profile['profile_markdown'],
+            stock_price=stock_price,
+            price_change_pct=price_change_pct,
+            price_change_color=price_change_color
+        )
+
+        # Send email
+        send_email(
+            subject=email_data['subject'],
+            html_body=email_data['html'],
+            to=DIGEST_TO  # Admin email
+        )
+
+        LOG.info(f"📧 Emailed company profile for {ticker} to {DIGEST_TO}")
+        return {
+            "status": "success",
+            "message": f"Profile for {ticker} emailed successfully to {DIGEST_TO}"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to email company profile for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/admin/restart-worker")
 async def restart_worker_api(request: Request):
     """Restart worker thread only (gentle, 0 downtime)"""

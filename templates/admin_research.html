@@ -407,8 +407,21 @@
         <div id="view-profiles-tab" class="tab-content" style="display:none;">
             <h2>Company Profiles Library</h2>
             <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">
-                Browse all generated company profiles. Click on a row to view the full profile.
+                Browse, search, and manage all generated company profiles.
             </p>
+
+            <!-- Search Box -->
+            <div style="margin-bottom: 20px;">
+                <input
+                    type="text"
+                    id="profiles-search"
+                    placeholder="🔍 Search by ticker or company name..."
+                    oninput="filterProfiles()"
+                    style="width: 100%; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; transition: border-color 0.3s;"
+                    onfocus="this.style.borderColor='#1e40af'"
+                    onblur="this.style.borderColor='#e5e7eb'"
+                />
+            </div>
 
             <div id="profiles-loading" style="text-align: center; padding: 40px;">
                 <p style="color: #6b7280;">Loading profiles...</p>
@@ -417,22 +430,35 @@
             <div id="profiles-list" style="display:none;">
                 <p id="profiles-count" style="margin-bottom: 16px; color: #6b7280; font-size: 14px;"></p>
 
-                <table style="width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden;">
-                    <thead style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white;">
-                        <tr>
-                            <th style="padding: 12px; text-align: left;">Ticker</th>
-                            <th style="padding: 12px; text-align: left;">Company</th>
-                            <th style="padding: 12px; text-align: left;">Industry</th>
-                            <th style="padding: 12px; text-align: left;">Fiscal Year</th>
-                            <th style="padding: 12px; text-align: left;">Source</th>
-                            <th style="padding: 12px; text-align: left;">Generated</th>
-                            <th style="padding: 12px; text-align: center;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="profiles-table-body">
-                        <!-- Rows will be inserted here -->
-                    </tbody>
-                </table>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; min-width: 1200px;">
+                        <thead style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white;">
+                            <tr>
+                                <th onclick="sortTable('ticker')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
+                                    Ticker <span id="sort-ticker" style="font-size: 10px;">▼</span>
+                                </th>
+                                <th onclick="sortTable('company_name')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
+                                    Company <span id="sort-company_name" style="font-size: 10px;">○</span>
+                                </th>
+                                <th onclick="sortTable('industry')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
+                                    Industry <span id="sort-industry" style="font-size: 10px;">○</span>
+                                </th>
+                                <th onclick="sortTable('fiscal_year')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
+                                    FY <span id="sort-fiscal_year" style="font-size: 10px;">○</span>
+                                </th>
+                                <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
+                                    Generated <span id="sort-generated_at" style="font-size: 10px;">○</span>
+                                </th>
+                                <th style="padding: 12px; text-align: center;">Tokens (In/Out)</th>
+                                <th style="padding: 12px; text-align: center;">Time</th>
+                                <th style="padding: 12px; text-align: center;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="profiles-table-body">
+                            <!-- Rows will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             <div id="profiles-error" style="display:none; padding: 20px; background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px; margin-top: 20px;">
@@ -910,7 +936,11 @@
             }
         }
 
+        let allProfiles = [];  // Store all profiles for filtering/sorting
+        let currentSort = { column: 'ticker', direction: 'asc' };
+
         function displayProfiles(profiles) {
+            allProfiles = profiles;  // Store for filtering/sorting
             document.getElementById('profiles-loading').style.display = 'none';
             document.getElementById('profiles-list').style.display = 'block';
             document.getElementById('profiles-count').textContent = `Found ${profiles.length} company profile(s)`;
@@ -919,36 +949,56 @@
             tbody.innerHTML = '';
 
             if (profiles.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="padding: 40px; text-align: center; color: #6b7280;">No profiles generated yet. Create one in the "Company Profiles" tab!</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="padding: 40px; text-align: center; color: #6b7280;">No profiles generated yet. Create one in the "Company Profiles" tab!</td></tr>';
                 return;
             }
 
             profiles.forEach(profile => {
                 const row = document.createElement('tr');
-                row.style.cursor = 'pointer';
+                row.setAttribute('data-ticker', profile.ticker);
+                row.setAttribute('data-company', profile.company_name.toLowerCase());
                 row.style.borderBottom = '1px solid #e5e7eb';
                 row.onmouseover = () => row.style.background = '#f9fafb';
                 row.onmouseout = () => row.style.background = 'white';
 
                 const generatedDate = new Date(profile.generated_at).toLocaleString();
-                const chars = profile.char_count.toLocaleString();
+                const tokensIn = (profile.token_count_input || 0).toLocaleString();
+                const tokensOut = (profile.token_count_output || 0).toLocaleString();
+                const genTime = profile.generation_time_seconds || 0;
+                const timeStr = genTime >= 60 ? `${Math.floor(genTime/60)}m ${genTime%60}s` : `${genTime}s`;
 
                 row.innerHTML = `
                     <td style="padding: 12px; font-weight: 600; color: #1e40af;">${profile.ticker}</td>
                     <td style="padding: 12px;">${profile.company_name}</td>
                     <td style="padding: 12px; color: #6b7280; font-size: 13px;">${profile.industry || 'N/A'}</td>
                     <td style="padding: 12px;">${profile.fiscal_year}</td>
-                    <td style="padding: 12px; color: #6b7280; font-size: 13px;">${profile.source_file}</td>
                     <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
+                    <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 12px;">
+                        <div>${tokensIn} / ${tokensOut}</div>
+                        <div style="font-size: 11px; color: #9ca3af;">(${((profile.token_count_input || 0) + (profile.token_count_output || 0)).toLocaleString()} total)</div>
+                    </td>
+                    <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${timeStr}</td>
                     <td style="padding: 12px; text-align: center;">
-                        <button onclick="viewProfile('${profile.ticker}'); event.stopPropagation();"
-                                style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;">
-                            View
-                        </button>
+                        <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: wrap;">
+                            <button onclick="viewProfile('${profile.ticker}'); event.stopPropagation();"
+                                    title="View Profile"
+                                    style="background: #1e40af; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                👁️
+                            </button>
+                            <button onclick="emailProfile('${profile.ticker}'); event.stopPropagation();"
+                                    title="Email to Me"
+                                    style="background: #059669; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                📧
+                            </button>
+                            <button onclick="deleteProfile('${profile.ticker}', '${profile.company_name}'); event.stopPropagation();"
+                                    title="Delete Profile"
+                                    style="background: #dc2626; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                🗑️
+                            </button>
+                        </div>
                     </td>
                 `;
 
-                row.onclick = () => viewProfile(profile.ticker);
                 tbody.appendChild(row);
             });
         }
@@ -990,6 +1040,138 @@
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        }
+
+        // Filter profiles by search query
+        function filterProfiles() {
+            const searchQuery = document.getElementById('profiles-search').value.toLowerCase();
+            const rows = document.querySelectorAll('#profiles-table-body tr');
+
+            let visibleCount = 0;
+            rows.forEach(row => {
+                const ticker = row.getAttribute('data-ticker') || '';
+                const company = row.getAttribute('data-company') || '';
+
+                if (ticker.toLowerCase().includes(searchQuery) || company.includes(searchQuery)) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+
+            const countText = searchQuery ?
+                `Showing ${visibleCount} of ${allProfiles.length} profile(s)` :
+                `Found ${allProfiles.length} company profile(s)`;
+            document.getElementById('profiles-count').textContent = countText;
+        }
+
+        // Sort table by column
+        function sortTable(column) {
+            // Toggle sort direction
+            if (currentSort.column === column) {
+                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.column = column;
+                currentSort.direction = 'asc';
+            }
+
+            // Update sort indicators
+            document.querySelectorAll('[id^="sort-"]').forEach(el => {
+                el.textContent = '○';
+            });
+            document.getElementById(`sort-${column}`).textContent = currentSort.direction === 'asc' ? '▲' : '▼';
+
+            // Sort profiles array
+            const sorted = [...allProfiles].sort((a, b) => {
+                let aVal = a[column];
+                let bVal = b[column];
+
+                // Handle nulls
+                if (!aVal) return 1;
+                if (!bVal) return -1;
+
+                // String comparison
+                if (typeof aVal === 'string') {
+                    return currentSort.direction === 'asc' ?
+                        aVal.localeCompare(bVal) :
+                        bVal.localeCompare(aVal);
+                }
+
+                // Number comparison
+                return currentSort.direction === 'asc' ?
+                    aVal - bVal :
+                    bVal - aVal;
+            });
+
+            // Re-display sorted profiles
+            displayProfiles(sorted);
+
+            // Re-apply current search filter
+            const searchQuery = document.getElementById('profiles-search').value;
+            if (searchQuery) {
+                filterProfiles();
+            }
+        }
+
+        // Delete profile
+        async function deleteProfile(ticker, companyName) {
+            if (!confirm(`Are you sure you want to delete the profile for ${companyName} (${ticker})?\n\nThis action cannot be undone.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/delete-company-profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token, ticker })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    alert(`✅ ${data.message}`);
+                    // Reload profiles
+                    loadProfiles();
+                } else {
+                    alert(`❌ ${data.message}`);
+                }
+            } catch (error) {
+                alert(`❌ Failed to delete profile: ${error.message}`);
+            }
+        }
+
+        // Email profile to admin
+        async function emailProfile(ticker) {
+            if (!confirm(`Send the profile for ${ticker} to your email?`)) {
+                return;
+            }
+
+            // Show loading indicator
+            const originalText = event.target.textContent;
+            event.target.textContent = '⏳';
+            event.target.disabled = true;
+
+            try {
+                const response = await fetch('/api/admin/email-company-profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token, ticker })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    alert(`✅ ${data.message}`);
+                } else {
+                    alert(`❌ ${data.message}`);
+                }
+            } catch (error) {
+                alert(`❌ Failed to email profile: ${error.message}`);
+            } finally {
+                event.target.textContent = originalText;
+                event.target.disabled = false;
+            }
         }
 
         // Simple markdown to HTML converter

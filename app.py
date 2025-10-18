@@ -8,6 +8,7 @@ import re
 import pytz
 import json
 import secrets
+import uuid
 import openai
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
@@ -23324,7 +23325,7 @@ async def generate_company_profile_api(request: Request):
 
         # Create job in ticker_processing_jobs table
         with db() as conn, conn.cursor() as cur:
-            batch_id = f"profile_{ticker}_{int(datetime.now().timestamp())}"
+            batch_id = str(uuid.uuid4())
 
             # Create batch
             cur.execute("""

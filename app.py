@@ -6574,6 +6574,13 @@ Examples:
 ✅ Specify which business segment for segment-specific metrics
 ✅ Include guidance ranges completely (e.g., "$500M-$520M" not "approximately $510M")
 
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "Sept. 30" → Write "Sept. 30" (not "September 30, 2024")
+   - Article says "third quarter" → Write "third quarter" (not "Q3 2025")
+   - Article says "next year" → Write "next year" (not "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year" (not "2025")
+   - ONLY include specific years when article explicitly states them ("Q3 2025", "fiscal 2024")
 ❌ NEVER speculate beyond explicit company guidance or analyst commentary
 ❌ NEVER infer financial impacts not quantified in article
 ❌ NEVER add competitive implications not stated in article
@@ -6584,11 +6591,6 @@ Examples:
 ❌ NEVER editorialize on whether developments are "positive", "negative", "strong", or "weak" unless quoting source
 ❌ NEVER round numbers differently than article presents them
 ❌ NEVER add time context not in article (e.g., don't add "amid rising interest rates" unless article states this)
-❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
-   - Article says "next year" → Write "next year" (not "2024" or "2026")
-   - Article says "November" → Write "November" (not "November 2024")
-   - Article says "later this year" → Write "later this year"
-   - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 
 **CRITICAL FABRICATION PREVENTION:**
 
@@ -6632,8 +6634,11 @@ Speculative Language Check:
 □ Exception: Only in direct quotes with full attribution
 
 Temporal Phrasing Check:
-□ Preserved article's exact temporal phrasing without resolving to specific years?
-□ "Next year" stays "next year" (not "2026"), "November" stays "November" (not "November 2024")?
+□ Preserved article's EXACT dates, months, quarters, and temporal phrasing without adding years?
+□ "Sept. 30" stays "Sept. 30" (not "September 30, 2024")?
+□ "Third quarter" stays "third quarter" (not "Q3 2025")?
+□ "November" stays "November" (not "November 2024")?
+□ "Later this year" stays "later this year" (not "later in 2025")?
 
 **QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
 ❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
@@ -6833,6 +6838,13 @@ This summary will be labeled as [COMPETITOR] content in the executive summary sy
 ✅ Include executive quotes verbatim with attribution
 ✅ Present competitor facts objectively without editorializing
 
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "Sept. 30" → Write "Sept. 30" (not "September 30, 2024")
+   - Article says "Q2" → Write "Q2" (not "Q2 2025" or "second quarter 2025")
+   - Article says "next year" → Write "next year" (not "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year" (not "2025")
+   - ONLY include specific years when article explicitly states them ("Q3 2025", "fiscal 2024")
 ❌ NEVER speculate on target company's response or strategy
 ❌ NEVER infer impact on target company's competitive position unless article explicitly states it
 ❌ NEVER write about what target company "faces" or "must do" or "needs to" in response
@@ -6841,11 +6853,6 @@ This summary will be labeled as [COMPETITOR] content in the executive summary sy
 ❌ NEVER compare competitor's metrics to target company unless article does so explicitly with specific comparative data
 ❌ NEVER use speculative language: "may impact", "could pressure", "likely to", "suggests", "threatens", "creates pressure for", "forces", "challenges"
 ❌ NEVER invent competitive dynamics (customer defections, market share loss, pricing pressure) not stated in article
-❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
-   - Article says "next year" → Write "next year" (not "2024" or "2026")
-   - Article says "November" → Write "November" (not "November 2024")
-   - Article says "later this year" → Write "later this year"
-   - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 ❌ NEVER add competitive context statements like "both operate in [sector]", "compete for [customers]", "competes with [target company's products]" unless article explicitly makes these specific comparisons
 ❌ NEVER infer geographic overlap (don't assume target company operates in same regions)
 ❌ NEVER infer product overlap (don't assume target company has competing products)
@@ -6892,8 +6899,11 @@ Speculative Language Check:
 □ Exception: Only in direct quotes with full attribution
 
 Temporal Phrasing Check:
-□ Preserved article's exact temporal phrasing without resolving to specific years?
-□ "Next year" stays "next year" (not "2026"), "November" stays "November" (not "November 2024")?
+□ Preserved article's EXACT dates, months, quarters, and temporal phrasing without adding years?
+□ "Sept. 30" stays "Sept. 30" (not "September 30, 2024")?
+□ "Q2" stays "Q2" (not "Q2 2025" or "second quarter 2025")?
+□ "November" stays "November" (not "November 2024")?
+□ "Later this year" stays "later this year" (not "later in 2025")?
 
 Challenge Framing Check:
 □ Only categorical challenges (recalls, lawsuits, investigations) OR explicitly framed challenges?
@@ -7709,6 +7719,13 @@ This summary will be labeled as [INDUSTRY - keyword] content in the executive su
 ✅ State geographic context clearly when relevant
 ✅ Stick to the driver keyword the article was flagged for
 
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "Sept. 30" → Write "Sept. 30" (not "September 30, 2024")
+   - Article says "second quarter" → Write "second quarter" (not "Q2 2025")
+   - Article says "next year" → Write "next year" (not "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year" (not "2025")
+   - ONLY include specific years when article explicitly states them ("Q3 2025", "fiscal 2024")
 ❌ NO speculation about target company's strategy, response, or positioning
 ❌ NO inferred impacts on target company unless article explicitly discussed target company
 ❌ NO assumptions about target company's exposure, production, consumption, or competitive position
@@ -7717,11 +7734,6 @@ This summary will be labeled as [INDUSTRY - keyword] content in the executive su
 ❌ NO discussion of target company operations unless article explicitly mentions them
 ❌ NO filtering content based on your judgment of target company's markets/products
 ❌ NO claims about what "affects target company" or "impacts target company" unless article stated this
-❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
-   - Article says "next year" → Write "next year" (not "2024" or "2026")
-   - Article says "November" → Write "November" (not "November 2024")
-   - Article says "later this year" → Write "later this year"
-   - ONLY include specific years when article explicitly states them ("launching in 2026", "Q3 2025", "fiscal 2024")
 
 **CRITICAL FABRICATION PREVENTION:**
 
@@ -7765,8 +7777,11 @@ Speculative Language Check:
 □ Exception: Only in direct quotes with full attribution
 
 Temporal Phrasing Check:
-□ Preserved article's exact temporal phrasing without resolving to specific years?
-□ "Next year" stays "next year" (not "2026"), "November" stays "November" (not "November 2024")?
+□ Preserved article's EXACT dates, months, quarters, and temporal phrasing without adding years?
+□ "Sept. 30" stays "Sept. 30" (not "September 30, 2024")?
+□ "Second quarter" stays "second quarter" (not "Q2 2025")?
+□ "November" stays "November" (not "November 2024")?
+□ "Later this year" stays "later this year" (not "later in 2025")?
 
 Sector Framing Check:
 □ Competitor/industry data included ONLY if article explicitly framed as sector-wide trend?

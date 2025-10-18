@@ -18247,12 +18247,20 @@ OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving profile to database...")
 
         with db() as conn:
+            # Determine source file name based on mode
+            if 'sec_html_url' in config and config['sec_html_url']:
+                # FMP Mode - use SEC.gov as source
+                source_file = f"SEC.gov 10-K (FY{config['fiscal_year']})"
+            else:
+                # File Upload Mode - use uploaded file name
+                source_file = config.get('file_name', f"10-K FY{config['fiscal_year']}")
+
             save_config = {
                 'company_name': ticker_config['company_name'],
                 'industry': ticker_config.get('industry'),
                 'fiscal_year': config['fiscal_year'],
                 'filing_date': config['filing_date'],
-                'source_file': config['file_name']
+                'source_file': source_file
             }
 
             save_company_profile_to_database(
@@ -18742,7 +18750,21 @@ def job_worker_loop():
                         job_id = active_futures.pop(done)
                         try:
                             done.result()  # Raises exception if job failed
-                            LOG.info(f"✅ [JOB {job_id}] Completed successfully ({len(active_futures)}/{MAX_CONCURRENT_JOBS} active)")
+
+                            # Check actual job status in database (job might have caught its own exception)
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
+                                result = cur.fetchone()
+                                final_status = result['status'] if result else 'unknown'
+
+                            if final_status == 'completed':
+                                LOG.info(f"✅ [JOB {job_id}] Completed successfully ({len(active_futures)}/{MAX_CONCURRENT_JOBS} active)")
+                            elif final_status == 'failed':
+                                LOG.error(f"❌ [JOB {job_id}] Failed (marked in database) ({len(active_futures)}/{MAX_CONCURRENT_JOBS} active)")
+                            elif final_status == 'timeout':
+                                LOG.error(f"⏱️ [JOB {job_id}] Timed out ({len(active_futures)}/{MAX_CONCURRENT_JOBS} active)")
+                            else:
+                                LOG.warning(f"⚠️ [JOB {job_id}] Finished with status: {final_status} ({len(active_futures)}/{MAX_CONCURRENT_JOBS} active)")
                         except Exception as e:
                             LOG.error(f"❌ [JOB {job_id}] Failed with exception: {e}")
                 else:

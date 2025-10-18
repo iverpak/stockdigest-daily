@@ -66,6 +66,59 @@ def extract_text_file(txt_path: str) -> str:
         raise
 
 
+def fetch_sec_html_text(url: str) -> str:
+    """
+    Fetch 10-K HTML from SEC.gov and extract plain text.
+
+    Args:
+        url: SEC.gov HTML URL (from FMP API)
+
+    Returns:
+        Plain text extracted from HTML
+
+    Raises:
+        Exception: If fetch or parsing fails
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    LOG.info(f"Fetching 10-K HTML from SEC.gov: {url}")
+
+    try:
+        # SEC requires proper User-Agent to prevent blocking
+        headers = {
+            "User-Agent": "StockDigest/1.0 (stockdigest.research@gmail.com)"
+        }
+
+        response = requests.get(url, headers=headers, timeout=60)
+        response.raise_for_status()
+
+        LOG.info(f"✅ Fetched HTML ({len(response.text)} chars)")
+
+        # Parse HTML and extract text
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+
+        # Get text with newline separation
+        text = soup.get_text(separator='\n', strip=True)
+
+        # Clean up whitespace (collapse multiple spaces/tabs)
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+
+        LOG.info(f"✅ Extracted {len(text)} characters from HTML")
+
+        return text
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch SEC HTML: {e}")
+        raise
+
+
 # ==============================================================================
 # GEMINI AI PROFILE GENERATION
 # ==============================================================================

@@ -80,6 +80,7 @@ from modules.transcript_summaries import (
 from modules.company_profiles import (
     extract_pdf_text,
     extract_text_file,
+    fetch_sec_html_text,
     generate_company_profile_with_gemini,
     generate_company_profile_email,
     save_company_profile_to_database
@@ -18147,13 +18148,24 @@ async def process_company_profile_phase(job: dict):
         update_job_status(job_id, phase='extracting_text', progress=10)
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 10-K text...")
 
-        file_path = config['file_path']
-        file_ext = config.get('file_ext', 'pdf')
+        # Check if using FMP mode (SEC.gov HTML) or file upload mode
+        if 'sec_html_url' in config and config['sec_html_url']:
+            # FMP MODE: Fetch HTML from SEC.gov
+            LOG.info(f"[{ticker}] Using FMP mode - fetching from SEC.gov")
+            content = fetch_sec_html_text(config['sec_html_url'])
+        else:
+            # FILE UPLOAD MODE: Extract from uploaded PDF/TXT
+            LOG.info(f"[{ticker}] Using file upload mode")
+            file_path = config.get('file_path')
+            if not file_path:
+                raise ValueError("Neither sec_html_url nor file_path provided in config")
 
-        if file_ext == 'pdf':
-            content = extract_pdf_text(file_path)
-        else:  # txt
-            content = extract_text_file(file_path)
+            file_ext = config.get('file_ext', 'pdf')
+
+            if file_ext == 'pdf':
+                content = extract_pdf_text(file_path)
+            else:  # txt
+                content = extract_text_file(file_path)
 
         if not content or len(content) < 1000:
             raise ValueError(f"Extracted text too short ({len(content)} chars)")
@@ -19579,14 +19591,51 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
         company_name = config.get("company_name", ticker)
 
         if type == 'profile':
-            # Company profiles use file upload (no FMP check needed)
-            return {
-                "valid": True,
-                "company_name": company_name,
-                "industry": config.get("industry", "N/A"),
-                "ticker": ticker,
-                "message": "Upload 10-K PDF or TXT file to generate company profile"
-            }
+            # Fetch 10-K filings from FMP
+            try:
+                fmp_url = f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-K&page=0&apikey={FMP_API_KEY}"
+                response = requests.get(fmp_url, timeout=10)
+                filings = response.json()
+
+                # Extract years and dates (last 10 years)
+                available_years = []
+                for filing in filings[:10]:
+                    try:
+                        filing_date_str = filing.get("fillingDate", "")
+                        if filing_date_str:
+                            year = int(filing_date_str[:4])
+                            filing_date = filing_date_str[:10]  # YYYY-MM-DD
+                            sec_html_url = filing.get("finalLink", "")
+
+                            available_years.append({
+                                "year": year,
+                                "filing_date": filing_date,
+                                "sec_html_url": sec_html_url
+                            })
+                    except (ValueError, KeyError) as e:
+                        LOG.warning(f"Skipping invalid filing entry for {ticker}: {e}")
+                        continue
+
+                return {
+                    "valid": True,
+                    "company_name": company_name,
+                    "industry": config.get("industry", "N/A"),
+                    "ticker": ticker,
+                    "available_years": available_years,
+                    "message": f"Found {len(available_years)} 10-K filings" if available_years else "No 10-K filings found. Upload file instead."
+                }
+
+            except Exception as e:
+                LOG.error(f"Failed to fetch FMP 10-K list for {ticker}: {e}")
+                # Fallback: Allow file upload if FMP fails
+                return {
+                    "valid": True,
+                    "company_name": company_name,
+                    "industry": config.get("industry", "N/A"),
+                    "ticker": ticker,
+                    "available_years": [],
+                    "message": "FMP API error. Please upload 10-K file manually."
+                }
 
         elif type == 'transcript':
             # Fetch transcript list from FMP
@@ -23233,8 +23282,9 @@ async def generate_company_profile_api(request: Request):
     ticker = body.get('ticker')
     fiscal_year = body.get('fiscal_year')
     filing_date = body.get('filing_date')
-    file_content = body.get('file_content')  # Base64 encoded
-    file_name = body.get('file_name')
+    sec_html_url = body.get('sec_html_url')  # FMP mode (optional)
+    file_content = body.get('file_content')  # Base64 encoded (optional)
+    file_name = body.get('file_name')  # Optional
 
     try:
         LOG.info(f"📊 Creating company profile job for {ticker} FY{fiscal_year}")
@@ -23244,25 +23294,33 @@ async def generate_company_profile_api(request: Request):
         if not config:
             return {"status": "error", "message": f"Ticker {ticker} not found in database"}
 
-        # Save uploaded file temporarily
-        file_ext = file_name.split('.')[-1].lower()
-        temp_path = f"/tmp/{ticker}_10K_FY{fiscal_year}.{file_ext}"
-
-        with open(temp_path, 'wb') as f:
-            f.write(base64.b64decode(file_content))
-
-        LOG.info(f"Saved uploaded file to {temp_path} ({os.path.getsize(temp_path)} bytes)")
-
-        # Create job config
+        # Determine mode: FMP (SEC.gov HTML) or file upload
         job_config = {
             "ticker": ticker,
             "fiscal_year": fiscal_year,
             "filing_date": filing_date,
-            "file_path": temp_path,
-            "file_name": file_name,
-            "file_ext": file_ext,
             "send_email": True
         }
+
+        if sec_html_url:
+            # FMP MODE: Use SEC.gov HTML URL
+            LOG.info(f"Using FMP mode: {sec_html_url}")
+            job_config["sec_html_url"] = sec_html_url
+        elif file_content and file_name:
+            # FILE UPLOAD MODE: Save uploaded file temporarily
+            file_ext = file_name.split('.')[-1].lower()
+            temp_path = f"/tmp/{ticker}_10K_FY{fiscal_year}.{file_ext}"
+
+            with open(temp_path, 'wb') as f:
+                f.write(base64.b64decode(file_content))
+
+            LOG.info(f"Saved uploaded file to {temp_path} ({os.path.getsize(temp_path)} bytes)")
+
+            job_config["file_path"] = temp_path
+            job_config["file_name"] = file_name
+            job_config["file_ext"] = file_ext
+        else:
+            return {"status": "error", "message": "Either sec_html_url or file_content must be provided"}
 
         # Create job in ticker_processing_jobs table
         with db() as conn, conn.cursor() as cur:

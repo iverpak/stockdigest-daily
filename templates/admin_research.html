@@ -337,26 +337,16 @@
 
             <div id="profile-validation-result"></div>
 
-            <!-- Step 2: File Upload (shown after validation) -->
-            <div id="profile-upload-section" style="display:none; margin-top: 24px;">
+            <!-- Step 2: Year Selection (shown after validation) -->
+            <div id="profile-year-section" style="display:none; margin-top: 24px;">
                 <div class="input-group">
-                    <label>Upload 10-K Filing <span style="color: #dc2626;">*</span></label>
-                    <input type="file" id="profile-file-upload" accept=".pdf,.txt"
-                           style="padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;">
+                    <label>Select Fiscal Year <span style="color: #dc2626;">*</span></label>
+                    <select id="profile-fiscal-year" style="width: 100%;">
+                        <option value="">Validate ticker first...</option>
+                    </select>
                     <p style="font-size: 12px; color: #6b7280; margin-top: 4px;">
-                        Supported formats: PDF, TXT (max 300 pages)
+                        Select the fiscal year from available SEC filings
                     </p>
-                </div>
-
-                <div class="input-group" style="margin-top: 16px;">
-                    <label>Fiscal Year <span style="color: #dc2626;">*</span></label>
-                    <input type="number" id="profile-fiscal-year" placeholder="e.g., 2024"
-                           min="2000" max="2030" style="width: 150px;">
-                </div>
-
-                <div class="input-group" style="margin-top: 16px;">
-                    <label>Filing Date <span style="color: #dc2626;">*</span></label>
-                    <input type="date" id="profile-filing-date" style="width: 200px;">
                 </div>
 
                 <button onclick="generateCompanyProfile()"
@@ -661,23 +651,43 @@
                 const data = await response.json();
 
                 if (data.valid) {
-                    resultDiv.innerHTML = `
-                        <div class="validation-result success">
-                            ✅ ${ticker} - ${data.company_name} (${data.industry})<br>
-                            <span style="font-size: 12px; color: #059669;">${data.message}</span>
-                        </div>
-                    `;
+                    const select = document.getElementById('profile-fiscal-year');
+                    select.innerHTML = '';
 
-                    // Show upload section
-                    document.getElementById('profile-upload-section').style.display = 'block';
+                    if (data.available_years && data.available_years.length > 0) {
+                        // Populate dropdown with available years
+                        data.available_years.forEach((y, index) => {
+                            const option = document.createElement('option');
+                            option.value = index;  // Store index to access data later
+                            option.dataset.year = y.year;
+                            option.dataset.filingDate = y.filing_date;
+                            option.dataset.secHtmlUrl = y.sec_html_url;
+                            option.textContent = `${y.year} (Filed: ${y.filing_date})`;
+                            if (index === 0) option.selected = true;  // Select latest by default
+                            select.appendChild(option);
+                        });
 
-                    // Set default fiscal year to current year
-                    const currentYear = new Date().getFullYear();
-                    document.getElementById('profile-fiscal-year').value = currentYear - 1; // Last year's 10-K
+                        resultDiv.innerHTML = `
+                            <div class="validation-result success">
+                                ✅ ${ticker} - ${data.company_name} (${data.industry})<br>
+                                <span style="font-size: 12px; color: #059669;">Found ${data.available_years.length} 10-K filings from FMP</span>
+                            </div>
+                        `;
 
+                        // Show year selection section
+                        document.getElementById('profile-year-section').style.display = 'block';
+                    } else {
+                        resultDiv.innerHTML = `
+                            <div class="validation-result warning">
+                                ⚠️ ${ticker} - ${data.company_name} (${data.industry})<br>
+                                <span style="font-size: 12px; color: #92400e;">${data.message || 'No 10-K filings found in FMP'}</span>
+                            </div>
+                        `;
+                        document.getElementById('profile-year-section').style.display = 'none';
+                    }
                 } else {
                     resultDiv.innerHTML = `<div class="validation-result error">❌ ${data.error}</div>`;
-                    document.getElementById('profile-upload-section').style.display = 'none';
+                    document.getElementById('profile-year-section').style.display = 'none';
                 }
             } catch (error) {
                 resultDiv.innerHTML = `<div class="validation-result error">❌ Validation failed: ${error.message}</div>`;
@@ -686,9 +696,8 @@
 
         async function generateCompanyProfile() {
             const ticker = document.getElementById('profile-ticker').value.toUpperCase().trim();
-            const fileInput = document.getElementById('profile-file-upload');
-            const fiscalYear = parseInt(document.getElementById('profile-fiscal-year').value);
-            const filingDate = document.getElementById('profile-filing-date').value;
+            const select = document.getElementById('profile-fiscal-year');
+            const selectedOption = select.options[select.selectedIndex];
 
             // Validation
             if (!ticker) {
@@ -696,75 +705,55 @@
                 return;
             }
 
-            if (!fileInput.files[0]) {
-                alert('Please upload a 10-K file (PDF or TXT)');
+            if (!selectedOption || !selectedOption.dataset.secHtmlUrl) {
+                alert('Please select a fiscal year from the dropdown');
                 return;
             }
 
-            if (!fiscalYear || fiscalYear < 2000 || fiscalYear > 2030) {
-                alert('Please enter a valid fiscal year (2000-2030)');
-                return;
-            }
+            // Extract data from selected option
+            const fiscalYear = parseInt(selectedOption.dataset.year);
+            const filingDate = selectedOption.dataset.filingDate;
+            const secHtmlUrl = selectedOption.dataset.secHtmlUrl;
 
-            if (!filingDate) {
-                alert('Please enter a filing date');
-                return;
-            }
+            // Hide year section, show status
+            document.getElementById('profile-year-section').style.display = 'none';
+            document.getElementById('profile-job-status').style.display = 'block';
+            document.getElementById('profile-result').style.display = 'none';
+            document.getElementById('profile-error').style.display = 'none';
 
-            // Read file as base64
-            const file = fileInput.files[0];
-            const reader = new FileReader();
+            try {
+                // Create job (FMP mode - no file upload needed!)
+                const response = await fetch('/api/admin/generate-company-profile', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        token: token,
+                        ticker: ticker,
+                        fiscal_year: fiscalYear,
+                        filing_date: filingDate,
+                        sec_html_url: secHtmlUrl
+                    })
+                });
 
-            reader.onload = async function(e) {
-                // Convert ArrayBuffer to base64
-                const base64Content = btoa(
-                    new Uint8Array(e.target.result)
-                        .reduce((data, byte) => data + String.fromCharCode(byte), '')
-                );
+                const result = await response.json();
 
-                // Hide upload section, show status
-                document.getElementById('profile-upload-section').style.display = 'none';
-                document.getElementById('profile-job-status').style.display = 'block';
-                document.getElementById('profile-result').style.display = 'none';
-                document.getElementById('profile-error').style.display = 'none';
-
-                try {
-                    // Create job
-                    const response = await fetch('/api/admin/generate-company-profile', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            token: token,
-                            ticker: ticker,
-                            fiscal_year: fiscalYear,
-                            filing_date: filingDate,
-                            file_content: base64Content,
-                            file_name: file.name
-                        })
-                    });
-
-                    const result = await response.json();
-
-                    if (result.status === 'success') {
-                        // Start polling job status
-                        pollCompanyProfileJobStatus(result.job_id);
-                    } else {
-                        // Show error
-                        document.getElementById('profile-job-status').style.display = 'none';
-                        document.getElementById('profile-error').style.display = 'block';
-                        document.getElementById('profile-error-message').textContent = result.message;
-                        document.getElementById('profile-upload-section').style.display = 'block';
-                    }
-
-                } catch (error) {
+                if (result.status === 'success') {
+                    // Start polling job status
+                    pollCompanyProfileJobStatus(result.job_id);
+                } else {
+                    // Show error
                     document.getElementById('profile-job-status').style.display = 'none';
                     document.getElementById('profile-error').style.display = 'block';
-                    document.getElementById('profile-error-message').textContent = error.message;
-                    document.getElementById('profile-upload-section').style.display = 'block';
+                    document.getElementById('profile-error-message').textContent = result.message;
+                    document.getElementById('profile-year-section').style.display = 'block';
                 }
-            };
 
-            reader.readAsArrayBuffer(file);
+            } catch (error) {
+                document.getElementById('profile-job-status').style.display = 'none';
+                document.getElementById('profile-error').style.display = 'block';
+                document.getElementById('profile-error-message').textContent = error.message;
+                document.getElementById('profile-year-section').style.display = 'block';
+            }
         }
 
         async function pollCompanyProfileJobStatus(jobId) {

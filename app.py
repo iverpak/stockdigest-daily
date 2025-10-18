@@ -67,6 +67,24 @@ from memory_monitor import (
     full_resource_cleanup
 )
 
+# Module imports (Oct 2025 - modularization)
+from modules.transcript_summaries import (
+    fetch_fmp_transcript_list,
+    fetch_fmp_transcript,
+    fetch_fmp_press_releases,
+    fetch_fmp_press_release_by_date,
+    generate_transcript_summary_with_claude,
+    generate_transcript_email,
+    save_transcript_summary_to_database
+)
+from modules.company_profiles import (
+    extract_pdf_text,
+    extract_text_file,
+    generate_company_profile_with_gemini,
+    generate_company_profile_email,
+    save_company_profile_to_database
+)
+
 # ============================================================================
 # AIOHTTP CONNECTION MANAGEMENT - Prevents Connection Exhaustion & Deadlock
 # ============================================================================
@@ -644,6 +662,7 @@ USE_CLAUDE_FOR_METADATA = os.getenv("USE_CLAUDE_FOR_METADATA", "true").lower() =
 
 SCRAPFLY_API_KEY = os.getenv("SCRAPFLY_API_KEY")
 FMP_API_KEY = os.getenv("FMP_API_KEY")  # Financial Modeling Prep API key
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Google Gemini API key for company profiles
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Personal Access Token
 GITHUB_REPO = os.getenv("GITHUB_REPO")    # e.g., "username/repo-name"
@@ -1461,8 +1480,8 @@ def ensure_schema():
 
                 CREATE INDEX IF NOT EXISTS idx_exec_summ_ticker_date ON executive_summaries(ticker, summary_date DESC);
 
-                -- RESEARCH SUMMARIES: Store earnings transcript and press release summaries
-                CREATE TABLE IF NOT EXISTS research_summaries (
+                -- TRANSCRIPT SUMMARIES: Store earnings transcript and press release summaries
+                CREATE TABLE IF NOT EXISTS transcript_summaries (
                     id SERIAL PRIMARY KEY,
                     ticker VARCHAR(20) NOT NULL,
                     company_name VARCHAR(255),
@@ -1484,10 +1503,51 @@ def ensure_schema():
                     UNIQUE(ticker, report_type, quarter, year)
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_research_summaries_ticker ON research_summaries(ticker);
-                CREATE INDEX IF NOT EXISTS idx_research_summaries_quarter ON research_summaries(quarter, year);
-                CREATE INDEX IF NOT EXISTS idx_research_summaries_type ON research_summaries(report_type);
-                CREATE INDEX IF NOT EXISTS idx_research_summaries_date ON research_summaries(report_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_transcript_summaries_ticker ON transcript_summaries(ticker);
+                CREATE INDEX IF NOT EXISTS idx_transcript_summaries_quarter ON transcript_summaries(quarter, year);
+                CREATE INDEX IF NOT EXISTS idx_transcript_summaries_type ON transcript_summaries(report_type);
+                CREATE INDEX IF NOT EXISTS idx_transcript_summaries_date ON transcript_summaries(report_date DESC);
+
+                -- COMPANY PROFILES: Store AI-generated 10-K company profiles
+                CREATE TABLE IF NOT EXISTS company_profiles (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) NOT NULL UNIQUE,
+                    company_name VARCHAR(255) NOT NULL,
+                    industry VARCHAR(255),
+                    fiscal_year INTEGER,
+                    filing_date DATE,
+
+                    -- Full profile markdown
+                    profile_markdown TEXT NOT NULL,
+
+                    -- Brief summary (future: for executive summary injection)
+                    profile_summary TEXT,
+
+                    -- Structured KPIs as JSON
+                    key_metrics JSONB,
+
+                    -- Source tracking
+                    source_file VARCHAR(500),  -- Original filename
+
+                    -- AI metadata
+                    ai_provider VARCHAR(20) NOT NULL,  -- 'gemini'
+                    gemini_model VARCHAR(100),
+                    thinking_budget INTEGER,
+                    generation_time_seconds INTEGER,
+                    token_count_input INTEGER,
+                    token_count_output INTEGER,
+
+                    -- Status
+                    status VARCHAR(50) DEFAULT 'active',  -- 'active', 'stale', 'error'
+                    error_message TEXT,
+
+                    -- Timestamps
+                    generated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_company_profiles_ticker ON company_profiles(ticker);
+                CREATE INDEX IF NOT EXISTS idx_company_profiles_fiscal_year ON company_profiles(fiscal_year DESC);
+                CREATE INDEX IF NOT EXISTS idx_company_profiles_status ON company_profiles(status);
 
                 -- Beta users table for landing page signups
                 CREATE TABLE IF NOT EXISTS beta_users (
@@ -18073,14 +18133,202 @@ def stop_heartbeat_thread(job_id: str):
 # Job Processing
 # ============================================================================
 
-async def process_ticker_job(job: dict):
-    """Process a single ticker job (ingest + digest + commit)"""
+async def process_company_profile_phase(job: dict):
+    """Process company profile generation (5-15 min, Gemini 2.5)"""
     job_id = job['job_id']
     ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread
+        start_heartbeat_thread(job_id)
+
+        # Progress: 10% - Extracting 10-K text
+        update_job_status(job_id, phase='extracting_text', progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 10-K text...")
+
+        file_path = config['file_path']
+        file_ext = config.get('file_ext', 'pdf')
+
+        if file_ext == 'pdf':
+            content = extract_pdf_text(file_path)
+        else:  # txt
+            content = extract_text_file(file_path)
+
+        if not content or len(content) < 1000:
+            raise ValueError(f"Extracted text too short ({len(content)} chars)")
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters")
+
+        # Progress: 30% - Generating profile with Gemini (this takes 5-10 min)
+        update_job_status(job_id, phase='generating_profile', progress=30)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating profile with Gemini 2.5 Flash (5-10 min)...")
+
+        ticker_config = get_ticker_config(ticker)
+
+        # Build Gemini prompt (using user's spec - abbreviated version for space)
+        gemini_prompt = """You are creating a Company Profile document for an equity analyst.
+
+This profile will be used to provide context when analyzing news articles about the company.
+
+I am providing you with the COMPLETE Form 10-K for {company_name} ({ticker}).
+
+Your task is to extract and synthesize information from across the entire document to create a comprehensive profile following the structure below.
+
+CRITICAL INSTRUCTIONS:
+- Be specific, not generic (name suppliers, customers, exact figures)
+- Use actual numbers with units
+- Extract only facts explicitly stated in the filing
+- Skip sections with no disclosed data
+- Target length: 3-5 pages (~3,000-5,000 words)
+
+---
+COMPLETE 10-K DOCUMENT:
+
+{full_10k_text}
+
+---
+
+Create a Company Profile in Markdown format with these sections:
+
+# {company_name} ({ticker}) - COMPANY PROFILE
+
+*Generated from Form 10-K filed {filing_date} for fiscal year ending {fiscal_year_end}*
+
+## 1. INDUSTRY CLASSIFICATION
+## 2. BUSINESS MODEL SUMMARY
+## 3. REVENUE STREAMS
+## 4. KEY OPERATIONAL METRICS (KPIs)
+## 5. GEOGRAPHIC PRESENCE
+## 6. KEY PRODUCTS & SERVICES
+## 7. MATERIAL DEPENDENCIES
+## 8. INFRASTRUCTURE & ASSETS
+## 9. COST STRUCTURE
+## 10. FINANCIAL SNAPSHOT (Latest Year)
+## 11. SPECIFIC RISKS & CONCENTRATIONS
+## 12. REGULATORY OVERSIGHT
+## 13. STRATEGIC PRIORITIES & OUTLOOK
+## 14. KEY THINGS TO MONITOR
+
+OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
+"""
+
+        result = generate_company_profile_with_gemini(
+            ticker=ticker,
+            content=content,
+            config=ticker_config,
+            fiscal_year=config['fiscal_year'],
+            filing_date=config['filing_date'],
+            gemini_api_key=GEMINI_API_KEY,
+            gemini_prompt=gemini_prompt
+        )
+
+        if not result:
+            raise ValueError("Gemini profile generation failed")
+
+        profile_markdown = result['profile_markdown']
+        metadata = result['metadata']
+
+        # Progress: 80% - Saving to database
+        update_job_status(job_id, phase='saving_profile', progress=80)
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving profile to database...")
+
+        with db() as conn:
+            save_config = {
+                'company_name': ticker_config['company_name'],
+                'industry': ticker_config.get('industry'),
+                'fiscal_year': config['fiscal_year'],
+                'filing_date': config['filing_date'],
+                'source_file': config['file_name']
+            }
+
+            save_company_profile_to_database(
+                ticker, profile_markdown, save_config, metadata, conn
+            )
+
+        # Progress: 95% - Sending email
+        if config.get('send_email', True):
+            update_job_status(job_id, phase='sending_email', progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+
+            # Get stock price for email
+            stock_price = "$0.00"
+            price_change_pct = None
+            price_change_color = "#4ade80"
+
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT financial_last_price, financial_price_change_pct
+                    FROM ticker_reference
+                    WHERE ticker = %s
+                """, (ticker,))
+                price_data = cur.fetchone()
+
+                if price_data and price_data['financial_last_price']:
+                    stock_price = f"${price_data['financial_last_price']:.2f}"
+                    if price_data['financial_price_change_pct'] is not None:
+                        pct = price_data['financial_price_change_pct']
+                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+            email_data = generate_company_profile_email(
+                ticker=ticker,
+                company_name=ticker_config['company_name'],
+                industry=ticker_config.get('industry', 'N/A'),
+                fiscal_year=config['fiscal_year'],
+                filing_date=config['filing_date'],
+                profile_markdown=profile_markdown,
+                stock_price=stock_price,
+                price_change_pct=price_change_pct,
+                price_change_color=price_change_color
+            )
+
+            send_email(
+                subject=email_data['subject'],
+                html_body=email_data['html'],
+                to='stockdigest.research@gmail.com'
+            )
+
+        # Clean up temp file
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Cleaned up temp file: {file_path}")
+
+        # Mark complete
+        update_job_status(job_id, phase='complete', progress=100)
+        mark_job_complete(job_id)
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company profile generation complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Company profile generation failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        mark_job_failed(job_id, str(e), traceback.format_exc())
+
+
+async def process_ticker_job(job: dict):
+    """Process a single ticker job (ingest + digest + commit) OR company profile generation"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    phase = job.get('phase', 'ingest_start')
 
     # psycopg returns JSONB as dict, not string
     config = job['config'] if isinstance(job['config'], dict) else {}
 
+    # ROUTE: If this is a company profile generation job, handle separately
+    if phase == 'profile_generation':
+        await process_company_profile_phase(job)
+        return
+
+    # Standard ticker processing (news articles)
     minutes = config.get('minutes', 1440)
     batch_size = config.get('batch_size', 3)
     triage_batch_size = config.get('triage_batch_size', 3)
@@ -19311,30 +19559,16 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
 @APP.get("/api/fmp-validate-ticker")
 async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
     """
-    Validate ticker for research summaries and return available transcripts or press releases.
+    Validate ticker for research summaries and return available transcripts, press releases, or company profiles.
 
     Query params:
         ticker: Stock ticker (AAPL, RY.TO, etc.)
-        type: 'transcript' or 'press_release'
+        type: 'transcript', 'press_release', or 'profile'
 
     Returns:
-        {
-            "valid": true,
-            "company_name": "Apple Inc.",
-            "latest_quarter": "Q3 2024",
-            "available_quarters": ["Q3 2024", "Q2 2024", ...],
-            "ticker": "AAPL"
-        }
-        OR
-        {
-            "valid": true,
-            "company_name": "Apple Inc.",
-            "available_releases": [
-                {"date": "2024-10-15 09:00:00", "title": "Apple Announces..."},
-                ...
-            ],
-            "ticker": "AAPL"
-        }
+        For transcripts: {"valid": true, "company_name": "...", "available_quarters": [...]}
+        For press_releases: {"valid": true, "company_name": "...", "available_releases": [...]}
+        For profiles: {"valid": true, "company_name": "...", "industry": "..."}
     """
     try:
         # Validate ticker exists in database
@@ -19344,9 +19578,19 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
 
         company_name = config.get("company_name", ticker)
 
-        if type == 'transcript':
+        if type == 'profile':
+            # Company profiles use file upload (no FMP check needed)
+            return {
+                "valid": True,
+                "company_name": company_name,
+                "industry": config.get("industry", "N/A"),
+                "ticker": ticker,
+                "message": "Upload 10-K PDF or TXT file to generate company profile"
+            }
+
+        elif type == 'transcript':
             # Fetch transcript list from FMP
-            transcripts = fetch_fmp_transcript_list(ticker)
+            transcripts = fetch_fmp_transcript_list(ticker, FMP_API_KEY)
             if not transcripts:
                 return {
                     "valid": True,
@@ -19371,7 +19615,7 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
 
         else:  # press_release
             # Fetch press releases from FMP
-            releases = fetch_fmp_press_releases(ticker, limit=20)
+            releases = fetch_fmp_press_releases(ticker, FMP_API_KEY, limit=20)
             if not releases:
                 return {
                     "valid": True,
@@ -22803,8 +23047,8 @@ async def delete_user(request: Request):
         LOG.error(f"Failed to delete user: {e}")
         return {"status": "error", "message": str(e)}
 
-@APP.post("/api/admin/generate-research-summary")
-async def generate_research_summary_api(request: Request):
+@APP.post("/api/admin/generate-transcript-summary")
+async def generate_transcript_summary_api(request: Request):
     """Generate AI summary of earnings transcript or press release"""
     body = await request.json()
     token = body.get('token')
@@ -22819,7 +23063,7 @@ async def generate_research_summary_api(request: Request):
     pr_date = body.get('pr_date')  # String date for press releases
 
     try:
-        LOG.info(f"📊 Generating research summary for {ticker} ({report_type})")
+        LOG.info(f"📊 Generating transcript summary for {ticker} ({report_type})")
 
         # Get ticker config
         config = get_ticker_config(ticker)
@@ -22828,9 +23072,9 @@ async def generate_research_summary_api(request: Request):
 
         company_name = config.get("company_name", ticker)
 
-        # Fetch content from FMP
+        # Fetch content from FMP (using module function)
         if report_type == 'transcript':
-            data = fetch_fmp_transcript(ticker, quarter, year)
+            data = fetch_fmp_transcript(ticker, quarter, year, FMP_API_KEY)
             if not data:
                 return {"status": "error", "message": f"No transcript found for {ticker} Q{quarter} {year}"}
 
@@ -22840,7 +23084,7 @@ async def generate_research_summary_api(request: Request):
             pr_title = None
 
         else:  # press_release
-            data = fetch_fmp_press_release_by_date(ticker, pr_date)
+            data = fetch_fmp_press_release_by_date(ticker, pr_date, FMP_API_KEY)
             if not data:
                 return {"status": "error", "message": f"No press release found for {ticker} on {pr_date}"}
 
@@ -22849,38 +23093,57 @@ async def generate_research_summary_api(request: Request):
             pr_title = data['title']
             fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
 
-        # Summarize with Claude
+        # Summarize with Claude (using module function)
         LOG.info(f"🤖 Summarizing with Claude (content length: {len(content)} chars)")
-        summary_text = summarize_research_with_claude(ticker, content, config, report_type)
+        summary_text = generate_transcript_summary_with_claude(
+            ticker, content, config, report_type,
+            ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
+            _build_research_summary_prompt  # Pass prompt builder
+        )
 
         if not summary_text:
             return {"status": "error", "message": "Claude summarization failed"}
 
-        # Save to database
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO research_summaries (
-                    ticker, company_name, report_type, quarter, year,
-                    report_date, pr_title, summary_text, source_url,
-                    ai_provider
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, report_type, quarter, year)
-                DO UPDATE SET
-                    summary_text = EXCLUDED.summary_text,
-                    generated_at = NOW()
-            """, (
-                ticker, company_name, report_type,
-                quarter, year,
-                report_date, pr_title,
-                summary_text, fmp_url, 'claude'
-            ))
-            conn.commit()
+        # Save to database (using module function)
+        with db() as conn:
+            save_transcript_summary_to_database(
+                ticker=ticker,
+                company_name=company_name,
+                report_type=report_type,
+                quarter=f"Q{quarter}" if quarter else None,
+                year=year,
+                report_date=report_date,
+                pr_title=pr_title,
+                summary_text=summary_text,
+                source_url=fmp_url,
+                ai_provider='claude',
+                db_connection=conn
+            )
 
         LOG.info(f"💾 Saved summary to database")
 
-        # Generate and send email
-        email_data = generate_research_email(
+        # Get stock price for email
+        stock_price = "$0.00"
+        price_change_pct = None
+        price_change_color = "#4ade80"
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT financial_last_price, financial_price_change_pct
+                FROM ticker_reference
+                WHERE ticker = %s
+            """, (ticker,))
+            price_data = cur.fetchone()
+
+            if price_data and price_data['financial_last_price']:
+                stock_price = f"${price_data['financial_last_price']:.2f}"
+                if price_data['financial_price_change_pct'] is not None:
+                    pct = price_data['financial_price_change_pct']
+                    price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                    price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+        # Generate and send email (using module function)
+        email_data = generate_transcript_email(
             ticker=ticker,
             company_name=company_name,
             report_type=report_type,
@@ -22889,7 +23152,10 @@ async def generate_research_summary_api(request: Request):
             report_date=report_date,
             pr_title=pr_title,
             summary_text=summary_text,
-            fmp_url=fmp_url
+            fmp_url=fmp_url,
+            stock_price=stock_price,
+            price_change_pct=price_change_pct,
+            price_change_color=price_change_color
         )
 
         # Send to admin email
@@ -22900,7 +23166,7 @@ async def generate_research_summary_api(request: Request):
         )
 
         if success:
-            LOG.info(f"✅ Research summary email sent successfully")
+            LOG.info(f"✅ Transcript summary email sent successfully")
             return {
                 "status": "success",
                 "message": f"Summary generated and sent to stockdigest.research@gmail.com",
@@ -22912,12 +23178,12 @@ async def generate_research_summary_api(request: Request):
             return {"status": "error", "message": "Email sending failed"}
 
     except Exception as e:
-        LOG.error(f"Failed to generate research summary: {e}", exc_info=True)
+        LOG.error(f"Failed to generate transcript summary: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
-@APP.get("/api/admin/debug-research-summary")
-async def debug_research_summary(ticker: str, token: str):
-    """Debug endpoint to view raw research summary from database"""
+@APP.get("/api/admin/debug-transcript-summary")
+async def debug_transcript_summary(ticker: str, token: str):
+    """Debug endpoint to view raw transcript summary from database"""
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
@@ -22926,7 +23192,7 @@ async def debug_research_summary(ticker: str, token: str):
             cur.execute("""
                 SELECT ticker, company_name, report_type, quarter, year,
                        report_date, summary_text, ai_provider, generated_at
-                FROM research_summaries
+                FROM transcript_summaries
                 WHERE ticker = %s
                 ORDER BY generated_at DESC
                 LIMIT 1
@@ -22953,6 +23219,86 @@ async def debug_research_summary(ticker: str, token: str):
 
     except Exception as e:
         LOG.error(f"Failed to fetch research summary: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/generate-company-profile")
+async def generate_company_profile_api(request: Request):
+    """Generate AI company profile from uploaded 10-K file (uses job queue)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    fiscal_year = body.get('fiscal_year')
+    filing_date = body.get('filing_date')
+    file_content = body.get('file_content')  # Base64 encoded
+    file_name = body.get('file_name')
+
+    try:
+        LOG.info(f"📊 Creating company profile job for {ticker} FY{fiscal_year}")
+
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+
+        # Save uploaded file temporarily
+        file_ext = file_name.split('.')[-1].lower()
+        temp_path = f"/tmp/{ticker}_10K_FY{fiscal_year}.{file_ext}"
+
+        with open(temp_path, 'wb') as f:
+            f.write(base64.b64decode(file_content))
+
+        LOG.info(f"Saved uploaded file to {temp_path} ({os.path.getsize(temp_path)} bytes)")
+
+        # Create job config
+        job_config = {
+            "ticker": ticker,
+            "fiscal_year": fiscal_year,
+            "filing_date": filing_date,
+            "file_path": temp_path,
+            "file_name": file_name,
+            "file_ext": file_ext,
+            "send_email": True
+        }
+
+        # Create job in ticker_processing_jobs table
+        with db() as conn, conn.cursor() as cur:
+            batch_id = f"profile_{ticker}_{int(datetime.now().timestamp())}"
+
+            # Create batch
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                VALUES (%s, %s, 1, %s)
+                RETURNING batch_id
+            """, (batch_id, 'processing', json.dumps(job_config)))
+
+            # Create job
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, ticker, status, phase, progress, config
+                )
+                VALUES (%s, %s, %s, %s, 0, %s)
+                RETURNING job_id
+            """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
+
+            job_id = cur.fetchone()['job_id']
+            conn.commit()
+
+        LOG.info(f"Created company profile job {job_id} for {ticker}")
+
+        return {
+            "status": "success",
+            "message": f"Company profile job created for {ticker}",
+            "job_id": job_id,
+            "ticker": ticker,
+            "fiscal_year": fiscal_year
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to create company profile job: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/restart-worker")

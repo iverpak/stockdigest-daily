@@ -14350,10 +14350,15 @@ Example:
 
 📈 UPSIDE SCENARIO (Only if bullish developments exist - single paragraph, 80-100 words)
 
-CRITICAL: Synthesize developments tagged as bullish in sections above. Present what article authors stated about these positive developments.
-If you tagged developments as (bullish, [reason]) in Major Developments or Competitive/Industry Dynamics sections, synthesize those author statements here.
-Format: "[Source/Author] noted [bullish development]. [Another source/author] highlighted [positive metric]. [Third source] stated [favorable trend]."
-DO NOT include this section if no bullish-tagged developments exist in your summary above.
+CRITICAL: Synthesize developments tagged as bullish in sections above.
+If you tagged developments as (bullish, [reason]) in any section above, synthesize them here using EITHER attributed author statements OR the factual developments themselves.
+
+Format examples:
+- "[Source/Author] noted [bullish development]" (when authors made conclusions)
+- "Posted record revenue of $X (+Y%)" (when you inferred bullish from facts)
+- Mix both: "Record deliveries of 497K; [Analyst] stated this demonstrates strong execution"
+
+INCLUDE this section if you have tagged 1+ developments as (bullish, ...) in sections above.
 
 Format: Single paragraph, 3-4 sentences
 Reference developments from above sections WITHOUT repeating specific numbers
@@ -14372,10 +14377,15 @@ DO NOT include this section if no bullish author views exist in articles.
 
 📉 DOWNSIDE SCENARIO (Only if bearish developments exist - single paragraph, 80-100 words)
 
-CRITICAL: Synthesize developments tagged as bearish in sections above. Present what article authors stated about these negative developments or risks.
-If you tagged developments as (bearish, [reason]) in Major Developments, Risk Factors, or Competitive/Industry Dynamics sections, synthesize those author statements here.
-Format: "[Source/Author] flagged [bearish development]. [Another source/author] noted [negative metric or risk]. [Third source] warned [concerning trend]."
-DO NOT include this section if no bearish-tagged developments exist in your summary above.
+CRITICAL: Synthesize developments tagged as bearish in sections above.
+If you tagged developments as (bearish, [reason]) in any section above, synthesize them here using EITHER attributed author statements OR the factual risks themselves.
+
+Format examples:
+- "[Source/Author] warned [bearish development]" (when authors made conclusions)
+- "Disclosed $X loss related to [event]" (when you inferred bearish from facts)
+- Mix both: "Disclosed $170M loss; CEO Dimon warned 'when you see one cockroach there are probably more'"
+
+INCLUDE this section if you have tagged 1+ developments as (bearish, ...) in sections above.
 
 Format: Single paragraph, 3-4 sentences
 Reference developments from above sections WITHOUT repeating specific numbers
@@ -14561,8 +14571,8 @@ ATTRIBUTION QUALITY:
 □ Are my Upside/Downside scenarios pure author views or did I add my own analysis?
 
 SECTION COMPLETENESS:
-□ Are Upside/Downside empty because no analyst views exist in articles? (Good - correct behavior)
-□ Or because I didn't look hard enough for author conclusions? (Bad - recheck articles)
+□ Are Upside/Downside empty because zero bullish/bearish tagged developments exist? (Good - correct behavior)
+□ If 1+ bullish/bearish tags exist but section is empty? (Bad - ERROR, add the section)
 □ Did I include Risk Factors only when authors flagged concerns OR categorical risks occurred?
 
 MAGNITUDE VERIFICATION:

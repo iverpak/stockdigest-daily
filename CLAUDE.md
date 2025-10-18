@@ -66,6 +66,7 @@ python app.py alerts    # Hourly (9 AM - 10 PM EST) - Real-time article alerts (
 - `/admin/queue` - Email queue management with 8 smart buttons + ♻️ Regenerate Email #3 button per ticker (Oct 2025)
 - `/admin/settings` - System configuration: Lookback window + GitHub CSV backup (Oct 2025)
 - `/admin/test` - Web-based test runner (replaces PowerShell setup_job_queue.ps1) (Oct 2025)
+- `/admin/research` - **NEW (Oct 18, 2025):** Research tools for company profiles, transcripts, and press releases with modal viewer and bulk management
 
 **Safety Systems:**
 - Startup recovery (requeues jobs stuck >3min at startup)
@@ -257,6 +258,16 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 
 StockDigest provides AI-powered research tools for analyzing 10-K filings, earnings transcripts, and press releases.
 
+### Admin Research Dashboard
+
+**`GET /admin/research`** - Centralized research tools interface (NEW - Oct 18, 2025)
+- **Location:** `https://stockdigest.app/admin/research?token=YOUR_ADMIN_TOKEN`
+- **Features:**
+  - Tabbed interface for Company Profiles, Transcripts, and Press Releases
+  - Unified UI for all research workflows
+  - Modal viewer for viewing profiles with markdown rendering
+  - Bulk management tools (view all, delete, regenerate, email)
+
 **Company Profiles (FMP + SEC.gov Integration):**
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=profile`**: Validate ticker and fetch available 10-K filings from FMP
   - Returns: Array of `available_years` with fiscal year, filing date, and SEC.gov HTML URL
@@ -277,8 +288,32 @@ StockDigest provides AI-powered research tools for analyzing 10-K filings, earni
 - **`POST /api/admin/generate-company-profile`**: Generate AI company profile from 10-K filing (uses job queue)
   - **FMP Mode (recommended):** Send `sec_html_url` from validation response → Fetches HTML from SEC.gov
   - **File Upload Mode (fallback):** Send `file_content` (base64) + `file_name` → Extracts from PDF/TXT
-  - Processing: 5-10 minutes (Gemini 2.5 Flash with thinking mode)
+  - Processing: 5-10 minutes (Gemini 2.5 Flash, no thinking mode - param removed Oct 2025)
   - Returns: `job_id` for status polling via `/jobs/{job_id}`
+
+**Company Profiles Management (NEW - Oct 18, 2025):**
+- **`GET /api/admin/company-profiles`**: List all company profiles from database
+  - Returns: Array of profiles with ticker, company_name, fiscal_year, markdown, char_count, metadata
+  - Sorted by most recently generated first
+  - Supports modal viewer in admin research page
+
+- **`POST /api/admin/delete-company-profile`**: Delete a company profile
+  - Parameters: `ticker`, `token`
+  - Returns: Success/error message
+  - UI: Click trash icon in profiles table
+
+- **`POST /api/admin/regenerate-company-profile`**: Regenerate existing profile
+  - Parameters: `ticker`, `token`
+  - Currently: SEC.gov profiles only (file upload requires re-upload)
+  - Returns: Info message with instructions
+  - Future: Full automatic regeneration for SEC.gov profiles
+
+- **`POST /api/admin/email-company-profile`**: Email profile to admin
+  - Parameters: `ticker`, `token`
+  - Fetches profile from database
+  - Generates formatted email with stock price header
+  - Sends to ADMIN_EMAIL
+  - UI: Click email icon in profiles table
 
 **Transcript Summaries:**
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=transcript`**: Fetch available earnings transcripts from FMP
@@ -294,25 +329,29 @@ StockDigest provides AI-powered research tools for analyzing 10-K filings, earni
   - BeautifulSoup HTML parsing with script/style removal
   - Returns cleaned plain text for AI processing
 - `generate_company_profile_with_gemini()`: Generate 14-section company profile using Gemini 2.5 Flash
-  - Model: gemini-2.5-flash with thinking_budget=8192
+  - Model: gemini-2.5-flash (thinking mode disabled - param was invalid)
   - Temperature: 0.3 (consistent outputs)
   - Max output tokens: 8000 (~3,000-5,000 words)
 - `generate_company_profile_email()`: Create HTML email with profile preview and legal disclaimers
 
 **User Workflow (20x faster than manual file upload):**
-1. Navigate to `/admin_research` → Click "Company Profiles" tab
+1. Navigate to `/admin/research` → Click "Company Profiles" tab
 2. Enter ticker → Click "Validate Ticker"
 3. FMP returns list of available 10-K years (dropdown auto-populates)
 4. Select year from dropdown: "2023 (Filed: Nov 3, 2023)"
 5. Click "Generate Profile (5-10 min)"
 6. Backend fetches HTML from SEC.gov → Gemini generates profile → Email sent
 7. Profile saved to `company_profiles` table with UNIQUE(ticker) constraint
+8. **NEW:** View all profiles in "View All Profiles" section below form
+9. **NEW:** Click "View" to see profile in modal, "Email" to send to admin, "Delete" to remove
 
 **Database Schema:**
 - `company_profiles`: Stores AI-generated 10-K profiles
   - ticker (UNIQUE), company_name, industry, fiscal_year, filing_date
   - profile_markdown (TEXT), profile_summary (TEXT), key_metrics (JSONB)
-  - ai_provider='gemini', gemini_model='gemini-2.5-flash', thinking_budget=8192
+  - source_file (VARCHAR 500) - Tracks original filename or "SEC.gov via FMP"
+  - ai_provider='gemini', gemini_model='gemini-2.5-flash'
+  - thinking_budget (INTEGER) - **DEPRECATED**: No longer used in API calls (removed Oct 2025)
   - generation_time_seconds, token counts, status
 - `transcript_summaries`: Stores earnings transcript and press release summaries
   - ticker, report_type (transcript/press_release), quarter, year, report_date

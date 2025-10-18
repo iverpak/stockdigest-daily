@@ -722,6 +722,18 @@ SPAM_DOMAINS = {
     "insidermonkey.com", "www.insidermonkey.com",
     "zacks.com", "www.zacks.com",
     "markets.financialcontent.com", "www.markets.financialcontent.com",  # Added Oct 2025
+    # Retail analysis sites - automated ratings, stock screeners, AI predictions (Oct 2025)
+    "gurufocus.com", "www.gurufocus.com",  # CRITICAL: Moved from PROBLEMATIC_SCRAPE_DOMAINS
+    "stockanalysis.com", "www.stockanalysis.com",
+    "stockrover.com", "www.stockrover.com",
+    "stockcharts.com", "www.stockcharts.com",
+    "stockinvest.us", "www.stockinvest.us",
+    "wallstreetzen.com", "www.wallstreetzen.com",
+    "stockopedia.com", "www.stockopedia.com",
+    "stockrow.com", "www.stockrow.com",
+    # Vietnamese news sites - not material for US/Canadian market analysis (Oct 2025)
+    "nchmf.gov.vn", "www.nchmf.gov.vn",  # Vietnamese weather/climate center
+    "baovietnamnet.vn", "www.baovietnamnet.vn", "baovietnamnet",  # Vietnamese news portal
 }
 
 QUALITY_DOMAINS = {
@@ -733,7 +745,7 @@ QUALITY_DOMAINS = {
 # Domains that can be ingested but NOT scraped (heavy JS/bot protection)
 PROBLEMATIC_SCRAPE_DOMAINS = {
     "defenseworld.net", "defense-world.net", "defensenews.com",
-    "gurufocus.com", "www.gurufocus.com",
+    # Note: gurufocus.com moved to SPAM_DOMAINS (Oct 2025) - blocked at ingestion now
 }
 
 # Known paywall domains to skip during content scraping
@@ -6792,6 +6804,36 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
             # System prompt (generic - cacheable, ~1100 tokens to meet threshold)
             system_prompt = """You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
+**SOURCE QUALITY FILTER:**
+SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
+
+Retail investment analysis indicators (check article content):
+❌ Automated stock ratings/scores (e.g., "6 out of 10 score", "Fair Value: $X per share")
+❌ Proprietary valuation models without named analyst (e.g., "DCF model suggests intrinsic value")
+❌ Retail stock picks/recommendations (e.g., "Top 10 Stocks to Buy", "Should You Buy?")
+❌ Aggregated analyst consensus without original analysis (e.g., "Average of 12 analyst ratings")
+❌ AI-generated predictions/forecasts without human analyst attribution
+❌ Technical analysis signals for retail traders (e.g., "RSI indicates overbought")
+❌ Stock screener results/rankings (e.g., "Ranks #3 in momentum score")
+
+Examples of content to SKIP:
+- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
+- "DCF model calculated intrinsic value $1,081.85 per share"
+- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
+- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
+- "GuruFocus gives company a financial strength score of 7/10"
+
+✓ KEEP institutional sell-side research:
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, etc.)
+- Professional financial journalism with byline
+- Company press releases and regulatory filings
+- Industry trade publications
+
+If article content matches retail analysis patterns above, output ONLY:
+{"skip": true, "reason": "Retail investment analysis"}
+
+Do not proceed with summarization.
+
 **YOUR TASK:**
 The user will provide target company, competitor name and ticker, article title, and content. Extract and summarize facts from the article about the competitor's actions, performance, or developments. Focus on operational and strategic information that provides competitive context.
 
@@ -7052,6 +7094,16 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 if not content or len(content.strip()) < 50:
                     LOG.warning(f"Claude returned insufficient competitor summary for {target_ticker}")
                     return None
+
+                # Check for skip response
+                if content.strip().startswith('{"skip"'):
+                    try:
+                        skip_data = json.loads(content.strip())
+                        if skip_data.get("skip"):
+                            LOG.info(f"[{target_ticker}] 🚫 FILTERED (competitor): {skip_data.get('reason')} - {title[:80]}")
+                            return None
+                    except json.JSONDecodeError:
+                        pass  # Not valid JSON, continue normal processing
 
                 return content.strip()
 
@@ -7646,6 +7698,36 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
             # System prompt (generic - cacheable)
             system_prompt = """You are a research analyst extracting fundamental driver facts for a competitive intelligence report.
 
+**SOURCE QUALITY FILTER:**
+SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
+
+Retail investment analysis indicators (check article content):
+❌ Automated stock ratings/scores (e.g., "6 out of 10 score", "Fair Value: $X per share")
+❌ Proprietary valuation models without named analyst (e.g., "DCF model suggests intrinsic value")
+❌ Retail stock picks/recommendations (e.g., "Top 10 Stocks to Buy", "Should You Buy?")
+❌ Aggregated analyst consensus without original analysis (e.g., "Average of 12 analyst ratings")
+❌ AI-generated predictions/forecasts without human analyst attribution
+❌ Technical analysis signals for retail traders (e.g., "RSI indicates overbought")
+❌ Stock screener results/rankings (e.g., "Ranks #3 in momentum score")
+
+Examples of content to SKIP:
+- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
+- "DCF model calculated intrinsic value $1,081.85 per share"
+- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
+- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
+- "GuruFocus gives company a financial strength score of 7/10"
+
+✓ KEEP institutional sell-side research:
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, etc.)
+- Professional financial journalism with byline
+- Company press releases and regulatory filings
+- Industry trade publications
+
+If article content matches retail analysis patterns above, output ONLY:
+{"skip": true, "reason": "Retail investment analysis"}
+
+Do not proceed with summarization.
+
 **YOUR TASK:**
 The user will provide target company, ticker, driver keyword, article title, and content. Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that relate to the fundamental driver keyword provided.
 
@@ -7932,6 +8014,16 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                     LOG.warning(f"Claude returned insufficient summary for {target_ticker}")
                     return None
 
+                # Check for skip response
+                if content.strip().startswith('{"skip"'):
+                    try:
+                        skip_data = json.loads(content.strip())
+                        if skip_data.get("skip"):
+                            LOG.info(f"[{target_ticker}] 🚫 FILTERED (industry): {skip_data.get('reason')} - {title[:80]}")
+                            return None
+                    except json.JSONDecodeError:
+                        pass  # Not valid JSON, continue normal processing
+
                 return content.strip()
 
         except Exception as e:
@@ -7951,6 +8043,12 @@ async def generate_openai_article_summary(company_name: str, ticker: str, title:
     if True:  # Maintain indentation
         try:
             prompt = f"""You are a hedge fund analyst extracting information about {company_name} ({ticker}) for an investment research report.
+
+**CRITICAL - Retail Analysis Detection:**
+If article is primarily retail investment analysis (Simply Wall St scores, GuruFocus ratings, Zacks ranks, TipRanks consensus, unnamed DCF models, stock screener results), return ONLY the text:
+SKIP_RETAIL_ANALYSIS
+
+Do not proceed with summarization.
 
 **YOUR TASK:**
 Extract and summarize all material facts about {company_name}'s actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
@@ -8193,6 +8291,10 @@ Extract all material facts about {company_name}'s actions, performance, and deve
                         result = await response.json()
                         summary = extract_text_from_responses(result)
                         if summary and len(summary.strip()) > 10:
+                            # Check for skip signal
+                            if "SKIP_RETAIL_ANALYSIS" in summary:
+                                LOG.info(f"[{ticker}] 🚫 FILTERED (OpenAI): Retail investment analysis - {title[:80]}")
+                                return None
                             LOG.info(f"OpenAI company summary: {ticker} ({len(summary)} chars)")
                             return summary.strip()
                     else:
@@ -8212,6 +8314,12 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
     if True:  # Maintain indentation
         try:
             prompt = f"""You are a research analyst extracting information about a competitor for a competitive intelligence report.
+
+**CRITICAL - Retail Analysis Detection:**
+If article is primarily retail investment analysis (Simply Wall St scores, GuruFocus ratings, Zacks ranks, TipRanks consensus, unnamed DCF models, stock screener results), return ONLY the text:
+SKIP_RETAIL_ANALYSIS
+
+Do not proceed with summarization.
 
 **YOUR TASK:**
 Extract and summarize facts from the article about {competitor_name} ({competitor_ticker})'s actions, performance, or developments. Focus on operational and strategic information that provides competitive context for {target_company} ({target_ticker}).
@@ -8422,6 +8530,10 @@ Extract facts about {competitor_name}'s actions and performance. Do not speculat
                         result = await response.json()
                         summary = extract_text_from_responses(result)
                         if summary and len(summary.strip()) > 10:
+                            # Check for skip signal
+                            if "SKIP_RETAIL_ANALYSIS" in summary:
+                                LOG.info(f"[{target_ticker}] 🚫 FILTERED (OpenAI competitor): Retail investment analysis - {title[:80]}")
+                                return None
                             LOG.info(f"OpenAI competitor summary: {competitor_ticker} ({len(summary)} chars)")
                             return summary.strip()
                     else:
@@ -8445,6 +8557,12 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
     if True:  # Maintain indentation
         try:
             prompt = f"""You are a research analyst extracting fundamental driver facts relevant to a target company's financial performance.
+
+**CRITICAL - Retail Analysis Detection:**
+If article is primarily retail investment analysis (Simply Wall St scores, GuruFocus ratings, Zacks ranks, TipRanks consensus, unnamed DCF models, stock screener results), return ONLY the text:
+SKIP_RETAIL_ANALYSIS
+
+Do not proceed with summarization.
 
 **YOUR TASK:**
 Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact target company's revenue, costs, or margins.
@@ -8672,6 +8790,10 @@ Extract fundamental driver facts (commodity prices, volume metrics, policy chang
                         result = await response.json()
                         summary = extract_text_from_responses(result)
                         if summary and len(summary.strip()) > 10:
+                            # Check for skip signal
+                            if "SKIP_RETAIL_ANALYSIS" in summary:
+                                LOG.info(f"[{target_ticker}] 🚫 FILTERED (OpenAI industry): Retail investment analysis - {title[:80]}")
+                                return None
                             LOG.info(f"OpenAI industry summary: {industry_keyword} ({len(summary)} chars)")
                             return summary.strip()
                     else:

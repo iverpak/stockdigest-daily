@@ -14317,6 +14317,20 @@ Skip 10-K context when:
 - Generic analyst opinions without factual developments
 - 10-K lacks relevant data (graceful degradation)
 
+MANDATORY Context for vague/unquantified disclosures:
+When article announces initiative WITHOUT specifics (no amounts, timelines, targets, project names), CHECK 10-K for:
+- Existing operations/portfolio in that category (show current scale as baseline)
+- Prior investments or segment size in that area (quantify historical context)
+- Strategic priorities or disclosed plans (show if this aligns with stated goals)
+
+Examples:
+- "Investing in renewable energy" (no amount) → Context: "Company operates X MW renewable capacity per 10-K"
+- "Expanding AI capabilities" (no details) → Context: "Company generated $X AI revenue in FY2024 per 10-K"
+- "Focus on cost reduction" (no target) → Context: "Operating expenses were $X (Y% of revenue) in FY2024 per 10-K"
+- "Pursuing M&A opportunities" (generic) → Context: "Company has $X cash, $Y debt capacity per 10-K"
+
+This transforms vague announcements into useful intelligence by showing reader where company stands today.
+
 ---
 
 IMPACT TAG (for Major Developments, Competitive Dynamics, Risk Factors):
@@ -14600,12 +14614,14 @@ CRITICAL CONTEXT RULES:
 - Guidance: "Q4 2025 guidance: Revenue $Y-Z"
 - Recovery context: Show distance from peak ONLY if source provided this
 - Growth context: Show prior trend ONLY if source provided this
+- Stale data detection: If article references data >6 months old (e.g., "October 2023" in October 2025 report), either (a) skip if immaterial, or (b) include with clear temporal flag: "Stock traded $45 CAD in October 2023 (historical reference from article); current price $X"
 
 Include:
 - Earnings, revenue, guidance, margins (exact figures) vs. consensus when mentioned
 - Production metrics, capacity, operational KPIs
 - Capex, debt, buybacks, dividends (amounts)
 - Stock performance: Price, daily change, YTD performance, recent range (omit detailed technical analysis with multiple moving averages unless exceptional volatility)
+- Valuation: When reporting analyst targets or fair values, ALWAYS note currency (CAD vs USD) for dual-listed companies or foreign listed companies
 
 Format (use • bullet, NO sentiment tags):
 - [Metric]: [Value with context] [vs. comparison if provided] (Oct 10)
@@ -14695,6 +14711,7 @@ Source: [COMPANY] articles only
 
 Format (use • bullet, NO sentiment tags):
 - [Firm] [action] to [rating/target], [rationale if provided] (Oct 10)
+- For dual-listed companies, specify currency for price targets (e.g., "$49.90 USD target" or "$68.40 CAD fair value")
 
 If 3+ analysts moved same direction:
 - Multiple firms [upgraded/downgraded]: [Firm 1] to $X, [Firm 2] to $Y, [Firm 3] to $Z (Oct 9-10)
@@ -14731,6 +14748,11 @@ If competitor news has no stated connection to {ticker} → SKIP IT entirely.
 
 COMPETITOR BREVITY: Limit to 50-100 words focused on competitive intelligence. 
 ALWAYS include {ticker} comparison when available: "Competitor +13% vs {ticker} +8.2% in Q3"
+
+EXCLUDE from competitor coverage:
+- Insider transactions (buys/sells) at competitor companies
+- Detailed stock price technical levels (support/resistance/moving averages) for competitors
+- Competitor dividend dates, ex-dividend dates, or routine corporate actions
 
 ❌ SKIP: "Competitor announces layoffs" with no {ticker} mention
 ✅ INCLUDE: "Competitor launches product; [Analyst] stated undercuts {ticker} pricing"

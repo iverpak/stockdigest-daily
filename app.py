@@ -15568,7 +15568,7 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 10000,
-            "temperature": 0.3,
+            "temperature": 0.1,
             "system": [
                 {
                     "type": "text",

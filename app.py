@@ -13993,6 +13993,39 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
     """Helper: Build executive summary prompt and extract company name. Returns (system_prompt, user_content, company_name) or None."""
     company_name = config.get("name", ticker)
 
+    # Fetch 10-K Profile from database (if available)
+    profile_block = None
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT profile_markdown, fiscal_year, filing_date, company_name
+                FROM company_profiles
+                WHERE ticker = %s
+                ORDER BY fiscal_year DESC
+                LIMIT 1
+            """, (ticker,))
+
+            row = cur.fetchone()
+            if row:
+                markdown = row['profile_markdown']
+                fiscal_year = row['fiscal_year']
+                filing_date = row['filing_date']
+                profile_company_name = row['company_name']
+
+                # Build labeled profile block with requested format
+                profile_block = (
+                    f"COMPANY 10-K PROFILE:\n\n"
+                    f"[{ticker} ({profile_company_name}) 10-K FILING FOR FISCAL YEAR {fiscal_year}, "
+                    f"Filed: {filing_date}]\n\n"
+                    f"{markdown}\n\n"
+                )
+                LOG.info(f"[{ticker}] ✅ Loaded 10-K profile (FY{fiscal_year}, {len(markdown):,} chars)")
+            else:
+                LOG.debug(f"[{ticker}] No 10-K profile found - proceeding with articles only")
+    except Exception as e:
+        LOG.warning(f"[{ticker}] Failed to fetch 10-K profile: {e}")
+        profile_block = None
+
     # Collect ALL flagged articles across all categories
     all_flagged_articles = []
 
@@ -14039,13 +14072,27 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
                 unified_timeline.append(f"• {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
 
-    # Handle case with no flagged articles (quiet day)
+    # Build user_content with optional 10-K profile prepended
     if not all_flagged_articles:
         LOG.info(f"[{ticker}] No flagged articles - generating quiet day summary")
-        user_content = "FLAGGED ARTICLE COUNT: 0\n\nNO FLAGGED ARTICLES - Generate quiet day summary per template."
+        # Include 10-K profile even on quiet days (provides context)
+        if profile_block:
+            user_content = f"{profile_block}---\n\nFLAGGED ARTICLE COUNT: 0\n\nNO FLAGGED ARTICLES - Generate quiet day summary per template."
+        else:
+            user_content = "FLAGGED ARTICLE COUNT: 0\n\nNO FLAGGED ARTICLES - Generate quiet day summary per template."
     else:
         article_count = len(all_flagged_articles)
-        user_content = f"FLAGGED ARTICLE COUNT: {article_count}\n\nUNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
+        # Prepend 10-K profile before articles timeline
+        if profile_block:
+            user_content = (
+                f"{profile_block}"
+                f"---\n\n"
+                f"FLAGGED ARTICLE COUNT: {article_count}\n\n"
+                f"UNIFIED ARTICLE TIMELINE (newest to oldest):\n"
+                + "\n".join(unified_timeline)
+            )
+        else:
+            user_content = f"FLAGGED ARTICLE COUNT: {article_count}\n\nUNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
 
     # Get current date for prompt
     current_date = datetime.now().strftime("%B %d, %Y")
@@ -14060,7 +14107,7 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
 [10-K PROFILE]:
-You will also receive a Company 10-K Profile (10 page summary from most recent filing) providing baseline context: segment economics, customer/supplier concentration, geographic exposure, historical metrics, disclosed risks, strategic priorities.
+You may receive a Company 10-K Profile labeled with ticker, company name, fiscal year, and filing date. This profile is a 5-10 page summary from the most recent 10-K filing providing baseline context: segment economics, customer/supplier concentration, geographic exposure, historical metrics, disclosed risks, strategic priorities.
 
 Use 10-K to enrich articles with context where relevant. Read entire profile - data might appear in any section.
 

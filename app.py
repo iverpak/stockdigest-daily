@@ -16800,6 +16800,10 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     for line in summary_text.split('\n'):
         line_stripped = line.strip()
 
+        # Skip horizontal rule separators (Claude sometimes adds these)
+        if line_stripped == '---':
+            continue
+
         # Check if line is a section header
         is_header = False
         for marker, section_key in section_markers:
@@ -16883,6 +16887,10 @@ def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
 
     for line in summary_text.split('\n'):
         line_stripped = line.strip()
+
+        # Skip horizontal rule separators (Claude sometimes adds these)
+        if line_stripped == '---':
+            continue
 
         # Check if line is a section header
         is_header = False

@@ -14072,19 +14072,50 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                 source_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
                 unified_timeline.append(f"• {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
 
+    # Calculate report context (start date, end date, day of week)
+    end_date = datetime.now().strftime("%B %d, %Y")
+    day_of_week = datetime.now().strftime("%A")
+
+    # Calculate start date from oldest flagged article (or default to 7 days ago)
+    if all_flagged_articles:
+        oldest_article = min(all_flagged_articles, key=lambda x: x.get("published_at") or datetime.max.replace(tzinfo=timezone.utc))
+        start_date = oldest_article.get("published_at").strftime("%B %d, %Y")
+    else:
+        start_date = (datetime.now() - timedelta(days=7)).strftime("%B %d, %Y")
+
     # Build user_content with optional 10-K profile prepended
     if not all_flagged_articles:
         LOG.info(f"[{ticker}] No flagged articles - generating quiet day summary")
         # Include 10-K profile even on quiet days (provides context)
         if profile_block:
-            user_content = f"{profile_block}---\n\nFLAGGED ARTICLE COUNT: 0\n\nNO FLAGGED ARTICLES - Generate quiet day summary per template."
+            user_content = (
+                f"REPORT CONTEXT:\n"
+                f"Report type: {day_of_week}\n"
+                f"Coverage period: {start_date} to {end_date}\n\n"
+                f"---\n\n"
+                f"{profile_block}"
+                f"---\n\n"
+                f"FLAGGED ARTICLE COUNT: 0\n\n"
+                f"NO FLAGGED ARTICLES - Generate quiet day summary per template."
+            )
         else:
-            user_content = "FLAGGED ARTICLE COUNT: 0\n\nNO FLAGGED ARTICLES - Generate quiet day summary per template."
+            user_content = (
+                f"REPORT CONTEXT:\n"
+                f"Report type: {day_of_week}\n"
+                f"Coverage period: {start_date} to {end_date}\n\n"
+                f"---\n\n"
+                f"FLAGGED ARTICLE COUNT: 0\n\n"
+                f"NO FLAGGED ARTICLES - Generate quiet day summary per template."
+            )
     else:
         article_count = len(all_flagged_articles)
         # Prepend 10-K profile before articles timeline
         if profile_block:
             user_content = (
+                f"REPORT CONTEXT:\n"
+                f"Report type: {day_of_week}\n"
+                f"Coverage period: {start_date} to {end_date}\n\n"
+                f"---\n\n"
                 f"{profile_block}"
                 f"---\n\n"
                 f"FLAGGED ARTICLE COUNT: {article_count}\n\n"
@@ -14092,7 +14123,15 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                 + "\n".join(unified_timeline)
             )
         else:
-            user_content = f"FLAGGED ARTICLE COUNT: {article_count}\n\nUNIFIED ARTICLE TIMELINE (newest to oldest):\n" + "\n".join(unified_timeline)
+            user_content = (
+                f"REPORT CONTEXT:\n"
+                f"Report type: {day_of_week}\n"
+                f"Coverage period: {start_date} to {end_date}\n\n"
+                f"---\n\n"
+                f"FLAGGED ARTICLE COUNT: {article_count}\n\n"
+                f"UNIFIED ARTICLE TIMELINE (newest to oldest):\n"
+                + "\n".join(unified_timeline)
+            )
 
     # Get current date for prompt
     current_date = datetime.now().strftime("%B %d, %Y")
@@ -14122,6 +14161,18 @@ Read ENTIRE 10-K Profile before analyzing articles. Data might appear in any sec
 For EVERY article, actively ask: Does the 10-K contain relevant context? If yes, integrate it. Failing to use available 10-K context is an error.
 
 Detailed integration framework with examples provided in 🔬 10-K CONTEXT ENRICHMENT section below.
+
+CRITICAL - NEWS FLOW PATTERNS:
+Weekend/holiday article volume is naturally lower for actively traded companies - this is NORMAL.
+Focus on the LAST MAJOR MARKET TRADING DAY as your reference point for recent developments.
+
+Weekend/holiday articles containing ROUTINE UPDATES should be weighted lower than trading day coverage.
+However, weekend/holiday articles containing BREAKING MATERIAL DEVELOPMENTS (earnings, M&A, regulatory
+actions, etc.) should be treated as fully material regardless of day.
+
+DO NOT let sparse weekend/holiday routine coverage create the impression of a quiet period.
+
+---
 
 🚨 THREE-TIER INFERENCE FRAMEWORK
 
@@ -14447,7 +14498,7 @@ Topic labels will be automatically bolded during HTML rendering. Just write: "To
 
 📌 BOTTOM LINE (Always - 150 words max)
 
-Answer: "What happened today for {ticker}?"
+Lead with developments from the most recent trading day, then key context from earlier in the coverage period: What happened? Key data points? What to monitor next?
 
 If FLAGGED ARTICLE COUNT = 0:
 QUIET DAY - NO MATERIAL DEVELOPMENTS
@@ -14473,9 +14524,10 @@ Ask: "If I removed {ticker}'s name from this headline, would it still be news?"
 - YES → Competitive Dynamics (it's industry-wide or competitor-specific)
 
 PRIORITIZATION:
-- Newest articles first when multiple cover same topic
+- When multiple articles cover same event: Prioritize most recent coverage, preferring
+  trading day sources unless weekend article has material new information
 - [COMPANY] articles have priority over [INDUSTRY]/[COMPETITOR]
-- If articles span multiple days, group by topic not by forcing all into one section
+- If articles span multiple days, group by topic not chronologically
 
 SYNTHESIS RULES:
 - If 2+ articles cover same development: Combine into ONE bullet with full context
@@ -14856,14 +14908,15 @@ CRITICAL WRITING RULES
 9. Present tense for current - "trades at," "stands at"
 
 LENGTH GUIDELINES:
-Scale naturally to content volume with attribution requirements. Let article density determine length - don't force word counts. Attribution requirements naturally make content more concise than inference-heavy summaries.
+Scale naturally to total flagged article count across the full coverage period.
+Ignore day-of-week distribution when determining coverage depth.
 
 General guidance:
-- High article volume (8+ flagged): Comprehensive coverage with full context
-- Medium volume (4-7 flagged): Focused on key developments
-- Low volume (2-3 flagged): Concise reporting of main events
-- Minimal (1 flagged): Brief but complete
-- Zero flagged: Bottom Line only (100-150 words)
+- High volume (15+ flagged): Comprehensive coverage
+- Medium volume (8-14 flagged): Focused on key developments
+- Low volume (4-7 flagged): Concise reporting
+- Minimal (2-3 flagged): Brief but complete
+- Zero flagged: Bottom Line only
 
 SECTION RULES:
 

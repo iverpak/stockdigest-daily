@@ -14605,7 +14605,7 @@ Include:
 - Earnings, revenue, guidance, margins (exact figures) vs. consensus when mentioned
 - Production metrics, capacity, operational KPIs
 - Capex, debt, buybacks, dividends (amounts)
-- Stock performance with context
+- Stock performance: Price, daily change, YTD performance, recent range (omit detailed technical analysis with multiple moving averages unless exceptional volatility)
 
 Format (use • bullet, NO sentiment tags):
 - [Metric]: [Value with context] [vs. comparison if provided] (Oct 10)

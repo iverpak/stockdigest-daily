@@ -18702,8 +18702,8 @@ OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
                 to='stockdigest.research@gmail.com'
             )
 
-        # Clean up temp file
-        if os.path.exists(file_path):
+        # Clean up temp file (only in file upload mode)
+        if 'file_path' in locals() and file_path and os.path.exists(file_path):
             os.remove(file_path)
             LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Cleaned up temp file: {file_path}")
 

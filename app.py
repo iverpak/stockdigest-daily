@@ -14646,6 +14646,16 @@ Include if EITHER:
    - C-suite executive departures (unplanned)
    - Customer/contract losses
    - Cybersecurity breaches, data incidents
+3. Competitive threat with logical single-step impact:
+   - Competitor capacity expansion in same market (threatens market share)
+   - Competitor product launch with superior specs/pricing (threatens competitive position)
+   - Competitor regulatory approval {ticker} lacks (threatens first-mover advantage)
+   - Industry consolidation creating larger competitor (threatens pricing power)
+   
+   SINGLE-STEP TEST for #3: Can you connect competitor action → {ticker} impact in ONE direct step?
+   ✅ "UP-NS merger creates 2nd transcontinental competitor" → threatens CP's unique network (ONE step)
+   ✅ "Competitor launches $30K EV" → undercuts {ticker}'s $45K entry model (ONE step)
+   ❌ "Competitor hires new CFO" → ??? (no clear single-step impact)
 
 For categorical risks: Report the facts; let the category signal it's a risk. No need for article to explicitly use risk language.
 
@@ -14739,12 +14749,16 @@ Ask: "If I removed {ticker}'s name from this headline, would it still be news?"
 Default rule: If uncertain which section → Competitive Dynamics (not Major Developments)
 
 CRITICAL COMPETITOR NEWS FILTER:
-Include competitor developments ONLY if:
-1. Article explicitly discusses impact on {ticker}, OR
-2. Article provides direct comparative metrics with {ticker}, OR
-3. Development is sector-wide affecting all players AND articles state this
+Include competitor developments if ANY:
+1. Article explicitly discusses impact on {ticker} (HIGH relevance), OR
+2. Article provides direct comparative metrics with {ticker} (HIGH relevance), OR
+3. Development is sector-wide affecting all players AND articles state this (MEDIUM relevance), OR
+4. Competitor operates in same market with NO stated {ticker} impact (LOW relevance - monitoring only)
 
-If competitor news has no stated connection to {ticker} → SKIP IT entirely.
+For #4 (low relevance monitoring): Use this exact format:
+- Topic (low impact, neutral, competitive development): [Competitor action]; no stated {ticker} impact (Oct X)
+
+This preserves investor awareness of competitive landscape without overstating relevance.
 
 COMPETITOR BREVITY: Limit to 50-100 words focused on competitive intelligence. 
 ALWAYS include {ticker} comparison when available: "Competitor +13% vs {ticker} +8.2% in Q3"
@@ -14753,10 +14767,8 @@ EXCLUDE from competitor coverage:
 - Insider transactions (buys/sells) at competitor companies
 - Detailed stock price technical levels (support/resistance/moving averages) for competitors
 - Competitor dividend dates, ex-dividend dates, or routine corporate actions
-
-❌ SKIP: "Competitor announces layoffs" with no {ticker} mention
-✅ INCLUDE: "Competitor launches product; [Analyst] stated undercuts {ticker} pricing"
-✅ INCLUDE: "Sector-wide regulation affects all producers per [Source]"
+- Competitor internal HR changes (non-C-suite personnel moves)
+- Competitor minor facility openings/closings (<5% of competitor's capacity)
 
 APPROACH: Report developments and any competitive implications that article authors explicitly stated for {ticker}.
 

@@ -16616,6 +16616,8 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     """
     Parse executive summary text into sections by emoji headers.
     Returns dict: {section_name: [bullet1, bullet2, ...]}
+
+    Handles multi-line bullets with indented continuation lines (e.g., Context sub-bullets).
     """
     sections = {
         "bottom_line": [],
@@ -16651,12 +16653,12 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     section_marker_prefixes = tuple(marker for marker, _ in section_markers)
 
     for line in summary_text.split('\n'):
-        line = line.strip()
+        line_stripped = line.strip()
 
         # Check if line is a section header
         is_header = False
         for marker, section_key in section_markers:
-            if line.startswith(marker):
+            if line.startswith(marker):  # Use original line for emoji detection
                 current_section = section_key
                 is_header = True
                 break
@@ -16667,18 +16669,26 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
             # Special handling for paragraphs: capture ALL text (not just bullets)
             if current_section in ['bottom_line', 'upside_scenario', 'downside_scenario']:
                 # Skip lines that start with section markers (shouldn't happen but be safe)
-                if not line.startswith(section_marker_prefixes):
+                if not line_stripped.startswith(section_marker_prefixes):
                     # Skip empty lines at start, but keep them once content exists
-                    if line or sections[current_section]:
-                        sections[current_section].append(line)
+                    if line_stripped or sections[current_section]:
+                        sections[current_section].append(line_stripped)
 
-            # Standard handling for other sections: bullets only
+            # Standard handling for other sections: bullets + continuation lines
             else:
-                if line.startswith('•') or line.startswith('-'):
-                    # Extract bullet text (handle both • and - bullets)
-                    bullet_text = line.lstrip('•- ').strip()
+                if line_stripped.startswith('•') or line_stripped.startswith('-'):
+                    # New bullet - extract text (handle both • and - bullets)
+                    bullet_text = line_stripped.lstrip('•- ').strip()
                     if bullet_text:
                         sections[current_section].append(bullet_text)
+
+                elif line.startswith('  ') and sections[current_section]:
+                    # Indented continuation line (e.g., "  Context: ...")
+                    # Check original 'line' for indentation, use 'line_stripped' for content
+                    continuation = line_stripped
+                    if continuation:
+                        # Append to the last bullet with a line break
+                        sections[current_section][-1] += '\n' + continuation
 
     return sections
 

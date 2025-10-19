@@ -14221,6 +14221,22 @@ Compress or omit:
 
 ---
 
+🚫 RETAIL ANALYSIS EXCLUSION (APPLIES TO ALL SECTIONS BELOW)
+
+Never include retail investment analysis in ANY section below:
+
+EXCLUDE ALL of the following patterns:
+- Automated ratings/scores (e.g., "Zacks Rank #3", "GuruFocus score 7/10", "Simply Wall St checks")
+- Proprietary models without named analyst (e.g., "DCF model fair value $X", "AI prediction")
+- Stock screener rankings/results (e.g., "Ranks #3 in momentum")
+- Aggregated consensus without source (e.g., "Zacks Consensus", "average of 12 analysts")
+- Technical indicators without analyst context (e.g., "RSI indicates oversold")
+
+✓ KEEP: Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, etc.)
+✓ KEEP: Beat/miss vs consensus WITH source attribution (e.g., "beat FactSet consensus $X")
+
+---
+
 OUTPUT STRUCTURE
 
 CRITICAL: DO NOT use markdown headers (##) or title lines. Start sections with emoji ONLY.
@@ -14325,11 +14341,6 @@ Format (use • bullet, NO sentiment tags):
 Example:
 - Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B per [Source]; full-year guidance raised to $52B from $50B (Oct 10)
 
-EXCLUDE:
-- Proprietary valuation models without named analyst (e.g., "DCF model suggests $X")
-- Automated financial scores or stock screener rankings
-- Technical analysis indicators without analyst context
-
 ⚠️ RISK FACTORS (Only if risks identified - 2-4 bullets max)
 
 Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
@@ -14392,11 +14403,6 @@ If 3+ analysts moved same direction:
 
 Example:
 - Goldman Sachs upgraded to Buy from Neutral, $450 target (from $380), citing AI infrastructure demand per analyst report (Oct 10)
-
-EXCLUDE:
-- Aggregated consensus without named analyst/firm (e.g., "Average of 12 analyst ratings")
-- Automated ratings from retail sites (GuruFocus, Simply Wall St, Zacks, TipRanks)
-- Unnamed price targets or fair value estimates without analyst attribution
 
 ⚡ COMPETITIVE/INDUSTRY DYNAMICS (Only if developments exist - 2-5 bullets max)
 
@@ -14584,6 +14590,8 @@ If article shows calculation: "[Germany revenue $X ÷ Total revenue $Y = Z% per 
 If uncertain whether stated: Use qualitative language ("significant portion," "substantial market")
 
 VERIFICATION: Before ANY specific number, confirm: "Did article explicitly state this exact figure?"
+
+REMINDER: Exclude all retail analysis patterns (automated ratings, proprietary models, aggregated consensus) from all sections above.
 
 ---
 

@@ -14496,7 +14496,19 @@ Use exact emoji headers shown below. No ##, no ###, no additional formatting.
 CRITICAL: DO NOT use markdown bold (**text**) or any markdown formatting. Output plain text only.
 Topic labels will be automatically bolded during HTML rendering. Just write: "Topic Label: Details"
 
-📌 BOTTOM LINE (Always - 150 words max)
+📌 BOTTOM LINE (Always - 150 words HARD CAP)
+
+MANDATORY LENGTH CHECK:
+After writing Bottom Line, count words. If >150 words:
+1. Remove lowest-priority detail (usually: granular peer comparisons, secondary metrics)
+2. Condense monitoring guidance (belongs in Key Variables section anyway)
+3. Trim redundant phrasing ("announced that they will" → "will")
+4. Recount - repeat until ≤150 words
+
+Target structure (works for all industries):
+- Sentence 1-2: What happened (most material development from recent trading days)
+- Sentence 3-4: Key quantified context (numbers, dates, comparative data)
+- Sentence 5: Forward-looking monitoring statement (brief)
 
 Lead with developments from the most recent trading day, then key context from earlier in the coverage period: What happened? Key data points? What to monitor next?
 
@@ -14656,7 +14668,25 @@ Examples:
 ❌ WRONG: • Supply disruption: Novelis fire eliminates capacity, creating margin pressure for Ford production
 (No attribution for "margin pressure" conclusion unless it's a categorical risk event like force majeure)
 
-📈 WALL STREET SENTIMENT (Only if analyst activity - 1-4 bullets max)
+📈 WALL STREET SENTIMENT (Create if 1+ analyst actions - 1-4 bullets max)
+
+MANDATORY SECTION CREATION RULE:
+Count total analyst actions across all articles (each firm action = 1):
+- 0 analyst actions → Omit this section entirely
+- 1-2 analyst actions → CREATE this dedicated section
+- 3+ analyst actions → CREATE this dedicated section (prioritize most material)
+
+Analyst action = Named firm + (rating change OR price target change OR initiation)
+
+Examples that count:
+✅ "Goldman Sachs upgraded to Buy" = 1 action
+✅ "Morgan Stanley raised target to $150" = 1 action  
+✅ "JPM initiated coverage at Overweight" = 1 action
+✅ "Jefferies reiterated Buy rating" = 1 action
+✅ "Consensus target rose to $X" = 0 actions (no named firm)
+✅ "Multiple analysts upgraded" = 0 actions (must name specific firms)
+
+If 1+ analyst actions exist in articles, this section MUST appear in output.
 
 Source: [COMPANY] articles only
 
@@ -14758,6 +14788,21 @@ Example:
 
 📈 UPSIDE SCENARIO (Only if bullish developments exist - single paragraph, 80-100 words)
 
+🚨 MANDATORY PRE-WRITE CHECKPOINT 🚨
+Before writing Upside/Downside scenarios, verify you will NOT write these BANNED PHRASES:
+❌ "alternative strategic options"
+❌ "could pursue alternatives"  
+❌ "may explore other alternatives"
+❌ "various strategic paths"
+❌ "strategic flexibility"
+❌ "multiple options available"
+
+ONLY write attributed statements:
+✅ "[Author/Firm] stated company is positioned to [specific outcome they said]"
+✅ "[Analyst] argued [specific view they expressed]"
+
+If you were about to write a banned phrase → STOP → Rewrite as attributed view from articles.
+
 CRITICAL: Synthesize developments tagged as bullish in sections above.
 If you tagged developments as (bullish, [reason]) in any section above, synthesize them here using EITHER attributed author statements OR the factual developments themselves.
 
@@ -14785,13 +14830,31 @@ DO NOT include this section if no bullish author views exist in articles.
 
 📉 DOWNSIDE SCENARIO (Only if bearish developments exist - single paragraph, 80-100 words)
 
+🚨 MANDATORY PRE-WRITE CHECKPOINT 🚨
+Before writing this section, verify you will NOT write these BANNED PHRASES:
+❌ "alternative strategic options"
+❌ "could pursue alternatives"  
+❌ "may explore other alternatives"
+❌ "various strategic paths"
+❌ "strategic flexibility"
+❌ "multiple options available"
+❌ "potential strategic alternatives"
+❌ "might consider other options"
+
+ONLY write attributed statements:
+✅ "[Author/Firm] warned [specific risk they identified]"
+✅ "[Analyst] raised concerns about [specific issue they flagged]"
+✅ "[Source] noted [specific headwind they described]"
+
+If you were about to write a banned phrase → STOP → Rewrite as attributed view from articles.
+
 CRITICAL: Synthesize developments tagged as bearish in sections above.
 If you tagged developments as (bearish, [reason]) in any section above, synthesize them here using EITHER attributed author statements OR the factual risks themselves.
 
 Format examples:
 - "[Source/Author] warned [bearish development]" (when authors made conclusions)
 - "Disclosed $X loss related to [event]" (when you inferred bearish from facts)
-- Mix both: "Disclosed $170M loss; CEO Dimon warned 'when you see one cockroach there are probably more'"
+- Mix both: "Disclosed $170M loss; CEO warned 'risks remain elevated'"
 
 INCLUDE this section if you have tagged 1+ developments as (bearish, ...) in sections above.
 
@@ -14936,14 +14999,32 @@ Include ONLY if content exists:
 
 Omit empty section headers entirely.
 
-FILTERING - DO NOT include:
+FILTERING - INCLUSION RULES:
 
-❌ Pure technical analysis
-❌ Single fund position changes
-❌ Minor price target adjustments (<5%)
-❌ Competitor news with no stated {ticker} connection
-❌ Generic macro affecting all stocks equally
-❌ Developments <1% materiality unless authors emphasized significance
+✅ INCLUDE low-impact items (<1% materiality) with explicit (low impact, ...) tag
+   Rationale: Shows completeness - "we reviewed this, deemed immaterial"
+   Better than omission which creates "did they miss this?" uncertainty
+   
+   Low-impact format:
+   • Topic (low impact, neutral, [reason]): [Facts]; no stated {ticker} impact (Oct 15)
+   
+   Examples across industries:
+   ✅ Tech: "Competitor executive departure (low impact, neutral, personnel change): 
+            [Company X] removed CTO; no stated impact on {ticker} operations (Oct 15)"
+   
+   ✅ Industrial: "Minor contract award (low impact, bullish, incremental revenue): 
+                  Secured $2M contract (0.1% of FY2024 revenue per 10-K) (Oct 15)"
+   
+   ✅ Pharma: "Competitor trial data (low impact, neutral, competitive development): 
+               [Company Y] reported Phase 2 results; articles did not discuss {ticker} 
+               competitive positioning or market share implications (Oct 15)"
+
+❌ EXCLUDE entirely (different from low impact):
+- Pure technical analysis (RSI, moving averages without fundamental catalyst)
+- Retail investment analysis (Zacks ranks, proprietary model scores, screener results)
+- Generic macro affecting all stocks equally (Fed decision without sector-specific impact)
+- Daily price action without catalyst (<5% moves, no news)
+- Single fund position changes (<5% ownership, no activist agenda)
 
 LEGAL COMPLIANCE:
 
@@ -14962,9 +15043,25 @@ ALWAYS use:
 
 ---
 
-🚨 SELF-CALIBRATION QUESTIONS
+🚨 MANDATORY SELF-CALIBRATION CHECKLIST
 
-After generating your summary, reflect on these questions (NOT statistical targets):
+After generating your summary, verify EVERY item (NOT statistical targets - actual checks):
+
+SECTION STRUCTURE:
+□ If 1+ analyst actions exist in articles → Is Wall Street Sentiment section present? (Must be YES)
+□ If 1+ bullish tags exist in sections → Is Upside Scenario present? (Must be YES)
+□ If 1+ bearish tags exist in sections → Is Downside Scenario present? (Must be YES)
+□ If Upcoming Catalysts section exists → Is Key Variables section present? (Must be YES)
+
+BANNED PHRASES:
+□ Does Upside/Downside contain "alternative strategic options"? (Must be NO)
+□ Does Upside/Downside contain "could pursue alternatives"? (Must be NO)
+□ Does Upside/Downside contain "strategic flexibility"? (Must be NO)
+□ Are ALL forward statements attributed to article authors? (Must be YES)
+
+LOW-IMPACT INCLUSION:
+□ Did I include <1% materiality items with (low impact, ...) tags? (Should be YES if any exist)
+□ Did I omit competitor news solely because "no connection stated"? (Should be YES - correct to omit)
 
 SENTIMENT DISTRIBUTION:
 □ If most tags are bullish/bearish, did something major actually happen to justify this?

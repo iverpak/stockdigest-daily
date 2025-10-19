@@ -14650,7 +14650,8 @@ Include if EITHER:
    - Competitor capacity expansion in same market (threatens market share)
    - Competitor product launch with superior specs/pricing (threatens competitive position)
    - Competitor regulatory approval {ticker} lacks (threatens first-mover advantage)
-   - Industry consolidation creating larger competitor (threatens pricing power)
+   - Competitor M&A >$10B creating new capability/market overlap {ticker} currently dominates (threatens competitive moat)
+   - Industry consolidation reducing number of competitors by >25% (threatens pricing power)
    
    SINGLE-STEP TEST for #3: Can you connect competitor action → {ticker} impact in ONE direct step?
    ✅ "UP-NS merger creates 2nd transcontinental competitor" → threatens CP's unique network (ONE step)

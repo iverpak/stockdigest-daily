@@ -14059,6 +14059,11 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 - [INDUSTRY - keyword] = Fundamental value drivers for {ticker} (prices, costs, demand, supply, regulation)
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
+[10-K PROFILE]:
+You will also receive a Company 10-K Profile (10 page summary from most recent filing) providing baseline context: segment economics, customer/supplier concentration, geographic exposure, historical metrics, disclosed risks, strategic priorities.
+
+Use 10-K to enrich articles with context where relevant. Read entire profile - data might appear in any section.
+
 🚨 THREE-TIER INFERENCE FRAMEWORK
 
 You will use THREE LEVELS of inference with strict boundaries:
@@ -14104,6 +14109,145 @@ Allowed ONLY for:
 ❌ FORBIDDEN: Article A about competitor + Article B about {ticker} → Don't connect unless articles linked them
 
 ---
+
+🔬 10-K CONTEXT ENRICHMENT
+
+CORE PRINCIPLE:
+Use 10-K to show scale, economics, dependencies, trends. Provide facts that enable readers to reach own conclusions. Never make buy/sell/hold recommendations.
+
+---
+
+WHEN TO USE 10-K CONTEXT:
+
+Read entire 10-K Profile when analyzing articles. Use 10-K data to answer:
+
+**1. MATERIALITY: How big is this?**
+- Look for: % of revenue/EBIT/assets, customer/supplier rankings, segment size, geographic exposure
+- Thresholds: >5% OR top 3 = high impact; 1-5% OR top 10 = medium impact; <1% = low impact
+- Multi-factor: Use HIGHEST level (e.g., 2% revenue BUT top 3 customer = high impact)
+
+**2. ECONOMICS: Is this profitable?**
+- Look for: Segment margins, ROIC, profitability by division/product/geography
+- Use for: Determining sentiment (investment in -131% margin segment = bearish, not bullish)
+
+**3. DEPENDENCIES: Do they rely on this?**
+- Look for: Customer concentration, sole suppliers, geographic concentration
+- Use for: Quantifying risk (top customer = 34% revenue = high dependency)
+
+**4. TRENDS: Better or worse than before?**
+- Look for: Prior year metrics, baselines, historical comparisons
+- Use for: Calculating change (Q3 revenue vs FY2024 average = +11%)
+
+**5. RISKS: Did they warn about this?**
+- Look for: Risk Factors section disclosures
+- Use for: Flagging ⚠️ Risk Materialization when news confirms 10-K disclosed risk
+
+**6. COMPETITIVE SCALE: How do they compare?**
+- Look for: Market share, relative size vs competitors
+- Use for: Assessing threats (competitor 40x smaller = distant threat)
+
+**7. CAPITAL ALLOCATION: Good use of money?**
+- Look for: Company ROIC, segment margins where investment directed
+- Use for: Assessing ROIC-accretive vs dilutive (investing in unprofitable segment vs company ROIC)
+
+**8. TIMELINE: On schedule?**
+- Look for: Disclosed milestones, targets, timelines
+- Use for: Tracking execution (actual vs target = on schedule/ahead/behind)
+
+**9. CASH GENERATION: Financially sustainable?**
+- Look for: Operating cash flow, free cash flow vs earnings
+- Use for: Distinguishing accounting profits from actual cash
+
+**10. BUSINESS MODEL: How does this fit?**
+- Look for: Revenue model (recurring vs transactional, regulated vs merchant)
+- Use for: Understanding revenue quality and volatility
+
+---
+
+CRITICAL APPROACH:
+
+Read ENTIRE 10-K Profile, not just specific sections. Data might appear anywhere:
+- Customer info might be in Dependencies, or Risks, or Strategic Priorities
+- Segment economics might be in Revenue, or Costs, or Risks
+- Find it wherever it appears
+
+Synthesize across sections when relevant:
+- Article mentions investment → Check segment margins + company ROIC + disclosed risks + strategic priorities
+
+---
+
+ENRICHMENT FORMAT:
+
+When 10-K has relevant data, add Context bullet after main bullet:
+
+- Main bullet (impact, sentiment, reason): [Development with attribution] (Oct 10)
+  Context: [1-3 most relevant data points] per FY[YEAR] 10-K
+
+Requirements:
+- Indented (shows supplementary to main bullet)
+- 25-60 words (concise but substantive)
+- Always cite "per FY[YEAR] 10-K" (or "per Q3 2025 10-Q" if quarterly data)
+- Use exact figures, minimal rounding
+- Pick 1-3 most relevant points, not everything available
+- Natural prose, not bullet list
+
+Skip 10-K context when:
+- Generic analyst opinions without factual developments
+- 10-K lacks relevant data (graceful degradation)
+
+---
+
+IMPACT TAG (for Major Developments, Competitive Dynamics, Risk Factors):
+
+**HIGH IMPACT**: >5% revenue/EBIT/assets OR top 3 customer/supplier OR 10-K Risk Factor disclosed OR categorical event (FDA action, CEO fraud, M&A, bankruptcy, production halt)
+**MEDIUM IMPACT**: 1-5% revenue/EBIT/assets OR top 10 customer/supplier OR mentioned in Strategic Priorities
+**LOW IMPACT**: <1% revenue/EBIT/assets
+
+Use highest applicable level when multiple factors present.
+
+---
+
+SENTIMENT TAG (using Articles + 10-K):
+
+Sentiment = article framing + 10-K economic reality
+
+Examples:
+- Article: "Growth investment" + 10-K: Segment -131% margin → (bearish, capital misallocation)
+- Article: "Customer loss" + 10-K: Customer <1% revenue → (low impact, neutral, routine churn)
+- Article: "Competitor product" + 10-K: Competitor 40x smaller → (low impact, neutral, competitive development)
+
+Logical single-step inference from public data (articles + 10-K):
+- Unprofitable segment investment = bearish
+- High customer concentration = high impact
+- Massive scale gap = low competitive threat
+
+This categorizes facts, doesn't make investment recommendations. Reader decides implications.
+
+---
+
+RISK MATERIALIZATION FLAG:
+
+When news confirms 10-K disclosed risk, flag with ⚠️:
+
+⚠️ • Risk Topic (high impact, bearish, [risk type]): [Event] confirms 10-K disclosed [risk]; [quantify exposure using 10-K]
+  Context: 10-K Risk Factors section disclosed [specific risk]; [relevant data showing exposure] per FY[YEAR] 10-K
+
+---
+
+EXAMPLE:
+
+Article: "Ford announces $2B EV investment; CEO says positions for growth"
+
+10-K shows: Model e -131.8% margin, Ford Pro 88% of EBIT at 13.5% margin, company ROIC 12.9%
+
+Output:
+- EV capacity investment (high impact, bearish, capital misallocation): Ford announces $2B Michigan EV battery plant per announcement; CEO stated investment positions company for EV demand growth (Oct 15)
+  Context: Investment targets Ford Model e segment (lost $5.1B FY2024, -131.8% margin per 10-K) while Ford Pro generates 88% of company EBIT at 13.5% margin; $2B allocation vs company ROIC 12.9%
+
+Why: HIGH IMPACT (material capex), BEARISH (despite CEO spin, 10-K shows unprofitable segment), Context synthesizes segment economics + ROIC
+
+---
+
 
 🚨 CRITICAL FILTERING RULES
 
@@ -14289,8 +14433,13 @@ Include:
 - {ticker} regulatory: Investigations, litigation, approvals
 - {ticker} contracts: Dollar amounts or strategic significance
 
-Format (use • bullet with TOPIC LABEL and sentiment tag):
-- Topic Label (sentiment, reason): [Development with context, amounts, dates, ATTRIBUTION for any implications] (Oct 10)
+Format (use • bullet with TOPIC LABEL and impact/sentiment tags):
+- Topic Label (impact, sentiment, reason): [Development with context, amounts, dates, ATTRIBUTION for any implications] (Oct 10)
+  Context: [10-K data if relevant] per FY[YEAR] 10-K
+
+Impact: high impact | medium impact | low impact
+Sentiment: bullish | bearish | neutral
+Reason: 2-4 words describing impact type (not topic restatement)
 
 SENTIMENT TAG GUIDANCE (TIER 1 INFERENCE):
 Use SINGLE-STEP inference only. Sentiment reflects how development directly impacts {ticker}.
@@ -14376,8 +14525,16 @@ Include (report what authors identified as risks OR categorical risk events):
 - Industry regulatory: ONLY if authors stated these create sector-wide risks OR categorical regulatory actions
 - Insider transactions: ONLY if authors raised concerns about timing/size
 
-Format (use • bullet with TOPIC LABEL, NO sentiment tags):
-- Topic Label: [What authors reported as the risk OR categorical risk event with key facts, dates, and ATTRIBUTED concerns if any] (Oct 10)
+Format (use • bullet with TOPIC LABEL and impact/sentiment tags):
+- Topic Label (impact, sentiment, reason): [What authors reported as the risk OR categorical risk event with key facts, dates, and ATTRIBUTED concerns if any] (Oct 10)
+  Context: [10-K data if relevant] per FY[YEAR] 10-K
+
+Impact: high impact | medium impact | low impact (include all risk levels)
+Sentiment: bearish (most common) | neutral (risk update) | bullish (risk resolved/reduced)
+Reason: 2-4 words describing risk type
+
+⚠️ Risk Materialization Flag:
+When news event confirms 10-K disclosed risk, add ⚠️ before bullet and reference 10-K Risk Factors section in Context bullet
 
 Topic Label: 2-5 words describing the risk
 
@@ -14449,8 +14606,13 @@ Include (report what authors stated):
 - Market data: Pricing changes, capacity additions, production figures
 - Executive commentary: Direct quotes from earnings calls/statements
 
-Format (use • bullet with TOPIC LABEL and sentiment tag):
-- Topic Label (sentiment, reason): [What happened per sources]. [What authors explicitly stated about {ticker} implications] (Oct 10)
+Format (use • bullet with TOPIC LABEL and impact/sentiment tags):
+- Topic Label (impact, sentiment, reason): [What happened per sources]. [What authors explicitly stated about {ticker} implications] (Oct 10)
+  Context: [10-K data if relevant] per FY[YEAR] 10-K
+
+Impact: high impact | medium impact | low impact
+Sentiment: bullish | bearish | neutral
+Reason: 2-4 words describing impact type (not topic restatement)
 
 SENTIMENT TAG GUIDANCE (TIER 1 INFERENCE):
 Use SINGLE-STEP inference only for how development directly impacts {ticker}.
@@ -14755,6 +14917,20 @@ ATTRIBUTION CHECK:
 FABRICATION CHECK:
 □ No claims of "undisclosed" or "not provided" unless article explicitly stated this?
 □ Article silence treated as missing information, not as information absence?
+
+---
+
+10-K ENRICHMENT CHECK:
+□ Context bullets added for high/medium/low impact developments with 10-K data
+□ Each context cites "per FY[YEAR] 10-K" or "per Q[X] 20XX 10-Q" with exact figures
+□ Context length 25-60 words (concise but substantive)
+□ Context uses 1-3 most relevant data points (not everything available)
+□ Read entire 10-K Profile, didn't rely on single section
+□ Impact tags reflect 10-K materiality: >5% OR top 3 = high; 1-5% OR top 10 = medium; <1% = low
+□ Sentiment reflects article framing + 10-K economic reality (not just article alone)
+□ Flagged ⚠️ Risk Materialization when news confirms 10-K disclosed risk
+□ Skipped enrichment when 10-K lacked relevant data (graceful degradation)
+□ Included ALL impact levels (high/medium/low) - didn't skip low impact
 
 ---
 

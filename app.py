@@ -14664,10 +14664,10 @@ For categorical risks: Report the facts; let the category signal it's a risk. No
 
 CRITICAL: Do NOT explain why something is a risk unless article authors explained it. Report what they identified/what happened.
 
-SINGLE-STEP LOGIC FOR #3 COMPETITIVE THREATS:
+SINGLE-STEP LOGIC FOR COMPETITIVE THREATS:
 You ARE allowed to identify competitive threats using factual single-step logic WITHOUT requiring article to explicitly state "{ticker} threatened."
 
-Process for #3:
+Process:
 1. Check 10-K: Does {ticker} have unique positioning, market dominance, or strategic advantage in this area?
 2. Check articles: Does competitor development directly challenge that positioning? (M&A creating overlap, approval in same indication, capacity in same market)
 3. If YES to both → Include in Risk Factors section (report facts, let section placement signal it's a threat)

@@ -14652,23 +14652,23 @@ Examples:
 ❌ WRONG: • Supply disruption: Novelis fire eliminates capacity, creating margin pressure for Ford production
 (No attribution for "margin pressure" conclusion unless it's a categorical risk event like force majeure)
 
-📈 WALL STREET SENTIMENT (Create if 1+ analyst actions - 1-4 bullets max)
+📈 WALL STREET SENTIMENT (MANDATORY if 1+ analyst actions - 1-4 bullets max)
 
-MANDATORY SECTION CREATION RULE:
-Count total analyst actions across all articles (each firm action = 1):
-- 0 analyst actions → Omit this section entirely
-- 1-2 analyst actions → CREATE this dedicated section
-- 3+ analyst actions → CREATE this dedicated section (prioritize most material)
+SECTION CREATION RULE:
+Count analyst actions in articles (firm name + rating/target change):
+- 0 actions → Omit section
+- 1+ actions → CREATE section (non-negotiable)
 
 Analyst action = Named firm + (rating change OR price target change OR initiation)
 
-Examples that count:
+Examples:
 ✅ "Goldman Sachs upgraded to Buy" = 1 action
-✅ "Morgan Stanley raised target to $150" = 1 action  
-✅ "JPM initiated coverage at Overweight" = 1 action
-✅ "Jefferies reiterated Buy rating" = 1 action
+✅ "Morgan Stanley raised target to $150" = 1 action
+✅ "Jefferies reiterated Buy" = 1 action
 ✅ "Consensus target rose to $X" = 0 actions (no named firm)
-✅ "Multiple analysts upgraded" = 0 actions (must name specific firms)
+
+CRITICAL: Do NOT put analyst actions in Major Developments or Financial/Operational sections.
+Analyst coverage ALWAYS gets dedicated Wall Street section when present, even if discussing M&A deal context.
 
 If 1+ analyst actions exist in articles, this section MUST appear in output.
 

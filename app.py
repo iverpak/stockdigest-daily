@@ -14340,9 +14340,9 @@ This categorizes facts, doesn't make investment recommendations. Reader decides 
 
 ---
 
-RISK MATERIALIZATION FLAG:
+RISK MATERIALIZATION:
 
-When news confirms 10-K disclosed risk, note in Context bullet (no special emoji):
+When news confirms 10-K disclosed risk, note in Context bullet:
 
 - Risk Topic (high impact, bearish, [risk type]): [Event description] (Oct 15)
   Context: Risk Materialization—10-K Risk Factors section disclosed [specific risk]; [relevant data] per FY[YEAR] 10-K
@@ -14645,8 +14645,8 @@ Impact: high impact | medium impact | low impact (include all risk levels)
 Sentiment: bearish (most common) | neutral (risk update) | bullish (risk resolved/reduced)
 Reason: 2-4 words describing risk type
 
-⚠️ Risk Materialization Flag:
-When news event confirms 10-K disclosed risk, add ⚠️ before bullet and reference 10-K Risk Factors section in Context bullet
+Risk Materialization Flag:
+When news event confirms 10-K disclosed risk, reference 10-K Risk Factors section in Context bullet
 
 Topic Label: 2-5 words describing the risk
 
@@ -15129,7 +15129,7 @@ FABRICATION CHECK:
 □ Read entire 10-K Profile, didn't rely on single section
 □ Impact tags reflect 10-K materiality: >5% OR top 3 = high; 1-5% OR top 10 = medium; <1% = low
 □ Sentiment reflects article framing + 10-K economic reality (not just article alone)
-□ Flagged ⚠️ Risk Materialization when news confirms 10-K disclosed risk
+□ Flagged Risk Materialization when news confirms 10-K disclosed risk
 □ Skipped enrichment when 10-K lacked relevant data (graceful degradation)
 □ Included ALL impact levels (high/medium/low) - didn't skip low impact
 

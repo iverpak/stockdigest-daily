@@ -14550,7 +14550,9 @@ Major Developments:
 BRIGHT-LINE TEST:
 Ask: "If I removed {ticker}'s name from this headline, would it still be news?"
 - NO → Major Developments (it's {ticker}-specific)
-- YES → Competitive Dynamics (it's industry-wide or competitor-specific)
+- YES → Check if qualifies for Risk Factors first (see #3 in Risk Factors criteria)
+  - If YES → Include in Risk Factors (threat framing) + Competitive Dynamics (detail framing)
+  - If NO → Competitive Dynamics only
 
 PRIORITIZATION:
 - When multiple articles cover same event: Prioritize most recent coverage, preferring
@@ -14662,6 +14664,25 @@ For categorical risks: Report the facts; let the category signal it's a risk. No
 
 CRITICAL: Do NOT explain why something is a risk unless article authors explained it. Report what they identified/what happened.
 
+SINGLE-STEP LOGIC FOR #3 COMPETITIVE THREATS:
+You ARE allowed to identify competitive threats using factual single-step logic WITHOUT requiring article to explicitly state "{ticker} threatened."
+
+Process for #3:
+1. Check 10-K: Does {ticker} have unique positioning, market dominance, or strategic advantage in this area?
+2. Check articles: Does competitor development directly challenge that positioning? (M&A creating overlap, approval in same indication, capacity in same market)
+3. If YES to both → Include in Risk Factors section (report facts, let section placement signal it's a threat)
+
+Report FACTS in bullet:
+- Transaction size, companies involved, new capabilities created, markets entered
+- Let the Risk Factors section placement signal competitive threat
+- Do NOT add editorial like "this threatens because..." unless article authors stated it
+
+Examples across sectors:
+- Railroads: "$85B merger creates 2nd transcontinental network" (fact) → Section: Risk Factors (signals threat)
+- Semiconductors: "Acquisition gives competitor GPU+CPU design capability" (fact) → Section: Risk Factors (signals threat)
+- Pharma: "Competitor received FDA breakthrough designation for Alzheimer's drug" (fact) → Section: Risk Factors (signals threat)
+- Utilities: "Competitor secured 10-year offtake agreement for 500 MW nuclear facility" (fact) → Section: Risk Factors (signals threat)
+
 COMPETITOR DISADVANTAGE RULE:
 If competitor loses advantage/faces problem that hurts THEM → Belongs in Competitive Dynamics as (bullish, competitor disadvantage), NOT here
 Example: "Ford/GM cancelled lease programs" = competitor handicap = Competitive Dynamics
@@ -14744,10 +14765,20 @@ Competitive/Industry Dynamics:
 
 BRIGHT-LINE TEST:
 Ask: "If I removed {ticker}'s name from this headline, would it still be news?"
-- YES → Competitive Dynamics (it's industry-wide or competitor-specific)
+- YES → First check if qualifies for Risk Factors section (see Risk Factors criteria #3: competitive threats)
+  - If qualifies as material competitive threat → Include in BOTH Risk Factors (threat framing) AND Competitive Dynamics (transaction details)
+  - If does not qualify as threat → Competitive Dynamics only
 - NO → Major Developments (it's {ticker}-specific)
 
 Default rule: If uncertain which section → Competitive Dynamics (not Major Developments)
+
+**SECTOR EXAMPLES:**
+- ✅ Railroads: UP-NS $85B merger → Both Risk Factors + Competitive Dynamics
+- ✅ Semiconductors: NVDA-ARM $69B acquisition → Both sections
+- ✅ Pharma: Competitor gets FDA approval for {ticker}'s core indication → Both sections
+- ✅ Utilities: Competitor secures 10-year power contract {ticker} bid on → Both sections
+- ❌ Any sector: Competitor CFO change → Competitive Dynamics only (not a threat)
+
 
 CRITICAL COMPETITOR NEWS FILTER:
 Include competitor developments if ANY:
@@ -15122,7 +15153,12 @@ ATTRIBUTION QUALITY:
 SECTION COMPLETENESS:
 □ Are Upside/Downside empty because zero bullish/bearish tagged developments exist? (Good - correct behavior)
 □ If 1+ bullish/bearish tags exist but section is empty? (Bad - ERROR, add the section)
-□ Did I include Risk Factors only when authors flagged concerns OR categorical risks occurred?
+□ Did I include Risk Factors when ANY of these exist:
+  - Article authors explicitly flagged concerns?
+  - Categorical risk events occurred (recalls, investigations, force majeure, lawsuits, etc.)?
+  - Competitive threats with single-step logic (M&A >$10B creating market overlap, competitor approval {ticker} lacks, capacity expansion in same market, product launch with superior specs/pricing)?
+□ For competitive threats: Did I check 10-K to verify {ticker} has unique positioning being challenged?
+□ For competitive threats: Did I include in BOTH Risk Factors (threat framing) AND Competitive Dynamics (transaction details)?
 
 MAGNITUDE VERIFICATION:
 □ Did I include any items <1% materiality that articles didn't emphasize?

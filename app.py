@@ -16820,6 +16820,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         """
         Bold topic labels in bullet points.
         Transforms: "Topic Label: Details" → "<strong>Topic Label:</strong> Details"
+        Also bolds "Context:" when it appears in 10-K enrichment lines.
         Also strips markdown bold syntax (**text**) that AI sometimes adds despite instructions.
         Note: Bullets are stripped during parsing, so pattern matches at start of text.
         """
@@ -16836,7 +16837,13 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         # 130-char limit prevents bolding entire sentences while capturing longer contextual labels
         pattern = r'^([^:]{2,130}?:)(\s)'
         replacement = r'<strong>\1</strong>\2'
-        return re.sub(pattern, replacement, text)
+        text = re.sub(pattern, replacement, text)
+
+        # Bold "Context:" when it appears (10-K enrichment lines)
+        # Match exact string "Context:" (case-sensitive)
+        text = text.replace('Context:', '<strong>Context:</strong>')
+
+        return text
 
     def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
         """Build section with consistent styling

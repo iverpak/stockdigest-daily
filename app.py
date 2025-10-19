@@ -14247,7 +14247,7 @@ For EVERY article, use the 10-K Profile to answer these questions:
 
 **5. RISKS: Did they warn about this?**
 - Look for: Risk Factors section disclosures
-- Use for: Flagging ⚠️ Risk Materialization when news confirms 10-K disclosed risk
+- Use for: Flagging Risk Materialization in Context when news confirms 10-K disclosed risk
 
 **6. COMPETITIVE SCALE: How do they compare?**
 - Look for: Market share, relative size vs competitors
@@ -14298,6 +14298,10 @@ Requirements:
 - Pick 1-3 most relevant points, not everything available
 - Natural prose, not bullet list
 
+- When stating percentages/ratios, show calculation: "Segment $9.0B of total $10.2B (88% = $9.0B ÷ $10.2B)"
+- Only calculate if units match and figures in 10-K;
+- If uncertain or complex calculation, use direct 10-K quote instead of deriving metric
+
 Skip 10-K context when:
 - Generic analyst opinions without factual developments
 - 10-K lacks relevant data (graceful degradation)
@@ -14309,6 +14313,10 @@ IMPACT TAG (for Major Developments, Competitive Dynamics, Risk Factors):
 **HIGH IMPACT**: >5% revenue/EBIT/assets OR top 3 customer/supplier OR 10-K Risk Factor disclosed OR categorical event (FDA action, CEO fraud, M&A, bankruptcy, production halt)
 **MEDIUM IMPACT**: 1-5% revenue/EBIT/assets OR top 10 customer/supplier OR mentioned in Strategic Priorities
 **LOW IMPACT**: <1% revenue/EBIT/assets
+
+AUTO-ESCALATE to HIGH if any apply: superlatives in articles ("most," "record," "unprecedented"), 
+pattern vs isolated event (100+ recalls vs 1), 3+ articles emphasize same topic, analyst quantifies >10% 
+segment impact, or categorical risk events (production halts, force majeure, regulatory investigations).
 
 Use highest applicable level when multiple factors present.
 
@@ -14334,10 +14342,10 @@ This categorizes facts, doesn't make investment recommendations. Reader decides 
 
 RISK MATERIALIZATION FLAG:
 
-When news confirms 10-K disclosed risk, flag with ⚠️:
+When news confirms 10-K disclosed risk, note in Context bullet (no special emoji):
 
-⚠️ • Risk Topic (high impact, bearish, [risk type]): [Event] confirms 10-K disclosed [risk]; [quantify exposure using 10-K]
-  Context: 10-K Risk Factors section disclosed [specific risk]; [relevant data showing exposure] per FY[YEAR] 10-K
+- Risk Topic (high impact, bearish, [risk type]): [Event description] (Oct 15)
+  Context: Risk Materialization—10-K Risk Factors section disclosed [specific risk]; [relevant data] per FY[YEAR] 10-K
 
 ---
 
@@ -14709,6 +14717,9 @@ Include competitor developments ONLY if:
 3. Development is sector-wide affecting all players AND articles state this
 
 If competitor news has no stated connection to {ticker} → SKIP IT entirely.
+
+COMPETITOR BREVITY: Limit to 50-100 words focused on competitive intelligence. 
+ALWAYS include {ticker} comparison when available: "Competitor +13% vs {ticker} +8.2% in Q3"
 
 ❌ SKIP: "Competitor announces layoffs" with no {ticker} mention
 ✅ INCLUDE: "Competitor launches product; [Analyst] stated undercuts {ticker} pricing"

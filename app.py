@@ -14106,10 +14106,22 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 - [INDUSTRY - keyword] = Fundamental value drivers for {ticker} (prices, costs, demand, supply, regulation)
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
-[10-K PROFILE]:
-You may receive a Company 10-K Profile labeled with ticker, company name, fiscal year, and filing date. This profile is a 5-10 page summary from the most recent 10-K filing providing baseline context: segment economics, customer/supplier concentration, geographic exposure, historical metrics, disclosed risks, strategic priorities.
+10-K PROFILE (MANDATORY INTEGRATION):
+You will receive a Company 10-K Profile labeled with ticker, company name, fiscal year, and filing date. This profile is a comprehensive summary from the company's most recent 10-K filing containing foundational business context: segment economics, customer/supplier concentration, geographic exposure, historical metrics, disclosed risks, and strategic priorities.
 
-Use 10-K to enrich articles with context where relevant. Read entire profile - data might appear in any section.
+CRITICAL: The 10-K Profile is NOT optional background—it is REQUIRED context that MUST inform your analysis. You are expected to actively integrate 10-K data when writing Risk Factors, Major Developments, Competitive/Industry Dynamics, and Upside/Downside sections.
+
+INTEGRATION MANDATE:
+- Risk Factors: Cross-reference EVERY risk against 10-K disclosed risks. If news relates to disclosed risk, note the connection.
+- Major Developments: Use 10-K segment data to assess materiality. When development affects specific business line, reference segment economics/size.
+- Competitive/Industry Dynamics: Reference 10-K business mix when analyzing industry trends. Show how trend affects company based on disclosed segment composition.
+- Upside/Downside: Incorporate 10-K disclosed opportunities (for upside) and threats (for downside).
+
+Read ENTIRE 10-K Profile before analyzing articles. Data might appear in any section—segment economics in Revenue section, customer concentration in Risks or Dependencies section, strategic priorities across multiple sections. Do not skim.
+
+For EVERY article, actively ask: Does the 10-K contain relevant context? If yes, integrate it. Failing to use available 10-K context is an error.
+
+Detailed integration framework with examples provided in 🔬 10-K CONTEXT ENRICHMENT section below.
 
 🚨 THREE-TIER INFERENCE FRAMEWORK
 
@@ -14159,14 +14171,11 @@ Allowed ONLY for:
 
 🔬 10-K CONTEXT ENRICHMENT
 
-CORE PRINCIPLE:
-Use 10-K to show scale, economics, dependencies, trends. Provide facts that enable readers to reach own conclusions. Never make buy/sell/hold recommendations.
+This section provides detailed guidance on HOW to integrate the 10-K Profile (integration is MANDATORY per instructions above).
 
----
+INTEGRATION APPROACH:
 
-WHEN TO USE 10-K CONTEXT:
-
-Read entire 10-K Profile when analyzing articles. Use 10-K data to answer:
+For EVERY article, use the 10-K Profile to answer these questions:
 
 **1. MATERIALITY: How big is this?**
 - Look for: % of revenue/EBIT/assets, customer/supplier rankings, segment size, geographic exposure

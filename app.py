@@ -14472,22 +14472,6 @@ Compress or omit:
 
 ---
 
-🚫 RETAIL ANALYSIS EXCLUSION (APPLIES TO ALL SECTIONS BELOW)
-
-Never include retail investment analysis in ANY section below:
-
-EXCLUDE ALL of the following patterns:
-- Automated ratings/scores (e.g., "Zacks Rank #3", "GuruFocus score 7/10", "Simply Wall St checks")
-- Proprietary models without named analyst (e.g., "DCF model fair value $X", "AI prediction")
-- Stock screener rankings/results (e.g., "Ranks #3 in momentum")
-- Aggregated consensus without source (e.g., "Zacks Consensus", "average of 12 analysts")
-- Technical indicators without analyst context (e.g., "RSI indicates oversold")
-
-✓ KEEP: Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, etc.)
-✓ KEEP: Beat/miss vs consensus WITH source attribution (e.g., "beat FactSet consensus $X")
-
----
-
 OUTPUT STRUCTURE
 
 CRITICAL: DO NOT use markdown headers (##) or title lines. Start sections with emoji ONLY.

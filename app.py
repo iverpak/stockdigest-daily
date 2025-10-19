@@ -14269,6 +14269,17 @@ For EVERY article, use the 10-K Profile to answer these questions:
 - Look for: Revenue model (recurring vs transactional, regulated vs merchant)
 - Use for: Understanding revenue quality and volatility
 
+**11. COMMODITY EXPOSURE: How much does this input/output matter?**
+- Look for: Fleet fuel mix, capacity by fuel type, input costs breakdown, hedging positions
+- Use for: When articles discuss commodity prices (natural gas, oil, coal, power prices, metals, uranium)
+- Context trigger: Show company's exposure scale even if price movement seems immaterial
+- Examples:
+  * Natural gas prices article → Check for gas-fired generation capacity
+  * Coal prices article → Check for coal fleet capacity
+  * Power prices article → Check for merchant vs contracted revenue mix
+  * Oil prices article → Check for oil-fired capacity or transportation costs
+  * Metal prices (aluminum, steel, copper) → Check for input cost exposure
+
 ---
 
 CRITICAL APPROACH:

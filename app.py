@@ -1523,45 +1523,86 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_date ON transcript_summaries(report_date DESC);
 
                 -- COMPANY PROFILES: Store AI-generated 10-K company profiles
-                CREATE TABLE IF NOT EXISTS company_profiles (
+                -- SEC FILINGS: Unified table for 10-K, 10-Q, and investor presentations
+                CREATE TABLE IF NOT EXISTS sec_filings (
                     id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(20) NOT NULL UNIQUE,
-                    company_name VARCHAR(255) NOT NULL,
-                    industry VARCHAR(255),
-                    fiscal_year INTEGER,
+                    ticker VARCHAR(20) NOT NULL,
+
+                    -- Filing identification
+                    filing_type VARCHAR(20) NOT NULL,      -- '10-K', '10-Q', 'PRESENTATION'
+                    fiscal_year INTEGER NOT NULL,
+                    fiscal_quarter VARCHAR(5),             -- 'Q1', 'Q2', 'Q3', 'Q4', NULL for 10-K/annual presentations
                     filing_date DATE,
+                    period_end_date DATE,                  -- Actual quarter/year end date
 
-                    -- Full profile markdown
+                    -- Content (same structure for all filing types)
                     profile_markdown TEXT NOT NULL,
-
-                    -- Brief summary (future: for executive summary injection)
-                    profile_summary TEXT,
-
-                    -- Structured KPIs as JSON
+                    profile_summary TEXT,                  -- AI-generated executive summary
                     key_metrics JSONB,
 
                     -- Source tracking
-                    source_file VARCHAR(500),  -- Original filename
+                    source_type VARCHAR(20),               -- 'fmp_sec', 'file_upload', 'gemini_multimodal'
+                    source_file VARCHAR(500),              -- Original filename or 'SEC.gov via FMP'
+                    sec_html_url TEXT,                     -- SEC.gov direct link (for 10-K/10-Q)
+
+                    -- Company info (denormalized for convenience)
+                    company_name VARCHAR(255),
+                    industry VARCHAR(255),
 
                     -- AI metadata
-                    ai_provider VARCHAR(20) NOT NULL,  -- 'gemini'
-                    gemini_model VARCHAR(100),
-                    thinking_budget INTEGER,
+                    ai_provider VARCHAR(20),               -- 'gemini', 'claude', 'openai'
+                    ai_model VARCHAR(100),                 -- 'gemini-2.5-flash', 'gemini-2.5-pro', etc.
                     generation_time_seconds INTEGER,
                     token_count_input INTEGER,
                     token_count_output INTEGER,
 
-                    -- Status
-                    status VARCHAR(50) DEFAULT 'active',  -- 'active', 'stale', 'error'
-                    error_message TEXT,
+                    -- Presentation-specific fields (NULL for 10-K/10-Q)
+                    presentation_title VARCHAR(500),
+                    presentation_type VARCHAR(50),         -- 'earnings', 'investor_day', 'analyst_day', 'conference'
+                    page_count INTEGER,
+                    file_size_bytes BIGINT,
 
-                    -- Timestamps
-                    generated_at TIMESTAMPTZ DEFAULT NOW()
+                    -- Status
+                    status VARCHAR(50) DEFAULT 'active',   -- 'active', 'stale', 'error'
+                    error_message TEXT,
+                    generated_at TIMESTAMPTZ DEFAULT NOW(),
+
+                    -- UNIQUE constraint: One filing per ticker+type+year+quarter combination
+                    UNIQUE(ticker, filing_type, fiscal_year, fiscal_quarter)
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_company_profiles_ticker ON company_profiles(ticker);
-                CREATE INDEX IF NOT EXISTS idx_company_profiles_fiscal_year ON company_profiles(fiscal_year DESC);
-                CREATE INDEX IF NOT EXISTS idx_company_profiles_status ON company_profiles(status);
+                CREATE INDEX IF NOT EXISTS idx_sec_filings_ticker ON sec_filings(ticker);
+                CREATE INDEX IF NOT EXISTS idx_sec_filings_type ON sec_filings(filing_type);
+                CREATE INDEX IF NOT EXISTS idx_sec_filings_ticker_type ON sec_filings(ticker, filing_type);
+                CREATE INDEX IF NOT EXISTS idx_sec_filings_period ON sec_filings(fiscal_year DESC, fiscal_quarter DESC);
+                CREATE INDEX IF NOT EXISTS idx_sec_filings_status ON sec_filings(status);
+
+                -- BACKWARD COMPATIBILITY VIEW: Maps old company_profiles queries to sec_filings
+                -- This allows existing code to work during migration period
+                -- Usage: SELECT * FROM company_profiles WHERE ticker='AAPL'
+                CREATE OR REPLACE VIEW company_profiles AS
+                SELECT
+                    id,
+                    ticker,
+                    company_name,
+                    industry,
+                    fiscal_year,
+                    filing_date,
+                    profile_markdown,
+                    profile_summary,
+                    key_metrics,
+                    source_file,
+                    ai_provider,
+                    ai_model AS gemini_model,              -- Alias for backward compatibility
+                    NULL::INTEGER AS thinking_budget,      -- Deprecated field (always NULL)
+                    generation_time_seconds,
+                    token_count_input,
+                    token_count_output,
+                    status,
+                    error_message,
+                    generated_at
+                FROM sec_filings
+                WHERE filing_type = '10-K';
 
                 -- Beta users table for landing page signups
                 CREATE TABLE IF NOT EXISTS beta_users (
@@ -13994,13 +14035,16 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
     company_name = config.get("name", ticker)
 
     # Fetch 10-K Profile from database (if available)
+    # FUTURE: Can expand to include 10-Q and presentations for richer context
     profile_block = None
     try:
         with db() as conn, conn.cursor() as cur:
+            # Currently fetching only 10-K (annual report)
             cur.execute("""
                 SELECT profile_markdown, fiscal_year, filing_date, company_name
-                FROM company_profiles
+                FROM sec_filings
                 WHERE ticker = %s
+                  AND filing_type = '10-K'
                 ORDER BY fiscal_year DESC
                 LIMIT 1
             """, (ticker,))
@@ -14022,6 +14066,59 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                 LOG.info(f"[{ticker}] ✅ Loaded 10-K profile (FY{fiscal_year}, {len(markdown):,} chars)")
             else:
                 LOG.debug(f"[{ticker}] No 10-K profile found - proceeding with articles only")
+
+            # FUTURE: Multi-material context injection (10-K + 10-Q + Presentation)
+            # Uncomment when ready to test enhanced context
+            #
+            # context_blocks = []
+            #
+            # # 1. Latest 10-K (full company overview)
+            # if row:
+            #     context_blocks.append(
+            #         f"COMPANY 10-K PROFILE:\n"
+            #         f"[{ticker} ({profile_company_name}) 10-K FILING FOR FISCAL YEAR {fiscal_year}, Filed: {filing_date}]\n\n"
+            #         f"{markdown}\n\n"
+            #     )
+            #
+            # # 2. Latest 10-Q (recent quarterly performance)
+            # cur.execute("""
+            #     SELECT profile_markdown, fiscal_year, fiscal_quarter, filing_date
+            #     FROM sec_filings
+            #     WHERE ticker = %s AND filing_type = '10-Q'
+            #     ORDER BY fiscal_year DESC, fiscal_quarter DESC
+            #     LIMIT 1
+            # """, (ticker,))
+            # latest_10q = cur.fetchone()
+            # if latest_10q:
+            #     context_blocks.append(
+            #         f"LATEST QUARTERLY REPORT (10-Q):\n"
+            #         f"[{ticker} {latest_10q['fiscal_quarter']} {latest_10q['fiscal_year']}, Filed: {latest_10q['filing_date']}]\n\n"
+            #         f"{latest_10q['profile_markdown']}\n\n"
+            #     )
+            #     LOG.info(f"[{ticker}] ✅ Loaded 10-Q ({latest_10q['fiscal_quarter']} {latest_10q['fiscal_year']})")
+            #
+            # # 3. Latest investor presentation (management outlook)
+            # cur.execute("""
+            #     SELECT profile_markdown, fiscal_year, fiscal_quarter, presentation_date, presentation_type
+            #     FROM sec_filings
+            #     WHERE ticker = %s AND filing_type = 'PRESENTATION'
+            #     ORDER BY fiscal_year DESC, fiscal_quarter DESC
+            #     LIMIT 1
+            # """, (ticker,))
+            # latest_deck = cur.fetchone()
+            # if latest_deck:
+            #     context_blocks.append(
+            #         f"LATEST INVESTOR PRESENTATION:\n"
+            #         f"[{ticker} {latest_deck['presentation_type']} - {latest_deck['fiscal_quarter']} {latest_deck['fiscal_year']}]\n\n"
+            #         f"{latest_deck['profile_markdown']}\n\n"
+            #     )
+            #     LOG.info(f"[{ticker}] ✅ Loaded presentation ({latest_deck['presentation_type']})")
+            #
+            # # Combine all context (if multiple materials available)
+            # if len(context_blocks) > 1:
+            #     profile_block = "\n---\n".join(context_blocks)
+            #     LOG.info(f"[{ticker}] 🚀 Enhanced context: {len(context_blocks)} materials loaded")
+
     except Exception as e:
         LOG.warning(f"[{ticker}] Failed to fetch 10-K profile: {e}")
         profile_block = None
@@ -24022,12 +24119,13 @@ async def generate_company_profile_api(request: Request):
 
 @APP.get("/api/admin/company-profiles")
 async def get_company_profiles_api(token: str = None):
-    """Get all company profiles from database"""
+    """Get all company profiles (10-K filings) from database"""
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
         with db() as conn, conn.cursor() as cur:
+            # Fetch only 10-K filings (backward compatible with old company_profiles table)
             cur.execute("""
                 SELECT
                     ticker,
@@ -24038,13 +24136,14 @@ async def get_company_profiles_api(token: str = None):
                     profile_markdown,
                     source_file,
                     ai_provider,
-                    gemini_model,
+                    ai_model,
                     generation_time_seconds,
                     token_count_input,
                     token_count_output,
                     status,
                     generated_at
-                FROM company_profiles
+                FROM sec_filings
+                WHERE filing_type = '10-K'
                 ORDER BY generated_at DESC
             """)
 
@@ -24062,7 +24161,7 @@ async def get_company_profiles_api(token: str = None):
                     "profile_markdown": profile['profile_markdown'],
                     "source_file": profile['source_file'],
                     "ai_provider": profile['ai_provider'],
-                    "gemini_model": profile['gemini_model'],
+                    "gemini_model": profile['ai_model'],  # Frontend expects 'gemini_model' key
                     "generation_time_seconds": profile['generation_time_seconds'],
                     "token_count_input": profile['token_count_input'],
                     "token_count_output": profile['token_count_output'],
@@ -24083,7 +24182,7 @@ async def get_company_profiles_api(token: str = None):
 
 @APP.post("/api/admin/delete-company-profile")
 async def delete_company_profile_api(request: Request):
-    """Delete a company profile from database"""
+    """Delete a company profile (10-K) from database"""
     body = await request.json()
     token = body.get('token')
 
@@ -24096,14 +24195,18 @@ async def delete_company_profile_api(request: Request):
 
     try:
         with db() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM company_profiles WHERE ticker = %s", (ticker,))
+            # Delete 10-K filings for this ticker (may be multiple years)
+            cur.execute("""
+                DELETE FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-K'
+            """, (ticker,))
             conn.commit()
 
             if cur.rowcount > 0:
-                LOG.info(f"🗑️ Deleted company profile for {ticker}")
-                return {"status": "success", "message": f"Profile for {ticker} deleted successfully"}
+                LOG.info(f"🗑️ Deleted {cur.rowcount} 10-K profile(s) for {ticker}")
+                return {"status": "success", "message": f"{cur.rowcount} profile(s) for {ticker} deleted successfully"}
             else:
-                return {"status": "error", "message": f"No profile found for {ticker}"}
+                return {"status": "error", "message": f"No 10-K profiles found for {ticker}"}
 
     except Exception as e:
         LOG.error(f"Failed to delete company profile for {ticker}: {e}", exc_info=True)
@@ -24123,17 +24226,19 @@ async def regenerate_company_profile_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Get existing profile to reuse fiscal_year and filing_date
+        # Get existing 10-K profile to reuse fiscal_year and filing_date
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT fiscal_year, filing_date, source_file
-                FROM company_profiles
-                WHERE ticker = %s
+                FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-K'
+                ORDER BY fiscal_year DESC
+                LIMIT 1
             """, (ticker,))
 
             existing = cur.fetchone()
             if not existing:
-                return {"status": "error", "message": f"No existing profile found for {ticker}"}
+                return {"status": "error", "message": f"No existing 10-K profile found for {ticker}"}
 
             fiscal_year = existing['fiscal_year']
             filing_date = existing['filing_date']
@@ -24161,7 +24266,7 @@ async def regenerate_company_profile_api(request: Request):
 
 @APP.post("/api/admin/email-company-profile")
 async def email_company_profile_api(request: Request):
-    """Email a company profile to admin"""
+    """Email a company profile (10-K) to admin"""
     body = await request.json()
     token = body.get('token')
 
@@ -24173,20 +24278,22 @@ async def email_company_profile_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Get profile from database
+        # Get latest 10-K profile from database
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT
                     ticker, company_name, industry, fiscal_year, filing_date,
-                    profile_markdown, source_file, ai_provider, gemini_model,
+                    profile_markdown, source_file, ai_provider, ai_model,
                     generation_time_seconds, token_count_input, token_count_output
-                FROM company_profiles
-                WHERE ticker = %s
+                FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-K'
+                ORDER BY fiscal_year DESC
+                LIMIT 1
             """, (ticker,))
 
             profile = cur.fetchone()
             if not profile:
-                return {"status": "error", "message": f"No profile found for {ticker}"}
+                return {"status": "error", "message": f"No 10-K profile found for {ticker}"}
 
         # Import the email generation function from company_profiles module
         from modules.company_profiles import generate_company_profile_email

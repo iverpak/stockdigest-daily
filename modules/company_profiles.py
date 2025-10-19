@@ -377,30 +377,36 @@ def save_company_profile_to_database(
     metadata: Dict,
     db_connection
 ) -> None:
-    """Save company profile to database"""
-    LOG.info(f"Saving company profile for {ticker} to database")
+    """Save company profile to unified sec_filings table"""
+    LOG.info(f"Saving company profile for {ticker} to sec_filings table")
 
     try:
         cur = db_connection.cursor()
 
+        # Determine source type
+        source_file = config.get('source_file', '')
+        source_type = 'fmp_sec' if 'SEC.gov' in source_file else 'file_upload'
+
         cur.execute("""
-            INSERT INTO company_profiles (
-                ticker, company_name, industry, fiscal_year, filing_date,
-                profile_markdown, source_file,
-                ai_provider, gemini_model,
+            INSERT INTO sec_filings (
+                ticker, filing_type, fiscal_year, fiscal_quarter,
+                company_name, industry, filing_date,
+                profile_markdown, source_file, source_type, sec_html_url,
+                ai_provider, ai_model,
                 generation_time_seconds, token_count_input, token_count_output,
                 status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ticker) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ticker, filing_type, fiscal_year, fiscal_quarter) DO UPDATE SET
                 company_name = EXCLUDED.company_name,
                 industry = EXCLUDED.industry,
-                fiscal_year = EXCLUDED.fiscal_year,
                 filing_date = EXCLUDED.filing_date,
                 profile_markdown = EXCLUDED.profile_markdown,
                 source_file = EXCLUDED.source_file,
+                source_type = EXCLUDED.source_type,
+                sec_html_url = EXCLUDED.sec_html_url,
                 ai_provider = EXCLUDED.ai_provider,
-                gemini_model = EXCLUDED.gemini_model,
+                ai_model = EXCLUDED.ai_model,
                 generation_time_seconds = EXCLUDED.generation_time_seconds,
                 token_count_input = EXCLUDED.token_count_input,
                 token_count_output = EXCLUDED.token_count_output,
@@ -409,14 +415,18 @@ def save_company_profile_to_database(
                 error_message = NULL
         """, (
             ticker,
+            '10-K',                              # filing_type (always 10-K for now)
+            config.get('fiscal_year'),           # fiscal_year
+            None,                                # fiscal_quarter (NULL for 10-K)
             config.get('company_name'),
             config.get('industry'),
-            config.get('fiscal_year'),
             config.get('filing_date'),
             profile_markdown,
-            config.get('source_file'),
+            source_file,
+            source_type,
+            config.get('sec_html_url'),         # SEC.gov HTML URL (if available)
             'gemini',
-            metadata.get('model'),
+            metadata.get('model'),               # ai_model (e.g., 'gemini-2.5-flash')
             metadata.get('generation_time_seconds'),
             metadata.get('token_count_input'),
             metadata.get('token_count_output'),
@@ -426,7 +436,7 @@ def save_company_profile_to_database(
         db_connection.commit()
         cur.close()
 
-        LOG.info(f"✅ Saved company profile for {ticker} to database")
+        LOG.info(f"✅ Saved 10-K profile for {ticker} (FY{config.get('fiscal_year')}) to sec_filings table")
 
     except Exception as e:
         LOG.error(f"Failed to save company profile for {ticker}: {e}")

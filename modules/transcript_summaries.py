@@ -142,8 +142,124 @@ def fetch_fmp_press_release_by_date(ticker: str, target_date: str, fmp_api_key: 
 
 
 # ==============================================================================
+# PROMPTS
+# ==============================================================================
+
+GEMINI_TRANSCRIPT_PROMPT = """You are extracting key information from an earnings call transcript for {company_name} ({ticker}) - Q{quarter} {fiscal_year}.
+
+Summarize the transcript into these sections:
+
+## 0. BOTTOM LINE
+## 1. FINANCIAL RESULTS
+## 2. PERFORMANCE VS EXPECTATIONS
+## 3. SEGMENT PERFORMANCE
+## 4. OPERATIONAL METRICS & KPIS
+## 5. GUIDANCE UPDATES
+## 6. STRATEGIC ANNOUNCEMENTS
+## 7. CAPITAL ALLOCATION & BALANCE SHEET
+## 8. MANAGEMENT COMMENTARY ON OUTLOOK
+## 9. KEY RISKS & CHALLENGES DISCUSSED
+## 10. ANALYST QUESTIONS & CONCERNS
+## 11. INVESTMENT IMPLICATIONS
+
+For each section, extract the most important information discussed. Use bullet points where appropriate. If a section is not discussed on the call, write "Not discussed."
+
+Target length: 2,000-4,000 words.
+
+---
+TRANSCRIPT:
+{transcript_text}
+---
+
+Generate the earnings call summary now."""
+
+
+# ==============================================================================
 # AI SUMMARIZATION
 # ==============================================================================
+
+def generate_transcript_summary_with_gemini(
+    ticker: str,
+    content: str,
+    config: Dict,
+    quarter: int,
+    fiscal_year: int,
+    gemini_api_key: str
+) -> Optional[Dict]:
+    """
+    Generate transcript summary using Gemini 2.5 Flash (2-4k words).
+    Returns dict with {summary_text, generation_time_seconds, token_count_input, token_count_output}
+    or None if failed.
+    """
+    if not gemini_api_key:
+        LOG.error("Gemini API key not configured")
+        return None
+
+    try:
+        import time
+        import google.generativeai as genai
+
+        start_time = time.time()
+
+        # Configure Gemini
+        genai.configure(api_key=gemini_api_key)
+
+        # Build prompt
+        company_name = config.get('company_name', ticker)
+        prompt = GEMINI_TRANSCRIPT_PROMPT.format(
+            company_name=company_name,
+            ticker=ticker,
+            quarter=quarter,
+            fiscal_year=fiscal_year,
+            transcript_text=content
+        )
+
+        LOG.info(f"Generating transcript summary for {ticker} Q{quarter} {fiscal_year} using Gemini 2.5 Flash")
+
+        # Configure model
+        model = genai.GenerativeModel(
+            model_name='gemini-2.5-flash',
+            generation_config={
+                'temperature': 0.3,
+                'max_output_tokens': 16000,  # Allow up to 4k words
+            }
+        )
+
+        # Generate summary
+        response = model.generate_content(prompt)
+
+        if not response or not response.text:
+            LOG.error(f"Gemini returned empty response for {ticker}")
+            return None
+
+        summary_text = response.text.strip()
+        generation_time = time.time() - start_time
+
+        # Extract token counts (if available)
+        token_count_input = 0
+        token_count_output = 0
+        if hasattr(response, 'usage_metadata'):
+            token_count_input = getattr(response.usage_metadata, 'prompt_token_count', 0)
+            token_count_output = getattr(response.usage_metadata, 'candidates_token_count', 0)
+
+        word_count = len(summary_text.split())
+
+        LOG.info(f"✅ Generated Gemini summary for {ticker} Q{quarter} {fiscal_year}")
+        LOG.info(f"   Words: {word_count}, Time: {generation_time:.1f}s")
+        LOG.info(f"   Tokens: in={token_count_input}, out={token_count_output}")
+
+        return {
+            'summary_text': summary_text,
+            'generation_time_seconds': int(generation_time),
+            'token_count_input': token_count_input,
+            'token_count_output': token_count_output
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to generate Gemini summary for {ticker}: {e}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+        return None
+
 
 def generate_transcript_summary_with_claude(
     ticker: str,
@@ -545,10 +661,14 @@ def save_transcript_summary_to_database(
     summary_text: str,
     source_url: str,
     ai_provider: str,
+    ai_model: str,
+    generation_time_seconds: int,
+    token_count_input: int,
+    token_count_output: int,
     db_connection
 ) -> None:
     """Save transcript summary to database"""
-    LOG.info(f"Saving transcript summary for {ticker} to database")
+    LOG.info(f"Saving transcript summary for {ticker} ({ai_model}) to database")
 
     try:
         cur = db_connection.cursor()
@@ -557,18 +677,20 @@ def save_transcript_summary_to_database(
             INSERT INTO transcript_summaries (
                 ticker, company_name, report_type, quarter, year,
                 report_date, pr_title, summary_text, source_url,
-                ai_provider
+                ai_provider, ai_model, processing_duration_seconds
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ticker, report_type, quarter, year)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ticker, report_type, quarter, year, ai_provider)
             DO UPDATE SET
                 summary_text = EXCLUDED.summary_text,
+                ai_model = EXCLUDED.ai_model,
+                processing_duration_seconds = EXCLUDED.processing_duration_seconds,
                 generated_at = NOW()
         """, (
             ticker, company_name, report_type,
             quarter, year,
             report_date, pr_title,
-            summary_text, source_url, ai_provider
+            summary_text, source_url, ai_provider, ai_model, generation_time_seconds
         ))
 
         db_connection.commit()

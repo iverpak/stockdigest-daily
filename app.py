@@ -76,6 +76,7 @@ from modules.transcript_summaries import (
     fetch_fmp_press_releases,
     fetch_fmp_press_release_by_date,
     generate_transcript_summary_with_claude,
+    generate_transcript_summary_with_gemini,
     generate_transcript_email,
     save_transcript_summary_to_database
 )
@@ -15694,7 +15695,7 @@ def summarize_research_with_claude(
 
         data = {
             "model": ANTHROPIC_MODEL,
-            "max_tokens": 16000,  # Allow long summaries (transcripts can be 3-4k words)
+            "max_tokens": 16000,  # Allow long summaries (2-4k words target)
             "system": [
                 {
                     "type": "text",
@@ -24328,7 +24329,7 @@ async def delete_user(request: Request):
 
 @APP.post("/api/admin/generate-transcript-summary")
 async def generate_transcript_summary_api(request: Request):
-    """Generate AI summary of earnings transcript or press release"""
+    """Generate AI summary of earnings transcript or press release using Claude or Gemini"""
     body = await request.json()
     token = body.get('token')
 
@@ -24340,9 +24341,10 @@ async def generate_transcript_summary_api(request: Request):
     quarter = body.get('quarter')  # Integer (3) for transcripts
     year = body.get('year')  # Integer (2024) for transcripts
     pr_date = body.get('pr_date')  # String date for press releases
+    model = body.get('model', 'claude')  # 'claude' or 'gemini'
 
     try:
-        LOG.info(f"📊 Generating transcript summary for {ticker} ({report_type})")
+        LOG.info(f"📊 Generating transcript summary for {ticker} ({report_type}) using {model}")
 
         # Get ticker config
         config = get_ticker_config(ticker)
@@ -24372,16 +24374,51 @@ async def generate_transcript_summary_api(request: Request):
             pr_title = data['title']
             fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
 
-        # Summarize with Claude (using module function)
-        LOG.info(f"🤖 Summarizing with Claude (content length: {len(content)} chars)")
-        summary_text = generate_transcript_summary_with_claude(
-            ticker, content, config, report_type,
-            ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
-            _build_research_summary_prompt  # Pass prompt builder
-        )
+        # Summarize with selected AI model
+        summary_text = None
+        ai_provider = None
+        ai_model = None
+        generation_time_seconds = 0
+        token_count_input = 0
+        token_count_output = 0
 
-        if not summary_text:
-            return {"status": "error", "message": "Claude summarization failed"}
+        if model == 'gemini':
+            # Gemini summarization (transcripts only for now)
+            if report_type != 'transcript':
+                return {"status": "error", "message": "Gemini only supports transcripts currently"}
+
+            LOG.info(f"🤖 Summarizing with Gemini 2.5 Flash (content length: {len(content)} chars)")
+            result = generate_transcript_summary_with_gemini(
+                ticker, content, config, quarter, year, GEMINI_API_KEY
+            )
+
+            if not result:
+                return {"status": "error", "message": "Gemini summarization failed"}
+
+            summary_text = result['summary_text']
+            ai_provider = 'gemini'
+            ai_model = 'gemini-2.5-flash'
+            generation_time_seconds = result['generation_time_seconds']
+            token_count_input = result['token_count_input']
+            token_count_output = result['token_count_output']
+
+        else:  # Claude (default)
+            LOG.info(f"🤖 Summarizing with Claude Sonnet 4.5 (content length: {len(content)} chars)")
+            summary_text = generate_transcript_summary_with_claude(
+                ticker, content, config, report_type,
+                ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
+                _build_research_summary_prompt  # Pass prompt builder
+            )
+
+            if not summary_text:
+                return {"status": "error", "message": "Claude summarization failed"}
+
+            ai_provider = 'claude'
+            ai_model = ANTHROPIC_MODEL  # claude-sonnet-4-5-20250929
+            # Claude function doesn't return timing/tokens, use defaults
+            generation_time_seconds = 0
+            token_count_input = 0
+            token_count_output = 0
 
         # Save to database (using module function)
         with db() as conn:
@@ -24395,66 +24432,84 @@ async def generate_transcript_summary_api(request: Request):
                 pr_title=pr_title,
                 summary_text=summary_text,
                 source_url=fmp_url,
-                ai_provider='claude',
+                ai_provider=ai_provider,
+                ai_model=ai_model,
+                generation_time_seconds=generation_time_seconds,
+                token_count_input=token_count_input,
+                token_count_output=token_count_output,
                 db_connection=conn
             )
 
         LOG.info(f"💾 Saved summary to database")
 
-        # Get stock price for email
-        stock_price = "$0.00"
-        price_change_pct = None
-        price_change_color = "#4ade80"
+        # Only send emails for Claude summaries (Gemini is view-only for A/B testing)
+        if ai_provider == 'claude':
+            # Get stock price for email
+            stock_price = "$0.00"
+            price_change_pct = None
+            price_change_color = "#4ade80"
 
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT financial_last_price, financial_price_change_pct
-                FROM ticker_reference
-                WHERE ticker = %s
-            """, (ticker,))
-            price_data = cur.fetchone()
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT financial_last_price, financial_price_change_pct
+                    FROM ticker_reference
+                    WHERE ticker = %s
+                """, (ticker,))
+                price_data = cur.fetchone()
 
-            if price_data and price_data['financial_last_price']:
-                stock_price = f"${price_data['financial_last_price']:.2f}"
-                if price_data['financial_price_change_pct'] is not None:
-                    pct = price_data['financial_price_change_pct']
-                    price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                    price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+                if price_data and price_data['financial_last_price']:
+                    stock_price = f"${price_data['financial_last_price']:.2f}"
+                    if price_data['financial_price_change_pct'] is not None:
+                        pct = price_data['financial_price_change_pct']
+                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
 
-        # Generate and send email (using module function)
-        email_data = generate_transcript_email(
-            ticker=ticker,
-            company_name=company_name,
-            report_type=report_type,
-            quarter=f"Q{quarter}" if quarter else None,
-            year=year,
-            report_date=report_date,
-            pr_title=pr_title,
-            summary_text=summary_text,
-            fmp_url=fmp_url,
-            stock_price=stock_price,
-            price_change_pct=price_change_pct,
-            price_change_color=price_change_color
-        )
+            # Generate and send email (using module function)
+            email_data = generate_transcript_email(
+                ticker=ticker,
+                company_name=company_name,
+                report_type=report_type,
+                quarter=f"Q{quarter}" if quarter else None,
+                year=year,
+                report_date=report_date,
+                pr_title=pr_title,
+                summary_text=summary_text,
+                fmp_url=fmp_url,
+                stock_price=stock_price,
+                price_change_pct=price_change_pct,
+                price_change_color=price_change_color
+            )
 
-        # Send to admin email
-        success = send_email(
-            subject=email_data['subject'],
-            html_body=email_data['html'],
-            to='stockdigest.research@gmail.com'
-        )
+            # Send to admin email
+            success = send_email(
+                subject=email_data['subject'],
+                html_body=email_data['html'],
+                to='stockdigest.research@gmail.com'
+            )
 
-        if success:
-            LOG.info(f"✅ Transcript summary email sent successfully")
+            if success:
+                LOG.info(f"✅ Transcript summary email sent successfully")
+                return {
+                    "status": "success",
+                    "message": f"Summary generated and email sent to stockdigest.research@gmail.com",
+                    "ticker": ticker,
+                    "company_name": company_name,
+                    "report_type": report_type
+                }
+            else:
+                return {"status": "error", "message": "Email sending failed"}
+
+        else:  # Gemini - view only
+            LOG.info(f"✅ Gemini summary saved (view-only, no email sent)")
             return {
                 "status": "success",
-                "message": f"Summary generated and sent to stockdigest.research@gmail.com",
+                "message": f"Summary generated and saved to database (view-only)",
                 "ticker": ticker,
                 "company_name": company_name,
-                "report_type": report_type
+                "report_type": report_type,
+                "model": ai_model,
+                "generation_time_seconds": generation_time_seconds
             }
-        else:
-            return {"status": "error", "message": "Email sending failed"}
 
     except Exception as e:
         LOG.error(f"Failed to generate transcript summary: {e}", exc_info=True)
@@ -25085,6 +25140,8 @@ async def get_transcripts_api(token: str = None):
                     report_date,
                     summary_text,
                     ai_provider,
+                    ai_model,
+                    processing_duration_seconds,
                     generated_at
                 FROM transcript_summaries
                 WHERE report_type = 'transcript'
@@ -25103,6 +25160,8 @@ async def get_transcripts_api(token: str = None):
                     "report_date": str(t['report_date']) if t['report_date'] else None,
                     "summary_text": t['summary_text'],
                     "ai_provider": t['ai_provider'],
+                    "ai_model": t['ai_model'],
+                    "processing_duration_seconds": t['processing_duration_seconds'],
                     "generated_at": str(t['generated_at']),
                     "char_count": len(t['summary_text']) if t['summary_text'] else 0,
                     "word_count": len(t['summary_text'].split()) if t['summary_text'] else 0

@@ -638,10 +638,16 @@
                             <div>
                                 <strong>${item.label}</strong>
                             </div>
-                            <button onclick="generateTranscript('${ticker}', ${item.quarter}, ${item.year})"
-                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
-                                Generate
-                            </button>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <select id="model-select-${item.quarter}-${item.year}" style="padding: 8px 12px; border: 2px solid #e5e7eb; border-radius: 4px; font-size: 14px; cursor: pointer;">
+                                    <option value="claude">Sonnet</option>
+                                    <option value="gemini">Gemini</option>
+                                </select>
+                                <button onclick="generateTranscript('${ticker}', ${item.quarter}, ${item.year})"
+                                        style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                    Generate
+                                </button>
+                            </div>
                         </div>
                     `;
                 }
@@ -750,7 +756,12 @@
         }
 
         async function generateTranscript(ticker, quarter, year) {
-            alert(`Generating transcript for ${ticker} Q${quarter} ${year}...`);
+            // Get selected model from dropdown
+            const modelSelect = document.getElementById(`model-select-${quarter}-${year}`);
+            const model = modelSelect ? modelSelect.value : 'claude';
+            const modelName = model === 'gemini' ? 'Gemini 2.5 Flash' : 'Claude Sonnet 4.5';
+
+            alert(`Generating transcript for ${ticker} Q${quarter} ${year} using ${modelName}...`);
 
             try {
                 const response = await fetch('/api/admin/generate-transcript-summary', {
@@ -761,13 +772,18 @@
                         ticker: ticker,
                         report_type: 'transcript',
                         quarter: quarter,
-                        year: year
+                        year: year,
+                        model: model
                     })
                 });
 
                 const result = await response.json();
                 if (result.status === 'success') {
-                    alert('✅ Transcript generated successfully! Check your email.');
+                    if (model === 'gemini') {
+                        alert(`✅ Transcript generated successfully with Gemini!\n\nGeneration time: ${result.generation_time_seconds}s\n\nView-only (no email sent for A/B testing).`);
+                    } else {
+                        alert('✅ Transcript generated successfully! Check your email.');
+                    }
                     loadTickerResearch(); // Reload to show updated status
                 } else {
                     alert(`❌ Error: ${result.message}`);
@@ -1065,7 +1081,7 @@
                         <th style="padding: 12px; text-align: left;">Quarter</th>
                         <th onclick="sortTable('report_date')" style="padding: 12px; text-align: left; cursor: pointer;">Report Date</th>
                         <th style="padding: 12px; text-align: center;">Words</th>
-                        <th style="padding: 12px; text-align: left;">AI Provider</th>
+                        <th style="padding: 12px; text-align: center;">Model</th>
                         <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
                         <th style="padding: 12px; text-align: center;">Actions</th>
                     `;
@@ -1132,12 +1148,21 @@
                         </td>
                     `;
                 case 'transcripts':
+                    // Model badge with generation time
+                    const modelBadge = doc.ai_provider === 'gemini'
+                        ? `<span style="background: #10b981; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟩 Gemini</span>`
+                        : `<span style="background: #1e40af; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟦 Sonnet</span>`;
+
+                    const genTime = doc.processing_duration_seconds
+                        ? `<div style="font-size: 11px; color: #6b7280; margin-top: 4px;">${doc.processing_duration_seconds}s</div>`
+                        : '';
+
                     return `
                         <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
                         <td style="padding: 12px;">${doc.quarter_label}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
                         <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.ai_provider || 'N/A'}</td>
+                        <td style="padding: 12px; text-align: center;">${modelBadge}${genTime}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
                         <td style="padding: 12px; text-align: center;">
                             ${getActionButtons(doc, type)}
@@ -1167,6 +1192,9 @@
                 report_date: doc.report_date
             }).replace(/"/g, '&quot;');
 
+            // Hide Email button for Gemini transcripts (view-only for A/B testing)
+            const showEmailButton = !(type === 'transcripts' && doc.ai_provider === 'gemini');
+
             return `
                 <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: wrap;">
                     <button onclick='viewDocument(${docId}); event.stopPropagation();'
@@ -1174,11 +1202,13 @@
                             style="background: #1e40af; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
                         👁️
                     </button>
+                    ${showEmailButton ? `
                     <button onclick='emailDocument(${docId}); event.stopPropagation();'
                             title="Email to Me"
                             style="background: #059669; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
                         📧
                     </button>
+                    ` : ''}
                     <button onclick='deleteDocument(${docId}); event.stopPropagation();'
                             title="Delete"
                             style="background: #dc2626; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">

@@ -932,33 +932,37 @@
             document.getElementById('profiles-error').style.display = 'none';
 
             try {
-                let endpoint, dataKey;
+                let endpoint, dataKey, params;
 
                 switch (currentResearchType) {
                     case '10k':
                         endpoint = '/api/admin/company-profiles';
                         dataKey = 'profiles';
+                        params = `token=${token}&filing_type=10-K`;
                         break;
                     case '10q':
-                        // 10-Q uses same endpoint, just filtered
-                        // For now, show empty since we haven't generated any 10-Qs yet
-                        displayProfiles([]);
-                        return;
+                        endpoint = '/api/admin/company-profiles';
+                        dataKey = 'profiles';
+                        params = `token=${token}&filing_type=10-Q`;
+                        break;
                     case 'presentations':
                         endpoint = '/api/admin/investor-presentations';
                         dataKey = 'presentations';
+                        params = `token=${token}`;
                         break;
                     case 'transcripts':
                         endpoint = '/api/admin/transcripts';
                         dataKey = 'transcripts';
+                        params = `token=${token}`;
                         break;
                     case 'press_releases':
                         endpoint = '/api/admin/press-releases';
                         dataKey = 'press_releases';
+                        params = `token=${token}`;
                         break;
                 }
 
-                const response = await fetch(`${endpoint}?token=${token}`);
+                const response = await fetch(`${endpoint}?${params}`);
                 const data = await response.json();
 
                 if (data.status === 'success') {
@@ -1031,10 +1035,17 @@
 
             switch (type) {
                 case '10k':
-                case '10q':
                     return common + `
                         <th style="padding: 8px; text-align: left; font-size: 13px;">Company</th>
                         <th onclick="sortTable('fiscal_year')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">FY</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
+                        <th style="padding: 8px; text-align: center; font-size: 13px;">Tokens</th>
+                        <th style="padding: 8px; text-align: center; font-size: 13px;">Actions</th>
+                    `;
+                case '10q':
+                    return common + `
+                        <th style="padding: 8px; text-align: left; font-size: 13px;">Company</th>
+                        <th onclick="sortTable('fiscal_year')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">Period</th>
                         <th onclick="sortTable('generated_at')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
                         <th style="padding: 8px; text-align: center; font-size: 13px;">Tokens</th>
                         <th style="padding: 8px; text-align: center; font-size: 13px;">Actions</th>
@@ -1075,9 +1086,8 @@
 
             switch (type) {
                 case '10k':
-                case '10q':
-                    const tokensIn = (doc.token_count_input || 0).toLocaleString();
-                    const tokensOut = (doc.token_count_output || 0).toLocaleString();
+                    const tokensIn10k = (doc.token_count_input || 0).toLocaleString();
+                    const tokensOut10k = (doc.token_count_output || 0).toLocaleString();
 
                     return `
                         <td style="padding: 8px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
@@ -1085,7 +1095,24 @@
                         <td style="padding: 8px; font-size: 12px;">${doc.fiscal_year}</td>
                         <td style="padding: 8px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
                         <td style="padding: 8px; text-align: center; color: #6b7280; font-size: 11px;">
-                            ${tokensIn} / ${tokensOut}
+                            ${tokensIn10k} / ${tokensOut10k}
+                        </td>
+                        <td style="padding: 8px; text-align: center;">
+                            ${getActionButtons(doc, type)}
+                        </td>
+                    `;
+                case '10q':
+                    const tokensIn10q = (doc.token_count_input || 0).toLocaleString();
+                    const tokensOut10q = (doc.token_count_output || 0).toLocaleString();
+                    const period = doc.fiscal_quarter ? `Q${doc.fiscal_quarter} ${doc.fiscal_year}` : doc.fiscal_year;
+
+                    return `
+                        <td style="padding: 8px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
+                        <td style="padding: 8px; font-size: 12px;">${doc.company_name}</td>
+                        <td style="padding: 8px; font-size: 12px;">${period}</td>
+                        <td style="padding: 8px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
+                        <td style="padding: 8px; text-align: center; color: #6b7280; font-size: 11px;">
+                            ${tokensIn10q} / ${tokensOut10q}
                         </td>
                         <td style="padding: 8px; text-align: center;">
                             ${getActionButtons(doc, type)}

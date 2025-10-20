@@ -24758,20 +24758,30 @@ async def generate_presentation_api(request: Request):
         return {"status": "error", "message": str(e)}
 
 @APP.get("/api/admin/company-profiles")
-async def get_company_profiles_api(token: str = None):
-    """Get all company profiles (10-K filings) from database"""
+async def get_company_profiles_api(token: str = None, filing_type: str = "10-K"):
+    """Get all company profiles (10-K or 10-Q filings) from database
+
+    Args:
+        token: Admin authentication token
+        filing_type: Either '10-K' or '10-Q' (defaults to '10-K' for backward compatibility)
+    """
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    # Validate filing_type parameter
+    if filing_type not in ['10-K', '10-Q']:
+        return {"status": "error", "message": f"Invalid filing_type: {filing_type}. Must be '10-K' or '10-Q'"}
+
     try:
         with db() as conn, conn.cursor() as cur:
-            # Fetch only 10-K filings (backward compatible with old company_profiles table)
+            # Fetch filings based on filing_type parameter
             cur.execute("""
                 SELECT
                     ticker,
                     company_name,
                     industry,
                     fiscal_year,
+                    fiscal_quarter,
                     filing_date,
                     profile_markdown,
                     source_file,
@@ -24783,9 +24793,9 @@ async def get_company_profiles_api(token: str = None):
                     status,
                     generated_at
                 FROM sec_filings
-                WHERE filing_type = '10-K'
+                WHERE filing_type = %s
                 ORDER BY generated_at DESC
-            """)
+            """, (filing_type,))
 
             profiles = cur.fetchall()
 
@@ -24797,6 +24807,7 @@ async def get_company_profiles_api(token: str = None):
                     "company_name": profile['company_name'],
                     "industry": profile['industry'],
                     "fiscal_year": profile['fiscal_year'],
+                    "fiscal_quarter": profile['fiscal_quarter'],  # For 10-Q filings
                     "filing_date": str(profile['filing_date']) if profile['filing_date'] else None,
                     "profile_markdown": profile['profile_markdown'],
                     "source_file": profile['source_file'],

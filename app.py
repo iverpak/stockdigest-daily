@@ -20080,12 +20080,12 @@ def job_queue_reclaim_loop():
 
             with db() as conn, conn.cursor() as cur:
                 # Find jobs with stale heartbeat (no update in 3 minutes = worker likely dead)
+                # IMPORTANT: Keep original phase so job routes correctly when restarted
                 cur.execute("""
                     UPDATE ticker_processing_jobs
                     SET status = 'queued',
                         started_at = NULL,
                         worker_id = NULL,
-                        phase = 'reclaimed_dead_worker',
                         progress = 0,
                         error_message = COALESCE(error_message, '') || ' | Reclaimed: Dead worker detected (heartbeat stale >3min)',
                         last_updated = NOW()

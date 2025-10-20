@@ -353,7 +353,7 @@ def generate_transcript_summary_with_claude(
 def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     """
     Parse transcript summary text into sections by emoji headers.
-    Handles special Q&A format (Q:/A: paragraphs) and Investment Implications sub-sections.
+    Handles special Q&A format (Q:/A: paragraphs) and top-level Upside/Downside/Variables sections.
     Returns dict: {section_name: [line1, line2, ...]}
     """
     sections = {
@@ -368,13 +368,15 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
         "industry_competitive": [],
         "capital_allocation": [],
         "qa_highlights": [],
-        "investment_implications": []
+        "upside_scenario": [],
+        "downside_scenario": [],
+        "key_variables": []
     }
 
     if not summary_text:
         return sections
 
-    # Split by emoji headers
+    # Split by emoji headers (updated Oct 2025 - upside/downside/variables are top-level)
     section_markers = [
         ("📌 BOTTOM LINE", "bottom_line"),
         ("💰 FINANCIAL RESULTS", "financial_results"),
@@ -387,7 +389,9 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
         ("🏭 INDUSTRY", "industry_competitive"),  # Matches "INDUSTRY & COMPETITIVE"
         ("💡 CAPITAL ALLOCATION", "capital_allocation"),
         ("💬 Q&A HIGHLIGHTS", "qa_highlights"),
-        ("🎯 INVESTMENT IMPLICATIONS", "investment_implications")  # Has 3 sub-sections
+        ("📈 UPSIDE SCENARIO", "upside_scenario"),
+        ("📉 DOWNSIDE SCENARIO", "downside_scenario"),
+        ("🔍 KEY VARIABLES TO MONITOR", "key_variables")
     ]
 
     current_section = None
@@ -395,6 +399,10 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
 
     for line in summary_text.split('\n'):
         line_stripped = line.strip()
+
+        # Skip horizontal rule separators (Claude sometimes adds these)
+        if line_stripped == '---':
+            continue
 
         # Check if line is a section header
         is_header = False
@@ -407,8 +415,8 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
         if not is_header and current_section:
             # Line is content, not a header
 
-            # Special handling for sections that capture ALL text (paragraphs + bullets)
-            if current_section in ['bottom_line', 'qa_highlights', 'investment_implications']:
+            # Special handling for sections that capture ALL text (paragraphs)
+            if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
                 # Skip lines that start with section markers
                 if not line_stripped.startswith(section_marker_prefixes):
                     # Skip empty lines at start, but keep them once content exists
@@ -422,6 +430,12 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
                     bullet_text = line_stripped.lstrip('•- ').strip()
                     if bullet_text:
                         sections[current_section].append(bullet_text)
+                elif line.startswith('  ') and sections[current_section]:
+                    # Indented continuation line (e.g., "  Context: ...")
+                    continuation = line_stripped
+                    if continuation:
+                        # Append to the last bullet with a line break
+                        sections[current_section][-1] += '\n' + continuation
 
     return sections
 
@@ -429,28 +443,75 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
 def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: str) -> str:
     """
     Build HTML for transcript summary sections.
+    Strips emojis from headers and bolds topic labels + Context.
     Used by email template generation.
 
     Args:
         sections: Parsed sections dict
         content_type: 'transcript' or 'press_release'
     """
-    def build_section(title: str, bullets: List[str], use_bullets: bool = True) -> str:
+    import re
+
+    def strip_emoji(text: str) -> str:
+        """Remove emoji characters from text"""
+        emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            u"\U00002702-\U000027B0"
+            u"\U000024C2-\U0001F251"
+            u"\U0001F900-\U0001F9FF"  # supplemental symbols
+            u"\U00002600-\U000026FF"  # misc symbols
+            "]+", flags=re.UNICODE)
+        return emoji_pattern.sub('', text).strip()
+
+    def strip_markdown_formatting(text: str) -> str:
+        """Strip markdown formatting (bold, italic) that AI sometimes adds"""
+        text = re.sub(r'\*\*([^*]+?)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+?)__', r'\1', text)
+        text = re.sub(r'\*([^*]+?)\*', r'\1', text)
+        text = re.sub(r'_([^_]+?)_', r'\1', text)
+        return text
+
+    def bold_bullet_labels(text: str) -> str:
+        """
+        Bold topic labels in format 'Topic Label: Details'
+        Also bolds 'Context:' when it appears in 10-K enrichment lines.
+        """
+        text = strip_markdown_formatting(text)
+        pattern = r'^([^:]{2,130}?:)(\s)'
+        replacement = r'<strong>\1</strong>\2'
+        text = re.sub(pattern, replacement, text)
+
+        # Bold "Context:" when it appears (10-K enrichment lines)
+        text = text.replace('Context:', '<strong>Context:</strong>')
+
+        return text
+
+    def build_section(title: str, bullets: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
         """Helper to build a section with title and content"""
         if not bullets:
             return ""
 
+        # Always strip emojis from title
+        display_title = strip_emoji(title)
+
         html = f'<div style="margin-bottom: 24px;">\n'
-        html += f'  <h3 style="font-size: 15px; font-weight: 700; color: #1e40af; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h3>\n'
+        html += f'  <h3 style="font-size: 15px; font-weight: 700; color: #1e40af; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h3>\n'
 
         if use_bullets:
             html += '  <ul style="margin: 0; padding-left: 20px; color: #374151; font-size: 13px; line-height: 1.6;">\n'
             for bullet in bullets:
-                html += f'    <li style="margin-bottom: 6px;">{bullet}</li>\n'
+                # Apply label bolding if requested
+                processed_bullet = bold_bullet_labels(bullet) if bold_labels else bullet
+                html += f'    <li style="margin-bottom: 6px;">{processed_bullet}</li>\n'
             html += '  </ul>\n'
         else:
-            # Paragraph format (for bottom_line, qa_highlights, investment_implications)
-            content = '\n'.join(bullets)
+            # Paragraph format (for bottom_line, qa_highlights, upside/downside)
+            # Strip markdown from each line before joining
+            content_filtered = [strip_markdown_formatting(line) for line in bullets if line.strip()]
+            content = '<br>'.join(content_filtered)
             html += f'  <div style="color: #374151; font-size: 13px; line-height: 1.6;">{content}</div>\n'
 
         html += '</div>\n'
@@ -458,23 +519,27 @@ def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: 
 
     html = ""
 
-    # Always render sections in fixed order
+    # Always render sections in fixed order (emojis stripped automatically)
     html += build_section("📌 Bottom Line", sections.get("bottom_line", []), use_bullets=False)
-    html += build_section("💰 Financial Results", sections.get("financial_results", []))
-    html += build_section("🏢 Major Developments", sections.get("major_developments", []))
-    html += build_section("📊 Operational Metrics", sections.get("operational_metrics", []))
-    html += build_section("📈 Guidance", sections.get("guidance", []))
-    html += build_section("🎯 Strategic Initiatives", sections.get("strategic_initiatives", []))
-    html += build_section("💼 Management Sentiment & Tone", sections.get("management_sentiment", []))
-    html += build_section("⚠️ Risk Factors & Headwinds", sections.get("risk_factors", []))
-    html += build_section("🏭 Industry & Competitive Dynamics", sections.get("industry_competitive", []))
-    html += build_section("💡 Capital Allocation", sections.get("capital_allocation", []))
+    html += build_section("💰 Financial Results", sections.get("financial_results", []), use_bullets=True, bold_labels=True)
+    html += build_section("🏢 Major Developments", sections.get("major_developments", []), use_bullets=True, bold_labels=True)
+    html += build_section("📊 Operational Metrics", sections.get("operational_metrics", []), use_bullets=True, bold_labels=True)
+    html += build_section("📈 Guidance", sections.get("guidance", []), use_bullets=True, bold_labels=True)
+    html += build_section("🎯 Strategic Initiatives", sections.get("strategic_initiatives", []), use_bullets=True, bold_labels=True)
+    html += build_section("💼 Management Sentiment & Tone", sections.get("management_sentiment", []), use_bullets=True, bold_labels=True)
+    html += build_section("⚠️ Risk Factors & Headwinds", sections.get("risk_factors", []), use_bullets=True, bold_labels=True)
+    html += build_section("🏭 Industry & Competitive Dynamics", sections.get("industry_competitive", []), use_bullets=True, bold_labels=True)
+    html += build_section("💡 Capital Allocation", sections.get("capital_allocation", []), use_bullets=True, bold_labels=True)
 
     # Q&A Highlights (only for transcripts, not press releases)
     if content_type == 'transcript':
         html += build_section("💬 Q&A Highlights", sections.get("qa_highlights", []), use_bullets=False)
 
-    html += build_section("🎯 Investment Implications", sections.get("investment_implications", []), use_bullets=False)
+    # Top-level Upside/Downside/Variables sections (Oct 2025 - promoted from sub-sections)
+    # Upside/Downside are PARAGRAPHS, Variables are BULLETS
+    html += build_section("📈 Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=False)
+    html += build_section("📉 Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=False)
+    html += build_section("🔍 Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
     return html
 

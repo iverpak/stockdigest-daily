@@ -17559,7 +17559,7 @@ def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
 def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     """
     Parse research summary text (transcript or press release) into sections by emoji headers.
-    Handles special Q&A format (Q:/A: paragraphs) and Investment Implications sub-sections.
+    Handles special Q&A format (Q:/A: paragraphs) and top-level Upside/Downside/Variables sections.
     Returns dict: {section_name: [line1, line2, ...]}
     """
     sections = {
@@ -17574,13 +17574,15 @@ def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
         "industry_competitive": [],
         "capital_allocation": [],
         "qa_highlights": [],
-        "investment_implications": []
+        "upside_scenario": [],
+        "downside_scenario": [],
+        "key_variables": []
     }
 
     if not summary_text:
         return sections
 
-    # Split by emoji headers
+    # Split by emoji headers (updated Oct 2025 - upside/downside/variables are top-level)
     section_markers = [
         ("📌 BOTTOM LINE", "bottom_line"),
         ("💰 FINANCIAL RESULTS", "financial_results"),
@@ -17593,7 +17595,9 @@ def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
         ("🏭 INDUSTRY", "industry_competitive"),  # Matches "INDUSTRY & COMPETITIVE"
         ("💡 CAPITAL ALLOCATION", "capital_allocation"),
         ("💬 Q&A HIGHLIGHTS", "qa_highlights"),
-        ("🎯 INVESTMENT IMPLICATIONS", "investment_implications")  # Has 3 sub-sections
+        ("📈 UPSIDE SCENARIO", "upside_scenario"),
+        ("📉 DOWNSIDE SCENARIO", "downside_scenario"),
+        ("🔍 KEY VARIABLES TO MONITOR", "key_variables")
     ]
 
     current_section = None
@@ -17617,8 +17621,8 @@ def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
         if not is_header and current_section:
             # Line is content, not a header
 
-            # Special handling for sections that capture ALL text (paragraphs + bullets)
-            if current_section in ['bottom_line', 'qa_highlights', 'investment_implications']:
+            # Special handling for sections that capture ALL text (paragraphs)
+            if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
                 # Skip lines that start with section markers
                 if not line_stripped.startswith(section_marker_prefixes):
                     # Skip empty lines at start, but keep them once content exists
@@ -17632,6 +17636,12 @@ def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
                     bullet_text = line_stripped.lstrip('•- ').strip()
                     if bullet_text:
                         sections[current_section].append(bullet_text)
+                elif line.startswith('  ') and sections[current_section]:
+                    # Indented continuation line (e.g., "  Context: ...")
+                    continuation = line_stripped
+                    if continuation:
+                        # Append to the last bullet with a line break
+                        sections[current_section][-1] += '\n' + continuation
 
     return sections
 
@@ -17838,12 +17848,20 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
         return text
 
     def bold_bullet_labels(text: str) -> str:
-        """Bold topic labels in format 'Topic Label: Details'"""
+        """
+        Bold topic labels in format 'Topic Label: Details'
+        Also bolds 'Context:' when it appears in 10-K enrichment lines.
+        """
         import re
         text = strip_markdown_formatting(text)
         pattern = r'^([^:]{2,130}?:)(\s)'
         replacement = r'<strong>\1</strong>\2'
-        return re.sub(pattern, replacement, text)
+        text = re.sub(pattern, replacement, text)
+
+        # Bold "Context:" when it appears (10-K enrichment lines)
+        text = text.replace('Context:', '<strong>Context:</strong>')
+
+        return text
 
     def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
         """Build section with consistent styling (always strips emojis for research reports)"""
@@ -17903,65 +17921,6 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
         html += '</div>'
         return html
 
-    def build_investment_section(inv_content: List[str]) -> str:
-        """Build Investment Implications with 3 sub-sections"""
-        if not inv_content:
-            return ""
-
-        # Parse sub-sections
-        upside_scenario = []
-        downside_scenario = []
-        key_variables = []
-        current_subsection = None
-
-        for line in inv_content:
-            line = line.strip()
-            if not line:
-                continue
-
-            # Check for sub-section headers
-            if 'UPSIDE SCENARIO' in line:
-                current_subsection = 'upside'
-                continue
-            elif 'DOWNSIDE SCENARIO' in line:
-                current_subsection = 'downside'
-                continue
-            elif 'KEY VARIABLES TO MONITOR' in line:
-                current_subsection = 'variables'
-                continue
-
-            # Extract content based on subsection type
-            if current_subsection == 'upside':
-                upside_scenario.append(line)
-            elif current_subsection == 'downside':
-                downside_scenario.append(line)
-            elif current_subsection == 'variables':
-                # Key Variables are BULLETS
-                if line.startswith('•') or line.startswith('-'):
-                    bullet_text = line.lstrip('•- ').strip()
-                    if bullet_text:
-                        key_variables.append(bullet_text)
-
-        # Build HTML
-        html = ''
-
-        # Parent header
-        if upside_scenario or downside_scenario or key_variables:
-            html += '''
-                <div style="margin-bottom: 20px;">
-                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Investment Implications</h2>
-                </div>
-            '''
-
-        # Upside/Downside are PARAGRAPHS
-        html += build_section("📈 Upside Scenario", upside_scenario, use_bullets=False, bold_labels=False)
-        html += build_section("📉 Downside Scenario", downside_scenario, use_bullets=False, bold_labels=False)
-
-        # Key Variables are BULLETS with bold labels
-        html += build_section("🔍 Key Variables to Monitor", key_variables, use_bullets=True, bold_labels=True)
-
-        return html
-
     # Build HTML in order
     html = ""
 
@@ -18001,9 +17960,11 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
     if content_type == 'transcript' and "qa_highlights" in sections:
         html += build_qa_section(sections["qa_highlights"])
 
-    # 12. Investment Implications (always, special format with 3 sub-sections)
-    if "investment_implications" in sections:
-        html += build_investment_section(sections["investment_implications"])
+    # 12-14. Top-level Upside/Downside/Variables sections (Oct 2025 - promoted from sub-sections)
+    # Upside/Downside are PARAGRAPHS, Variables are BULLETS
+    html += build_section("📈 Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=False)
+    html += build_section("📉 Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=False)
+    html += build_section("🔍 Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
     return html
 

@@ -33,8 +33,8 @@ Fixed and implemented **all 5 research generation types** on the `/admin/researc
 - Returns: `job_id` for status tracking via `/jobs/{job_id}`
 
 **`POST /api/admin/generate-presentation`** (Lines 24202-24283)
-- Analyzes investor presentation PDFs using Gemini 2.5 Flash
-- Uses job queue system (5-10 minute processing time)
+- Analyzes investor presentation PDFs using **Gemini 2.0 Flash Exp MULTIMODAL** (vision-enabled)
+- Uses job queue system (5-15 minute processing time)
 - Parameters:
   - `ticker`: Stock ticker
   - `presentation_date`: YYYY-MM-DD format
@@ -59,19 +59,20 @@ Fixed and implemented **all 5 research generation types** on the `/admin/researc
   - 95% - Sending email
   - 100% - Complete
 
-**`process_presentation_phase()`** (Lines 19258-19478)
-- Extracts text from uploaded PDF using PyPDF2
-- Analyzes using Gemini 2.5 Flash with **GEMINI_INVESTOR_DECK_PROMPT**
-  - Page-by-page analysis
+**`process_presentation_phase()`** (Lines 19261-19480)
+- **Uploads PDF directly to Gemini File API** (multimodal vision analysis)
+- Analyzes using **Gemini 2.0 Flash Exp MULTIMODAL** with **GEMINI_INVESTOR_DECK_PROMPT**
+  - Can analyze charts, graphs, and images directly (not just text)
+  - Page-by-page visual and content analysis
   - 14-section executive summary
   - Investment implications
 - Saves to `sec_filings` table with `filing_type='PRESENTATION'`
-- Includes metadata: page count, file size
+- Includes metadata: page count, file size, model: 'gemini-2.0-flash-exp-multimodal'
 - Sends email notification to admin
-- Cleans up temporary PDF file after processing
+- Cleans up uploaded file from Gemini and temporary PDF file
 - Job phases:
-  - 10% - Extracting PDF text
-  - 30% - Analyzing presentation with Gemini
+  - 10% - Uploading PDF to Gemini File API
+  - 30% - Analyzing presentation with Gemini multimodal vision
   - 80% - Saving analysis to database
   - 95% - Sending email
   - 100% - Complete
@@ -359,20 +360,24 @@ python -m py_compile /workspaces/quantbrief-daily/app.py
 
 ## Known Limitations
 
-### 1. Investor Presentations - Text Extraction Only
-**Current Implementation:**
-- Uses PyPDF2 text extraction
-- Analyzes extracted text with Gemini 2.5 Flash
-- Image-based charts/tables have limited extractability (70-80%)
+### 1. Investor Presentations - ✅ **MULTIMODAL VISION ENABLED!**
+**Current Implementation (Updated):**
+- ✅ **Uses Gemini 2.0 Flash Exp MULTIMODAL** (vision-enabled)
+- ✅ **Uploads PDF directly to Gemini File API**
+- ✅ **Analyzes charts, graphs, and images directly** (not just text)
+- ✅ **Page-by-page visual analysis** with content extraction
+- Free during Gemini experimental phase (use while available!)
 
-**Future Enhancement (Not Implemented):**
-- Gemini multimodal vision for direct PDF image analysis
-- Would improve extraction from image-heavy decks
-- Would allow analysis of charts, graphs, and infographics
+**Benefits vs Text-Only:**
+- Can read data from visual charts and graphs
+- Understands complex diagrams and infographics
+- Better extraction from image-heavy presentations
+- Comprehensive page-by-page analysis
 
-**Workaround:**
-- System flags pages that need manual review
-- Analyst can refer to original PDF for image-based content
+**Note:**
+- Some complex visuals may still need manual review
+- System still flags pages for review when needed
+- Analyst can refer to original PDF for verification
 
 ### 2. No Duplicate Prevention (By Design)
 **Current Behavior:**

@@ -19259,7 +19259,7 @@ async def process_10q_profile_phase(job: dict):
 
 
 async def process_presentation_phase(job: dict):
-    """Process investor presentation analysis (5-15 min, Gemini 2.5 multimodal)"""
+    """Process investor presentation analysis (5-15 min, Gemini 2.0 Flash Exp with multimodal vision)"""
     job_id = job['job_id']
     ticker = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
@@ -19273,47 +19273,63 @@ async def process_presentation_phase(job: dict):
         presentation_title = config.get('presentation_title')
         file_path = config.get('file_path')
 
-        # Progress: 10% - Extracting PDF text
-        update_job_status(job_id, phase='extracting_pdf', progress=10)
-        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting text from presentation PDF...")
+        # Progress: 10% - Uploading PDF to Gemini File API
+        update_job_status(job_id, phase='uploading_pdf', progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Uploading PDF to Gemini File API for multimodal analysis...")
 
         if not file_path or not os.path.exists(file_path):
             raise ValueError(f"PDF file not found: {file_path}")
 
-        # Extract text from PDF
-        content = extract_pdf_text(file_path)
+        # Configure Gemini API
+        genai.configure(api_key=GEMINI_API_KEY)
 
-        if not content or len(content) < 100:
-            raise ValueError(f"Extracted text too short ({len(content)} chars)")
+        # Upload PDF file to Gemini File API
+        LOG.info(f"[{ticker}] Uploading {file_path} to Gemini...")
+        uploaded_file = genai.upload_file(file_path, mime_type="application/pdf")
+        LOG.info(f"[{ticker}] ✅ File uploaded: {uploaded_file.name} (URI: {uploaded_file.uri})")
 
-        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters from PDF")
+        # Wait for file to be processed
+        import time as time_module
+        while uploaded_file.state.name == "PROCESSING":
+            LOG.info(f"[{ticker}] File processing... waiting 2 seconds")
+            time_module.sleep(2)
+            uploaded_file = genai.get_file(uploaded_file.name)
 
-        # Progress: 30% - Analyzing presentation with Gemini
+        if uploaded_file.state.name == "FAILED":
+            raise ValueError(f"Gemini file processing failed: {uploaded_file.state.name}")
+
+        LOG.info(f"[{ticker}] ✅ File ready for analysis: {uploaded_file.state.name}")
+
+        # Progress: 30% - Analyzing presentation with Gemini 2.0 Flash Multimodal
         update_job_status(job_id, phase='analyzing_presentation', progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Analyzing presentation with Gemini 2.5 Flash (5-10 min)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Analyzing presentation with Gemini 2.0 Flash Exp Multimodal (5-15 min)...")
 
         ticker_config = get_ticker_config(ticker)
 
-        # Generate analysis using Gemini with GEMINI_INVESTOR_DECK_PROMPT
-        # For now, we'll use the text-based extraction (future: add multimodal PDF analysis)
+        # Generate analysis using Gemini multimodal with GEMINI_INVESTOR_DECK_PROMPT
         from modules.company_profiles import GEMINI_INVESTOR_DECK_PROMPT
 
-        # Build prompt with presentation details
-        prompt = GEMINI_INVESTOR_DECK_PROMPT.format(
-            company_name=ticker_config['company_name'],
-            ticker=ticker,
-            presentation_date=presentation_date,
-            deck_type=presentation_type,
-            full_deck_text=content
-        )
+        # Build simplified prompt for multimodal (PDF contains all content)
+        prompt_text = f"""You are analyzing an Investor Presentation/Deck for {ticker_config['company_name']} ({ticker}).
 
-        # Call Gemini API
-        genai.configure(api_key=GEMINI_API_KEY)
+Presentation Date: {presentation_date}
+Deck Type: {presentation_type}
+
+I have provided you with the complete PDF presentation. Analyze it thoroughly and provide a comprehensive analysis following the structure in the prompt.
+
+{GEMINI_INVESTOR_DECK_PROMPT.split('---')[0]}
+
+Generate the complete page-by-page deck analysis now.
+"""
+
+        # Use Gemini 2.0 Flash Exp (supports multimodal vision)
         model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
         start_time = time.time()
+
+        # Send PDF file + prompt to model
         response = model.generate_content(
-            prompt,
+            [uploaded_file, prompt_text],
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
                 max_output_tokens=16000
@@ -19327,12 +19343,21 @@ async def process_presentation_phase(job: dict):
 
         profile_markdown = response.text
 
-        # Extract token counts from response metadata (if available)
+        # Extract token counts from response metadata
         token_count_input = getattr(response.usage_metadata, 'prompt_token_count', None) if hasattr(response, 'usage_metadata') else None
         token_count_output = getattr(response.usage_metadata, 'candidates_token_count', None) if hasattr(response, 'usage_metadata') else None
 
+        LOG.info(f"[{ticker}] ✅ Generated {len(profile_markdown)} characters (input: {token_count_input} tokens, output: {token_count_output} tokens)")
+
+        # Clean up uploaded file from Gemini
+        try:
+            genai.delete_file(uploaded_file.name)
+            LOG.info(f"[{ticker}] 🗑️ Deleted uploaded file from Gemini: {uploaded_file.name}")
+        except Exception as e:
+            LOG.warning(f"[{ticker}] Failed to delete Gemini file: {e}")
+
         metadata = {
-            'model': 'gemini-2.0-flash-exp',
+            'model': 'gemini-2.0-flash-exp-multimodal',
             'generation_time_seconds': round(generation_time, 2),
             'token_count_input': token_count_input,
             'token_count_output': token_count_output
@@ -19393,7 +19418,7 @@ async def process_presentation_phase(job: dict):
                 presentation_type,
                 presentation_title,
                 profile_markdown,
-                'file_upload',
+                'gemini_multimodal',
                 config.get('file_name'),
                 page_count,
                 file_size_bytes,

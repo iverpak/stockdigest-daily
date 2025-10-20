@@ -18890,7 +18890,7 @@ async def process_company_profile_phase(job: dict):
         start_heartbeat_thread(job_id)
 
         # Progress: 10% - Extracting 10-K text
-        update_job_status(job_id, phase='extracting_text', progress=10)
+        update_job_status(job_id, progress=10)
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 10-K text...")
 
         # Check if using FMP mode (SEC.gov HTML) or file upload mode
@@ -18918,7 +18918,7 @@ async def process_company_profile_phase(job: dict):
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters")
 
         # Progress: 30% - Generating profile with Gemini (this takes 5-10 min)
-        update_job_status(job_id, phase='generating_profile', progress=30)
+        update_job_status(job_id, progress=30)
         LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating profile with Gemini 2.5 Flash (5-10 min)...")
 
         ticker_config = get_ticker_config(ticker)
@@ -18941,7 +18941,7 @@ async def process_company_profile_phase(job: dict):
         metadata = result['metadata']
 
         # Progress: 80% - Saving to database
-        update_job_status(job_id, phase='saving_profile', progress=80)
+        update_job_status(job_id, progress=80)
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving profile to database...")
 
         with db() as conn:
@@ -18967,7 +18967,7 @@ async def process_company_profile_phase(job: dict):
 
         # Progress: 95% - Sending email
         if config.get('send_email', True):
-            update_job_status(job_id, phase='sending_email', progress=95)
+            update_job_status(job_id, progress=95)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
             # Get stock price for email
@@ -19014,7 +19014,7 @@ async def process_company_profile_phase(job: dict):
             LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Cleaned up temp file: {file_path}")
 
         # Mark complete
-        update_job_status(job_id, status='completed', phase='complete', progress=100)
+        update_job_status(job_id, status='completed', progress=100)
 
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company profile generation complete")
 
@@ -19053,7 +19053,7 @@ async def process_10q_profile_phase(job: dict):
         sec_html_url = config.get('sec_html_url')
 
         # Progress: 10% - Extracting 10-Q text
-        update_job_status(job_id, phase='extracting_text', progress=10)
+        update_job_status(job_id, progress=10)
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 10-Q text for {fiscal_quarter} {fiscal_year}...")
 
         # Fetch HTML from SEC.gov
@@ -19068,7 +19068,7 @@ async def process_10q_profile_phase(job: dict):
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters")
 
         # Progress: 30% - Generating 10-Q profile with Gemini
-        update_job_status(job_id, phase='generating_profile', progress=30)
+        update_job_status(job_id, progress=30)
         LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating 10-Q profile with Gemini 2.5 Flash (5-10 min)...")
 
         ticker_config = get_ticker_config(ticker)
@@ -19092,7 +19092,7 @@ async def process_10q_profile_phase(job: dict):
         metadata = result['metadata']
 
         # Progress: 80% - Saving to database
-        update_job_status(job_id, phase='saving_profile', progress=80)
+        update_job_status(job_id, progress=80)
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving 10-Q profile to database...")
 
         with db() as conn, conn.cursor() as cur:
@@ -19143,7 +19143,7 @@ async def process_10q_profile_phase(job: dict):
 
         # Progress: 95% - Sending email
         if config.get('send_email', True):
-            update_job_status(job_id, phase='sending_email', progress=95)
+            update_job_status(job_id, progress=95)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
             # Get stock price
@@ -19189,7 +19189,7 @@ async def process_10q_profile_phase(job: dict):
             )
 
         # Mark complete
-        update_job_status(job_id, status='completed', phase='complete', progress=100)
+        update_job_status(job_id, status='completed', progress=100)
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] 10-Q profile generation complete")
 
         # Stop heartbeat
@@ -19227,7 +19227,7 @@ async def process_presentation_phase(job: dict):
         file_path = config.get('file_path')
 
         # Progress: 10% - Uploading PDF to Gemini File API
-        update_job_status(job_id, phase='uploading_pdf', progress=10)
+        update_job_status(job_id, progress=10)
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Uploading PDF to Gemini File API for multimodal analysis...")
 
         if not file_path or not os.path.exists(file_path):
@@ -19254,7 +19254,7 @@ async def process_presentation_phase(job: dict):
         LOG.info(f"[{ticker}] ✅ File ready for analysis: {uploaded_file.state.name}")
 
         # Progress: 30% - Analyzing presentation with Gemini 2.5 Pro Multimodal
-        update_job_status(job_id, phase='analyzing_presentation', progress=30)
+        update_job_status(job_id, progress=30)
         LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Analyzing presentation with Gemini 2.5 Pro (multimodal vision) (5-15 min)...")
 
         ticker_config = get_ticker_config(ticker)
@@ -19317,7 +19317,7 @@ Generate the complete page-by-page deck analysis now.
         }
 
         # Progress: 80% - Saving to database
-        update_job_status(job_id, phase='saving_analysis', progress=80)
+        update_job_status(job_id, progress=80)
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving presentation analysis to database...")
 
         with db() as conn, conn.cursor() as cur:
@@ -19381,7 +19381,7 @@ Generate the complete page-by-page deck analysis now.
 
         # Progress: 95% - Sending email
         if config.get('send_email', True):
-            update_job_status(job_id, phase='sending_email', progress=95)
+            update_job_status(job_id, progress=95)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
             # Get stock price
@@ -19432,7 +19432,7 @@ Generate the complete page-by-page deck analysis now.
             LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Cleaned up temp file: {file_path}")
 
         # Mark complete
-        update_job_status(job_id, status='completed', phase='complete', progress=100)
+        update_job_status(job_id, status='completed', progress=100)
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Presentation analysis complete")
 
         # Stop heartbeat
@@ -19536,7 +19536,7 @@ async def process_ticker_job(job: dict):
                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] {feed_count} feeds verified")
 
         # PHASE 1: Ingest (already implemented in /cron/ingest)
-        update_job_status(job_id, phase='ingest_start', progress=10)
+        update_job_status(job_id, progress=10)
         LOG.info(f"[{ticker}] 📥 [JOB {job_id}] Phase 1: Ingest starting...")
 
         # Call ingest logic (will be defined later in file)
@@ -19551,7 +19551,7 @@ async def process_ticker_job(job: dict):
             mode=config.get('mode', 'daily')
         )
 
-        update_job_status(job_id, phase='ingest_complete', progress=60)
+        update_job_status(job_id, progress=60)
 
         # Log detailed ingest stats
         if ingest_result:
@@ -19592,7 +19592,7 @@ async def process_ticker_job(job: dict):
                 LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles found in config after ingest")
 
         # PHASE 1.5: Resolve Google News URLs for flagged articles (NEW!)
-        update_job_status(job_id, phase='resolution_start', progress=62)
+        update_job_status(job_id, progress=62)
         LOG.info(f"[{ticker}] 🔗 [JOB {job_id}] Phase 1.5: Google News URL resolution starting...")
 
         if flagged_article_ids:
@@ -19602,10 +19602,10 @@ async def process_ticker_job(job: dict):
         else:
             LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No flagged articles to resolve")
 
-        update_job_status(job_id, phase='resolution_complete', progress=64)
+        update_job_status(job_id, progress=64)
 
         # PHASE 2: Digest (already implemented in /cron/digest)
-        update_job_status(job_id, phase='digest_start', progress=65)
+        update_job_status(job_id, progress=65)
         LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Phase 2: Digest starting...")
 
         # Call digest function (defined later in file) - pass deduplicated flagged articles
@@ -19617,7 +19617,7 @@ async def process_ticker_job(job: dict):
             mode=config.get('mode', 'daily')
         )
 
-        update_job_status(job_id, phase='digest_complete', progress=95)
+        update_job_status(job_id, progress=95)
 
         # Log detailed digest stats
         if digest_result:
@@ -19648,7 +19648,7 @@ async def process_ticker_job(job: dict):
             LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_digest:.1f}MB")
 
         # EMAIL #3: USER INTELLIGENCE REPORT (no AI analysis, no descriptions)
-        update_job_status(job_id, phase='user_report', progress=97)
+        update_job_status(job_id, progress=97)
 
         # Check mode to determine Email #3 behavior
         mode = config.get('mode', 'test')
@@ -19698,7 +19698,7 @@ async def process_ticker_job(job: dict):
 
         # COMMIT METADATA TO GITHUB after all emails sent
         # This ensures GitHub commit doesn't trigger server restart before emails are sent
-        update_job_status(job_id, phase='commit_metadata', progress=99)
+        update_job_status(job_id, progress=99)
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
 
         try:
@@ -19717,7 +19717,7 @@ async def process_ticker_job(job: dict):
             # Don't fail the job if commit fails - continue processing
 
         # PHASE 3: Complete
-        update_job_status(job_id, phase='finalizing', progress=99)
+        update_job_status(job_id, progress=99)
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Finalizing job...")
 
         # Calculate final metrics

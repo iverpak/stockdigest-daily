@@ -15678,6 +15678,9 @@ As you analyze the transcript, look for these patterns:
 5. **Management Emphasis** - Preserve direct quotes and note repetition
    Example: "CEO mentioned 'pricing power' 8 times across prepared remarks and Q&A responses"
 
+6. **Offsetting Variables** - When metric stays flat/positive DESPITE negative factor, flag implied underlying strength
+   Example: "CFO stated demand flat YoY despite cooler weather (lower cooling degree days); management characterized as 'sign of demand growth' indicating underlying growth offsetting weather headwind"
+
 SYNTHESIS DECISION RULES:
 
 When same topic appears in prepared remarks + Q&A:
@@ -15847,12 +15850,20 @@ Example:
 
 SCOPE: Management's confidence level, emphasis patterns, tone shifts
 
+CRITICAL PATTERN DETECTION: When management repeats same phrase/concept 3+ times across prepared remarks and Q&A, synthesize as single bullet showing repetition pattern.
+
 Format (use • bullet):
 - [Observation]: [Specific evidence]. [What this reveals - flag inferences]
 
 Examples:
-- Confident on Pricing: CEO mentioned "pricing power" 8 times across prepared remarks and Q&A; no hedging language (inference: interpreting repetition as conviction)
-- Defensive on Buyback Execution: CEO tone shifted from committed to citing "MNPI restrictions" when questioned on $100M YTD vs $250M target pace (inference: interpreting deflection as concern about credibility)
+- Confident on Pricing: CEO mentioned "pricing power" 8 times across prepared remarks and 4 Q&A responses; no hedging language (inference: interpreting repetition as conviction)
+- Conservative on Guidance: CFO stated "we would never underwrite these high prints" 3 times across Q&A responses; emphasized maintaining "balance and discipline" with projections (inference: interpreting repetition as commitment to conservative assumptions)
+- Defensive on Margins: CFO tone shifted from "confident" to "barring unforeseen pressures" (inference: interpreting tone shift as concern)
+
+DETECTION TRIGGERS:
+- Same phrase used 3+ times = pattern worth noting
+- Same concept rephrased across multiple Q&A responses = emphasis pattern
+- Unprompted repetition (management volunteers same point without follow-up question) = high conviction/concern
 
 ---
 
@@ -15870,12 +15881,20 @@ Example:
 
 ---
 
-🏭 INDUSTRY & COMPETITIVE LANDSCAPE (Always if discussed - 2-5 bullets max)
+🏭 INDUSTRY & COMPETITIVE LANDSCAPE (Always - 2-5 bullets max)
 
 SCOPE: Management's view of external environment and competitive position
 
+CRITICAL FOR COMMODITY-EXPOSED COMPANIES: When management discusses forward curve shifts, term structure changes, or pricing inflection points, ALWAYS include:
+- What changed (backwardation → contango, contango → backwardation, curve steepening/flattening)
+- When it changed (recent timing if provided: "last week," "past month," "during quarter")
+- Why it matters per management (what it signals about supply/demand)
+
 Format (use • bullet with TOPIC LABEL and sentiment tag):
 - Topic Label (impact, sentiment, reason): [Management statements]. [Supporting data]. [Flag inferences]
+
+Example:
+- Forward curve normalization (medium impact, bullish, pricing dynamics): CCO stated forward power curves shifted from backwardation to contango within past 2 weeks (as of call date); characterized shift as "reflective of timing supply/demand fundamentals...trending right way" though "probably not fully where we think they need to be" per management; signals market beginning to price in tightening conditions
 
 Impact: high impact | medium impact | low impact
 Sentiment: bullish | bearish | neutral

@@ -20789,6 +20789,84 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                     "message": "FMP API error. Please upload 10-K file manually."
                 }
 
+        elif type == '10q':
+            # Fetch 10-Q filings from FMP
+            try:
+                fmp_url = f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}"
+                response = requests.get(fmp_url, timeout=10)
+                filings = response.json()
+
+                # Extract quarters and dates (last 12 quarters = 3 years)
+                available_quarters = []
+                for filing in filings[:12]:
+                    try:
+                        filing_date_str = filing.get("fillingDate", "")
+                        accepted_date_str = filing.get("acceptedDate", "")
+                        sec_html_url = filing.get("finalLink", "")
+
+                        if not filing_date_str:
+                            continue
+
+                        # Parse filing date to get fiscal year
+                        filing_date = filing_date_str[:10]  # YYYY-MM-DD
+                        fiscal_year = int(filing_date[:4])
+
+                        # Determine quarter from accepted date or filing date
+                        date_to_parse = accepted_date_str[:10] if accepted_date_str else filing_date
+                        month = int(date_to_parse[5:7])
+
+                        # Map filing month to fiscal quarter
+                        if month in [4, 5]:
+                            quarter = "Q1"
+                        elif month in [7, 8]:
+                            quarter = "Q2"
+                        elif month in [10, 11]:
+                            quarter = "Q3"
+                        else:
+                            if month in [1, 2, 3]:
+                                quarter = "Q4"
+                                fiscal_year -= 1
+                            elif month in [6]:
+                                quarter = "Q1"
+                            elif month in [9]:
+                                quarter = "Q2"
+                            elif month in [12]:
+                                quarter = "Q3"
+                            else:
+                                LOG.warning(f"Could not determine quarter for {ticker} filing on {date_to_parse}")
+                                continue
+
+                        available_quarters.append({
+                            "quarter": quarter,
+                            "fiscal_year": fiscal_year,
+                            "filing_date": filing_date,
+                            "sec_html_url": sec_html_url,
+                            "label": f"{quarter} {fiscal_year}"
+                        })
+                    except (ValueError, KeyError) as e:
+                        LOG.warning(f"Skipping invalid 10-Q filing entry for {ticker}: {e}")
+                        continue
+
+                return {
+                    "valid": True,
+                    "company_name": company_name,
+                    "industry": config.get("industry", "N/A"),
+                    "ticker": ticker,
+                    "available_quarters": available_quarters,
+                    "message": f"Found {len(available_quarters)} 10-Q filings" if available_quarters else "No 10-Q filings found. Upload file instead."
+                }
+
+            except Exception as e:
+                LOG.error(f"Failed to fetch FMP 10-Q list for {ticker}: {e}")
+                return {
+                    "valid": True,
+                    "company_name": company_name,
+                    "industry": config.get("industry", "N/A"),
+                    "ticker": ticker,
+                    "available_quarters": [],
+                    "message": "FMP API error. Please upload 10-Q file manually."
+                }
+
         elif type == 'transcript':
             # Fetch transcript list from FMP
             transcripts = fetch_fmp_transcript_list(ticker)
@@ -24424,7 +24502,7 @@ async def debug_transcript_summary(ticker: str, token: str):
 
 @APP.post("/api/admin/generate-company-profile")
 async def generate_company_profile_api(request: Request):
-    """Generate AI company profile from uploaded 10-K file (uses job queue)"""
+    """Generate AI company profile from 10-K or 10-Q filing (uses job queue)"""
     body = await request.json()
     token = body.get('token')
 
@@ -24432,27 +24510,39 @@ async def generate_company_profile_api(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     ticker = body.get('ticker')
+    filing_type = body.get('filing_type', '10-K')  # '10-K' or '10-Q'
     fiscal_year = body.get('fiscal_year')
+    fiscal_quarter = body.get('fiscal_quarter')  # Required for 10-Q (e.g., 'Q3')
     filing_date = body.get('filing_date')
     sec_html_url = body.get('sec_html_url')  # FMP mode (optional)
     file_content = body.get('file_content')  # Base64 encoded (optional)
     file_name = body.get('file_name')  # Optional
 
     try:
-        LOG.info(f"📊 Creating company profile job for {ticker} FY{fiscal_year}")
+        filing_desc = f"{fiscal_quarter} {fiscal_year}" if filing_type == '10-Q' else f"FY{fiscal_year}"
+        LOG.info(f"📊 Creating {filing_type} profile job for {ticker} {filing_desc}")
 
         # Get ticker config
         config = get_ticker_config(ticker)
         if not config:
             return {"status": "error", "message": f"Ticker {ticker} not found in database"}
 
+        # Validate parameters
+        if filing_type == '10-Q' and not fiscal_quarter:
+            return {"status": "error", "message": "fiscal_quarter is required for 10-Q filings"}
+
         # Determine mode: FMP (SEC.gov HTML) or file upload
         job_config = {
             "ticker": ticker,
+            "filing_type": filing_type,
             "fiscal_year": fiscal_year,
             "filing_date": filing_date,
             "send_email": True
         }
+        
+        # Add quarter for 10-Q
+        if filing_type == '10-Q':
+            job_config["fiscal_quarter"] = fiscal_quarter
 
         if sec_html_url:
             # FMP MODE: Use SEC.gov HTML URL
@@ -24485,14 +24575,15 @@ async def generate_company_profile_api(request: Request):
                 RETURNING batch_id
             """, (batch_id, 'processing', json.dumps(job_config)))
 
-            # Create job
+            # Create job with appropriate phase
+            phase = '10q_generation' if filing_type == '10-Q' else 'profile_generation'
             cur.execute("""
                 INSERT INTO ticker_processing_jobs (
                     batch_id, ticker, status, phase, progress, config
                 )
                 VALUES (%s, %s, %s, %s, 0, %s)
                 RETURNING job_id
-            """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
+            """, (batch_id, ticker, 'queued', phase, json.dumps(job_config)))
 
             job_id = cur.fetchone()['job_id']
             conn.commit()

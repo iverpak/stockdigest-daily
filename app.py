@@ -5444,6 +5444,10 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                     if existing_article:
                         # Article already exists for this ticker
                         stats["duplicates"] += 1
+                        # Enhanced logging to show deduplication strategy
+                        is_google_news = 'news.google.com' in url
+                        dedup_method = "domain+title" if is_google_news and final_domain else "URL"
+                        LOG.info(f"✓ DUPLICATE BLOCKED ({dedup_method}): {final_domain or 'unknown'} - {title[:50]}...")
                         continue
                     
                     # Parse publish date
@@ -5725,12 +5729,15 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                 # CHECK FOR DUPLICATES WITHIN THIS RUN FIRST
                 if url_hash in processed_hashes:
                     stats["duplicates"] += 1
-                    LOG.debug(f"FEED DUPLICATE SKIPPED: {title[:50]}... (same URL within feed)")
+                    # Enhanced logging to show deduplication strategy
+                    is_google_news = 'news.google.com' in url
+                    dedup_method = "domain+title" if is_google_news and final_domain else "URL"
+                    LOG.info(f"✓ DUPLICATE BLOCKED ({dedup_method}): {final_domain or 'unknown'} - {title[:50]}...")
                     continue
-                
+
                 # Add to processed set
                 processed_hashes.add(url_hash)
-                
+
                 # NOW check ingestion limits with FIXED count logic
                 with db() as conn, conn.cursor() as cur:
                     try:
@@ -5742,7 +5749,10 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         """, (url_hash, feed["ticker"]))
                         if cur.fetchone():
                             stats["duplicates"] += 1
-                            LOG.debug(f"DATABASE DUPLICATE SKIPPED: {title[:50]}... (already in database)")
+                            # Enhanced logging to show deduplication strategy
+                            is_google_news = 'news.google.com' in url
+                            dedup_method = "domain+title" if is_google_news and final_domain else "URL"
+                            LOG.info(f"✓ DUPLICATE BLOCKED ({dedup_method}): {final_domain or 'unknown'} - {title[:50]}...")
                             continue
                         
                         # HOURLY ALERTS: No ingestion limits (lightweight, no scraping/AI)
@@ -11714,19 +11724,46 @@ def extract_title_words_normalized(title: str, num_words: int = 10) -> str:
 
 def get_url_hash(url: str, resolved_url: str = None, domain: str = None, title: str = None) -> str:
     """
-    Generate hash for URL deduplication (simple URL-based)
+    Generate hash for URL deduplication with intelligent strategy selection.
 
-    Uses resolved_url if available (Yahoo Finance URLs), otherwise uses original URL.
-    Cross-feed duplicates (Google News + Yahoo → same article) are caught later in
-    post-resolution deduplication (Phase 1.5) before AI analysis.
+    Deduplication strategies:
+    1. Resolved URLs (Yahoo, Direct): Hash the final destination URL
+    2. Google News URLs (unresolved): Hash domain + title to catch cross-feed duplicates
+    3. Fallback: Hash the original URL
+
+    Why domain+title for Google News:
+    - Google generates unique redirect URLs per feed/context (news.google.com/rss/articles/ABC123...)
+    - Same article appears with DIFFERENT Google URLs in company/industry/competitor feeds
+    - Same article appears with DIFFERENT Google URLs in each hourly alert run
+    - Domain + title is stable across all feeds and time periods
+    - Prevents 10-15x duplication that was occurring hourly
+
+    Edge case handling:
+    - Two different articles with identical title from same publisher on same day: Rare in practice
+    - RSS feed titles are normalized, so variations unlikely
     """
-    # Use resolved URL if available (Yahoo Finance URLs that were resolved during ingestion)
+    # Strategy 1: Use resolved URL if available (Yahoo Finance URLs, Direct URLs)
     if resolved_url:
         url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', resolved_url.lower())
         url_clean = url_clean.rstrip('/')
         return hashlib.md5(url_clean.encode()).hexdigest()
 
-    # Otherwise use original URL (Google News URLs, Direct URLs)
+    # Strategy 2: Google News - Use domain + title for deduplication
+    # This catches the same article appearing with different Google News redirect URLs
+    if domain and title and 'news.google.com' in url.lower():
+        # Normalize domain and title for consistent hashing
+        domain_normalized = domain.lower().strip()
+        title_normalized = title.lower().strip()
+
+        # Create composite key for deduplication
+        dedup_key = f"{domain_normalized}||{title_normalized}"
+
+        # Log for monitoring (can be removed after validation)
+        LOG.debug(f"🔗 Domain+Title dedup: {domain[:30]}... || {title[:50]}...")
+
+        return hashlib.md5(dedup_key.encode()).hexdigest()
+
+    # Strategy 3: Fallback - Use original URL (should rarely hit this for Google News)
     url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url.lower())
     url_clean = url_clean.rstrip('/')
     return hashlib.md5(url_clean.encode()).hexdigest()

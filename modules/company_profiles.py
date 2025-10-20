@@ -591,6 +591,392 @@ OUTPUT FORMAT:
 Generate the complete quarterly update now.
 """
 
+GEMINI_INVESTOR_DECK_PROMPT = """You are analyzing an Investor Presentation/Deck for {company_name} ({ticker}).
+
+Presentation Date: {presentation_date}
+Deck Type: {deck_type}
+
+APPROACH:
+Analyze the deck PAGE BY PAGE in sequential order. Extract all readable content, describe visuals, and flag limitations.
+
+CRITICAL LIMITATIONS YOU MUST ACKNOWLEDGE:
+- Image-based charts/tables: You may see the visual but cannot extract precise data points
+- Complex diagrams: Describe what you see, but specific values may be unreadable
+- Design elements: Note emphasis (full-page treatment, large fonts) but may miss color meanings
+- When data is not extractable: CLEARLY STATE THIS and flag for manual review if critical
+
+YOUR JOB:
+1. Extract all text content (100% capture expected)
+2. Describe all visuals (charts, graphs, tables, images)
+3. Extract data where readable (70-80% success rate expected for image-based content)
+4. Flag pages where image-based data is critical but not fully extractable
+5. Provide executive summary synthesizing deck's messages
+
+---
+COMPLETE INVESTOR DECK:
+{full_deck_text}
+
+---
+
+## PAGE-BY-PAGE ANALYSIS
+
+For each page, use this format:
+
+### Page [#]: [Slide Title or "Untitled"]
+
+**Content Type:** [Financial Data / Strategic Message / Operational Metrics / Market Overview / Product Info / Visual Only / Other]
+
+**Text Content:**
+[Extract ALL text from slide - titles, bullets, paragraphs, labels, footnotes]
+[If no text: "No text content"]
+
+**Data Extracted:**
+[List all numbers, percentages, dates, targets, company names, metrics that are READABLE]
+- Revenue: $X
+- Growth rate: Y%
+- Target: Z by Year
+[If data is in image format and not fully readable: "Data present but in image format - extraction limited"]
+[If no data: "No quantitative data"]
+
+**Visuals Description:**
+[Describe EVERYTHING you can see, even if you cannot extract precise values]
+
+For charts:
+- Type: Bar chart / Line graph / Pie chart / Waterfall / Scatter plot / Other
+- What it shows: "Revenue by segment over 5 years"
+- Axes: "X-axis: Years 2020-2025, Y-axis: Revenue in $M"
+- Visible labels: List any data labels you CAN read
+- Trend: Increasing / Decreasing / Flat / Mixed
+- Data extraction status: "All values readable" OR "Values in image format - partial extraction only"
+
+For tables:
+- Dimensions: "5 columns × 10 rows"
+- Headers: List column and row headers
+- Content type: Financial data / Operational metrics / Comparison table
+- Data extraction status: "Fully extracted" OR "Complex table in image format - recommend manual review"
+
+For images/photos:
+- Subject: What is shown (product, facility, people, concept illustration)
+- Context: Any captions or labels
+- Purpose: What message does this visual convey?
+
+For diagrams/infographics:
+- Type: Process flow / Organizational chart / Concept map / Timeline / Other
+- Elements: Describe components and relationships
+- Labels: Extract any readable text
+- Extraction status: "Fully described" OR "Complex diagram - details may require manual review"
+
+[If no visuals: "Text-only slide"]
+
+**Key Takeaway:**
+[One concise sentence: What is the main point of this slide?]
+
+**Data Extraction Quality:**
+- Text: Complete / Partial / None
+- Numerical data: Complete / Partial / None / Not applicable
+- Visual data: Complete / Partial / Limited by image format / Not applicable
+
+**Manual Review Priority:** [Critical / High / Medium / Low / None]
+[Critical: Key financial data or strategic information in image format that significantly impacts investment thesis]
+[High: Important data in image format that adds material context]
+[Medium: Supplementary data in image format]
+[Low: Data is readable or not material to investment thesis]
+[None: All content successfully extracted]
+
+---
+
+[Repeat for EVERY page in deck]
+
+---
+
+## EXECUTIVE SUMMARY
+
+### 1. DECK OVERVIEW
+- **Purpose:** [What is this deck for? Earnings / Deal announcement / Investor day / Conference / Strategic update]
+- **Total pages:** [X pages, excluding cover/disclaimer]
+- **Audience:** [Public investors / Analysts / Specific event attendees]
+- **Date context:** [Quarterly earnings / Special announcement / Annual event]
+- **Overall extraction success:** [X% of content fully extracted, Y pages flagged for manual review]
+
+### 2. KEY MESSAGES (Top 5)
+What are the 5 most important messages management wants investors to remember?
+1. [Message with supporting data/slide references]
+2. [Message with supporting data/slide references]
+3. [Message with supporting data/slide references]
+4. [Message with supporting data/slide references]
+5. [Message with supporting data/slide references]
+
+### 3. FINANCIAL HIGHLIGHTS
+Consolidate all financial data mentioned across slides:
+
+**Current Period Results:**
+- Revenue: [Amount, growth rate, vs guidance/consensus if shown]
+- EBITDA/Adjusted EBITDA: [Amount, margin %, vs guidance if shown]
+- EPS: [Amount, vs consensus if shown]
+- Cash flow: [Operating CF, Free CF if disclosed]
+- Other key metrics: [Margins, ROIC, leverage ratios]
+
+**Segment Performance:**
+- [Segment 1]: Revenue $X, EBITDA $Y, Margin Z%
+- [Segment 2]: Revenue $X, EBITDA $Y, Margin Z%
+- [Continue for all segments]
+
+**Guidance (if provided):**
+- Full-year revenue: $X - $Y
+- Full-year EBITDA: $X - $Y
+- Full-year EPS: $X - $Y
+- Other guidance: [Capex, FCF, segment-specific]
+- Changes from prior guidance: [Raised / Lowered / Maintained / Narrowed]
+
+**Balance Sheet & Liquidity:**
+- Cash: $X
+- Total debt: $X
+- Net debt: $X
+- Leverage ratio: X.Xx
+- Liquidity: $X (cash + available facilities)
+
+**Capital Allocation:**
+- Dividends: $X (yield Y%)
+- Buybacks: $X YTD, $Y remaining authorization
+- Capex: $X
+- M&A: [Any deals mentioned]
+
+### 4. STRATEGIC PRIORITIES
+What strategic initiatives did management emphasize?
+
+**Primary Strategic Focus:** [1-2 sentence summary of overarching strategy]
+
+**Key Initiatives:**
+1. [Initiative name]: [Objective, timeline, success metrics, investment required]
+2. [Initiative name]: [Objective, timeline, success metrics, investment required]
+3. [Initiative name]: [Objective, timeline, success metrics, investment required]
+[Continue for all disclosed initiatives]
+
+**Capital Allocation Priorities:**
+1. [Priority 1 with % of capital or $ amount]
+2. [Priority 2 with % of capital or $ amount]
+3. [Priority 3 with % of capital or $ amount]
+
+### 5. FORWARD-LOOKING TARGETS
+All targets, goals, and timelines mentioned:
+
+**Near-term (Next 12 months):**
+- [Target 1]: Achieve X by Quarter Y
+- [Target 2]: Launch Y by Date Z
+- [Target 3]: Reach Z metric by Year-end
+
+**Medium-term (2-3 years):**
+- [Target 1]: Revenue CAGR of X% through 20XX
+- [Target 2]: EBITDA margin expansion to Y% by 20XX
+- [Target 3]: Achieve Z milestone by 20XX
+
+**Long-term (3-5 years):**
+- [Target 1]: Market share of X% by 20XX
+- [Target 2]: Return metric of Y% by 20XX
+- [Target 3]: Strategic transformation complete by 20XX
+
+### 6. OPERATIONAL METRICS & UNIT ECONOMICS
+Non-financial KPIs disclosed:
+
+**Volume/Growth Metrics:**
+- [Metric 1]: Current value, growth rate, target
+- [Metric 2]: Current value, growth rate, target
+- [Metric 3]: Current value, growth rate, target
+
+**Efficiency Metrics:**
+- [Metric 1]: Current value, trend, benchmark
+- [Metric 2]: Current value, trend, benchmark
+
+**Unit Economics (if disclosed):**
+- Customer acquisition cost (CAC): $X
+- Lifetime value (LTV): $Y
+- LTV/CAC ratio: Z.Zx
+- Payback period: X months
+- Average revenue per unit: $X
+- Other: [Any disclosed unit economics]
+
+### 7. RISKS & CHALLENGES ACKNOWLEDGED
+What headwinds or challenges did management discuss?
+
+**Disclosed Risks:**
+1. [Risk 1]: [Description, potential impact, mitigation plan]
+2. [Risk 2]: [Description, potential impact, mitigation plan]
+3. [Risk 3]: [Description, potential impact, mitigation plan]
+
+**Cautious Language Used:**
+- [Quote or theme showing caution]
+- [Quote or theme showing caution]
+
+**Guidance Assumptions:**
+- [Key assumption 1 that could change]
+- [Key assumption 2 that could change]
+
+### 8. MANAGEMENT TONE & EMPHASIS
+
+**Overall Tone:** [Confident / Cautious / Defensive / Visionary / Mixed / Other]
+
+**Evidence for tone assessment:**
+- [Language patterns observed]
+- [Topics emphasized vs downplayed]
+- [Comparison to prior communications if known]
+
+**What Got Most Airtime:**
+- [Topic 1]: X pages/slides dedicated
+- [Topic 2]: Y pages/slides dedicated
+- [Topic 3]: Z pages/slides dedicated
+[This reveals management's true priorities]
+
+**What Got Full-Page Treatment:**
+- Page X: [Topic] - signals high importance
+- Page Y: [Topic] - signals high importance
+
+**Notable Language:**
+- Positive: [Words like "accelerating," "momentum," "confident," "record"]
+- Cautious: [Words like "headwinds," "uncertainty," "monitoring," "challenged"]
+- Action: [Words like "transforming," "investing," "pivoting," "exiting"]
+
+### 9. NOTABLE OMISSIONS
+What topics were NOT discussed that you might expect?
+
+- [Expected topic 1]: Why notable? [Context on why absence is meaningful]
+- [Expected topic 2]: Why notable? [Context on why absence is meaningful]
+- [Expected topic 3]: Why notable? [Context on why absence is meaningful]
+
+**Metrics/Initiatives Dropped:**
+- [If comparing to prior deck] What metrics or initiatives present in prior communications are now absent?
+
+### 10. DEAL-SPECIFIC DETAILS (If M&A/Partnership Deck)
+[Skip this section if not applicable]
+
+**Transaction Overview:**
+- Target: [Company name and business description]
+- Structure: [Acquisition / Merger / JV / Partnership / Investment]
+- Valuation: [Purchase price, multiples, structure (cash/stock/earnout)]
+- Funding: [Source of funds]
+- Expected close: [Date and conditions]
+
+**Strategic Rationale:**
+- [Why this deal? Market expansion, product adjacency, vertical integration, other]
+- [How does this strengthen competitive position?]
+
+**Financial Impact:**
+- Target financials: [Revenue, EBITDA, margins if disclosed]
+- Synergies: [Cost synergies $X by Year Y, Revenue synergies $Z by Year W]
+- Accretion/dilution: [EPS impact over time]
+- Returns: [ROIC, IRR, payback period if disclosed]
+
+**Integration Plan:**
+- Timeline: [Key milestones]
+- Leadership: [Who's running combined entity]
+- Risks: [Integration risks acknowledged]
+
+### 11. VISUAL EMPHASIS & DESIGN CUES
+
+**Most Visually Prominent Slides:**
+- Page X: [What was emphasized and how] - suggests this is highest priority message
+- Page Y: [What was emphasized and how]
+
+**Design Patterns Observed:**
+- Color usage: [Green for positive, red for negative, other patterns]
+- Size emphasis: [Large fonts used for specific metrics/messages]
+- Repetition: [Themes that appear multiple times across slides]
+
+**Infographics & Diagrams:**
+- [Count] pages with complex visuals vs simple text/data
+- [Note] any strategic frameworks, process flows, or concept illustrations
+
+### 12. PAGES FLAGGED FOR MANUAL REVIEW
+
+**Critical Priority (Essential for investment thesis):**
+- Page X: [Reason - e.g., "Complex financial table with key segment data in image format"]
+- Page Y: [Reason - e.g., "Detailed guidance assumptions in small-print table"]
+
+**High Priority (Material context):**
+- Page X: [Reason]
+- Page Y: [Reason]
+
+**Medium Priority (Supplementary data):**
+- Page X: [Reason]
+
+**Summary:** [X total pages flagged, Y are critical, Z are high priority]
+
+### 13. COMPARISON TO PRIOR COMMUNICATIONS (If Context Available)
+
+**Messaging Changes:**
+- [What's more emphasized now vs prior quarter/year?]
+- [What's less emphasized or absent?]
+- [What's entirely new in messaging?]
+
+**Guidance Changes:**
+- [Compare current guidance to prior guidance]
+- [Magnitude and direction of changes]
+- [Management's explanation for changes]
+
+**Metric/Target Changes:**
+- [New metrics introduced]
+- [Metrics no longer disclosed]
+- [Targets raised, lowered, or abandoned]
+
+### 14. INVESTMENT IMPLICATIONS
+
+**What's Improving:**
+- [Positive signal 1 with evidence]
+- [Positive signal 2 with evidence]
+- [Positive signal 3 with evidence]
+
+**What's Deteriorating:**
+- [Negative signal 1 with evidence]
+- [Negative signal 2 with evidence]
+- [Negative signal 3 with evidence]
+
+**What's New Information:**
+- [Disclosure 1 not previously available]
+- [Disclosure 2 not previously available]
+- [Disclosure 3 not previously available]
+
+**Key Questions Raised:**
+- [Question 1 that investors should investigate further]
+- [Question 2 that investors should investigate further]
+- [Question 3 that investors should investigate further]
+
+**Overall Assessment:**
+- Results vs expectations: [Beat / In-line / Miss / Mixed]
+- Outlook: [Improving / Stable / Deteriorating / Uncertain]
+- Management credibility: [Delivering on promises / Struggling to execute / Lowering bar]
+- Investment thesis impact: [Strengthened / Neutral / Weakened]
+
+---
+
+## EXTRACTION QUALITY SUMMARY
+
+**Content Successfully Extracted:**
+- Text content: [X pages with complete text extraction]
+- Numerical data: [Y data points extracted from Z total visible]
+- Visual descriptions: [All A visuals described]
+
+**Limitations Encountered:**
+- Pages with image-based data: [X pages]
+- Complex tables requiring manual review: [Y pages]
+- Diagrams with limited extractability: [Z pages]
+
+**Recommendation:**
+[If flagged pages > 5% of deck]: Recommend manual review of flagged pages for complete analysis
+[If flagged pages < 5% of deck]: Automated extraction captured materially complete picture
+
+---
+
+OUTPUT FORMAT:
+- Page-by-page analysis for EVERY slide
+- Consistent structure for each page
+- Executive summary synthesizing all pages
+- Clear flagging of extraction limitations
+- Honest assessment of what was captured vs what requires manual review
+- Markdown formatting with clear headers
+- Length scales to deck: 10-page deck = ~2,000 words; 40-page deck = ~6,000 words
+
+Generate the complete page-by-page deck analysis now.
+"""
+
 # ==============================================================================
 # PDF/TEXT EXTRACTION
 # ==============================================================================
@@ -860,6 +1246,144 @@ def generate_company_profile_with_gemini(
         filing_date=filing_date,
         gemini_api_key=gemini_api_key
     )
+
+
+def generate_investor_presentation_analysis_with_gemini(
+    ticker: str,
+    pdf_path: str,
+    config: Dict,
+    presentation_date: str,
+    deck_type: str,  # 'earnings', 'investor_day', 'analyst_day', 'conference'
+    gemini_api_key: str
+) -> Optional[Dict]:
+    """
+    Analyze investor presentation PDF using Gemini multimodal (vision + text).
+
+    This function uploads a PDF to Gemini, which extracts text and visuals,
+    then generates a comprehensive page-by-page analysis with executive summary.
+
+    Args:
+        ticker: Stock ticker (e.g., 'AAPL')
+        pdf_path: Path to PDF file on disk
+        config: Ticker configuration dict with company_name, industry
+        presentation_date: Date of presentation (YYYY-MM-DD)
+        deck_type: Type of presentation ('earnings', 'investor_day', 'analyst_day', 'conference')
+        gemini_api_key: Gemini API key
+
+    Returns:
+        {
+            'analysis_markdown': str (2,000-6,000 words depending on deck size),
+            'metadata': {
+                'model': str,
+                'generation_time_seconds': int,
+                'token_count_input': int,
+                'token_count_output': int,
+                'file_size_bytes': int
+            }
+        }
+    """
+    if not gemini_api_key:
+        LOG.error("Gemini API key not configured")
+        return None
+
+    if not os.path.exists(pdf_path):
+        LOG.error(f"PDF file not found: {pdf_path}")
+        return None
+
+    try:
+        genai.configure(api_key=gemini_api_key)
+
+        company_name = config.get("company_name", ticker)
+
+        LOG.info(f"Analyzing investor presentation for {ticker} ({deck_type}) using Gemini multimodal")
+        LOG.info(f"PDF: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+
+        # 1. Upload PDF to Gemini
+        start_upload = datetime.now()
+        uploaded_file = genai.upload_file(pdf_path)
+        upload_time = (datetime.now() - start_upload).total_seconds()
+
+        LOG.info(f"✅ Uploaded to Gemini: {uploaded_file.name} ({uploaded_file.size_bytes} bytes) in {upload_time:.1f}s")
+
+        # 2. Wait for Gemini to process (extracts text + images internally)
+        while uploaded_file.state.name == "PROCESSING":
+            import time
+            time.sleep(2)
+            uploaded_file = genai.get_file(uploaded_file.name)
+            LOG.info(f"Gemini processing PDF visuals...")
+
+        if uploaded_file.state.name == "FAILED":
+            LOG.error("Gemini failed to process PDF")
+            return None
+
+        LOG.info(f"✅ Gemini processed PDF successfully")
+
+        # 3. Build prompt
+        prompt = GEMINI_INVESTOR_DECK_PROMPT.format(
+            company_name=company_name,
+            ticker=ticker,
+            presentation_date=presentation_date,
+            deck_type=deck_type,
+            full_deck_text="[Gemini will extract from uploaded PDF]"
+        )
+
+        # 4. Generate analysis
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        generation_config = {
+            "temperature": 0.3,
+            "max_output_tokens": 16000  # 10-page deck ~2k words, 40-page deck ~6k words
+        }
+
+        start_time = datetime.now()
+
+        LOG.info(f"Generating comprehensive deck analysis...")
+
+        response = model.generate_content(
+            [uploaded_file, prompt],  # Pass file object + prompt for multimodal analysis
+            generation_config=generation_config
+        )
+
+        end_time = datetime.now()
+        generation_time = int((end_time - start_time).total_seconds())
+
+        analysis_markdown = response.text
+
+        if not analysis_markdown or len(analysis_markdown) < 1000:
+            LOG.warning(f"Gemini returned suspiciously short analysis for {ticker} ({len(analysis_markdown)} chars)")
+            return None
+
+        # 5. Extract metadata
+        word_count = len(analysis_markdown.split())
+        metadata = {
+            'model': 'gemini-2.5-flash',
+            'generation_time_seconds': generation_time,
+            'token_count_input': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
+            'token_count_output': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0,
+            'file_size_bytes': uploaded_file.size_bytes
+        }
+
+        LOG.info(f"✅ Generated deck analysis for {ticker}")
+        LOG.info(f"   Length: {len(analysis_markdown):,} chars (~{word_count:,} words)")
+        LOG.info(f"   Time: {generation_time}s")
+        LOG.info(f"   Tokens: {metadata['token_count_input']:,} in, {metadata['token_count_output']:,} out")
+
+        # 6. Cleanup: Delete uploaded file from Gemini
+        try:
+            genai.delete_file(uploaded_file.name)
+            LOG.info(f"✅ Deleted temp file from Gemini: {uploaded_file.name}")
+        except Exception as e:
+            LOG.warning(f"Failed to delete Gemini file (non-critical): {e}")
+
+        return {
+            'analysis_markdown': analysis_markdown,
+            'metadata': metadata
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to analyze presentation for {ticker}: {e}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+        return None
 
 
 # ==============================================================================

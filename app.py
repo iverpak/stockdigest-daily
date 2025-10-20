@@ -1530,10 +1530,11 @@ def ensure_schema():
 
                     -- Filing identification
                     filing_type VARCHAR(20) NOT NULL,      -- '10-K', '10-Q', 'PRESENTATION'
-                    fiscal_year INTEGER NOT NULL,
+                    fiscal_year INTEGER,                   -- Required for 10-K/10-Q, optional for presentations
                     fiscal_quarter VARCHAR(5),             -- 'Q1', 'Q2', 'Q3', 'Q4', NULL for 10-K/annual presentations
                     filing_date DATE,
                     period_end_date DATE,                  -- Actual quarter/year end date
+                    presentation_date DATE,                -- Date of presentation (for PRESENTATION filing_type)
 
                     -- Content (same structure for all filing types)
                     profile_markdown TEXT NOT NULL,
@@ -1565,17 +1566,26 @@ def ensure_schema():
                     -- Status
                     status VARCHAR(50) DEFAULT 'active',   -- 'active', 'stale', 'error'
                     error_message TEXT,
-                    generated_at TIMESTAMPTZ DEFAULT NOW(),
-
-                    -- UNIQUE constraint: One filing per ticker+type+year+quarter combination
-                    UNIQUE(ticker, filing_type, fiscal_year, fiscal_quarter)
+                    generated_at TIMESTAMPTZ DEFAULT NOW()
                 );
 
+                -- Indexes for performance
                 CREATE INDEX IF NOT EXISTS idx_sec_filings_ticker ON sec_filings(ticker);
                 CREATE INDEX IF NOT EXISTS idx_sec_filings_type ON sec_filings(filing_type);
                 CREATE INDEX IF NOT EXISTS idx_sec_filings_ticker_type ON sec_filings(ticker, filing_type);
                 CREATE INDEX IF NOT EXISTS idx_sec_filings_period ON sec_filings(fiscal_year DESC, fiscal_quarter DESC);
                 CREATE INDEX IF NOT EXISTS idx_sec_filings_status ON sec_filings(status);
+                CREATE INDEX IF NOT EXISTS idx_sec_filings_presentation_date ON sec_filings(presentation_date DESC);
+
+                -- Partial UNIQUE constraint for 10-K and 10-Q filings
+                CREATE UNIQUE INDEX IF NOT EXISTS uniq_sec_filings_10k_10q
+                    ON sec_filings(ticker, filing_type, fiscal_year, fiscal_quarter)
+                    WHERE filing_type IN ('10-K', '10-Q');
+
+                -- Partial UNIQUE constraint for investor presentations
+                CREATE UNIQUE INDEX IF NOT EXISTS uniq_sec_filings_presentations
+                    ON sec_filings(ticker, filing_type, presentation_date, presentation_type)
+                    WHERE filing_type = 'PRESENTATION';
 
                 -- BACKWARD COMPATIBILITY VIEW: Maps old company_profiles queries to sec_filings
                 -- This allows existing code to work during migration period

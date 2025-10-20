@@ -19276,8 +19276,8 @@ I have provided you with the complete PDF presentation. Analyze it thoroughly an
 Generate the complete page-by-page deck analysis now.
 """
 
-        # Use Gemini 2.0 Flash Thinking Experimental (with multimodal vision)
-        model = genai.GenerativeModel('gemini-2.0-flash-thinking-exp-1219')
+        # Use Gemini 2.5 Flash (multimodal vision)
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         start_time = time.time()
 
@@ -19311,7 +19311,7 @@ Generate the complete page-by-page deck analysis now.
             LOG.warning(f"[{ticker}] Failed to delete Gemini file: {e}")
 
         metadata = {
-            'model': 'gemini-2.0-flash-thinking-exp-1219',
+            'model': 'gemini-2.5-flash',
             'generation_time_seconds': round(generation_time, 2),
             'token_count_input': token_count_input,
             'token_count_output': token_count_output

@@ -19756,17 +19756,18 @@ async def process_presentation_phase(job: dict):
 
         # Read PDF file as bytes (direct multimodal input, no File API needed)
         LOG.info(f"[{ticker}] Reading {file_path} as bytes for multimodal analysis...")
+        import base64
         with open(file_path, 'rb') as f:
             pdf_bytes = f.read()
 
-        # Create Part for inline PDF data (works for PDFs under 20MB)
-        import google.generativeai as genai_types
-        pdf_part = genai_types.types.Part(
-            inline_data=genai_types.types.Blob(
-                mime_type='application/pdf',
-                data=pdf_bytes
-            )
-        )
+        # Create inline data part using base64 encoding (Gemini API format)
+        # This works for PDFs under 20MB without using the File API
+        pdf_part = {
+            "inline_data": {
+                "mime_type": "application/pdf",
+                "data": base64.b64encode(pdf_bytes).decode('utf-8')
+            }
+        }
 
         LOG.info(f"[{ticker}] ✅ PDF loaded ({len(pdf_bytes)} bytes), ready for analysis")
 

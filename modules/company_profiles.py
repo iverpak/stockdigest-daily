@@ -1149,12 +1149,12 @@ def generate_sec_filing_profile_with_gemini(
             # Extract quarter number for prompt (Q3 -> 3)
             quarter_num = fiscal_quarter[1] if fiscal_quarter else "?"
 
-        LOG.info(f"Generating {filing_type} profile for {ticker} ({filing_desc}) using Gemini 1.5 Pro")
+        LOG.info(f"Generating {filing_type} profile for {ticker} ({filing_desc}) using Gemini 2.0 Flash Thinking")
         LOG.info(f"Content length: {len(content):,} chars (~{len(content)//4:,} tokens)")
         LOG.info(f"Target output: {target_words} words")
 
-        # Gemini 1.5 Pro (stable flagship model - best quality for financial analysis)
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        # Gemini 2.0 Flash Thinking Experimental (latest stable experimental model)
+        model = genai.GenerativeModel('gemini-2.0-flash-thinking-exp-1219')
 
         generation_config = {
             "temperature": 0.3,
@@ -1195,7 +1195,7 @@ def generate_sec_filing_profile_with_gemini(
 
         # Extract metadata
         metadata = {
-            'model': 'gemini-1.5-pro',
+            'model': 'gemini-2.0-flash-thinking-exp-1219',
             'filing_type': filing_type,
             'generation_time_seconds': generation_time,
             'token_count_input': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,

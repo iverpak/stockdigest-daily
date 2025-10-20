@@ -18919,7 +18919,7 @@ async def process_company_profile_phase(job: dict):
 
         # Progress: 30% - Generating profile with Gemini (this takes 5-10 min)
         update_job_status(job_id, phase='generating_profile', progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating profile with Gemini 1.5 Pro (5-10 min)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating profile with Gemini 2.0 Flash Thinking (5-10 min)...")
 
         ticker_config = get_ticker_config(ticker)
 
@@ -19069,7 +19069,7 @@ async def process_10q_profile_phase(job: dict):
 
         # Progress: 30% - Generating 10-Q profile with Gemini
         update_job_status(job_id, phase='generating_profile', progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating 10-Q profile with Gemini 1.5 Pro (5-10 min)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating 10-Q profile with Gemini 2.0 Flash Thinking (5-10 min)...")
 
         ticker_config = get_ticker_config(ticker)
 
@@ -19276,8 +19276,8 @@ I have provided you with the complete PDF presentation. Analyze it thoroughly an
 Generate the complete page-by-page deck analysis now.
 """
 
-        # Use Gemini 1.5 Pro (stable flagship model with multimodal vision)
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        # Use Gemini 2.0 Flash Thinking Experimental (with multimodal vision)
+        model = genai.GenerativeModel('gemini-2.0-flash-thinking-exp-1219')
 
         start_time = time.time()
 
@@ -19311,7 +19311,7 @@ Generate the complete page-by-page deck analysis now.
             LOG.warning(f"[{ticker}] Failed to delete Gemini file: {e}")
 
         metadata = {
-            'model': 'gemini-1.5-pro',
+            'model': 'gemini-2.0-flash-thinking-exp-1219',
             'generation_time_seconds': round(generation_time, 2),
             'token_count_input': token_count_input,
             'token_count_output': token_count_output

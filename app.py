@@ -19259,7 +19259,7 @@ async def process_10q_profile_phase(job: dict):
 
 
 async def process_presentation_phase(job: dict):
-    """Process investor presentation analysis (5-15 min, Gemini 2.0 Flash Exp with multimodal vision)"""
+    """Process investor presentation analysis (5-15 min, Gemini 2.5 Pro with multimodal vision)"""
     job_id = job['job_id']
     ticker = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
@@ -19300,9 +19300,9 @@ async def process_presentation_phase(job: dict):
 
         LOG.info(f"[{ticker}] ✅ File ready for analysis: {uploaded_file.state.name}")
 
-        # Progress: 30% - Analyzing presentation with Gemini 2.0 Flash Multimodal
+        # Progress: 30% - Analyzing presentation with Gemini 2.5 Pro Multimodal
         update_job_status(job_id, phase='analyzing_presentation', progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Analyzing presentation with Gemini 2.0 Flash Exp Multimodal (5-15 min)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Analyzing presentation with Gemini 2.5 Pro (multimodal vision) (5-15 min)...")
 
         ticker_config = get_ticker_config(ticker)
 
@@ -19322,8 +19322,8 @@ I have provided you with the complete PDF presentation. Analyze it thoroughly an
 Generate the complete page-by-page deck analysis now.
 """
 
-        # Use Gemini 2.0 Flash Exp (supports multimodal vision)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # Use Gemini 2.5 Pro (flagship model with multimodal vision)
+        model = genai.GenerativeModel('gemini-2.5-pro')
 
         start_time = time.time()
 
@@ -19357,7 +19357,7 @@ Generate the complete page-by-page deck analysis now.
             LOG.warning(f"[{ticker}] Failed to delete Gemini file: {e}")
 
         metadata = {
-            'model': 'gemini-2.0-flash-exp-multimodal',
+            'model': 'gemini-2.5-pro',
             'generation_time_seconds': round(generation_time, 2),
             'token_count_input': token_count_input,
             'token_count_output': token_count_output

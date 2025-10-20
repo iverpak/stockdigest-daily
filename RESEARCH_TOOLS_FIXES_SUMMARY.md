@@ -22,7 +22,7 @@ Fixed and implemented **all 5 research generation types** on the `/admin/researc
 #### 1. New API Endpoints
 
 **`POST /api/admin/generate-10q-profile`** (Lines 24130-24200)
-- Generates 10-Q quarterly analysis using Gemini 2.5 Flash
+- Generates 10-Q quarterly analysis using **Gemini 2.5 Pro** (flagship model)
 - Uses job queue system (5-10 minute processing time)
 - Parameters:
   - `ticker`: Stock ticker
@@ -33,7 +33,7 @@ Fixed and implemented **all 5 research generation types** on the `/admin/researc
 - Returns: `job_id` for status tracking via `/jobs/{job_id}`
 
 **`POST /api/admin/generate-presentation`** (Lines 24202-24283)
-- Analyzes investor presentation PDFs using **Gemini 2.0 Flash Exp MULTIMODAL** (vision-enabled)
+- Analyzes investor presentation PDFs using **Gemini 2.5 Pro with MULTIMODAL VISION** (flagship model)
 - Uses job queue system (5-15 minute processing time)
 - Parameters:
   - `ticker`: Stock ticker
@@ -49,30 +49,30 @@ Fixed and implemented **all 5 research generation types** on the `/admin/researc
 **`process_10q_profile_phase()`** (Lines 19083-19255)
 - Extracts 10-Q HTML from SEC.gov
 - Generates comprehensive profile using `generate_sec_filing_profile_with_gemini()` with `filing_type='10-Q'`
-- Uses **GEMINI_10Q_PROMPT** (14-section quarterly analysis, 3,000-5,000 words)
+- Uses **Gemini 2.5 Pro** with **GEMINI_10Q_PROMPT** (14-section quarterly analysis, 3,000-5,000 words)
 - Saves to `sec_filings` table with `filing_type='10-Q'`
 - Sends email notification to admin
 - Job phases:
   - 10% - Extracting 10-Q text
-  - 30% - Generating profile with Gemini
+  - 30% - Generating profile with Gemini 2.5 Pro
   - 80% - Saving to database
   - 95% - Sending email
   - 100% - Complete
 
 **`process_presentation_phase()`** (Lines 19261-19480)
 - **Uploads PDF directly to Gemini File API** (multimodal vision analysis)
-- Analyzes using **Gemini 2.0 Flash Exp MULTIMODAL** with **GEMINI_INVESTOR_DECK_PROMPT**
+- Analyzes using **Gemini 2.5 Pro with MULTIMODAL VISION** (flagship model) with **GEMINI_INVESTOR_DECK_PROMPT**
   - Can analyze charts, graphs, and images directly (not just text)
   - Page-by-page visual and content analysis
   - 14-section executive summary
   - Investment implications
 - Saves to `sec_filings` table with `filing_type='PRESENTATION'`
-- Includes metadata: page count, file size, model: 'gemini-2.0-flash-exp-multimodal'
+- Includes metadata: page count, file size, model: 'gemini-2.5-pro'
 - Sends email notification to admin
 - Cleans up uploaded file from Gemini and temporary PDF file
 - Job phases:
   - 10% - Uploading PDF to Gemini File API
-  - 30% - Analyzing presentation with Gemini multimodal vision
+  - 30% - Analyzing presentation with Gemini 2.5 Pro multimodal vision
   - 80% - Saving analysis to database
   - 95% - Sending email
   - 100% - Complete
@@ -360,13 +360,13 @@ python -m py_compile /workspaces/quantbrief-daily/app.py
 
 ## Known Limitations
 
-### 1. Investor Presentations - ✅ **MULTIMODAL VISION ENABLED!**
+### 1. Investor Presentations - ✅ **GEMINI 2.5 PRO MULTIMODAL VISION!**
 **Current Implementation (Updated):**
-- ✅ **Uses Gemini 2.0 Flash Exp MULTIMODAL** (vision-enabled)
+- ✅ **Uses Gemini 2.5 Pro with MULTIMODAL VISION** (flagship model, latest April 2025)
 - ✅ **Uploads PDF directly to Gemini File API**
 - ✅ **Analyzes charts, graphs, and images directly** (not just text)
-- ✅ **Page-by-page visual analysis** with content extraction
-- Free during Gemini experimental phase (use while available!)
+- ✅ **Page-by-page visual analysis** with superior reasoning
+- ✅ **Free during Gemini experimental phase** (5 RPM, 25/day limit)
 
 **Benefits vs Text-Only:**
 - Can read data from visual charts and graphs

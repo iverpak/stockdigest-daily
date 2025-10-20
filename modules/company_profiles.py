@@ -1149,12 +1149,12 @@ def generate_sec_filing_profile_with_gemini(
             # Extract quarter number for prompt (Q3 -> 3)
             quarter_num = fiscal_quarter[1] if fiscal_quarter else "?"
 
-        LOG.info(f"Generating {filing_type} profile for {ticker} ({filing_desc}) using Gemini 2.5 Flash")
+        LOG.info(f"Generating {filing_type} profile for {ticker} ({filing_desc}) using Gemini 2.5 Pro")
         LOG.info(f"Content length: {len(content):,} chars (~{len(content)//4:,} tokens)")
         LOG.info(f"Target output: {target_words} words")
 
-        # Gemini 2.5 Flash
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        # Gemini 2.5 Pro (flagship model - best quality for financial analysis)
+        model = genai.GenerativeModel('gemini-2.5-pro')
 
         generation_config = {
             "temperature": 0.3,
@@ -1195,7 +1195,7 @@ def generate_sec_filing_profile_with_gemini(
 
         # Extract metadata
         metadata = {
-            'model': 'gemini-2.5-flash',
+            'model': 'gemini-2.5-pro',
             'filing_type': filing_type,
             'generation_time_seconds': generation_time,
             'token_count_input': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
@@ -1328,7 +1328,7 @@ def generate_investor_presentation_analysis_with_gemini(
         )
 
         # 4. Generate analysis
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-pro')
 
         generation_config = {
             "temperature": 0.3,
@@ -1356,7 +1356,7 @@ def generate_investor_presentation_analysis_with_gemini(
         # 5. Extract metadata
         word_count = len(analysis_markdown.split())
         metadata = {
-            'model': 'gemini-2.5-flash',
+            'model': 'gemini-2.5-pro',
             'generation_time_seconds': generation_time,
             'token_count_input': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
             'token_count_output': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0,

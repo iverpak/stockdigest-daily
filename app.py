@@ -19096,7 +19096,21 @@ async def process_10q_profile_phase(job: dict):
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving 10-Q profile to database...")
 
         with db() as conn, conn.cursor() as cur:
-            # Save to sec_filings table
+            # First, delete any existing 10-Q for this ticker/year/quarter
+            cur.execute("""
+                DELETE FROM sec_filings
+                WHERE ticker = %s
+                  AND filing_type = %s
+                  AND fiscal_year = %s
+                  AND fiscal_quarter = %s
+            """, (
+                ticker,
+                '10-Q',
+                fiscal_year,
+                fiscal_quarter
+            ))
+
+            # Then insert the new 10-Q profile
             cur.execute("""
                 INSERT INTO sec_filings (
                     ticker, filing_type, fiscal_year, fiscal_quarter,
@@ -19107,21 +19121,6 @@ async def process_10q_profile_phase(job: dict):
                     status
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, filing_type, fiscal_year, fiscal_quarter) DO UPDATE SET
-                    company_name = EXCLUDED.company_name,
-                    industry = EXCLUDED.industry,
-                    filing_date = EXCLUDED.filing_date,
-                    profile_markdown = EXCLUDED.profile_markdown,
-                    source_type = EXCLUDED.source_type,
-                    sec_html_url = EXCLUDED.sec_html_url,
-                    ai_provider = EXCLUDED.ai_provider,
-                    ai_model = EXCLUDED.ai_model,
-                    generation_time_seconds = EXCLUDED.generation_time_seconds,
-                    token_count_input = EXCLUDED.token_count_input,
-                    token_count_output = EXCLUDED.token_count_output,
-                    generated_at = NOW(),
-                    status = 'active',
-                    error_message = NULL
             """, (
                 ticker,
                 '10-Q',
@@ -19330,7 +19329,21 @@ Generate the complete page-by-page deck analysis now.
 
             file_size_bytes = os.path.getsize(file_path)
 
-            # Save to sec_filings table
+            # First, delete any existing presentation for this ticker/date/type
+            cur.execute("""
+                DELETE FROM sec_filings
+                WHERE ticker = %s
+                  AND filing_type = %s
+                  AND presentation_date = %s
+                  AND presentation_type = %s
+            """, (
+                ticker,
+                'PRESENTATION',
+                presentation_date,
+                presentation_type
+            ))
+
+            # Then insert the new presentation analysis
             cur.execute("""
                 INSERT INTO sec_filings (
                     ticker, filing_type,
@@ -19344,23 +19357,6 @@ Generate the complete page-by-page deck analysis now.
                     status
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, filing_type, presentation_date, presentation_type) DO UPDATE SET
-                    company_name = EXCLUDED.company_name,
-                    industry = EXCLUDED.industry,
-                    presentation_title = EXCLUDED.presentation_title,
-                    profile_markdown = EXCLUDED.profile_markdown,
-                    source_type = EXCLUDED.source_type,
-                    source_file = EXCLUDED.source_file,
-                    page_count = EXCLUDED.page_count,
-                    file_size_bytes = EXCLUDED.file_size_bytes,
-                    ai_provider = EXCLUDED.ai_provider,
-                    ai_model = EXCLUDED.ai_model,
-                    generation_time_seconds = EXCLUDED.generation_time_seconds,
-                    token_count_input = EXCLUDED.token_count_input,
-                    token_count_output = EXCLUDED.token_count_output,
-                    generated_at = NOW(),
-                    status = 'active',
-                    error_message = NULL
             """, (
                 ticker,
                 'PRESENTATION',

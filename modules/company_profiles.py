@@ -1561,6 +1561,22 @@ def save_company_profile_to_database(
         source_file = config.get('source_file', '')
         source_type = 'fmp_sec' if 'SEC.gov' in source_file else 'file_upload'
 
+        # First, delete any existing profile for this ticker/filing/year/quarter
+        cur.execute("""
+            DELETE FROM sec_filings
+            WHERE ticker = %s
+              AND filing_type = %s
+              AND fiscal_year = %s
+              AND (fiscal_quarter = %s OR (fiscal_quarter IS NULL AND %s IS NULL))
+        """, (
+            ticker,
+            '10-K',
+            config.get('fiscal_year'),
+            None,
+            None
+        ))
+
+        # Then insert the new profile
         cur.execute("""
             INSERT INTO sec_filings (
                 ticker, filing_type, fiscal_year, fiscal_quarter,
@@ -1571,22 +1587,6 @@ def save_company_profile_to_database(
                 status
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ticker, filing_type, fiscal_year, fiscal_quarter) DO UPDATE SET
-                company_name = EXCLUDED.company_name,
-                industry = EXCLUDED.industry,
-                filing_date = EXCLUDED.filing_date,
-                profile_markdown = EXCLUDED.profile_markdown,
-                source_file = EXCLUDED.source_file,
-                source_type = EXCLUDED.source_type,
-                sec_html_url = EXCLUDED.sec_html_url,
-                ai_provider = EXCLUDED.ai_provider,
-                ai_model = EXCLUDED.ai_model,
-                generation_time_seconds = EXCLUDED.generation_time_seconds,
-                token_count_input = EXCLUDED.token_count_input,
-                token_count_output = EXCLUDED.token_count_output,
-                generated_at = NOW(),
-                status = 'active',
-                error_message = NULL
         """, (
             ticker,
             '10-K',                              # filing_type (always 10-K for now)

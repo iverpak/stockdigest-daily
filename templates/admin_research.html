@@ -442,7 +442,7 @@
                 <p id="profiles-count" style="margin-bottom: 16px; color: #6b7280; font-size: 14px;"></p>
 
                 <div style="overflow-x: auto;">
-                    <table id="research-table" style="width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; min-width: 1200px;">
+                    <table id="research-table" style="width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden;">
                         <thead style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white;">
                             <tr id="table-headers">
                                 <!-- Headers will be inserted dynamically -->
@@ -994,7 +994,8 @@
                     'transcripts': 'No earnings transcripts generated yet. Create one in the "Earnings Transcripts" tab!',
                     'press_releases': 'No press releases generated yet. Create one in the "Press Releases" tab!'
                 };
-                tbody.innerHTML = `<tr><td colspan="10" style="padding: 40px; text-align: center; color: #6b7280;">${emptyMessages[currentResearchType]}</td></tr>`;
+                const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '5' : '10';
+                tbody.innerHTML = `<tr><td colspan="${colspan}" style="padding: 40px; text-align: center; color: #6b7280;">${emptyMessages[currentResearchType]}</td></tr>`;
                 return;
             }
 
@@ -1012,7 +1013,7 @@
 
         function getTableHeaders(type) {
             const common = `
-                <th onclick="sortTable('ticker')" style="padding: 12px; text-align: left; cursor: pointer;">
+                <th onclick="sortTable('ticker')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">
                     Ticker <span id="sort-ticker" style="font-size: 10px;">▼</span>
                 </th>
             `;
@@ -1021,13 +1022,11 @@
                 case '10k':
                 case '10q':
                     return common + `
-                        <th style="padding: 12px; text-align: left;">Company</th>
-                        <th style="padding: 12px; text-align: left;">Industry</th>
-                        <th onclick="sortTable('fiscal_year')" style="padding: 12px; text-align: left; cursor: pointer;">FY</th>
-                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
-                        <th style="padding: 12px; text-align: center;">Tokens</th>
-                        <th style="padding: 12px; text-align: center;">Time</th>
-                        <th style="padding: 12px; text-align: center;">Actions</th>
+                        <th style="padding: 8px; text-align: left; font-size: 13px;">Company</th>
+                        <th onclick="sortTable('fiscal_year')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">FY</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
+                        <th style="padding: 8px; text-align: center; font-size: 13px;">Tokens</th>
+                        <th style="padding: 8px; text-align: center; font-size: 13px;">Actions</th>
                     `;
                 case 'presentations':
                     return common + `
@@ -1060,27 +1059,24 @@
         }
 
         function getTableRow(doc, type) {
-            const generatedDate = new Date(doc.generated_at).toLocaleString();
+            // Format date without time (just YYYY-MM-DD)
+            const generatedDate = new Date(doc.generated_at).toLocaleDateString();
 
             switch (type) {
                 case '10k':
                 case '10q':
                     const tokensIn = (doc.token_count_input || 0).toLocaleString();
                     const tokensOut = (doc.token_count_output || 0).toLocaleString();
-                    const genTime = doc.generation_time_seconds || 0;
-                    const timeStr = genTime >= 60 ? `${Math.floor(genTime/60)}m ${genTime%60}s` : `${genTime}s`;
 
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
-                        <td style="padding: 12px;">${doc.company_name}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.industry || 'N/A'}</td>
-                        <td style="padding: 12px;">${doc.fiscal_year}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
-                        <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 12px;">
+                        <td style="padding: 8px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
+                        <td style="padding: 8px; font-size: 12px;">${doc.company_name}</td>
+                        <td style="padding: 8px; font-size: 12px;">${doc.fiscal_year}</td>
+                        <td style="padding: 8px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
+                        <td style="padding: 8px; text-align: center; color: #6b7280; font-size: 11px;">
                             ${tokensIn} / ${tokensOut}
                         </td>
-                        <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${timeStr}</td>
-                        <td style="padding: 12px; text-align: center;">
+                        <td style="padding: 8px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;

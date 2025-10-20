@@ -15741,7 +15741,7 @@ Format: [What was announced]. [Strategic rationale]. [Financial impact if disclo
 
 ---
 
-💰 FINANCIAL RESULTS (Always if financial data disclosed - 4-8 bullets)
+💰 FINANCIAL RESULTS (Always - 4-8 bullets)
 
 Format (use • bullet):
 - Metric Name: [Exact figure] [vs. comparisons with figures] [trend context if multi-period discussed]
@@ -15759,7 +15759,7 @@ Example: • Q2 EBITDA: $90M; down 53% vs FY2024 quarterly average $192M per 10-
 
 ---
 
-🏢 MAJOR DEVELOPMENTS (Include if material developments announced - 3-6 bullets max)
+🏢 MAJOR DEVELOPMENTS (Always - 3-6 bullets max)
 
 SCOPE: Company-specific events, announcements, strategic actions by {ticker}
 
@@ -15787,18 +15787,34 @@ Example:
 
 ---
 
-📊 OPERATIONAL METRICS (Include if KPIs disclosed - 3-6 bullets max)
+📊 OPERATIONAL METRICS (Always - 3-6 bullets max)
 
 SCOPE: Business-specific KPIs that drive financial performance
 
+MANDATORY: This section must appear in every transcript. Provides operational context beyond financial accounting metrics.
+
+DISTINCTION FROM FINANCIAL RESULTS:
+- Financial Results = accounting metrics (revenue, EBITDA, EPS, margins)
+- Operational Metrics = physical drivers (generation TWh, capacity MW, prices $/MWh, utilization %)
+
+If transcript contains detailed operational KPIs:
 Include sector-appropriate metrics:
-- Tech/Software: Subscribers, ARR, net retention, DAU/MAU
-- Retail: Same-store sales, traffic, basket size
-- Industrial: Production volumes, capacity utilization, order book
-- Power/Utilities: Generation volumes, capacity factors, power prices, fuel costs
+- Power/Utilities: Generation volumes (TWh), capacity factors (%), power prices ($/MWh), fuel costs ($/MMBtu), heat rates
+- Tech/Software: Subscribers, ARR, net retention (%), DAU/MAU, churn rate
+- Retail: Same-store sales (%), traffic, basket size ($), inventory turns
+- Industrial: Production volumes (units), capacity utilization (%), order book ($), backlog
+
+If transcript contains minimal operational discussion beyond financial results:
+Synthesize reference bullets from management statements:
+Example:
+- Fleet performance: 17 TWh generation with 1.8% Equivalent Forced Outage Factor; high reliability during peak demand per management
+- Market pricing: PJM capacity cleared $330/MW-day (2026/2027) vs $270/MW-day (2025/2026) per CFO
 
 Format (use • bullet, NO sentiment tags):
 - [Metric]: [Value with context] [vs. comparison if provided] (call date)
+
+NEVER skip this section. If truly no operational data discussed, state:
+"Operational metrics limited to financial results reported above."
 
 ---
 
@@ -15814,7 +15830,7 @@ Example:
 
 ---
 
-🎯 STRATEGIC INITIATIVES (Include if strategy discussed - 2-5 bullets max)
+🎯 STRATEGIC INITIATIVES (Always if strategy discussed - 2-5 bullets max)
 
 SCOPE: Forward-looking strategic direction, investments, transformations
 
@@ -15840,7 +15856,7 @@ Examples:
 
 ---
 
-⚠️ RISK FACTORS & HEADWINDS (Include if risks discussed - 3-6 bullets max)
+⚠️ RISK FACTORS & HEADWINDS (Always if risks discussed - 3-6 bullets max)
 
 SCOPE: Challenges, obstacles, concerns that could impact performance
 
@@ -15854,7 +15870,7 @@ Example:
 
 ---
 
-🏭 INDUSTRY & COMPETITIVE LANDSCAPE (Include if discussed - 2-5 bullets max)
+🏭 INDUSTRY & COMPETITIVE LANDSCAPE (Always if discussed - 2-5 bullets max)
 
 SCOPE: Management's view of external environment and competitive position
 
@@ -15871,7 +15887,7 @@ Example:
 
 ---
 
-💡 CAPITAL ALLOCATION & BALANCE SHEET (Include if discussed - 2-4 bullets max)
+💡 CAPITAL ALLOCATION & BALANCE SHEET (Always if discussed - 2-4 bullets max)
 
 SCOPE: Cash deployment priorities, balance sheet strength, shareholder returns
 

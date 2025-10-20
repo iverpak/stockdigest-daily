@@ -19754,22 +19754,21 @@ async def process_presentation_phase(job: dict):
         # Configure Gemini API
         genai.configure(api_key=GEMINI_API_KEY)
 
-        # Upload PDF file to Gemini File API
-        LOG.info(f"[{ticker}] Uploading {file_path} to Gemini...")
-        uploaded_file = genai.upload_file(file_path, mime_type="application/pdf")
-        LOG.info(f"[{ticker}] ✅ File uploaded: {uploaded_file.name} (URI: {uploaded_file.uri})")
+        # Read PDF file as bytes (direct multimodal input, no File API needed)
+        LOG.info(f"[{ticker}] Reading {file_path} as bytes for multimodal analysis...")
+        with open(file_path, 'rb') as f:
+            pdf_bytes = f.read()
 
-        # Wait for file to be processed
-        import time as time_module
-        while uploaded_file.state.name == "PROCESSING":
-            LOG.info(f"[{ticker}] File processing... waiting 2 seconds")
-            time_module.sleep(2)
-            uploaded_file = genai.get_file(uploaded_file.name)
+        # Create Part for inline PDF data (works for PDFs under 20MB)
+        import google.generativeai as genai_types
+        pdf_part = genai_types.types.Part(
+            inline_data=genai_types.types.Blob(
+                mime_type='application/pdf',
+                data=pdf_bytes
+            )
+        )
 
-        if uploaded_file.state.name == "FAILED":
-            raise ValueError(f"Gemini file processing failed: {uploaded_file.state.name}")
-
-        LOG.info(f"[{ticker}] ✅ File ready for analysis: {uploaded_file.state.name}")
+        LOG.info(f"[{ticker}] ✅ PDF loaded ({len(pdf_bytes)} bytes), ready for analysis")
 
         # Progress: 30% - Analyzing presentation with Gemini 2.5 Pro Multimodal
         update_job_status(job_id, progress=30)
@@ -19798,9 +19797,9 @@ Generate the complete page-by-page deck analysis now.
 
         start_time = time.time()
 
-        # Send PDF file + prompt to model
+        # Send PDF bytes + prompt to model
         response = model.generate_content(
-            [uploaded_file, prompt_text],
+            [pdf_part, prompt_text],
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
                 max_output_tokens=16000
@@ -19820,12 +19819,7 @@ Generate the complete page-by-page deck analysis now.
 
         LOG.info(f"[{ticker}] ✅ Generated {len(profile_markdown)} characters (input: {token_count_input} tokens, output: {token_count_output} tokens)")
 
-        # Clean up uploaded file from Gemini
-        try:
-            genai.delete_file(uploaded_file.name)
-            LOG.info(f"[{ticker}] 🗑️ Deleted uploaded file from Gemini: {uploaded_file.name}")
-        except Exception as e:
-            LOG.warning(f"[{ticker}] Failed to delete Gemini file: {e}")
+        # Note: No file cleanup needed since we're passing PDF bytes directly (not using File API)
 
         metadata = {
             'model': 'gemini-2.5-flash',

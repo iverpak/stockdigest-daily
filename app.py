@@ -18919,65 +18919,19 @@ async def process_company_profile_phase(job: dict):
 
         # Progress: 30% - Generating profile with Gemini (this takes 5-10 min)
         update_job_status(job_id, phase='generating_profile', progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating profile with Gemini 2.5 Flash (5-10 min)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating profile with Gemini 2.5 Pro (5-10 min)...")
 
         ticker_config = get_ticker_config(ticker)
 
-        # Build Gemini prompt (using user's spec - abbreviated version for space)
-        gemini_prompt = """You are creating a Company Profile document for an equity analyst.
-
-This profile will be used to provide context when analyzing news articles about the company.
-
-I am providing you with the COMPLETE Form 10-K for {company_name} ({ticker}).
-
-Your task is to extract and synthesize information from across the entire document to create a comprehensive profile following the structure below.
-
-CRITICAL INSTRUCTIONS:
-- Be specific, not generic (name suppliers, customers, exact figures)
-- Use actual numbers with units
-- Extract only facts explicitly stated in the filing
-- Skip sections with no disclosed data
-- Target length: 3-5 pages (~3,000-5,000 words)
-
----
-COMPLETE 10-K DOCUMENT:
-
-{full_10k_text}
-
----
-
-Create a Company Profile in Markdown format with these sections:
-
-# {company_name} ({ticker}) - COMPANY PROFILE
-
-*Generated from Form 10-K filed {filing_date} for fiscal year ending {fiscal_year_end}*
-
-## 1. INDUSTRY CLASSIFICATION
-## 2. BUSINESS MODEL SUMMARY
-## 3. REVENUE STREAMS
-## 4. KEY OPERATIONAL METRICS (KPIs)
-## 5. GEOGRAPHIC PRESENCE
-## 6. KEY PRODUCTS & SERVICES
-## 7. MATERIAL DEPENDENCIES
-## 8. INFRASTRUCTURE & ASSETS
-## 9. COST STRUCTURE
-## 10. FINANCIAL SNAPSHOT (Latest Year)
-## 11. SPECIFIC RISKS & CONCENTRATIONS
-## 12. REGULATORY OVERSIGHT
-## 13. STRATEGIC PRIORITIES & OUTLOOK
-## 14. KEY THINGS TO MONITOR
-
-OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
-"""
-
-        result = generate_company_profile_with_gemini(
+        # Use unified function with comprehensive GEMINI_10K_PROMPT (254 lines, 16 sections)
+        result = generate_sec_filing_profile_with_gemini(
             ticker=ticker,
             content=content,
             config=ticker_config,
+            filing_type='10-K',
             fiscal_year=config['fiscal_year'],
             filing_date=config['filing_date'],
-            gemini_api_key=GEMINI_API_KEY,
-            gemini_prompt=gemini_prompt
+            gemini_api_key=GEMINI_API_KEY
         )
 
         if not result:

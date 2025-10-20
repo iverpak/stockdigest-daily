@@ -517,6 +517,31 @@ def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: 
         html += '</div>\n'
         return html
 
+    def build_qa_section(qa_content: List[str]) -> str:
+        """Build Q&A section with special Q:/A: formatting (Q bold, proper spacing)"""
+        if not qa_content:
+            return ""
+
+        display_title = strip_emoji("💬 Q&A Highlights")
+
+        html = f'<div style="margin-bottom: 24px;">\n'
+        html += f'  <h3 style="font-size: 15px; font-weight: 700; color: #1e40af; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h3>\n'
+
+        for line in qa_content:
+            line_stripped = line.strip()
+            if line_stripped.startswith("Q:"):
+                # Bold Q, no bottom margin (A will follow immediately)
+                html += f'  <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;"><strong>{line_stripped}</strong></p>\n'
+            elif line_stripped.startswith("A:"):
+                # Regular A, with bottom margin (creates space before next Q)
+                html += f'  <p style="margin: 0 0 16px 0; font-size: 13px; line-height: 1.6; color: #374151;">{line_stripped}</p>\n'
+            elif not line_stripped:
+                # Blank lines are ignored (spacing controlled by A margin)
+                pass
+
+        html += '</div>\n'
+        return html
+
     html = ""
 
     # Always render sections in fixed order (emojis stripped automatically)
@@ -531,9 +556,9 @@ def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: 
     html += build_section("🏭 Industry & Competitive Dynamics", sections.get("industry_competitive", []), use_bullets=True, bold_labels=True)
     html += build_section("💡 Capital Allocation", sections.get("capital_allocation", []), use_bullets=True, bold_labels=True)
 
-    # Q&A Highlights (only for transcripts, not press releases)
+    # Q&A Highlights (only for transcripts, special formatting)
     if content_type == 'transcript':
-        html += build_section("💬 Q&A Highlights", sections.get("qa_highlights", []), use_bullets=False)
+        html += build_qa_section(sections.get("qa_highlights", []))
 
     # Top-level Upside/Downside/Variables sections (Oct 2025 - promoted from sub-sections)
     # Upside/Downside are PARAGRAPHS, Variables are BULLETS

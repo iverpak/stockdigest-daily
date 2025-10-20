@@ -1164,11 +1164,12 @@ def generate_sec_filing_profile_with_gemini(
         start_time = datetime.now()
 
         # Build full prompt with content (different formatting for 10-K vs 10-Q)
+        # Gemini 2.5 Flash has 1M token context window - use 400k tokens max
         if filing_type == '10-K':
             full_prompt = prompt_template.format(
                 company_name=company_name,
                 ticker=ticker,
-                full_10k_text=content[:200000]  # Limit to ~50k tokens to fit context window
+                full_10k_text=content[:1600000]  # ~400k tokens - full 10-K content
             )
         else:  # 10-Q
             full_prompt = prompt_template.format(
@@ -1176,7 +1177,7 @@ def generate_sec_filing_profile_with_gemini(
                 ticker=ticker,
                 quarter=quarter_num,
                 fiscal_year=fiscal_year,
-                full_10q_text=content[:150000]  # 10-Qs are typically shorter
+                full_10q_text=content[:1600000]  # ~400k tokens - full 10-Q content
             )
 
         response = model.generate_content(

@@ -24733,6 +24733,137 @@ async def email_research_api(request: Request):
         LOG.error(f"Failed to email {research_type} for {ticker}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+@APP.get("/api/admin/ticker-research-status")
+async def get_ticker_research_status(ticker: str = Query(...), token: str = Query(...)):
+    """Get comprehensive research status for a ticker - what's available from FMP + what's already generated"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = ticker.upper().strip()
+
+    try:
+        # Validate ticker first
+        validation_response = await fmp_validate_ticker(ticker=ticker, type="profile")
+        if not validation_response.get("valid"):
+            return {"status": "error", "message": validation_response.get("error", "Invalid ticker")}
+
+        company_name = validation_response.get("company_name")
+        industry = validation_response.get("industry")
+
+        # Fetch available 10-Ks from FMP
+        available_10k = validation_response.get("available_years", [])
+
+        # Fetch available 10-Qs from FMP (same endpoint, just filter by type)
+        fmp_10q_response = requests.get(
+            f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}",
+            timeout=10
+        )
+        available_10q = []
+        if fmp_10q_response.status_code == 200:
+            filings_10q = fmp_10q_response.json()[:12]  # Latest 12 quarters (3 years)
+            for filing in filings_10q:
+                # Parse quarter from filing period
+                period = filing.get("fillingDate", "")  # e.g., "2024-08-01"
+                if period:
+                    year = int(period[:4])
+                    month = int(period[5:7])
+                    quarter = (month - 1) // 3 + 1  # Jan-Mar=Q1, Apr-Jun=Q2, etc.
+                    available_10q.append({
+                        "quarter": quarter,
+                        "year": year,
+                        "filing_date": filing.get("fillingDate"),
+                        "sec_html_url": filing.get("finalLink")
+                    })
+
+        # Fetch available transcripts
+        transcript_response = await fmp_validate_ticker(ticker=ticker, type="transcript")
+        available_transcripts = []
+        if transcript_response.get("valid"):
+            quarters = transcript_response.get("available_quarters", [])
+            for q_str in quarters[:8]:  # Latest 8 quarters
+                match = re.match(r"Q(\d+)\s+(\d{4})", q_str)
+                if match:
+                    available_transcripts.append({
+                        "quarter": int(match.group(1)),
+                        "year": int(match.group(2)),
+                        "label": q_str
+                    })
+
+        # Fetch available press releases
+        pr_response = await fmp_validate_ticker(ticker=ticker, type="press_release")
+        available_press_releases = []
+        if pr_response.get("valid"):
+            releases = pr_response.get("available_releases", [])[:10]  # Latest 10
+            for release in releases:
+                available_press_releases.append({
+                    "date": release.get("date"),
+                    "title": release.get("title")
+                })
+
+        # Check what's already generated in database
+        with db() as conn, conn.cursor() as cur:
+            # Check generated 10-Ks
+            cur.execute("""
+                SELECT fiscal_year, generated_at
+                FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-K'
+            """, (ticker,))
+            generated_10k = {row['fiscal_year']: str(row['generated_at']) for row in cur.fetchall()}
+
+            # Check generated 10-Qs
+            cur.execute("""
+                SELECT fiscal_year, fiscal_quarter, generated_at
+                FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-Q'
+            """, (ticker,))
+            generated_10q = {f"{row['fiscal_year']}-Q{row['fiscal_quarter']}": str(row['generated_at']) for row in cur.fetchall()}
+
+            # Check generated transcripts
+            cur.execute("""
+                SELECT quarter, year, generated_at
+                FROM transcript_summaries
+                WHERE ticker = %s AND report_type = 'transcript'
+            """, (ticker,))
+            generated_transcripts = {f"{row['year']}-Q{row['quarter']}": str(row['generated_at']) for row in cur.fetchall()}
+
+            # Check generated press releases
+            cur.execute("""
+                SELECT report_date, generated_at
+                FROM transcript_summaries
+                WHERE ticker = %s AND report_type = 'press_release'
+            """, (ticker,))
+            generated_press_releases = {str(row['report_date']): str(row['generated_at']) for row in cur.fetchall()}
+
+        # Combine FMP data with generation status
+        for item in available_10k:
+            item['generated'] = generated_10k.get(item['year'])
+
+        for item in available_10q:
+            key = f"{item['year']}-Q{item['quarter']}"
+            item['generated'] = generated_10q.get(key)
+
+        for item in available_transcripts:
+            key = f"{item['year']}-Q{item['quarter']}"
+            item['generated'] = generated_transcripts.get(key)
+
+        for item in available_press_releases:
+            item['generated'] = generated_press_releases.get(item['date'])
+
+        return {
+            "status": "success",
+            "ticker": ticker,
+            "company_name": company_name,
+            "industry": industry,
+            "available_10k": available_10k,
+            "available_10q": available_10q,
+            "available_transcripts": available_transcripts,
+            "available_press_releases": available_press_releases
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get research status for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/admin/restart-worker")
 async def restart_worker_api(request: Request):
     """Restart worker thread only (gentle, 0 downtime)"""

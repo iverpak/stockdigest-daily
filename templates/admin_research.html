@@ -210,201 +210,144 @@
     <div class="container">
         <!-- Tab Navigation -->
         <div class="tabs">
-            <button class="tab active" onclick="switchTab('transcripts', event)">Earnings Transcripts</button>
-            <button class="tab" onclick="switchTab('press-releases', event)">Press Releases</button>
-            <button class="tab" onclick="switchTab('company-profiles', event)">Company Profiles</button>
-            <button class="tab" onclick="switchTab('view-profiles', event)">View Profiles</button>
+            <button class="tab active" onclick="switchTab('generate-research', event)">Generate Research</button>
+            <button class="tab" onclick="switchTab('research-library', event)">Research Library</button>
         </div>
 
-        <!-- Earnings Transcripts Tab -->
-        <div id="transcripts-tab" class="tab-content">
-            <h2>Generate Earnings Transcript Summary</h2>
+        <!-- Generate Research Tab (Unified) -->
+        <div id="generate-research-tab" class="tab-content">
+            <h2>Generate Research</h2>
             <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">
-                Fetch earnings call transcripts from FMP and generate AI summaries using Claude.
+                Enter a ticker to see all available research and generate comprehensive AI analyses.
             </p>
 
+            <!-- Ticker Input -->
             <div class="input-group">
                 <label>Ticker Symbol <span style="color: #dc2626;">*</span></label>
-                <input type="text" id="transcript-ticker" placeholder="e.g., AAPL, TSLA, RY.TO"
+                <input type="text" id="unified-ticker" placeholder="e.g., AAPL, TSLA, RY.TO"
                        style="text-transform: uppercase;">
-                <button onclick="validateTickerForTranscript()" style="margin-top: 8px;">Validate Ticker</button>
+                <button onclick="loadTickerResearch()" style="margin-top: 8px;">Load Research Options</button>
             </div>
 
-            <div id="transcript-validation-result"></div>
+            <!-- Loading State -->
+            <div id="research-loading" style="display:none; text-align: center; padding: 40px;">
+                <div class="loading"></div>
+                <p style="color: #6b7280; margin-top: 12px;">Loading available research...</p>
+            </div>
 
-            <div id="transcript-quarter-section" style="display:none; margin-top: 24px;">
-                <div class="input-group">
-                    <label>Select Quarter <span style="color: #dc2626;">*</span></label>
-                    <select id="transcript-quarter">
-                        <option value="">Validate ticker first...</option>
-                    </select>
+            <!-- Error State -->
+            <div id="research-error" style="display:none; margin-top: 20px; padding: 16px;
+                                            background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px;">
+                <p style="margin: 0; font-weight: 600; color: #991b1b;">Error</p>
+                <p id="research-error-message" style="margin: 8px 0 0 0; color: #991b1b; font-size: 14px;"></p>
+            </div>
+
+            <!-- Research Sections Container -->
+            <div id="research-sections" style="display:none; margin-top: 32px;">
+                <!-- Company Info Header -->
+                <div id="company-header" style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+                                                 color: white; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+                    <h3 id="company-name" style="margin: 0 0 8px 0; font-size: 24px;"></h3>
+                    <p id="company-details" style="margin: 0; opacity: 0.9; font-size: 14px;"></p>
                 </div>
 
-                <button onclick="generateTranscriptSummary()"
-                        style="margin-top: 20px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-                               padding: 12px 24px; font-size: 15px; font-weight: 600;">
-                    🚀 Generate Summary (30-60 sec)
-                </button>
-            </div>
+                <!-- 10-K Annual Reports Section -->
+                <details open style="margin-bottom: 20px; background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <summary style="font-size: 18px; font-weight: 600; color: #1e40af; cursor: pointer; user-select: none;">
+                        📄 10-K Annual Reports (<span id="count-10k">0</span> available)
+                    </summary>
+                    <div id="list-10k" style="margin-top: 16px;"></div>
+                </details>
 
-            <div id="transcript-result" style="display:none; margin-top: 24px; padding: 16px;
-                                              background: #f0fdf4; border-left: 4px solid #22c55e; border-radius: 4px;">
-                <p style="margin: 0; font-weight: 600; color: #166534; font-size: 15px;">
-                    ✅ Transcript summary generated successfully!
-                </p>
-                <p style="margin: 8px 0 0 0; font-size: 14px; color: #166534;">
-                    Check your email for the full summary. The summary has been saved to the database.
-                </p>
-            </div>
+                <!-- 10-Q Quarterly Reports Section -->
+                <details open style="margin-bottom: 20px; background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <summary style="font-size: 18px; font-weight: 600; color: #1e40af; cursor: pointer; user-select: none;">
+                        📊 10-Q Quarterly Reports (<span id="count-10q">0</span> available)
+                    </summary>
+                    <div id="list-10q" style="margin-top: 16px;"></div>
+                </details>
 
-            <div id="transcript-error" style="display:none; margin-top: 24px; padding: 16px;
-                                             background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px;">
-                <p style="margin: 0; font-weight: 600; color: #991b1b; font-size: 15px;">
-                    ❌ Summary generation failed
-                </p>
-                <p id="transcript-error-message" style="margin: 8px 0 0 0; font-size: 14px; color: #991b1b;">
-                    Error details will appear here.
-                </p>
-            </div>
-        </div>
+                <!-- Earnings Transcripts Section -->
+                <details open style="margin-bottom: 20px; background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <summary style="font-size: 18px; font-weight: 600; color: #1e40af; cursor: pointer; user-select: none;">
+                        🎙️ Earnings Transcripts (<span id="count-transcripts">0</span> available)
+                    </summary>
+                    <div id="list-transcripts" style="margin-top: 16px;"></div>
+                </details>
 
-        <!-- Press Releases Tab -->
-        <div id="press-releases-tab" class="tab-content" style="display:none;">
-            <h2>Generate Press Release Summary</h2>
-            <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">
-                Fetch press releases from FMP and generate AI summaries using Claude.
-            </p>
+                <!-- Press Releases Section -->
+                <details open style="margin-bottom: 20px; background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <summary style="font-size: 18px; font-weight: 600; color: #1e40af; cursor: pointer; user-select: none;">
+                        📰 Press Releases (<span id="count-press-releases">0</span> available)
+                    </summary>
+                    <div id="list-press-releases" style="margin-top: 16px;"></div>
+                </details>
 
-            <div class="input-group">
-                <label>Ticker Symbol <span style="color: #dc2626;">*</span></label>
-                <input type="text" id="pr-ticker" placeholder="e.g., AAPL, TSLA, RY.TO"
-                       style="text-transform: uppercase;">
-                <button onclick="validateTickerForPR()" style="margin-top: 8px;">Validate Ticker</button>
-            </div>
+                <!-- Investor Presentations Section -->
+                <details open style="margin-bottom: 20px; background: white; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <summary style="font-size: 18px; font-weight: 600; color: #1e40af; cursor: pointer; user-select: none;">
+                        📎 Investor Presentations (Drag & Drop PDF)
+                    </summary>
+                    <div style="margin-top: 16px;">
+                        <p style="color: #6b7280; font-size: 14px; margin-bottom: 16px;">
+                            Upload investor presentation PDFs for AI analysis using Gemini multimodal vision.
+                        </p>
+                        <div id="pdf-drop-zone"
+                             style="border: 2px dashed #e5e7eb; border-radius: 8px; padding: 32px; text-align: center;
+                                    background: #f9fafb; cursor: pointer; transition: all 0.2s;"
+                             ondrop="handlePDFDrop(event)" ondragover="handlePDFDragOver(event)" ondragleave="handlePDFDragLeave(event)"
+                             onclick="document.getElementById('pdf-file-input').click()">
+                            <p style="font-size: 16px; color: #6b7280; margin: 0;">
+                                📎 Drag and drop PDF here or click to browse
+                            </p>
+                            <p style="font-size: 12px; color: #9ca3af; margin: 8px 0 0 0;">
+                                Supports earnings decks, investor days, analyst days, and conference presentations
+                            </p>
+                        </div>
+                        <input type="file" id="pdf-file-input" accept=".pdf" style="display: none;" onchange="handlePDFFileSelect(event)">
 
-            <div id="pr-validation-result"></div>
-
-            <div id="pr-release-section" style="display:none; margin-top: 24px;">
-                <div class="input-group">
-                    <label>Select Press Release <span style="color: #dc2626;">*</span></label>
-                    <select id="pr-release">
-                        <option value="">Validate ticker first...</option>
-                    </select>
-                </div>
-
-                <button onclick="generatePRSummary()"
-                        style="margin-top: 20px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-                               padding: 12px 24px; font-size: 15px; font-weight: 600;">
-                    🚀 Generate Summary (30-60 sec)
-                </button>
-            </div>
-
-            <div id="pr-result" style="display:none; margin-top: 24px; padding: 16px;
-                                      background: #f0fdf4; border-left: 4px solid #22c55e; border-radius: 4px;">
-                <p style="margin: 0; font-weight: 600; color: #166534; font-size: 15px;">
-                    ✅ Press release summary generated successfully!
-                </p>
-                <p style="margin: 8px 0 0 0; font-size: 14px; color: #166534;">
-                    Check your email for the full summary. The summary has been saved to the database.
-                </p>
-            </div>
-
-            <div id="pr-error" style="display:none; margin-top: 24px; padding: 16px;
-                                     background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px;">
-                <p style="margin: 0; font-weight: 600; color: #991b1b; font-size: 15px;">
-                    ❌ Summary generation failed
-                </p>
-                <p id="pr-error-message" style="margin: 8px 0 0 0; font-size: 14px; color: #991b1b;">
-                    Error details will appear here.
-                </p>
-            </div>
-        </div>
-
-        <!-- Company Profiles Tab -->
-        <div id="company-profiles-tab" class="tab-content" style="display:none;">
-            <h2>Generate Company Profile</h2>
-            <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">
-                Upload a 10-K PDF or TXT file to generate a comprehensive company profile using Gemini 2.5 Flash AI.
-                Processing takes 5-10 minutes.
-            </p>
-
-            <!-- Step 1: Ticker Input -->
-            <div class="input-group">
-                <label>Ticker Symbol <span style="color: #dc2626;">*</span></label>
-                <input type="text" id="profile-ticker" placeholder="e.g., TSLA, AAPL, RY.TO"
-                       style="text-transform: uppercase;">
-                <button onclick="validateTickerForProfile()" style="margin-top: 8px;">Validate Ticker</button>
-            </div>
-
-            <div id="profile-validation-result"></div>
-
-            <!-- Step 2: Year Selection (shown after validation) -->
-            <div id="profile-year-section" style="display:none; margin-top: 24px;">
-                <div class="input-group">
-                    <label>Select Fiscal Year <span style="color: #dc2626;">*</span></label>
-                    <select id="profile-fiscal-year" style="width: 100%;">
-                        <option value="">Validate ticker first...</option>
-                    </select>
-                    <p style="font-size: 12px; color: #6b7280; margin-top: 4px;">
-                        Select the fiscal year from available SEC filings
-                    </p>
-                </div>
-
-                <button onclick="generateCompanyProfile()"
-                        style="margin-top: 20px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-                               padding: 12px 24px; font-size: 15px; font-weight: 600;">
-                    🚀 Generate Profile (5-10 min)
-                </button>
-            </div>
-
-            <!-- Step 3: Job Status (shown during processing) -->
-            <div id="profile-job-status" style="display:none; margin-top: 32px;">
-                <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px;">Processing...</h3>
-
-                <div style="background: #f3f4f6; border-radius: 8px; overflow: hidden; height: 40px; position: relative;">
-                    <div id="profile-progress"
-                         style="width: 0%; height: 100%; background: linear-gradient(90deg, #1e3a8a, #1e40af);
-                                transition: width 0.3s ease; display: flex; align-items: center; justify-content: center;">
-                        <span id="profile-progress-text" style="color: white; font-weight: 600; font-size: 14px;
-                                                                position: absolute; left: 50%; transform: translateX(-50%);">
-                            0%
-                        </span>
+                        <!-- PDF Upload Form (hidden until file selected) -->
+                        <div id="pdf-upload-form" style="display:none; margin-top: 20px; padding: 20px; background: #f0fdf4; border-radius: 8px;">
+                            <p style="margin: 0 0 16px 0; font-weight: 600;">Selected: <span id="pdf-filename"></span></p>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Presentation Date</label>
+                                    <input type="date" id="pdf-date" style="width: 100%; padding: 8px; border: 2px solid #e5e7eb; border-radius: 4px;">
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Type</label>
+                                    <select id="pdf-type" style="width: 100%; padding: 8px; border: 2px solid #e5e7eb; border-radius: 4px;">
+                                        <option value="earnings">Earnings Deck</option>
+                                        <option value="investor_day">Investor Day</option>
+                                        <option value="analyst_day">Analyst Day</option>
+                                        <option value="conference">Conference Presentation</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="margin-top: 16px;">
+                                <label style="display: block; margin-bottom: 8px; font-weight: 600;">Title</label>
+                                <input type="text" id="pdf-title" placeholder="e.g., Q3 2024 Earnings Deck"
+                                       style="width: 100%; padding: 8px; border: 2px solid #e5e7eb; border-radius: 4px;">
+                            </div>
+                            <button onclick="uploadAndAnalyzePDF()"
+                                    style="margin-top: 20px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+                                           color: white; border: none; padding: 12px 24px; border-radius: 8px;
+                                           font-weight: 600; cursor: pointer;">
+                                🚀 Upload & Analyze with Gemini
+                            </button>
+                            <button onclick="cancelPDFUpload()"
+                                    style="margin-left: 12px; background: #6b7280; color: white; border: none;
+                                           padding: 12px 24px; border-radius: 8px; cursor: pointer;">
+                                Cancel
+                            </button>
+                        </div>
                     </div>
-                </div>
-
-                <p id="profile-status-text" style="margin-top: 12px; font-size: 14px; color: #4b5563;">
-                    Extracting 10-K text...
-                </p>
-
-                <p id="profile-time-estimate" style="font-size: 12px; color: #9ca3af; margin-top: 4px;">
-                    Estimated time: 5-10 minutes
-                </p>
-            </div>
-
-            <!-- Step 4: Result Display -->
-            <div id="profile-result" style="display:none; margin-top: 24px; padding: 16px;
-                                            background: #f0fdf4; border-left: 4px solid #22c55e; border-radius: 4px;">
-                <p style="margin: 0; font-weight: 600; color: #166534; font-size: 15px;">
-                    ✅ Company profile generated successfully!
-                </p>
-                <p style="margin: 8px 0 0 0; font-size: 14px; color: #166534;">
-                    Check your email for the full profile. The profile has been saved to the database.
-                </p>
-            </div>
-
-            <div id="profile-error" style="display:none; margin-top: 24px; padding: 16px;
-                                           background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px;">
-                <p style="margin: 0; font-weight: 600; color: #991b1b; font-size: 15px;">
-                    ❌ Profile generation failed
-                </p>
-                <p id="profile-error-message" style="margin: 8px 0 0 0; font-size: 14px; color: #991b1b;">
-                    Error details will appear here.
-                </p>
+                </details>
             </div>
         </div>
 
-        <!-- View Profiles Tab -->
-        <div id="view-profiles-tab" class="tab-content" style="display:none;">
+        <!-- Research Library Tab (renamed from View Profiles) -->
+        <div id="research-library-tab" class="tab-content" style="display:none;">
             <h2>Research Library</h2>
             <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">
                 Browse, search, and manage all generated research documents.
@@ -511,81 +454,275 @@
         }
 
         // =============================================================================
-        // EARNINGS TRANSCRIPTS TAB
+        // =============================================================================
+        // UNIFIED GENERATE RESEARCH TAB
         // =============================================================================
 
-        async function validateTickerForTranscript() {
-            const ticker = document.getElementById('transcript-ticker').value.toUpperCase().trim();
-            const resultDiv = document.getElementById('transcript-validation-result');
+        let currentTickerData = null;
+        let selectedPDFFile = null;
+
+        async function loadTickerResearch() {
+            const ticker = document.getElementById('unified-ticker').value.toUpperCase().trim();
 
             if (!ticker) {
-                resultDiv.innerHTML = '<div class="validation-result error">⚠️ Please enter a ticker symbol</div>';
+                alert('Please enter a ticker symbol');
                 return;
             }
 
-            resultDiv.innerHTML = '<div class="validation-result">Validating ticker...</div>';
+            // Show loading, hide others
+            document.getElementById('research-loading').style.display = 'block';
+            document.getElementById('research-error').style.display = 'none';
+            document.getElementById('research-sections').style.display = 'none';
 
             try {
-                const response = await fetch(`/api/fmp-validate-ticker?ticker=${ticker}&type=transcript`);
+                const response = await fetch(`/api/admin/ticker-research-status?ticker=${ticker}&token=${token}`);
                 const data = await response.json();
 
-                if (data.valid) {
-                    const select = document.getElementById('transcript-quarter');
-                    select.innerHTML = '';
-
-                    if (data.available_quarters && data.available_quarters.length > 0) {
-                        data.available_quarters.forEach((q, index) => {
-                            const option = document.createElement('option');
-                            option.value = q;
-                            option.textContent = q + (index === 0 ? ' (Latest)' : '');
-                            if (index === 0) option.selected = true;
-                            select.appendChild(option);
-                        });
-
-                        resultDiv.innerHTML = `
-                            <div class="validation-result success">
-                                ✅ ${ticker} - ${data.company_name}<br>
-                                <span style="font-size: 12px; color: #059669;">${data.available_quarters.length} transcripts available</span>
-                            </div>
-                        `;
-
-                        document.getElementById('transcript-quarter-section').style.display = 'block';
-                    } else {
-                        resultDiv.innerHTML = `<div class="validation-result error">❌ No transcripts available for ${ticker}</div>`;
-                        document.getElementById('transcript-quarter-section').style.display = 'none';
-                    }
+                if (data.status === 'success') {
+                    currentTickerData = data;
+                    displayTickerResearch(data);
                 } else {
-                    resultDiv.innerHTML = `<div class="validation-result error">❌ ${data.error}</div>`;
-                    document.getElementById('transcript-quarter-section').style.display = 'none';
+                    document.getElementById('research-loading').style.display = 'none';
+                    document.getElementById('research-error').style.display = 'block';
+                    document.getElementById('research-error-message').textContent = data.message || 'Failed to load research options';
                 }
             } catch (error) {
-                resultDiv.innerHTML = `<div class="validation-result error">❌ Validation failed: ${error.message}</div>`;
+                document.getElementById('research-loading').style.display = 'none';
+                document.getElementById('research-error').style.display = 'block';
+                document.getElementById('research-error-message').textContent = error.message;
             }
         }
 
-        async function generateTranscriptSummary() {
-            const ticker = document.getElementById('transcript-ticker').value.toUpperCase().trim();
-            const quarterStr = document.getElementById('transcript-quarter').value;
+        function displayTickerResearch(data) {
+            // Hide loading, show sections
+            document.getElementById('research-loading').style.display = 'none';
+            document.getElementById('research-sections').style.display = 'block';
 
-            if (!ticker || !quarterStr) {
-                alert('Please validate ticker and select a quarter first');
+            // Update company header
+            document.getElementById('company-name').textContent = `${data.company_name} (${data.ticker})`;
+            document.getElementById('company-details').textContent = `Industry: ${data.industry || 'N/A'}`;
+
+            // Update counts
+            document.getElementById('count-10k').textContent = data.available_10k.length;
+            document.getElementById('count-10q').textContent = data.available_10q.length;
+            document.getElementById('count-transcripts').textContent = data.available_transcripts.length;
+            document.getElementById('count-press-releases').textContent = data.available_press_releases.length;
+
+            // Populate lists
+            populate10KList(data.available_10k, data.ticker);
+            populate10QList(data.available_10q, data.ticker);
+            populateTranscriptsList(data.available_transcripts, data.ticker);
+            populatePressReleasesList(data.available_press_releases, data.ticker);
+        }
+
+        function populate10KList(items, ticker) {
+            const container = document.getElementById('list-10k');
+            if (items.length === 0) {
+                container.innerHTML = '<p style="color: #6b7280;">No 10-K filings available from FMP.</p>';
                 return;
             }
 
-            // Parse "Q3 2024" into quarter=3, year=2024
-            const match = quarterStr.match(/Q(\d+)\s+(\d{4})/);
-            if (!match) {
-                alert('Invalid quarter format');
+            container.innerHTML = items.map(item => {
+                if (item.generated) {
+                    const genDate = new Date(item.generated).toLocaleDateString();
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.year}</strong> (Filed: ${item.filing_date})
+                                <span style="color: #059669; font-size: 13px; margin-left: 12px;">✓ Generated on ${genDate}</span>
+                            </div>
+                            <div>
+                                <button onclick="viewDocument({ticker: '${ticker}', type: '10k'})"
+                                        style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 8px;">
+                                    View
+                                </button>
+                                <button onclick="deleteDocument({ticker: '${ticker}', type: '10k'})"
+                                        style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.year}</strong> (Filed: ${item.filing_date})
+                            </div>
+                            <button onclick="generate10K('${ticker}', ${item.year}, '${item.filing_date}', '${item.sec_html_url}')"
+                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                Generate
+                            </button>
+                        </div>
+                    `;
+                }
+            }).join('');
+        }
+
+        function populate10QList(items, ticker) {
+            const container = document.getElementById('list-10q');
+            if (items.length === 0) {
+                container.innerHTML = '<p style="color: #6b7280;">No 10-Q filings available from FMP.</p>';
                 return;
             }
 
-            const quarter = parseInt(match[1]);
-            const year = parseInt(match[2]);
+            container.innerHTML = items.map(item => {
+                const key = `${item.year}-Q${item.quarter}`;
+                if (item.generated) {
+                    const genDate = new Date(item.generated).toLocaleDateString();
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>Q${item.quarter} ${item.year}</strong> (Filed: ${item.filing_date})
+                                <span style="color: #059669; font-size: 13px; margin-left: 12px;">✓ Generated on ${genDate}</span>
+                            </div>
+                            <div>
+                                <button onclick="viewDocument({ticker: '${ticker}', type: '10q', quarter: ${item.quarter}, year: ${item.year}})"
+                                        style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 8px;">
+                                    View
+                                </button>
+                                <button onclick="deleteDocument({ticker: '${ticker}', type: '10q', quarter: ${item.quarter}, year: ${item.year}})"
+                                        style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>Q${item.quarter} ${item.year}</strong> (Filed: ${item.filing_date})
+                            </div>
+                            <button onclick="alert('10-Q generation coming soon!')"
+                                    style="background: #6b7280; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">
+                                Coming Soon
+                            </button>
+                        </div>
+                    `;
+                }
+            }).join('');
+        }
 
-            // Hide sections, show processing
-            document.getElementById('transcript-quarter-section').style.display = 'none';
-            document.getElementById('transcript-result').style.display = 'none';
-            document.getElementById('transcript-error').style.display = 'none';
+        function populateTranscriptsList(items, ticker) {
+            const container = document.getElementById('list-transcripts');
+            if (items.length === 0) {
+                container.innerHTML = '<p style="color: #6b7280;">No earnings transcripts available from FMP.</p>';
+                return;
+            }
+
+            container.innerHTML = items.map(item => {
+                if (item.generated) {
+                    const genDate = new Date(item.generated).toLocaleDateString();
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.label}</strong>
+                                <span style="color: #059669; font-size: 13px; margin-left: 12px;">✓ Generated on ${genDate}</span>
+                            </div>
+                            <div>
+                                <button onclick="viewDocument({ticker: '${ticker}', type: 'transcripts', quarter: ${item.quarter}, year: ${item.year}})"
+                                        style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 8px;">
+                                    View
+                                </button>
+                                <button onclick="deleteDocument({ticker: '${ticker}', type: 'transcripts', quarter: ${item.quarter}, year: ${item.year}})"
+                                        style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.label}</strong>
+                            </div>
+                            <button onclick="generateTranscript('${ticker}', ${item.quarter}, ${item.year})"
+                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                Generate
+                            </button>
+                        </div>
+                    `;
+                }
+            }).join('');
+        }
+
+        function populatePressReleasesList(items, ticker) {
+            const container = document.getElementById('list-press-releases');
+            if (items.length === 0) {
+                container.innerHTML = '<p style="color: #6b7280;">No press releases available from FMP.</p>';
+                return;
+            }
+
+            container.innerHTML = items.map(item => {
+                if (item.generated) {
+                    const genDate = new Date(item.generated).toLocaleDateString();
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.date}</strong>: ${item.title.substring(0, 60)}...
+                                <span style="color: #059669; font-size: 13px; margin-left: 12px;">✓ Generated on ${genDate}</span>
+                            </div>
+                            <div>
+                                <button onclick="viewDocument({ticker: '${ticker}', type: 'press_releases', report_date: '${item.date}'})"
+                                        style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 8px;">
+                                    View
+                                </button>
+                                <button onclick="deleteDocument({ticker: '${ticker}', type: 'press_releases', report_date: '${item.date}'})"
+                                        style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.date}</strong>: ${item.title.substring(0, 60)}...
+                            </div>
+                            <button onclick="generatePressRelease('${ticker}', '${item.date}')"
+                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                Generate
+                            </button>
+                        </div>
+                    `;
+                }
+            }).join('');
+        }
+
+        // Generation functions (using existing backend endpoints)
+        async function generate10K(ticker, year, filingDate, secHtmlUrl) {
+            // Use existing company profile generation endpoint
+            alert(`Starting 10-K generation for ${ticker} FY${year}. This will take 5-10 minutes...`);
+
+            try {
+                const response = await fetch('/api/admin/generate-company-profile', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        token: token,
+                        ticker: ticker,
+                        fiscal_year: year,
+                        filing_date: filingDate,
+                        sec_html_url: secHtmlUrl
+                    })
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`10-K generation started! Job ID: ${result.job_id}. Refresh the page in 5-10 minutes to see the result.`);
+                } else {
+                    alert(`Error: ${result.message}`);
+                }
+            } catch (error) {
+                alert(`Failed to start generation: ${error.message}`);
+            }
+        }
+
+        async function generateTranscript(ticker, quarter, year) {
+            alert(`Generating transcript for ${ticker} Q${quarter} ${year}...`);
 
             try {
                 const response = await fetch('/api/admin/generate-transcript-summary', {
@@ -601,88 +738,19 @@
                 });
 
                 const result = await response.json();
-
                 if (result.status === 'success') {
-                    document.getElementById('transcript-result').style.display = 'block';
+                    alert('✅ Transcript generated successfully! Check your email.');
+                    loadTickerResearch(); // Reload to show updated status
                 } else {
-                    document.getElementById('transcript-error').style.display = 'block';
-                    document.getElementById('transcript-error-message').textContent = result.message;
-                    document.getElementById('transcript-quarter-section').style.display = 'block';
+                    alert(`❌ Error: ${result.message}`);
                 }
-
             } catch (error) {
-                document.getElementById('transcript-error').style.display = 'block';
-                document.getElementById('transcript-error-message').textContent = error.message;
-                document.getElementById('transcript-quarter-section').style.display = 'block';
+                alert(`❌ Failed: ${error.message}`);
             }
         }
 
-        // =============================================================================
-        // PRESS RELEASES TAB
-        // =============================================================================
-
-        async function validateTickerForPR() {
-            const ticker = document.getElementById('pr-ticker').value.toUpperCase().trim();
-            const resultDiv = document.getElementById('pr-validation-result');
-
-            if (!ticker) {
-                resultDiv.innerHTML = '<div class="validation-result error">⚠️ Please enter a ticker symbol</div>';
-                return;
-            }
-
-            resultDiv.innerHTML = '<div class="validation-result">Validating ticker...</div>';
-
-            try {
-                const response = await fetch(`/api/fmp-validate-ticker?ticker=${ticker}&type=press_release`);
-                const data = await response.json();
-
-                if (data.valid) {
-                    const select = document.getElementById('pr-release');
-                    select.innerHTML = '';
-
-                    if (data.available_releases && data.available_releases.length > 0) {
-                        data.available_releases.forEach((r, index) => {
-                            const option = document.createElement('option');
-                            option.value = r.date;
-                            option.textContent = `${r.date} - ${r.title}`;
-                            if (index === 0) option.selected = true;
-                            select.appendChild(option);
-                        });
-
-                        resultDiv.innerHTML = `
-                            <div class="validation-result success">
-                                ✅ ${ticker} - ${data.company_name}<br>
-                                <span style="font-size: 12px; color: #059669;">${data.available_releases.length} press releases available</span>
-                            </div>
-                        `;
-
-                        document.getElementById('pr-release-section').style.display = 'block';
-                    } else {
-                        resultDiv.innerHTML = `<div class="validation-result error">❌ No press releases available for ${ticker}</div>`;
-                        document.getElementById('pr-release-section').style.display = 'none';
-                    }
-                } else {
-                    resultDiv.innerHTML = `<div class="validation-result error">❌ ${data.error}</div>`;
-                    document.getElementById('pr-release-section').style.display = 'none';
-                }
-            } catch (error) {
-                resultDiv.innerHTML = `<div class="validation-result error">❌ Validation failed: ${error.message}</div>`;
-            }
-        }
-
-        async function generatePRSummary() {
-            const ticker = document.getElementById('pr-ticker').value.toUpperCase().trim();
-            const prDate = document.getElementById('pr-release').value;
-
-            if (!ticker || !prDate) {
-                alert('Please validate ticker and select a press release first');
-                return;
-            }
-
-            // Hide sections, show processing
-            document.getElementById('pr-release-section').style.display = 'none';
-            document.getElementById('pr-result').style.display = 'none';
-            document.getElementById('pr-error').style.display = 'none';
+        async function generatePressRelease(ticker, date) {
+            alert(`Generating press release for ${ticker} on ${date}...`);
 
             try {
                 const response = await fetch('/api/admin/generate-transcript-summary', {
@@ -692,216 +760,98 @@
                         token: token,
                         ticker: ticker,
                         report_type: 'press_release',
-                        pr_date: prDate
+                        pr_date: date
                     })
                 });
 
                 const result = await response.json();
-
                 if (result.status === 'success') {
-                    document.getElementById('pr-result').style.display = 'block';
+                    alert('✅ Press release summary generated! Check your email.');
+                    loadTickerResearch(); // Reload
                 } else {
-                    document.getElementById('pr-error').style.display = 'block';
-                    document.getElementById('pr-error-message').textContent = result.message;
-                    document.getElementById('pr-release-section').style.display = 'block';
+                    alert(`❌ Error: ${result.message}`);
                 }
-
             } catch (error) {
-                document.getElementById('pr-error').style.display = 'block';
-                document.getElementById('pr-error-message').textContent = error.message;
-                document.getElementById('pr-release-section').style.display = 'block';
+                alert(`❌ Failed: ${error.message}`);
             }
         }
 
-        // =============================================================================
-        // COMPANY PROFILES TAB
-        // =============================================================================
+        // PDF drag & drop handlers
+        function handlePDFDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.target.style.borderColor = '#1e40af';
+            e.target.style.background = '#eff6ff';
+        }
 
-        async function validateTickerForProfile() {
-            const ticker = document.getElementById('profile-ticker').value.toUpperCase().trim();
-            const resultDiv = document.getElementById('profile-validation-result');
+        function handlePDFDragLeave(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.target.style.borderColor = '#e5e7eb';
+            e.target.style.background = '#f9fafb';
+        }
 
-            if (!ticker) {
-                resultDiv.innerHTML = '<div class="validation-result error">⚠️ Please enter a ticker symbol</div>';
+        function handlePDFDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.target.style.borderColor = '#e5e7eb';
+            e.target.style.background = '#f9fafb';
+
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type === 'application/pdf') {
+                selectedPDFFile = files[0];
+                showPDFUploadForm(files[0].name);
+            } else {
+                alert('Please drop a PDF file');
+            }
+        }
+
+        function handlePDFFileSelect(e) {
+            const files = e.target.files;
+            if (files.length > 0 && files[0].type === 'application/pdf') {
+                selectedPDFFile = files[0];
+                showPDFUploadForm(files[0].name);
+            } else {
+                alert('Please select a PDF file');
+            }
+        }
+
+        function showPDFUploadForm(filename) {
+            document.getElementById('pdf-filename').textContent = filename;
+            document.getElementById('pdf-upload-form').style.display = 'block';
+
+            // Set default date to today
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('pdf-date').value = today;
+        }
+
+        function cancelPDFUpload() {
+            selectedPDFFile = null;
+            document.getElementById('pdf-upload-form').style.display = 'none';
+            document.getElementById('pdf-file-input').value = '';
+        }
+
+        async function uploadAndAnalyzePDF() {
+            if (!selectedPDFFile || !currentTickerData) {
+                alert('Please select a PDF and load ticker first');
                 return;
             }
 
-            resultDiv.innerHTML = '<div class="validation-result">Validating ticker...</div>';
+            const date = document.getElementById('pdf-date').value;
+            const type = document.getElementById('pdf-type').value;
+            const title = document.getElementById('pdf-title').value;
 
-            try {
-                const response = await fetch(`/api/fmp-validate-ticker?ticker=${ticker}&type=profile`);
-                const data = await response.json();
-
-                if (data.valid) {
-                    const select = document.getElementById('profile-fiscal-year');
-                    select.innerHTML = '';
-
-                    if (data.available_years && data.available_years.length > 0) {
-                        // Populate dropdown with available years
-                        data.available_years.forEach((y, index) => {
-                            const option = document.createElement('option');
-                            option.value = index;  // Store index to access data later
-                            option.dataset.year = y.year;
-                            option.dataset.filingDate = y.filing_date;
-                            option.dataset.secHtmlUrl = y.sec_html_url;
-                            option.textContent = `${y.year} (Filed: ${y.filing_date})`;
-                            if (index === 0) option.selected = true;  // Select latest by default
-                            select.appendChild(option);
-                        });
-
-                        resultDiv.innerHTML = `
-                            <div class="validation-result success">
-                                ✅ ${ticker} - ${data.company_name} (${data.industry})<br>
-                                <span style="font-size: 12px; color: #059669;">Found ${data.available_years.length} 10-K filings from FMP</span>
-                            </div>
-                        `;
-
-                        // Show year selection section
-                        document.getElementById('profile-year-section').style.display = 'block';
-                    } else {
-                        resultDiv.innerHTML = `
-                            <div class="validation-result warning">
-                                ⚠️ ${ticker} - ${data.company_name} (${data.industry})<br>
-                                <span style="font-size: 12px; color: #92400e;">${data.message || 'No 10-K filings found in FMP'}</span>
-                            </div>
-                        `;
-                        document.getElementById('profile-year-section').style.display = 'none';
-                    }
-                } else {
-                    resultDiv.innerHTML = `<div class="validation-result error">❌ ${data.error}</div>`;
-                    document.getElementById('profile-year-section').style.display = 'none';
-                }
-            } catch (error) {
-                resultDiv.innerHTML = `<div class="validation-result error">❌ Validation failed: ${error.message}</div>`;
-            }
-        }
-
-        async function generateCompanyProfile() {
-            const ticker = document.getElementById('profile-ticker').value.toUpperCase().trim();
-            const select = document.getElementById('profile-fiscal-year');
-            const selectedOption = select.options[select.selectedIndex];
-
-            // Validation
-            if (!ticker) {
-                alert('Please enter and validate a ticker symbol first');
+            if (!date || !title) {
+                alert('Please fill in all fields');
                 return;
             }
 
-            if (!selectedOption || !selectedOption.dataset.secHtmlUrl) {
-                alert('Please select a fiscal year from the dropdown');
-                return;
-            }
-
-            // Extract data from selected option
-            const fiscalYear = parseInt(selectedOption.dataset.year);
-            const filingDate = selectedOption.dataset.filingDate;
-            const secHtmlUrl = selectedOption.dataset.secHtmlUrl;
-
-            // Hide year section, show status
-            document.getElementById('profile-year-section').style.display = 'none';
-            document.getElementById('profile-job-status').style.display = 'block';
-            document.getElementById('profile-result').style.display = 'none';
-            document.getElementById('profile-error').style.display = 'none';
-
-            try {
-                // Create job (FMP mode - no file upload needed!)
-                const response = await fetch('/api/admin/generate-company-profile', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        token: token,
-                        ticker: ticker,
-                        fiscal_year: fiscalYear,
-                        filing_date: filingDate,
-                        sec_html_url: secHtmlUrl
-                    })
-                });
-
-                const result = await response.json();
-
-                if (result.status === 'success') {
-                    // Start polling job status
-                    pollCompanyProfileJobStatus(result.job_id);
-                } else {
-                    // Show error
-                    document.getElementById('profile-job-status').style.display = 'none';
-                    document.getElementById('profile-error').style.display = 'block';
-                    document.getElementById('profile-error-message').textContent = result.message;
-                    document.getElementById('profile-year-section').style.display = 'block';
-                }
-
-            } catch (error) {
-                document.getElementById('profile-job-status').style.display = 'none';
-                document.getElementById('profile-error').style.display = 'block';
-                document.getElementById('profile-error-message').textContent = error.message;
-                document.getElementById('profile-year-section').style.display = 'block';
-            }
-        }
-
-        async function pollCompanyProfileJobStatus(jobId) {
-            const pollInterval = setInterval(async () => {
-                try {
-                    const response = await fetch(`/jobs/${jobId}?token=${token}`);
-                    const status = await response.json();
-
-                    // Update progress bar
-                    const progress = status.progress || 0;
-                    document.getElementById('profile-progress').style.width = progress + '%';
-                    document.getElementById('profile-progress-text').textContent = progress + '%';
-
-                    // Update status text
-                    const phaseMessages = {
-                        'extracting_text': 'Extracting 10-K text...',
-                        'generating_profile': 'Generating profile with Gemini 2.5 Flash (5-10 min)...',
-                        'saving_profile': 'Saving profile to database...',
-                        'sending_email': 'Sending email notification...',
-                        'complete': 'Complete!'
-                    };
-
-                    document.getElementById('profile-status-text').textContent =
-                        phaseMessages[status.phase] || status.phase || 'Processing...';
-
-                    // Update time estimate
-                    if (progress < 30) {
-                        document.getElementById('profile-time-estimate').textContent = 'Estimated time remaining: 8-10 minutes';
-                    } else if (progress < 80) {
-                        document.getElementById('profile-time-estimate').textContent = 'Estimated time remaining: 3-5 minutes';
-                    } else if (progress < 100) {
-                        document.getElementById('profile-time-estimate').textContent = 'Estimated time remaining: < 1 minute';
-                    }
-
-                    // Check completion
-                    if (status.status === 'completed') {
-                        clearInterval(pollInterval);
-
-                        // Show success
-                        document.getElementById('profile-job-status').style.display = 'none';
-                        document.getElementById('profile-result').style.display = 'block';
-
-                    } else if (status.status === 'failed' || status.status === 'timeout') {
-                        clearInterval(pollInterval);
-
-                        // Show error
-                        document.getElementById('profile-job-status').style.display = 'none';
-                        document.getElementById('profile-error').style.display = 'block';
-                        document.getElementById('profile-error-message').textContent =
-                            status.error_message || 'Unknown error occurred';
-                        document.getElementById('profile-upload-section').style.display = 'block';
-                    }
-
-                } catch (error) {
-                    clearInterval(pollInterval);
-
-                    document.getElementById('profile-job-status').style.display = 'none';
-                    document.getElementById('profile-error').style.display = 'block';
-                    document.getElementById('profile-error-message').textContent =
-                        'Failed to poll job status: ' + error.message;
-                }
-
-            }, 10000); // Poll every 10 seconds
+            alert('PDF upload for investor presentations is coming soon! For now, this feature is prepared but not fully wired.');
+            // TODO: Implement PDF upload endpoint
         }
 
         // =============================================================================
+
         // VIEW PROFILES TAB - UNIFIED RESEARCH LIBRARY
         // =============================================================================
 
@@ -1426,7 +1376,7 @@
             }
 
             // Load profiles when View Profiles tab is opened
-            if (tabName === 'view-profiles') {
+            if (tabName === 'research-library') {
                 loadProfiles();
             }
         };

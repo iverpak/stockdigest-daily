@@ -405,64 +405,58 @@
 
         <!-- View Profiles Tab -->
         <div id="view-profiles-tab" class="tab-content" style="display:none;">
-            <h2>Company Profiles Library</h2>
+            <h2>Research Library</h2>
             <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">
-                Browse, search, and manage all generated company profiles.
+                Browse, search, and manage all generated research documents.
             </p>
 
-            <!-- Search Box -->
-            <div style="margin-bottom: 20px;">
+            <!-- Research Type Filter -->
+            <div style="margin-bottom: 20px; display: flex; gap: 12px; align-items: center;">
+                <label style="font-weight: 600; color: #374151; margin: 0;">View:</label>
+                <select id="research-type-filter" onchange="switchResearchType()"
+                        style="padding: 10px 16px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; cursor: pointer; flex: 0 0 200px;">
+                    <option value="10k">10-K Profiles</option>
+                    <option value="10q">10-Q Profiles</option>
+                    <option value="presentations">Investor Presentations</option>
+                    <option value="transcripts">Earnings Transcripts</option>
+                    <option value="press_releases">Press Releases</option>
+                </select>
+
+                <!-- Search Box -->
                 <input
                     type="text"
                     id="profiles-search"
-                    placeholder="🔍 Search by ticker or company name..."
+                    placeholder="🔍 Search by ticker..."
                     oninput="filterProfiles()"
-                    style="width: 100%; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; transition: border-color 0.3s;"
+                    style="flex: 1; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; transition: border-color 0.3s;"
                     onfocus="this.style.borderColor='#1e40af'"
                     onblur="this.style.borderColor='#e5e7eb'"
                 />
             </div>
 
             <div id="profiles-loading" style="text-align: center; padding: 40px;">
-                <p style="color: #6b7280;">Loading profiles...</p>
+                <p style="color: #6b7280;">Loading...</p>
             </div>
 
             <div id="profiles-list" style="display:none;">
                 <p id="profiles-count" style="margin-bottom: 16px; color: #6b7280; font-size: 14px;"></p>
 
                 <div style="overflow-x: auto;">
-                    <table style="width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; min-width: 1200px;">
+                    <table id="research-table" style="width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; min-width: 1200px;">
                         <thead style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white;">
-                            <tr>
-                                <th onclick="sortTable('ticker')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
-                                    Ticker <span id="sort-ticker" style="font-size: 10px;">▼</span>
-                                </th>
-                                <th onclick="sortTable('company_name')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
-                                    Company <span id="sort-company_name" style="font-size: 10px;">○</span>
-                                </th>
-                                <th onclick="sortTable('industry')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
-                                    Industry <span id="sort-industry" style="font-size: 10px;">○</span>
-                                </th>
-                                <th onclick="sortTable('fiscal_year')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
-                                    FY <span id="sort-fiscal_year" style="font-size: 10px;">○</span>
-                                </th>
-                                <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer; user-select: none;">
-                                    Generated <span id="sort-generated_at" style="font-size: 10px;">○</span>
-                                </th>
-                                <th style="padding: 12px; text-align: center;">Tokens (In/Out)</th>
-                                <th style="padding: 12px; text-align: center;">Time</th>
-                                <th style="padding: 12px; text-align: center;">Actions</th>
+                            <tr id="table-headers">
+                                <!-- Headers will be inserted dynamically -->
                             </tr>
                         </thead>
                         <tbody id="profiles-table-body">
-                            <!-- Rows will be inserted here -->
+                            <!-- Rows will be inserted dynamically -->
                         </tbody>
                     </table>
                 </div>
             </div>
 
             <div id="profiles-error" style="display:none; padding: 20px; background: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px; margin-top: 20px;">
-                <p style="margin: 0; font-weight: 600; color: #991b1b;">Error loading profiles</p>
+                <p style="margin: 0; font-weight: 600; color: #991b1b;">Error loading research</p>
                 <p id="profiles-error-message" style="margin: 8px 0 0 0; color: #991b1b; font-size: 14px;"></p>
             </div>
         </div>
@@ -908,10 +902,18 @@
         }
 
         // =============================================================================
-        // VIEW PROFILES TAB
+        // VIEW PROFILES TAB - UNIFIED RESEARCH LIBRARY
         // =============================================================================
 
-        let currentProfile = null;  // Store current profile for download
+        let currentProfile = null;  // Store current document for download
+        let currentResearchType = '10k';  // Current filter selection
+        let allProfiles = [];  // Store all documents for filtering/sorting
+        let currentSort = { column: 'ticker', direction: 'asc' };
+
+        async function switchResearchType() {
+            currentResearchType = document.getElementById('research-type-filter').value;
+            await loadProfiles();
+        }
 
         async function loadProfiles() {
             document.getElementById('profiles-loading').style.display = 'block';
@@ -919,15 +921,41 @@
             document.getElementById('profiles-error').style.display = 'none';
 
             try {
-                const response = await fetch(`/api/admin/company-profiles?token=${token}`);
+                let endpoint, dataKey;
+
+                switch (currentResearchType) {
+                    case '10k':
+                        endpoint = '/api/admin/company-profiles';
+                        dataKey = 'profiles';
+                        break;
+                    case '10q':
+                        // 10-Q uses same endpoint, just filtered
+                        // For now, show empty since we haven't generated any 10-Qs yet
+                        displayProfiles([]);
+                        return;
+                    case 'presentations':
+                        endpoint = '/api/admin/investor-presentations';
+                        dataKey = 'presentations';
+                        break;
+                    case 'transcripts':
+                        endpoint = '/api/admin/transcripts';
+                        dataKey = 'transcripts';
+                        break;
+                    case 'press_releases':
+                        endpoint = '/api/admin/press-releases';
+                        dataKey = 'press_releases';
+                        break;
+                }
+
+                const response = await fetch(`${endpoint}?token=${token}`);
                 const data = await response.json();
 
                 if (data.status === 'success') {
-                    displayProfiles(data.profiles);
+                    displayProfiles(data[dataKey] || []);
                 } else {
                     document.getElementById('profiles-loading').style.display = 'none';
                     document.getElementById('profiles-error').style.display = 'block';
-                    document.getElementById('profiles-error-message').textContent = data.message || 'Failed to load profiles';
+                    document.getElementById('profiles-error-message').textContent = data.message || 'Failed to load research';
                 }
             } catch (error) {
                 document.getElementById('profiles-loading').style.display = 'none';
@@ -936,89 +964,235 @@
             }
         }
 
-        let allProfiles = [];  // Store all profiles for filtering/sorting
-        let currentSort = { column: 'ticker', direction: 'asc' };
-
         function displayProfiles(profiles) {
-            allProfiles = profiles;  // Store for filtering/sorting
+            allProfiles = profiles;
             document.getElementById('profiles-loading').style.display = 'none';
             document.getElementById('profiles-list').style.display = 'block';
-            document.getElementById('profiles-count').textContent = `Found ${profiles.length} company profile(s)`;
+
+            const typeLabels = {
+                '10k': '10-K profile',
+                '10q': '10-Q profile',
+                'presentations': 'investor presentation',
+                'transcripts': 'transcript',
+                'press_releases': 'press release'
+            };
+            const typeLabel = typeLabels[currentResearchType] || 'document';
+            document.getElementById('profiles-count').textContent = `Found ${profiles.length} ${typeLabel}${profiles.length !== 1 ? 's' : ''}`;
+
+            // Build headers dynamically
+            const thead = document.getElementById('table-headers');
+            thead.innerHTML = getTableHeaders(currentResearchType);
 
             const tbody = document.getElementById('profiles-table-body');
             tbody.innerHTML = '';
 
             if (profiles.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="padding: 40px; text-align: center; color: #6b7280;">No profiles generated yet. Create one in the "Company Profiles" tab!</td></tr>';
+                const emptyMessages = {
+                    '10k': 'No 10-K profiles generated yet. Create one in the "Company Profiles" tab!',
+                    '10q': 'No 10-Q profiles generated yet. (Infrastructure ready, not wired to UI)',
+                    'presentations': 'No investor presentations analyzed yet.',
+                    'transcripts': 'No earnings transcripts generated yet. Create one in the "Earnings Transcripts" tab!',
+                    'press_releases': 'No press releases generated yet. Create one in the "Press Releases" tab!'
+                };
+                tbody.innerHTML = `<tr><td colspan="10" style="padding: 40px; text-align: center; color: #6b7280;">${emptyMessages[currentResearchType]}</td></tr>`;
                 return;
             }
 
-            profiles.forEach(profile => {
+            profiles.forEach(doc => {
                 const row = document.createElement('tr');
-                row.setAttribute('data-ticker', profile.ticker);
-                row.setAttribute('data-company', profile.company_name.toLowerCase());
+                row.setAttribute('data-ticker', doc.ticker);
                 row.style.borderBottom = '1px solid #e5e7eb';
                 row.onmouseover = () => row.style.background = '#f9fafb';
                 row.onmouseout = () => row.style.background = 'white';
 
-                const generatedDate = new Date(profile.generated_at).toLocaleString();
-                const tokensIn = (profile.token_count_input || 0).toLocaleString();
-                const tokensOut = (profile.token_count_output || 0).toLocaleString();
-                const genTime = profile.generation_time_seconds || 0;
-                const timeStr = genTime >= 60 ? `${Math.floor(genTime/60)}m ${genTime%60}s` : `${genTime}s`;
-
-                row.innerHTML = `
-                    <td style="padding: 12px; font-weight: 600; color: #1e40af;">${profile.ticker}</td>
-                    <td style="padding: 12px;">${profile.company_name}</td>
-                    <td style="padding: 12px; color: #6b7280; font-size: 13px;">${profile.industry || 'N/A'}</td>
-                    <td style="padding: 12px;">${profile.fiscal_year}</td>
-                    <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
-                    <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 12px;">
-                        <div>${tokensIn} / ${tokensOut}</div>
-                        <div style="font-size: 11px; color: #9ca3af;">(${((profile.token_count_input || 0) + (profile.token_count_output || 0)).toLocaleString()} total)</div>
-                    </td>
-                    <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${timeStr}</td>
-                    <td style="padding: 12px; text-align: center;">
-                        <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: wrap;">
-                            <button onclick="viewProfile('${profile.ticker}'); event.stopPropagation();"
-                                    title="View Profile"
-                                    style="background: #1e40af; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                                👁️
-                            </button>
-                            <button onclick="emailProfile('${profile.ticker}'); event.stopPropagation();"
-                                    title="Email to Me"
-                                    style="background: #059669; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                                📧
-                            </button>
-                            <button onclick="deleteProfile('${profile.ticker}', '${profile.company_name}'); event.stopPropagation();"
-                                    title="Delete Profile"
-                                    style="background: #dc2626; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                                🗑️
-                            </button>
-                        </div>
-                    </td>
-                `;
-
+                row.innerHTML = getTableRow(doc, currentResearchType);
                 tbody.appendChild(row);
             });
         }
 
-        async function viewProfile(ticker) {
-            try {
-                const response = await fetch(`/api/admin/company-profiles?token=${token}`);
-                const data = await response.json();
+        function getTableHeaders(type) {
+            const common = `
+                <th onclick="sortTable('ticker')" style="padding: 12px; text-align: left; cursor: pointer;">
+                    Ticker <span id="sort-ticker" style="font-size: 10px;">▼</span>
+                </th>
+            `;
 
-                if (data.status === 'success') {
-                    const profile = data.profiles.find(p => p.ticker === ticker);
-                    if (profile) {
-                        currentProfile = profile;
-                        document.getElementById('modal-title').textContent = `${profile.company_name} (${profile.ticker}) - FY${profile.fiscal_year}`;
-                        document.getElementById('modal-content').innerHTML = markdownToHtml(profile.profile_markdown);
-                        document.getElementById('profile-modal').style.display = 'block';
+            switch (type) {
+                case '10k':
+                case '10q':
+                    return common + `
+                        <th style="padding: 12px; text-align: left;">Company</th>
+                        <th style="padding: 12px; text-align: left;">Industry</th>
+                        <th onclick="sortTable('fiscal_year')" style="padding: 12px; text-align: left; cursor: pointer;">FY</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
+                        <th style="padding: 12px; text-align: center;">Tokens</th>
+                        <th style="padding: 12px; text-align: center;">Time</th>
+                        <th style="padding: 12px; text-align: center;">Actions</th>
+                    `;
+                case 'presentations':
+                    return common + `
+                        <th style="padding: 12px; text-align: left;">Company</th>
+                        <th style="padding: 12px; text-align: left;">Title</th>
+                        <th onclick="sortTable('presentation_date')" style="padding: 12px; text-align: left; cursor: pointer;">Date</th>
+                        <th style="padding: 12px; text-align: center;">Type</th>
+                        <th style="padding: 12px; text-align: center;">Pages</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Analyzed</th>
+                        <th style="padding: 12px; text-align: center;">Actions</th>
+                    `;
+                case 'transcripts':
+                    return common + `
+                        <th style="padding: 12px; text-align: left;">Quarter</th>
+                        <th onclick="sortTable('report_date')" style="padding: 12px; text-align: left; cursor: pointer;">Report Date</th>
+                        <th style="padding: 12px; text-align: center;">Words</th>
+                        <th style="padding: 12px; text-align: left;">AI Provider</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
+                        <th style="padding: 12px; text-align: center;">Actions</th>
+                    `;
+                case 'press_releases':
+                    return common + `
+                        <th onclick="sortTable('report_date')" style="padding: 12px; text-align: left; cursor: pointer;">Date</th>
+                        <th style="padding: 12px; text-align: center;">Words</th>
+                        <th style="padding: 12px; text-align: left;">AI Provider</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
+                        <th style="padding: 12px; text-align: center;">Actions</th>
+                    `;
+            }
+        }
+
+        function getTableRow(doc, type) {
+            const generatedDate = new Date(doc.generated_at).toLocaleString();
+
+            switch (type) {
+                case '10k':
+                case '10q':
+                    const tokensIn = (doc.token_count_input || 0).toLocaleString();
+                    const tokensOut = (doc.token_count_output || 0).toLocaleString();
+                    const genTime = doc.generation_time_seconds || 0;
+                    const timeStr = genTime >= 60 ? `${Math.floor(genTime/60)}m ${genTime%60}s` : `${genTime}s`;
+
+                    return `
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px;">${doc.company_name}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.industry || 'N/A'}</td>
+                        <td style="padding: 12px;">${doc.fiscal_year}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
+                        <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 12px;">
+                            ${tokensIn} / ${tokensOut}
+                        </td>
+                        <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${timeStr}</td>
+                        <td style="padding: 12px; text-align: center;">
+                            ${getActionButtons(doc, type)}
+                        </td>
+                    `;
+                case 'presentations':
+                    return `
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px;">${doc.company_name || 'N/A'}</td>
+                        <td style="padding: 12px; font-size: 13px;">${doc.presentation_title || 'N/A'}</td>
+                        <td style="padding: 12px; font-size: 13px;">${doc.presentation_date || 'N/A'}</td>
+                        <td style="padding: 12px; text-align: center; font-size: 13px;">${doc.presentation_type || 'N/A'}</td>
+                        <td style="padding: 12px; text-align: center;">${doc.page_count || 'N/A'}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
+                        <td style="padding: 12px; text-align: center;">
+                            ${getActionButtons(doc, type)}
+                        </td>
+                    `;
+                case 'transcripts':
+                    return `
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px;">${doc.quarter_label}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
+                        <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.ai_provider || 'N/A'}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
+                        <td style="padding: 12px; text-align: center;">
+                            ${getActionButtons(doc, type)}
+                        </td>
+                    `;
+                case 'press_releases':
+                    return `
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
+                        <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.ai_provider || 'N/A'}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
+                        <td style="padding: 12px; text-align: center;">
+                            ${getActionButtons(doc, type)}
+                        </td>
+                    `;
+            }
+        }
+
+        function getActionButtons(doc, type) {
+            const docId = JSON.stringify({
+                ticker: doc.ticker,
+                type: type,
+                presentation_date: doc.presentation_date,
+                quarter: doc.quarter,
+                year: doc.year,
+                report_date: doc.report_date
+            }).replace(/"/g, '&quot;');
+
+            return `
+                <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: wrap;">
+                    <button onclick='viewDocument(${docId}); event.stopPropagation();'
+                            title="View"
+                            style="background: #1e40af; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        👁️
+                    </button>
+                    <button onclick='emailDocument(${docId}); event.stopPropagation();'
+                            title="Email to Me"
+                            style="background: #059669; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        📧
+                    </button>
+                    <button onclick='deleteDocument(${docId}); event.stopPropagation();'
+                            title="Delete"
+                            style="background: #dc2626; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        🗑️
+                    </button>
+                </div>
+            `;
+        }
+
+        async function viewDocument(docInfo) {
+            try {
+                // Find document in current list
+                const doc = allProfiles.find(d => {
+                    if (docInfo.type === '10k' || docInfo.type === '10q') {
+                        return d.ticker === docInfo.ticker;
+                    } else if (docInfo.type === 'presentations') {
+                        return d.ticker === docInfo.ticker && d.presentation_date === docInfo.presentation_date;
+                    } else if (docInfo.type === 'transcripts') {
+                        return d.ticker === docInfo.ticker && d.quarter === docInfo.quarter && d.year === docInfo.year;
+                    } else if (docInfo.type === 'press_releases') {
+                        return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date;
                     }
+                });
+
+                if (doc) {
+                    currentProfile = doc;
+                    currentProfile.type = docInfo.type; // Store type for download
+
+                    // Set modal title
+                    let title = '';
+                    if (docInfo.type === '10k' || docInfo.type === '10q') {
+                        title = `${doc.company_name} (${doc.ticker}) - FY${doc.fiscal_year}`;
+                    } else if (docInfo.type === 'presentations') {
+                        title = `${doc.company_name || doc.ticker} - ${doc.presentation_title || 'Presentation'} (${doc.presentation_date})`;
+                    } else if (docInfo.type === 'transcripts') {
+                        title = `${doc.ticker} Earnings Transcript - Q${doc.quarter} ${doc.year}`;
+                    } else if (docInfo.type === 'press_releases') {
+                        title = `${doc.ticker} Press Release - ${doc.report_date}`;
+                    }
+                    document.getElementById('modal-title').textContent = title;
+
+                    // Get content
+                    const content = doc.profile_markdown || doc.summary_text || 'No content available';
+                    document.getElementById('modal-content').innerHTML = markdownToHtml(content);
+                    document.getElementById('profile-modal').style.display = 'block';
                 }
             } catch (error) {
-                alert('Failed to load profile: ' + error.message);
+                alert('Failed to load document: ' + error.message);
             }
         }
 
@@ -1030,8 +1204,24 @@
         function downloadProfile() {
             if (!currentProfile) return;
 
-            const filename = `${currentProfile.ticker}_CompanyProfile_FY${currentProfile.fiscal_year}.md`;
-            const blob = new Blob([currentProfile.profile_markdown], { type: 'text/markdown' });
+            let filename, content;
+            const type = currentProfile.type || currentResearchType;
+
+            if (type === '10k' || type === '10q') {
+                filename = `${currentProfile.ticker}_${type.toUpperCase()}_FY${currentProfile.fiscal_year}.md`;
+                content = currentProfile.profile_markdown;
+            } else if (type === 'presentations') {
+                filename = `${currentProfile.ticker}_Presentation_${currentProfile.presentation_date}.md`;
+                content = currentProfile.profile_markdown;
+            } else if (type === 'transcripts') {
+                filename = `${currentProfile.ticker}_Transcript_Q${currentProfile.quarter}_${currentProfile.year}.md`;
+                content = currentProfile.summary_text;
+            } else if (type === 'press_releases') {
+                filename = `${currentProfile.ticker}_PressRelease_${currentProfile.report_date}.md`;
+                content = currentProfile.summary_text;
+            }
+
+            const blob = new Blob([content], { type: 'text/markdown' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -1042,7 +1232,6 @@
             URL.revokeObjectURL(url);
         }
 
-        // Filter profiles by search query
         function filterProfiles() {
             const searchQuery = document.getElementById('profiles-search').value.toLowerCase();
             const rows = document.querySelectorAll('#profiles-table-body tr');
@@ -1050,9 +1239,8 @@
             let visibleCount = 0;
             rows.forEach(row => {
                 const ticker = row.getAttribute('data-ticker') || '';
-                const company = row.getAttribute('data-company') || '';
 
-                if (ticker.toLowerCase().includes(searchQuery) || company.includes(searchQuery)) {
+                if (ticker.toLowerCase().includes(searchQuery)) {
                     row.style.display = '';
                     visibleCount++;
                 } else {
@@ -1060,15 +1248,22 @@
                 }
             });
 
+            const typeLabels = {
+                '10k': '10-K profile',
+                '10q': '10-Q profile',
+                'presentations': 'presentation',
+                'transcripts': 'transcript',
+                'press_releases': 'press release'
+            };
+            const typeLabel = typeLabels[currentResearchType] || 'document';
+
             const countText = searchQuery ?
-                `Showing ${visibleCount} of ${allProfiles.length} profile(s)` :
-                `Found ${allProfiles.length} company profile(s)`;
+                `Showing ${visibleCount} of ${allProfiles.length} ${typeLabel}${allProfiles.length !== 1 ? 's' : ''}` :
+                `Found ${allProfiles.length} ${typeLabel}${allProfiles.length !== 1 ? 's' : ''}`;
             document.getElementById('profiles-count').textContent = countText;
         }
 
-        // Sort table by column
         function sortTable(column) {
-            // Toggle sort direction
             if (currentSort.column === column) {
                 currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
             } else {
@@ -1080,83 +1275,107 @@
             document.querySelectorAll('[id^="sort-"]').forEach(el => {
                 el.textContent = '○';
             });
-            document.getElementById(`sort-${column}`).textContent = currentSort.direction === 'asc' ? '▲' : '▼';
+            const sortEl = document.getElementById(`sort-${column}`);
+            if (sortEl) {
+                sortEl.textContent = currentSort.direction === 'asc' ? '▲' : '▼';
+            }
 
-            // Sort profiles array
+            // Sort array
             const sorted = [...allProfiles].sort((a, b) => {
                 let aVal = a[column];
                 let bVal = b[column];
 
-                // Handle nulls
                 if (!aVal) return 1;
                 if (!bVal) return -1;
 
-                // String comparison
                 if (typeof aVal === 'string') {
                     return currentSort.direction === 'asc' ?
                         aVal.localeCompare(bVal) :
                         bVal.localeCompare(aVal);
                 }
 
-                // Number comparison
-                return currentSort.direction === 'asc' ?
-                    aVal - bVal :
-                    bVal - aVal;
+                return currentSort.direction === 'asc' ? aVal - bVal : bVal - aVal;
             });
 
-            // Re-display sorted profiles
             displayProfiles(sorted);
 
-            // Re-apply current search filter
             const searchQuery = document.getElementById('profiles-search').value;
             if (searchQuery) {
                 filterProfiles();
             }
         }
 
-        // Delete profile
-        async function deleteProfile(ticker, companyName) {
-            if (!confirm(`Are you sure you want to delete the profile for ${companyName} (${ticker})?\n\nThis action cannot be undone.`)) {
+        async function deleteDocument(docInfo) {
+            if (!confirm(`Are you sure you want to delete this ${docInfo.type.replace('_', ' ')} for ${docInfo.ticker}?\n\nThis action cannot be undone.`)) {
                 return;
             }
 
             try {
-                const response = await fetch('/api/admin/delete-company-profile', {
+                let endpoint, body;
+
+                if (docInfo.type === '10k') {
+                    endpoint = '/api/admin/delete-company-profile';
+                    body = { token, ticker: docInfo.ticker };
+                } else if (docInfo.type === 'presentations') {
+                    endpoint = '/api/admin/delete-investor-presentation';
+                    body = { token, ticker: docInfo.ticker, presentation_date: docInfo.presentation_date };
+                } else if (docInfo.type === 'transcripts') {
+                    endpoint = '/api/admin/delete-transcript';
+                    body = { token, ticker: docInfo.ticker, quarter: docInfo.quarter, year: docInfo.year, report_type: 'transcript' };
+                } else if (docInfo.type === 'press_releases') {
+                    endpoint = '/api/admin/delete-transcript';
+                    body = { token, ticker: docInfo.ticker, report_date: docInfo.report_date, report_type: 'press_release' };
+                }
+
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token, ticker })
+                    body: JSON.stringify(body)
                 });
 
                 const data = await response.json();
 
                 if (data.status === 'success') {
                     alert(`✅ ${data.message}`);
-                    // Reload profiles
                     loadProfiles();
                 } else {
                     alert(`❌ ${data.message}`);
                 }
             } catch (error) {
-                alert(`❌ Failed to delete profile: ${error.message}`);
+                alert(`❌ Failed to delete: ${error.message}`);
             }
         }
 
-        // Email profile to admin
-        async function emailProfile(ticker) {
-            if (!confirm(`Send the profile for ${ticker} to your email?`)) {
+        async function emailDocument(docInfo) {
+            if (!confirm(`Send this ${docInfo.type.replace('_', ' ')} for ${docInfo.ticker} to your email?`)) {
                 return;
             }
 
-            // Show loading indicator
-            const originalText = event.target.textContent;
-            event.target.textContent = '⏳';
-            event.target.disabled = true;
-
             try {
-                const response = await fetch('/api/admin/email-company-profile', {
+                let endpoint, body;
+
+                if (docInfo.type === '10k') {
+                    endpoint = '/api/admin/email-company-profile';
+                    body = { token, ticker: docInfo.ticker };
+                } else {
+                    endpoint = '/api/admin/email-research';
+                    body = {
+                        token,
+                        ticker: docInfo.ticker,
+                        type: docInfo.type === 'transcripts' ? 'transcript' :
+                              docInfo.type === 'press_releases' ? 'press_release' :
+                              docInfo.type === 'presentations' ? 'presentation' : docInfo.type,
+                        presentation_date: docInfo.presentation_date,
+                        quarter: docInfo.quarter,
+                        year: docInfo.year,
+                        report_date: docInfo.report_date
+                    };
+                }
+
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token, ticker })
+                    body: JSON.stringify(body)
                 });
 
                 const data = await response.json();
@@ -1167,10 +1386,7 @@
                     alert(`❌ ${data.message}`);
                 }
             } catch (error) {
-                alert(`❌ Failed to email profile: ${error.message}`);
-            } finally {
-                event.target.textContent = originalText;
-                event.target.disabled = false;
+                alert(`❌ Failed to email: ${error.message}`);
             }
         }
 

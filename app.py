@@ -24358,6 +24358,381 @@ async def email_company_profile_api(request: Request):
         LOG.error(f"Failed to email company profile for {ticker}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+# =============================================================================
+# RESEARCH LIBRARY API ENDPOINTS - Investor Presentations, Transcripts, Press Releases
+# =============================================================================
+
+@APP.get("/api/admin/investor-presentations")
+async def get_investor_presentations_api(token: str = None):
+    """Get all investor presentation analyses from database"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ticker,
+                    company_name,
+                    industry,
+                    presentation_date,
+                    presentation_type,
+                    presentation_title,
+                    profile_markdown,
+                    page_count,
+                    file_size_bytes,
+                    ai_provider,
+                    ai_model,
+                    generation_time_seconds,
+                    token_count_input,
+                    token_count_output,
+                    status,
+                    generated_at
+                FROM sec_filings
+                WHERE filing_type = 'PRESENTATION'
+                ORDER BY presentation_date DESC, generated_at DESC
+            """)
+
+            presentations = cur.fetchall()
+
+            result = []
+            for p in presentations:
+                result.append({
+                    "ticker": p['ticker'],
+                    "company_name": p['company_name'],
+                    "industry": p['industry'],
+                    "presentation_date": str(p['presentation_date']) if p['presentation_date'] else None,
+                    "presentation_type": p['presentation_type'],
+                    "presentation_title": p['presentation_title'],
+                    "profile_markdown": p['profile_markdown'],
+                    "page_count": p['page_count'],
+                    "file_size_bytes": p['file_size_bytes'],
+                    "file_size_mb": round(p['file_size_bytes'] / 1048576, 2) if p['file_size_bytes'] else None,
+                    "ai_provider": p['ai_provider'],
+                    "ai_model": p['ai_model'],
+                    "generation_time_seconds": p['generation_time_seconds'],
+                    "token_count_input": p['token_count_input'],
+                    "token_count_output": p['token_count_output'],
+                    "status": p['status'],
+                    "generated_at": str(p['generated_at']),
+                    "char_count": len(p['profile_markdown']) if p['profile_markdown'] else 0
+                })
+
+            return {
+                "status": "success",
+                "presentations": result,
+                "count": len(result)
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch investor presentations: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/admin/transcripts")
+async def get_transcripts_api(token: str = None):
+    """Get all earnings transcript summaries from database"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ticker,
+                    quarter,
+                    year,
+                    report_date,
+                    summary_text,
+                    ai_provider,
+                    generated_at
+                FROM transcript_summaries
+                WHERE report_type = 'transcript'
+                ORDER BY year DESC, quarter DESC, generated_at DESC
+            """)
+
+            transcripts = cur.fetchall()
+
+            result = []
+            for t in transcripts:
+                result.append({
+                    "ticker": t['ticker'],
+                    "quarter": t['quarter'],
+                    "year": t['year'],
+                    "quarter_label": f"Q{t['quarter']} {t['year']}",
+                    "report_date": str(t['report_date']) if t['report_date'] else None,
+                    "summary_text": t['summary_text'],
+                    "ai_provider": t['ai_provider'],
+                    "generated_at": str(t['generated_at']),
+                    "char_count": len(t['summary_text']) if t['summary_text'] else 0,
+                    "word_count": len(t['summary_text'].split()) if t['summary_text'] else 0
+                })
+
+            return {
+                "status": "success",
+                "transcripts": result,
+                "count": len(result)
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch transcripts: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/admin/press-releases")
+async def get_press_releases_api(token: str = None):
+    """Get all press release summaries from database"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ticker,
+                    report_date,
+                    summary_text,
+                    ai_provider,
+                    generated_at
+                FROM transcript_summaries
+                WHERE report_type = 'press_release'
+                ORDER BY report_date DESC, generated_at DESC
+            """)
+
+            press_releases = cur.fetchall()
+
+            result = []
+            for pr in press_releases:
+                result.append({
+                    "ticker": pr['ticker'],
+                    "report_date": str(pr['report_date']) if pr['report_date'] else None,
+                    "summary_text": pr['summary_text'],
+                    "ai_provider": pr['ai_provider'],
+                    "generated_at": str(pr['generated_at']),
+                    "char_count": len(pr['summary_text']) if pr['summary_text'] else 0,
+                    "word_count": len(pr['summary_text'].split()) if pr['summary_text'] else 0
+                })
+
+            return {
+                "status": "success",
+                "press_releases": result,
+                "count": len(result)
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to fetch press releases: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/delete-investor-presentation")
+async def delete_investor_presentation_api(request: Request):
+    """Delete an investor presentation from database"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    presentation_date = body.get('presentation_date')
+
+    if not ticker or not presentation_date:
+        return {"status": "error", "message": "Ticker and presentation_date required"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM sec_filings
+                WHERE ticker = %s
+                  AND filing_type = 'PRESENTATION'
+                  AND presentation_date = %s
+            """, (ticker, presentation_date))
+            conn.commit()
+
+            if cur.rowcount > 0:
+                LOG.info(f"🗑️ Deleted investor presentation for {ticker} ({presentation_date})")
+                return {"status": "success", "message": f"Presentation for {ticker} deleted successfully"}
+            else:
+                return {"status": "error", "message": f"No presentation found for {ticker} on {presentation_date}"}
+
+    except Exception as e:
+        LOG.error(f"Failed to delete investor presentation: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/delete-transcript")
+async def delete_transcript_api(request: Request):
+    """Delete a transcript summary from database"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    quarter = body.get('quarter')
+    year = body.get('year')
+    report_type = body.get('report_type', 'transcript')  # 'transcript' or 'press_release'
+
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            if report_type == 'transcript':
+                if not quarter or not year:
+                    return {"status": "error", "message": "Quarter and year required for transcripts"}
+
+                cur.execute("""
+                    DELETE FROM transcript_summaries
+                    WHERE ticker = %s
+                      AND report_type = 'transcript'
+                      AND quarter = %s
+                      AND year = %s
+                """, (ticker, quarter, year))
+
+                identifier = f"Q{quarter} {year}"
+            else:  # press_release
+                report_date = body.get('report_date')
+                if not report_date:
+                    return {"status": "error", "message": "Report date required for press releases"}
+
+                cur.execute("""
+                    DELETE FROM transcript_summaries
+                    WHERE ticker = %s
+                      AND report_type = 'press_release'
+                      AND report_date = %s
+                """, (ticker, report_date))
+
+                identifier = report_date
+
+            conn.commit()
+
+            if cur.rowcount > 0:
+                LOG.info(f"🗑️ Deleted {report_type} for {ticker} ({identifier})")
+                return {"status": "success", "message": f"{report_type.replace('_', ' ').title()} for {ticker} deleted successfully"}
+            else:
+                return {"status": "error", "message": f"No {report_type} found for {ticker}"}
+
+    except Exception as e:
+        LOG.error(f"Failed to delete {report_type}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/email-research")
+async def email_research_api(request: Request):
+    """Email any research document (presentation, transcript, press release) to admin"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    research_type = body.get('type')  # 'presentation', 'transcript', 'press_release'
+
+    if not ticker or not research_type:
+        return {"status": "error", "message": "Ticker and type required"}
+
+    try:
+        content = None
+        subject = None
+
+        with db() as conn, conn.cursor() as cur:
+            if research_type == 'presentation':
+                presentation_date = body.get('presentation_date')
+                if not presentation_date:
+                    return {"status": "error", "message": "Presentation date required"}
+
+                cur.execute("""
+                    SELECT ticker, company_name, presentation_date, presentation_type,
+                           presentation_title, profile_markdown
+                    FROM sec_filings
+                    WHERE ticker = %s
+                      AND filing_type = 'PRESENTATION'
+                      AND presentation_date = %s
+                    LIMIT 1
+                """, (ticker, presentation_date))
+
+                doc = cur.fetchone()
+                if not doc:
+                    return {"status": "error", "message": f"No presentation found for {ticker}"}
+
+                content = doc['profile_markdown']
+                subject = f"Investor Presentation: {doc['company_name']} ({ticker}) - {doc['presentation_date']}"
+
+            elif research_type == 'transcript':
+                quarter = body.get('quarter')
+                year = body.get('year')
+                if not quarter or not year:
+                    return {"status": "error", "message": "Quarter and year required"}
+
+                cur.execute("""
+                    SELECT ticker, quarter, year, summary_text
+                    FROM transcript_summaries
+                    WHERE ticker = %s
+                      AND report_type = 'transcript'
+                      AND quarter = %s
+                      AND year = %s
+                    LIMIT 1
+                """, (ticker, quarter, year))
+
+                doc = cur.fetchone()
+                if not doc:
+                    return {"status": "error", "message": f"No transcript found for {ticker}"}
+
+                content = doc['summary_text']
+                subject = f"Earnings Transcript: {ticker} Q{quarter} {year}"
+
+            elif research_type == 'press_release':
+                report_date = body.get('report_date')
+                if not report_date:
+                    return {"status": "error", "message": "Report date required"}
+
+                cur.execute("""
+                    SELECT ticker, report_date, summary_text
+                    FROM transcript_summaries
+                    WHERE ticker = %s
+                      AND report_type = 'press_release'
+                      AND report_date = %s
+                    LIMIT 1
+                """, (ticker, report_date))
+
+                doc = cur.fetchone()
+                if not doc:
+                    return {"status": "error", "message": f"No press release found for {ticker}"}
+
+                content = doc['summary_text']
+                subject = f"Press Release: {ticker} - {report_date}"
+
+        if not content:
+            return {"status": "error", "message": "No content found"}
+
+        # Send email
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                h1 {{ color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; }}
+                h2 {{ color: #1e3a8a; margin-top: 24px; }}
+                pre {{ background: #f3f4f6; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }}
+            </style>
+        </head>
+        <body>
+            <h1>{subject}</h1>
+            <pre>{content}</pre>
+        </body>
+        </html>
+        """
+
+        send_email(subject=subject, body_html=html_body, to_email=DIGEST_TO)
+
+        LOG.info(f"📧 Emailed {research_type} for {ticker} to {DIGEST_TO}")
+        return {
+            "status": "success",
+            "message": f"{research_type.replace('_', ' ').title()} for {ticker} emailed successfully to {DIGEST_TO}"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to email {research_type} for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/admin/restart-worker")
 async def restart_worker_api(request: Request):
     """Restart worker thread only (gentle, 0 downtime)"""

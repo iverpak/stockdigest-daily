@@ -254,9 +254,9 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `GET /admin/ticker-metadata/{ticker}`: Retrieve ticker configuration
 - **`POST /admin/export-user-csv`**: Export beta users to CSV for daily processing
 
-**Company Profiles & Research Summaries (NEW - Oct 2025):**
+**Company Profiles & Research Summaries (UPDATED - Oct 19, 2025):**
 
-StockDigest provides AI-powered research tools for analyzing 10-K filings, earnings transcripts, and press releases.
+StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 10-Q), earnings transcripts, and press releases.
 
 ### Admin Research Dashboard
 
@@ -268,7 +268,30 @@ StockDigest provides AI-powered research tools for analyzing 10-K filings, earni
   - Modal viewer for viewing profiles with markdown rendering
   - Bulk management tools (view all, delete, regenerate, email)
 
-**Company Profiles (FMP + SEC.gov Integration):**
+**SEC Filings Analysis (10-K and 10-Q):**
+
+**MAJOR UPDATE (Oct 19, 2025):** Migrated to unified `sec_filings` table supporting 10-K, 10-Q, and investor presentations.
+
+**Comprehensive Gemini Prompts:**
+- **10-K Prompt:** 16-section comprehensive extraction (5,000-8,000 words)
+  - Section 0: Filing metadata (fiscal year end, currency, accounting standard)
+  - Section 3: EBITDA with approximation caveat, ASC 842 leases, ETR trends
+  - Section 4: Goodwill by segment, segment EBITDA (rarely disclosed note)
+  - Section 5: Complete debt schedule with covenant cushion analysis
+  - Section 8: Comprehensive risk factor extraction with top 5 prioritization
+  - Section 12: R&D capitalization policy, 3-year capex trends
+  - Section 13: Strategic priorities + guidance (realistic framing)
+  - Supports ALL industries and company sizes
+
+- **10-Q Prompt:** 14-section quarterly extraction (3,000-5,000 words) - **READY FOR FUTURE USE**
+  - YoY and YTD comparisons (QoQ noted as often unavailable)
+  - Management tone analysis (confident, cautious, defensive, mixed)
+  - New risks and material developments delta tracking
+  - Momentum assessment (accelerating vs decelerating)
+  - Share count change analysis
+  - Guidance tracking (with caveat that it's rare in 10-Qs)
+
+**Validation & Generation:**
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=profile`**: Validate ticker and fetch available 10-K filings from FMP
   - Returns: Array of `available_years` with fiscal year, filing date, and SEC.gov HTML URL
   - Uses FMP `/api/v3/sec_filings` endpoint (included in Starter plan)
@@ -288,32 +311,30 @@ StockDigest provides AI-powered research tools for analyzing 10-K filings, earni
 - **`POST /api/admin/generate-company-profile`**: Generate AI company profile from 10-K filing (uses job queue)
   - **FMP Mode (recommended):** Send `sec_html_url` from validation response → Fetches HTML from SEC.gov
   - **File Upload Mode (fallback):** Send `file_content` (base64) + `file_name` → Extracts from PDF/TXT
-  - Processing: 5-10 minutes (Gemini 2.5 Flash, no thinking mode - param removed Oct 2025)
+  - Processing: 5-10 minutes (Gemini 2.5 Flash)
   - Returns: `job_id` for status polling via `/jobs/{job_id}`
 
-**Company Profiles Management (NEW - Oct 18, 2025):**
-- **`GET /api/admin/company-profiles`**: List all company profiles from database
+**Profiles Management:**
+- **`GET /api/admin/company-profiles`**: List all 10-K profiles from sec_filings table
   - Returns: Array of profiles with ticker, company_name, fiscal_year, markdown, char_count, metadata
   - Sorted by most recently generated first
   - Supports modal viewer in admin research page
 
-- **`POST /api/admin/delete-company-profile`**: Delete a company profile
+- **`POST /api/admin/delete-company-profile`**: Delete 10-K profile(s)
   - Parameters: `ticker`, `token`
+  - Deletes all 10-K filings for ticker (may be multiple years)
   - Returns: Success/error message
-  - UI: Click trash icon in profiles table
 
 - **`POST /api/admin/regenerate-company-profile`**: Regenerate existing profile
   - Parameters: `ticker`, `token`
   - Currently: SEC.gov profiles only (file upload requires re-upload)
   - Returns: Info message with instructions
-  - Future: Full automatic regeneration for SEC.gov profiles
 
-- **`POST /api/admin/email-company-profile`**: Email profile to admin
+- **`POST /api/admin/email-company-profile`**: Email latest 10-K profile to admin
   - Parameters: `ticker`, `token`
-  - Fetches profile from database
+  - Fetches most recent 10-K from sec_filings
   - Generates formatted email with stock price header
   - Sends to ADMIN_EMAIL
-  - UI: Click email icon in profiles table
 
 **Transcript Summaries:**
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=transcript`**: Fetch available earnings transcripts from FMP
@@ -324,15 +345,44 @@ StockDigest provides AI-powered research tools for analyzing 10-K filings, earni
   - Stores in `transcript_summaries` table
 
 **Key Functions (modules/company_profiles.py):**
-- `fetch_sec_html_text(url)`: Fetch 10-K HTML from SEC.gov and extract plain text
+- **`generate_sec_filing_profile_with_gemini()`**: NEW unified function for 10-K and 10-Q generation
+  - Parameters: `ticker`, `content`, `config`, `filing_type` ('10-K' or '10-Q'), `fiscal_year`, `fiscal_quarter`, `gemini_api_key`
+  - Automatically selects appropriate prompt (GEMINI_10K_PROMPT or GEMINI_10Q_PROMPT)
+  - Model: gemini-2.5-flash
+  - Temperature: 0.3 (consistent outputs)
+  - **Max output tokens: 16000** (doubled from 8000 - supports comprehensive extraction)
+  - Returns: profile_markdown + metadata (token counts, generation time)
+  - Logs word count for validation
+
+- **`generate_company_profile_with_gemini()`**: DEPRECATED (backward compatible)
+  - Wrapper for `generate_sec_filing_profile_with_gemini()` with `filing_type='10-K'`
+  - Maintains compatibility with existing code
+
+- `fetch_sec_html_text(url)`: Fetch 10-K/10-Q HTML from SEC.gov and extract plain text
   - Uses proper User-Agent: "StockDigest/1.0 (stockdigest.research@gmail.com)"
   - BeautifulSoup HTML parsing with script/style removal
   - Returns cleaned plain text for AI processing
-- `generate_company_profile_with_gemini()`: Generate 14-section company profile using Gemini 2.5 Flash
-  - Model: gemini-2.5-flash (thinking mode disabled - param was invalid)
-  - Temperature: 0.3 (consistent outputs)
-  - Max output tokens: 8000 (~3,000-5,000 words)
+
 - `generate_company_profile_email()`: Create HTML email with profile preview and legal disclaimers
+
+**Comprehensive Prompts (modules/company_profiles.py):**
+- **GEMINI_10K_PROMPT**: 16-section analysis (Sections 0-15)
+  - Filing Metadata, Industry & Business Model, Revenue Model, Complete Financials
+  - EBITDA extraction (disclosed or approximation with caveat)
+  - Segment Performance, Complete Debt Schedule, Operational KPIs
+  - Dependencies & Concentrations, Risk Factors (all from Item 1A)
+  - Properties & Facilities, Legal Proceedings, Management & Governance
+  - Capital Allocation (3-year history), Strategic Priorities & Outlook
+  - Subsequent Events, Key Monitoring Variables
+  - Target: 5,000-8,000 words
+
+- **GEMINI_10Q_PROMPT**: 14-section quarterly analysis (Sections 0-13)
+  - Filing Metadata, Quarterly Financial Performance, Segment Performance
+  - Balance Sheet (QoQ and YoY), Debt Schedule Update, Cash Flow (QTD & YTD)
+  - Operational Metrics, Guidance & Outlook, New Risks & Developments
+  - Subsequent Events, Management Tone, Segment Trends, Liquidity
+  - Summary of Key Changes (positive/negative developments, momentum check)
+  - Target: 3,000-5,000 words
 
 **User Workflow (20x faster than manual file upload):**
 1. Navigate to `/admin/research` → Click "Company Profiles" tab
@@ -340,27 +390,45 @@ StockDigest provides AI-powered research tools for analyzing 10-K filings, earni
 3. FMP returns list of available 10-K years (dropdown auto-populates)
 4. Select year from dropdown: "2023 (Filed: Nov 3, 2023)"
 5. Click "Generate Profile (5-10 min)"
-6. Backend fetches HTML from SEC.gov → Gemini generates profile → Email sent
-7. Profile saved to `company_profiles` table with UNIQUE(ticker) constraint
+6. Backend fetches HTML from SEC.gov → Gemini generates comprehensive profile → Email sent
+7. Profile saved to `sec_filings` table with UNIQUE(ticker, filing_type, fiscal_year, fiscal_quarter)
 8. **NEW:** View all profiles in "View All Profiles" section below form
 9. **NEW:** Click "View" to see profile in modal, "Email" to send to admin, "Delete" to remove
 
 **Database Schema:**
-- `company_profiles`: Stores AI-generated 10-K profiles
-  - ticker (UNIQUE), company_name, industry, fiscal_year, filing_date
+- **`sec_filings`**: Unified storage for 10-K, 10-Q, and investor presentations (UPDATED Oct 19, 2025)
+  - ticker, filing_type ('10-K', '10-Q', 'PRESENTATION'), fiscal_year, fiscal_quarter
+  - filing_date, period_end_date, company_name, industry
   - profile_markdown (TEXT), profile_summary (TEXT), key_metrics (JSONB)
-  - source_file (VARCHAR 500) - Tracks original filename or "SEC.gov via FMP"
-  - ai_provider='gemini', gemini_model='gemini-2.5-flash'
-  - thinking_budget (INTEGER) - **DEPRECATED**: No longer used in API calls (removed Oct 2025)
-  - generation_time_seconds, token counts, status
-- `transcript_summaries`: Stores earnings transcript and press release summaries
+  - source_type ('fmp_sec', 'file_upload', 'gemini_multimodal'), source_file, sec_html_url
+  - ai_provider, ai_model, generation_time_seconds, token_count_input, token_count_output
+  - presentation_title, presentation_type, page_count, file_size_bytes (for presentations)
+  - status, error_message, generated_at
+  - **UNIQUE(ticker, filing_type, fiscal_year, fiscal_quarter)** - Stores ALL filings, not just latest
+  - Indexes: ticker, filing_type, ticker+type, fiscal_year+quarter, status
+
+- **`company_profiles` VIEW**: Backward compatibility (maps to sec_filings WHERE filing_type='10-K')
+  - Allows existing queries to work unchanged during migration
+  - Deprecated: Use sec_filings directly for new code
+
+- **`transcript_summaries`**: Stores earnings transcript and press release summaries
   - ticker, report_type (transcript/press_release), quarter, year, report_date
   - summary_text, ai_provider (claude/openai), UNIQUE(ticker, report_type, quarter, year)
+
+**Migration:**
+- **Migration guide:** See `SEC_FILINGS_MIGRATION.md` for SQL migration script
+- **Status:** ~10 existing 10-K profiles need migration from old company_profiles table
+- **Backward compatibility:** VIEW ensures zero downtime during migration
 
 **Cost Analysis:**
 - Gemini API: FREE during experimental phase (will be ~$0.24/profile when pricing launches)
 - FMP API: $0 (SEC filings included in Starter plan)
 - Processing time: 5-10 minutes per profile (most time spent in Gemini generation)
+
+**Future-Ready Features:**
+- ✅ 10-Q support: Prompts ready, API endpoints TBD
+- ✅ Investor presentations: Table schema ready, Gemini multimodal TBD
+- ✅ Multi-material AI context: 10-K + 10-Q + presentations (commented code in app.py:14070-14120)
 
 **System Configuration Endpoints (NEW - Oct 2025):**
 - **`GET /api/get-lookback-window`**: Get current production lookback window

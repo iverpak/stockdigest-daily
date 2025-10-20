@@ -20841,7 +20841,7 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
 
         elif type == 'transcript':
             # Fetch transcript list from FMP
-            transcripts = fetch_fmp_transcript_list(ticker, FMP_API_KEY)
+            transcripts = fetch_fmp_transcript_list(ticker)
             if not transcripts:
                 return {
                     "valid": True,
@@ -20866,7 +20866,7 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
 
         else:  # press_release
             # Fetch press releases from FMP
-            releases = fetch_fmp_press_releases(ticker, FMP_API_KEY, limit=20)
+            releases = fetch_fmp_press_releases(ticker, limit=20)
             if not releases:
                 return {
                     "valid": True,

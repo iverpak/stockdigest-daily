@@ -70,11 +70,32 @@ Create a Company Profile in Markdown format with these sections:
 OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
 """
 
-GEMINI_10Q_PROMPT = """You are creating a Quarterly Update for {company_name} ({ticker})
-from their Form 10-Q for Q{quarter} {fiscal_year}.
+GEMINI_10Q_PROMPT = """You are creating a Quarterly Update document for an equity analyst.
 
-Summarize the complete 10-Q document into these sections, focusing on quarter-over-quarter
-and year-over-year changes:
+I am providing you with the COMPLETE Form 10-Q for {company_name} ({ticker}).
+
+Your task is to extract and synthesize information from across the entire document to create a comprehensive quarterly update following the structure below, focusing on quarter-over-quarter and year-over-year changes.
+
+CRITICAL INSTRUCTIONS:
+- Be specific, not generic (name exact figures, percentages, line items)
+- Use actual numbers with units
+- Extract only facts explicitly stated in the filing
+- Show QoQ and YoY comparisons with percentage changes
+- Skip sections with no disclosed data
+- Target length: 3-5 pages (~3,000-5,000 words)
+
+---
+COMPLETE 10-Q DOCUMENT:
+
+{full_10q_text}
+
+---
+
+Create a Quarterly Update in Markdown format with these sections:
+
+# {company_name} ({ticker}) - QUARTERLY UPDATE
+
+*Generated from Form 10-Q for Q{quarter} {fiscal_year} filed {filing_date}*
 
 ## 1. QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)
 ## 2. SEGMENT PERFORMANCE TRENDS (QoQ & YoY)
@@ -89,18 +110,9 @@ and year-over-year changes:
 ## 11. RECENT EVENTS & SUBSEQUENT EVENTS
 ## 12. COMPETITIVE & INDUSTRY CONTEXT
 
-For each section, show current quarter vs prior quarter vs year-ago quarter with percentage
-changes. Extract what changed since the last period.
+For each section, show current quarter vs prior quarter vs year-ago quarter with percentage changes. Extract what changed since the last period.
 
-Target length: 3,000-5,000 words.
-
----
-COMPLETE 10-Q DOCUMENT:
-{full_10q_text}
-
----
-
-Generate the quarterly update now.
+OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
 """
 
 GEMINI_INVESTOR_DECK_PROMPT = """You are analyzing an Investor Presentation for {company_name} ({ticker}).
@@ -355,13 +367,21 @@ def generate_sec_filing_profile_with_gemini(
                 LOG.error(f"Available variables: company_name, ticker, filing_date, fiscal_year_end, full_10k_text")
                 raise
         else:  # 10-Q
-            full_prompt = prompt_template.format(
-                company_name=company_name,
-                ticker=ticker,
-                quarter=quarter_num,
-                fiscal_year=fiscal_year,
-                full_10q_text=content[:1600000]  # ~400k tokens - full 10-Q content
-            )
+            LOG.info(f"🔍 [DIAGNOSTIC] Template variables: company_name={company_name}, ticker={ticker}, quarter={quarter_num}, fiscal_year={fiscal_year}, filing_date={filing_date}")
+            try:
+                full_prompt = prompt_template.format(
+                    company_name=company_name,
+                    ticker=ticker,
+                    quarter=quarter_num,
+                    fiscal_year=fiscal_year,
+                    filing_date=filing_date or "N/A",  # Use provided filing_date or N/A
+                    full_10q_text=content[:1600000]  # ~400k tokens - full 10-Q content
+                )
+                LOG.info(f"🔍 [DIAGNOSTIC] Prompt formatted successfully, length: {len(full_prompt)}")
+            except KeyError as ke:
+                LOG.error(f"❌ Template formatting error: Missing variable {ke}")
+                LOG.error(f"Available variables: company_name, ticker, quarter, fiscal_year, filing_date, full_10q_text")
+                raise
 
         LOG.info(f"🔍 [DIAGNOSTIC] Calling Gemini API...")
         response = model.generate_content(

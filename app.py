@@ -19115,7 +19115,7 @@ async def process_10q_profile_phase(job: dict):
 
         # Progress: 30% - Generating 10-Q profile with Gemini
         update_job_status(job_id, phase='generating_profile', progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating 10-Q profile with Gemini 2.5 Flash (5-10 min)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating 10-Q profile with Gemini 2.5 Pro (5-10 min)...")
 
         ticker_config = get_ticker_config(ticker)
 
@@ -19390,11 +19390,9 @@ Generate the complete page-by-page deck analysis now.
                     status
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, filing_type, fiscal_year, fiscal_quarter) DO UPDATE SET
+                ON CONFLICT (ticker, filing_type, presentation_date, presentation_type) DO UPDATE SET
                     company_name = EXCLUDED.company_name,
                     industry = EXCLUDED.industry,
-                    presentation_date = EXCLUDED.presentation_date,
-                    presentation_type = EXCLUDED.presentation_type,
                     presentation_title = EXCLUDED.presentation_title,
                     profile_markdown = EXCLUDED.profile_markdown,
                     source_type = EXCLUDED.source_type,

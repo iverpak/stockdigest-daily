@@ -1394,7 +1394,7 @@ def generate_company_profile_email(
     ticker: str,
     company_name: str,
     industry: str,
-    fiscal_year: int,
+    fiscal_year: Optional[int],  # Can be None for presentations
     filing_date: str,
     profile_markdown: str,
     stock_price: str = "$0.00",
@@ -1410,6 +1410,9 @@ def generate_company_profile_email(
     LOG.info(f"Generating company profile email for {ticker}")
 
     current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
+
+    # Handle fiscal_year for presentations (can be None)
+    fiscal_year_display = f"FY{fiscal_year}" if fiscal_year else filing_date
 
     # Extract first ~2000 chars for email preview
     profile_preview = profile_markdown[:2000] + "..." if len(profile_markdown) > 2000 else profile_markdown
@@ -1451,7 +1454,7 @@ def generate_company_profile_email(
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">COMPANY PROFILE</div>
                                     </td>
                                     <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">Generated: {current_date} | FY{fiscal_year}</div>
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">Generated: {current_date} | {fiscal_year_display}</div>
                                     </td>
                                 </tr>
                                 <tr>
@@ -1532,7 +1535,7 @@ def generate_company_profile_email(
 </body>
 </html>'''
 
-    subject = f"📋 Company Profile: {company_name} ({ticker}) FY{fiscal_year}"
+    subject = f"📋 Company Profile: {company_name} ({ticker}) {fiscal_year_display}"
 
     return {"html": html, "subject": subject}
 

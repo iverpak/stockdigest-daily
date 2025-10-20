@@ -24742,16 +24742,16 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
     ticker = ticker.upper().strip()
 
     try:
-        # Validate ticker first
-        validation_response = await fmp_validate_ticker(ticker=ticker, type="profile")
-        if not validation_response.get("valid"):
-            return {"status": "error", "message": validation_response.get("error", "Invalid ticker")}
+        # Validate ticker and fetch 10-Ks
+        profile_response = await validate_ticker_for_research(ticker=ticker, type="profile")
+        if not profile_response.get("valid"):
+            return {"status": "error", "message": profile_response.get("error", "Invalid ticker")}
 
-        company_name = validation_response.get("company_name")
-        industry = validation_response.get("industry")
+        company_name = profile_response.get("company_name")
+        industry = profile_response.get("industry")
 
         # Fetch available 10-Ks from FMP
-        available_10k = validation_response.get("available_years", [])
+        available_10k = profile_response.get("available_years", [])
 
         # Fetch available 10-Qs from FMP (same endpoint, just filter by type)
         fmp_10q_response = requests.get(
@@ -24776,7 +24776,7 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
                     })
 
         # Fetch available transcripts
-        transcript_response = await fmp_validate_ticker(ticker=ticker, type="transcript")
+        transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
         available_transcripts = []
         if transcript_response.get("valid"):
             quarters = transcript_response.get("available_quarters", [])
@@ -24790,7 +24790,7 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
                     })
 
         # Fetch available press releases
-        pr_response = await fmp_validate_ticker(ticker=ticker, type="press_release")
+        pr_response = await validate_ticker_for_research(ticker=ticker, type="press_release")
         available_press_releases = []
         if pr_response.get("valid"):
             releases = pr_response.get("available_releases", [])[:10]  # Latest 10

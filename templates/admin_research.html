@@ -594,9 +594,9 @@
                             <div>
                                 <strong>Q${item.quarter} ${item.year}</strong> (Filed: ${item.filing_date})
                             </div>
-                            <button onclick="alert('10-Q generation coming soon!')"
-                                    style="background: #6b7280; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">
-                                Coming Soon
+                            <button onclick="generate10Q('${ticker}', ${item.year}, ${item.quarter}, '${item.filing_date}', '${item.sec_html_url}')"
+                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                Generate
                             </button>
                         </div>
                     `;
@@ -713,6 +713,34 @@
                 const result = await response.json();
                 if (result.status === 'success') {
                     alert(`10-K generation started! Job ID: ${result.job_id}. Refresh the page in 5-10 minutes to see the result.`);
+                } else {
+                    alert(`Error: ${result.message}`);
+                }
+            } catch (error) {
+                alert(`Failed to start generation: ${error.message}`);
+            }
+        }
+
+        async function generate10Q(ticker, year, quarter, filingDate, secHtmlUrl) {
+            alert(`Starting 10-Q generation for ${ticker} Q${quarter} ${year}. This will take 5-10 minutes...`);
+
+            try {
+                const response = await fetch('/api/admin/generate-10q-profile', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        token: token,
+                        ticker: ticker,
+                        fiscal_year: year,
+                        fiscal_quarter: `Q${quarter}`,
+                        filing_date: filingDate,
+                        sec_html_url: secHtmlUrl
+                    })
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`10-Q generation started! Job ID: ${result.job_id}. Refresh the page in 5-10 minutes to see the result.`);
                 } else {
                     alert(`Error: ${result.message}`);
                 }
@@ -846,8 +874,41 @@
                 return;
             }
 
-            alert('PDF upload for investor presentations is coming soon! For now, this feature is prepared but not fully wired.');
-            // TODO: Implement PDF upload endpoint
+            // Read file as base64
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const base64Content = e.target.result.split(',')[1]; // Remove data:application/pdf;base64, prefix
+
+                alert(`Uploading and analyzing ${selectedPDFFile.name}. This will take 5-10 minutes...`);
+
+                try {
+                    const response = await fetch('/api/admin/generate-presentation', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            token: token,
+                            ticker: currentTickerData.ticker,
+                            presentation_date: date,
+                            presentation_type: type,
+                            presentation_title: title,
+                            file_content: base64Content,
+                            file_name: selectedPDFFile.name
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        alert(`✅ Presentation analysis started! Job ID: ${result.job_id}. Refresh the page in 5-10 minutes to see the result.`);
+                        cancelPDFUpload(); // Clear form
+                        loadTickerResearch(); // Reload to show updated status
+                    } else {
+                        alert(`❌ Error: ${result.message}`);
+                    }
+                } catch (error) {
+                    alert(`❌ Failed: ${error.message}`);
+                }
+            };
+            reader.readAsDataURL(selectedPDFFile);
         }
 
         // =============================================================================

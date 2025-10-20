@@ -10,6 +10,7 @@ import json
 import secrets
 import uuid
 import openai
+import google.generativeai as genai
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from contextlib import contextmanager
@@ -83,8 +84,10 @@ from modules.company_profiles import (
     extract_text_file,
     fetch_sec_html_text,
     generate_company_profile_with_gemini,
+    generate_sec_filing_profile_with_gemini,
     generate_company_profile_email,
-    save_company_profile_to_database
+    save_company_profile_to_database,
+    GEMINI_INVESTOR_DECK_PROMPT
 )
 
 # ============================================================================
@@ -19080,6 +19083,404 @@ OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
         )
 
 
+async def process_10q_profile_phase(job: dict):
+    """Process 10-Q quarterly profile generation (5-15 min, Gemini 2.5)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread
+        start_heartbeat_thread(job_id)
+
+        fiscal_year = config.get('fiscal_year')
+        fiscal_quarter = config.get('fiscal_quarter')  # e.g., "Q3"
+        filing_date = config.get('filing_date')
+        sec_html_url = config.get('sec_html_url')
+
+        # Progress: 10% - Extracting 10-Q text
+        update_job_status(job_id, phase='extracting_text', progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 10-Q text for {fiscal_quarter} {fiscal_year}...")
+
+        # Fetch HTML from SEC.gov
+        if not sec_html_url:
+            raise ValueError("sec_html_url is required for 10-Q generation")
+
+        content = fetch_sec_html_text(sec_html_url)
+
+        if not content or len(content) < 1000:
+            raise ValueError(f"Extracted text too short ({len(content)} chars)")
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters")
+
+        # Progress: 30% - Generating 10-Q profile with Gemini
+        update_job_status(job_id, phase='generating_profile', progress=30)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating 10-Q profile with Gemini 2.5 Flash (5-10 min)...")
+
+        ticker_config = get_ticker_config(ticker)
+
+        # Use the unified function with filing_type='10-Q'
+        result = generate_sec_filing_profile_with_gemini(
+            ticker=ticker,
+            content=content,
+            config=ticker_config,
+            filing_type='10-Q',
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            filing_date=filing_date,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if not result:
+            raise ValueError("Gemini 10-Q profile generation failed")
+
+        profile_markdown = result['profile_markdown']
+        metadata = result['metadata']
+
+        # Progress: 80% - Saving to database
+        update_job_status(job_id, phase='saving_profile', progress=80)
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving 10-Q profile to database...")
+
+        with db() as conn, conn.cursor() as cur:
+            # Save to sec_filings table
+            cur.execute("""
+                INSERT INTO sec_filings (
+                    ticker, filing_type, fiscal_year, fiscal_quarter,
+                    company_name, industry, filing_date,
+                    profile_markdown, source_type, sec_html_url,
+                    ai_provider, ai_model,
+                    generation_time_seconds, token_count_input, token_count_output,
+                    status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, filing_type, fiscal_year, fiscal_quarter) DO UPDATE SET
+                    company_name = EXCLUDED.company_name,
+                    industry = EXCLUDED.industry,
+                    filing_date = EXCLUDED.filing_date,
+                    profile_markdown = EXCLUDED.profile_markdown,
+                    source_type = EXCLUDED.source_type,
+                    sec_html_url = EXCLUDED.sec_html_url,
+                    ai_provider = EXCLUDED.ai_provider,
+                    ai_model = EXCLUDED.ai_model,
+                    generation_time_seconds = EXCLUDED.generation_time_seconds,
+                    token_count_input = EXCLUDED.token_count_input,
+                    token_count_output = EXCLUDED.token_count_output,
+                    generated_at = NOW(),
+                    status = 'active',
+                    error_message = NULL
+            """, (
+                ticker,
+                '10-Q',
+                fiscal_year,
+                fiscal_quarter,
+                ticker_config.get('company_name'),
+                ticker_config.get('industry'),
+                filing_date,
+                profile_markdown,
+                'fmp_sec',  # Always SEC.gov for 10-Q
+                sec_html_url,
+                'gemini',
+                metadata.get('model'),
+                metadata.get('generation_time_seconds'),
+                metadata.get('token_count_input'),
+                metadata.get('token_count_output'),
+                'active'
+            ))
+            conn.commit()
+
+        # Progress: 95% - Sending email
+        if config.get('send_email', True):
+            update_job_status(job_id, phase='sending_email', progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+
+            # Get stock price
+            stock_price = "$0.00"
+            price_change_pct = None
+            price_change_color = "#4ade80"
+
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT financial_last_price, financial_price_change_pct
+                    FROM ticker_reference
+                    WHERE ticker = %s
+                """, (ticker,))
+                price_data = cur.fetchone()
+
+                if price_data and price_data['financial_last_price']:
+                    stock_price = f"${price_data['financial_last_price']:.2f}"
+                    if price_data['financial_price_change_pct'] is not None:
+                        pct = price_data['financial_price_change_pct']
+                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+            # Generate email (reuse company profile email function with modified subject)
+            email_data = generate_company_profile_email(
+                ticker=ticker,
+                company_name=ticker_config['company_name'],
+                industry=ticker_config.get('industry', 'N/A'),
+                fiscal_year=fiscal_year,
+                filing_date=filing_date,
+                profile_markdown=profile_markdown,
+                stock_price=stock_price,
+                price_change_pct=price_change_pct,
+                price_change_color=price_change_color
+            )
+
+            # Modify subject for 10-Q
+            email_data['subject'] = f"10-Q Profile: {ticker_config['company_name']} ({ticker}) - {fiscal_quarter} {fiscal_year}"
+
+            send_email(
+                subject=email_data['subject'],
+                html_body=email_data['html'],
+                to='stockdigest.research@gmail.com'
+            )
+
+        # Mark complete
+        update_job_status(job_id, status='completed', phase='complete', progress=100)
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] 10-Q profile generation complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] 10-Q profile generation failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
+
+
+async def process_presentation_phase(job: dict):
+    """Process investor presentation analysis (5-15 min, Gemini 2.5 multimodal)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread
+        start_heartbeat_thread(job_id)
+
+        presentation_date = config.get('presentation_date')
+        presentation_type = config.get('presentation_type')
+        presentation_title = config.get('presentation_title')
+        file_path = config.get('file_path')
+
+        # Progress: 10% - Extracting PDF text
+        update_job_status(job_id, phase='extracting_pdf', progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting text from presentation PDF...")
+
+        if not file_path or not os.path.exists(file_path):
+            raise ValueError(f"PDF file not found: {file_path}")
+
+        # Extract text from PDF
+        content = extract_pdf_text(file_path)
+
+        if not content or len(content) < 100:
+            raise ValueError(f"Extracted text too short ({len(content)} chars)")
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters from PDF")
+
+        # Progress: 30% - Analyzing presentation with Gemini
+        update_job_status(job_id, phase='analyzing_presentation', progress=30)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Analyzing presentation with Gemini 2.5 Flash (5-10 min)...")
+
+        ticker_config = get_ticker_config(ticker)
+
+        # Generate analysis using Gemini with GEMINI_INVESTOR_DECK_PROMPT
+        # For now, we'll use the text-based extraction (future: add multimodal PDF analysis)
+        from modules.company_profiles import GEMINI_INVESTOR_DECK_PROMPT
+
+        # Build prompt with presentation details
+        prompt = GEMINI_INVESTOR_DECK_PROMPT.format(
+            company_name=ticker_config['company_name'],
+            ticker=ticker,
+            presentation_date=presentation_date,
+            deck_type=presentation_type,
+            full_deck_text=content
+        )
+
+        # Call Gemini API
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+
+        start_time = time.time()
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.3,
+                max_output_tokens=16000
+            )
+        )
+
+        generation_time = time.time() - start_time
+
+        if not response or not response.text:
+            raise ValueError("Gemini presentation analysis failed")
+
+        profile_markdown = response.text
+
+        # Extract token counts from response metadata (if available)
+        token_count_input = getattr(response.usage_metadata, 'prompt_token_count', None) if hasattr(response, 'usage_metadata') else None
+        token_count_output = getattr(response.usage_metadata, 'candidates_token_count', None) if hasattr(response, 'usage_metadata') else None
+
+        metadata = {
+            'model': 'gemini-2.0-flash-exp',
+            'generation_time_seconds': round(generation_time, 2),
+            'token_count_input': token_count_input,
+            'token_count_output': token_count_output
+        }
+
+        # Progress: 80% - Saving to database
+        update_job_status(job_id, phase='saving_analysis', progress=80)
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving presentation analysis to database...")
+
+        with db() as conn, conn.cursor() as cur:
+            # Get page count from PDF
+            import PyPDF2
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                page_count = len(reader.pages)
+
+            file_size_bytes = os.path.getsize(file_path)
+
+            # Save to sec_filings table
+            cur.execute("""
+                INSERT INTO sec_filings (
+                    ticker, filing_type,
+                    company_name, industry,
+                    presentation_date, presentation_type, presentation_title,
+                    profile_markdown,
+                    source_type, source_file,
+                    page_count, file_size_bytes,
+                    ai_provider, ai_model,
+                    generation_time_seconds, token_count_input, token_count_output,
+                    status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, filing_type, fiscal_year, fiscal_quarter) DO UPDATE SET
+                    company_name = EXCLUDED.company_name,
+                    industry = EXCLUDED.industry,
+                    presentation_date = EXCLUDED.presentation_date,
+                    presentation_type = EXCLUDED.presentation_type,
+                    presentation_title = EXCLUDED.presentation_title,
+                    profile_markdown = EXCLUDED.profile_markdown,
+                    source_type = EXCLUDED.source_type,
+                    source_file = EXCLUDED.source_file,
+                    page_count = EXCLUDED.page_count,
+                    file_size_bytes = EXCLUDED.file_size_bytes,
+                    ai_provider = EXCLUDED.ai_provider,
+                    ai_model = EXCLUDED.ai_model,
+                    generation_time_seconds = EXCLUDED.generation_time_seconds,
+                    token_count_input = EXCLUDED.token_count_input,
+                    token_count_output = EXCLUDED.token_count_output,
+                    generated_at = NOW(),
+                    status = 'active',
+                    error_message = NULL
+            """, (
+                ticker,
+                'PRESENTATION',
+                ticker_config.get('company_name'),
+                ticker_config.get('industry'),
+                presentation_date,
+                presentation_type,
+                presentation_title,
+                profile_markdown,
+                'file_upload',
+                config.get('file_name'),
+                page_count,
+                file_size_bytes,
+                'gemini',
+                metadata['model'],
+                metadata['generation_time_seconds'],
+                metadata['token_count_input'],
+                metadata['token_count_output'],
+                'active'
+            ))
+            conn.commit()
+
+        # Progress: 95% - Sending email
+        if config.get('send_email', True):
+            update_job_status(job_id, phase='sending_email', progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+
+            # Get stock price
+            stock_price = "$0.00"
+            price_change_pct = None
+            price_change_color = "#4ade80"
+
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT financial_last_price, financial_price_change_pct
+                    FROM ticker_reference
+                    WHERE ticker = %s
+                """, (ticker,))
+                price_data = cur.fetchone()
+
+                if price_data and price_data['financial_last_price']:
+                    stock_price = f"${price_data['financial_last_price']:.2f}"
+                    if price_data['financial_price_change_pct'] is not None:
+                        pct = price_data['financial_price_change_pct']
+                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+            # Generate email (reuse company profile email function)
+            email_data = generate_company_profile_email(
+                ticker=ticker,
+                company_name=ticker_config['company_name'],
+                industry=ticker_config.get('industry', 'N/A'),
+                fiscal_year=None,  # Not applicable for presentations
+                filing_date=presentation_date,
+                profile_markdown=profile_markdown,
+                stock_price=stock_price,
+                price_change_pct=price_change_pct,
+                price_change_color=price_change_color
+            )
+
+            # Modify subject for presentation
+            email_data['subject'] = f"Investor Presentation Analysis: {ticker_config['company_name']} ({ticker}) - {presentation_title}"
+
+            send_email(
+                subject=email_data['subject'],
+                html_body=email_data['html'],
+                to='stockdigest.research@gmail.com'
+            )
+
+        # Clean up temp PDF file
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Cleaned up temp file: {file_path}")
+
+        # Mark complete
+        update_job_status(job_id, status='completed', phase='complete', progress=100)
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Presentation analysis complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Presentation analysis failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
+
+
 async def process_ticker_job(job: dict):
     """Process a single ticker job (ingest + digest + commit) OR company profile generation"""
     job_id = job['job_id']
@@ -19092,6 +19493,16 @@ async def process_ticker_job(job: dict):
     # ROUTE: If this is a company profile generation job, handle separately
     if phase == 'profile_generation':
         await process_company_profile_phase(job)
+        return
+
+    # ROUTE: If this is a 10-Q generation job, handle separately
+    if phase == '10q_generation':
+        await process_10q_profile_phase(job)
+        return
+
+    # ROUTE: If this is an investor presentation job, handle separately
+    if phase == 'presentation_generation':
+        await process_presentation_phase(job)
         return
 
     # Standard ticker processing (news articles)
@@ -24125,6 +24536,161 @@ async def generate_company_profile_api(request: Request):
 
     except Exception as e:
         LOG.error(f"Failed to create company profile job: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/generate-10q-profile")
+async def generate_10q_profile_api(request: Request):
+    """Generate AI 10-Q quarterly profile (uses job queue)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    fiscal_year = body.get('fiscal_year')
+    fiscal_quarter = body.get('fiscal_quarter')  # e.g., "Q3"
+    filing_date = body.get('filing_date')
+    sec_html_url = body.get('sec_html_url')
+
+    try:
+        LOG.info(f"📊 Creating 10-Q profile job for {ticker} {fiscal_quarter} {fiscal_year}")
+
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+
+        # Build job config for 10-Q
+        job_config = {
+            "ticker": ticker,
+            "filing_type": "10-Q",
+            "fiscal_year": fiscal_year,
+            "fiscal_quarter": fiscal_quarter,
+            "filing_date": filing_date,
+            "sec_html_url": sec_html_url,
+            "send_email": True
+        }
+
+        # Create job in ticker_processing_jobs table
+        with db() as conn, conn.cursor() as cur:
+            batch_id = str(uuid.uuid4())
+
+            # Create batch
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                VALUES (%s, %s, 1, %s)
+                RETURNING batch_id
+            """, (batch_id, 'processing', json.dumps(job_config)))
+
+            # Create job with phase '10q_generation'
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, ticker, status, phase, progress, config
+                )
+                VALUES (%s, %s, %s, %s, 0, %s)
+                RETURNING job_id
+            """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
+
+            job_id = cur.fetchone()['job_id']
+            conn.commit()
+
+        LOG.info(f"Created 10-Q profile job {job_id} for {ticker}")
+
+        return {
+            "status": "success",
+            "message": f"10-Q profile job created for {ticker} {fiscal_quarter} {fiscal_year}",
+            "job_id": job_id,
+            "ticker": ticker,
+            "fiscal_year": fiscal_year,
+            "fiscal_quarter": fiscal_quarter
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to create 10-Q profile job: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/generate-presentation")
+async def generate_presentation_api(request: Request):
+    """Generate AI analysis of investor presentation PDF (uses job queue + Gemini multimodal)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    presentation_date = body.get('presentation_date')  # YYYY-MM-DD
+    presentation_type = body.get('presentation_type')  # earnings, investor_day, analyst_day, conference
+    presentation_title = body.get('presentation_title')
+    file_content = body.get('file_content')  # Base64 encoded PDF
+    file_name = body.get('file_name')
+
+    try:
+        LOG.info(f"📊 Creating investor presentation job for {ticker} - {presentation_title}")
+
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+
+        # Save uploaded PDF temporarily
+        file_ext = file_name.split('.')[-1].lower()
+        if file_ext != 'pdf':
+            return {"status": "error", "message": "Only PDF files are supported"}
+
+        temp_path = f"/tmp/{ticker}_presentation_{presentation_date}.pdf"
+        with open(temp_path, 'wb') as f:
+            f.write(base64.b64decode(file_content))
+
+        LOG.info(f"Saved presentation PDF to {temp_path} ({os.path.getsize(temp_path)} bytes)")
+
+        # Build job config
+        job_config = {
+            "ticker": ticker,
+            "presentation_date": presentation_date,
+            "presentation_type": presentation_type,
+            "presentation_title": presentation_title,
+            "file_path": temp_path,
+            "file_name": file_name,
+            "send_email": True
+        }
+
+        # Create job in ticker_processing_jobs table
+        with db() as conn, conn.cursor() as cur:
+            batch_id = str(uuid.uuid4())
+
+            # Create batch
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                VALUES (%s, %s, 1, %s)
+                RETURNING batch_id
+            """, (batch_id, 'processing', json.dumps(job_config)))
+
+            # Create job with phase 'presentation_generation'
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, ticker, status, phase, progress, config
+                )
+                VALUES (%s, %s, %s, %s, 0, %s)
+                RETURNING job_id
+            """, (batch_id, ticker, 'queued', 'presentation_generation', json.dumps(job_config)))
+
+            job_id = cur.fetchone()['job_id']
+            conn.commit()
+
+        LOG.info(f"Created presentation job {job_id} for {ticker}")
+
+        return {
+            "status": "success",
+            "message": f"Investor presentation job created for {ticker}",
+            "job_id": job_id,
+            "ticker": ticker,
+            "presentation_date": presentation_date
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to create presentation job: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 @APP.get("/api/admin/company-profiles")

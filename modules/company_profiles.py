@@ -1561,19 +1561,18 @@ def save_company_profile_to_database(
         source_file = config.get('source_file', '')
         source_type = 'fmp_sec' if 'SEC.gov' in source_file else 'file_upload'
 
-        # First, delete any existing profile for this ticker/filing/year/quarter
+        # First, delete any existing 10-K profile for this ticker/year
+        # Note: fiscal_quarter is always NULL for 10-K
         cur.execute("""
             DELETE FROM sec_filings
             WHERE ticker = %s
               AND filing_type = %s
               AND fiscal_year = %s
-              AND (fiscal_quarter = %s OR (fiscal_quarter IS NULL AND %s IS NULL))
+              AND fiscal_quarter IS NULL
         """, (
             ticker,
             '10-K',
-            config.get('fiscal_year'),
-            None,
-            None
+            config.get('fiscal_year')
         ))
 
         # Then insert the new profile

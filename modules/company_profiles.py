@@ -17,6 +17,581 @@ import pytz
 LOG = logging.getLogger(__name__)
 
 # ==============================================================================
+# GEMINI PROMPTS (10-K and 10-Q)
+# ==============================================================================
+
+GEMINI_10K_PROMPT = """You are creating a comprehensive Company Profile for {company_name} ({ticker}) from their Form 10-K filing.
+
+EXTRACTION PHILOSOPHY:
+- Extract ALL material data disclosed in the filing - err on the side of inclusion
+- Use exact figures, names, dates, and terms as stated in filing
+- Format tables for structured data (financials, debt schedules, segment data)
+- This serves ALL industries and company sizes - extract what's disclosed
+- Target: 5,000-8,000 words (comprehensive extraction)
+
+---
+COMPLETE 10-K DOCUMENT:
+{full_10k_text}
+
+---
+
+## 0. FILING METADATA
+- **Fiscal year end date:** MM/DD/YYYY (e.g., December 31, 2024 or September 30, 2024)
+- **Reporting period:** Fiscal Year [YYYY]
+- **Filing date:** [Date 10-K was filed with SEC]
+- **Reporting currency:** USD, CAD, EUR, GBP, etc.
+- **Accounting standard:** US GAAP or IFRS
+- **Number of employees:** Total headcount (from Part I, Item 1)
+- **Independent auditor:** Auditing firm name
+
+## 1. INDUSTRY & BUSINESS MODEL
+- Industry classification and business description
+- All reportable segments: Name, revenue, profitability, purpose
+- Business characteristics: B2B/B2C, recurring/transactional, regulated/merchant, asset intensity
+- Geographic footprint: All countries of operation, facility locations, production sites
+- Organizational structure: Subsidiaries, JVs, equity method investments
+- Seasonality: Is business seasonal? Which quarters/periods are strongest?
+- Employee count by geography/segment if disclosed
+
+## 2. REVENUE MODEL
+- Revenue by segment (all periods disclosed, typically 3 years)
+- Revenue by geography (all periods disclosed)
+- Revenue by product/service category (all periods disclosed)
+- Revenue by customer type if disclosed
+- Revenue recognition policy: Timing, contract terms, performance obligations
+- Deferred revenue and contract assets/liabilities (amounts and trends)
+- Customer concentration: All customers >10% with names and percentages
+- Significant contracts: Government contracts, long-term agreements with terms
+
+## 3. COMPLETE FINANCIAL STATEMENTS
+**Income Statement (extract all periods provided, typically 3 years):**
+- Revenue line items (product, service, segment breakdowns)
+- Cost of revenue/COGS with components if disclosed
+- Gross profit and gross margin %
+- Operating expenses: R&D, SG&A, restructuring, impairments (all line items)
+- **Stock-based compensation (SBC):** Total SBC expense and 3-year trend ($ and % of revenue)
+- Operating income by segment if disclosed
+- **EBITDA/Adjusted EBITDA:**
+  - Extract from MD&A if company explicitly discloses with reconciliation table
+  - If disclosed: Extract all adjustments (stock comp, restructuring, impairments, etc.) and EBITDA margin %
+  - If NOT disclosed: Note "EBITDA not disclosed. Approximation: Calculate as Operating Income + Depreciation & Amortization (from cash flow statement). Note: This is an approximation and may differ from company's internal calculation."
+  - This is the PRIMARY earnings metric to extract
+- Interest income and interest expense (separately)
+- Other income/expense items
+- Equity in earnings of affiliates
+- **Income tax provision:** Amount, effective tax rate, 3-year ETR trend with explanation for changes
+- Net income and net income margin %
+- EPS: Basic and diluted
+- Shares outstanding: Basic and diluted (note any significant changes YoY)
+
+**Balance Sheet (extract all periods, typically 2 years):**
+- **Current assets:** Cash, marketable securities, receivables, inventory, prepaid, other
+- **Non-current assets:**
+  - PP&E: Gross PP&E, accumulated depreciation, net PP&E
+  - **Operating lease right-of-use (ROU) assets** (ASC 842 disclosure)
+  - Intangibles: Detail by type if disclosed (customer relationships, technology, trade names)
+  - **Goodwill:** Total and by segment if disclosed (required by ASC 350)
+  - Equity method investments
+  - Other non-current assets
+- **Current liabilities:** Payables, accrued expenses, current debt, **current operating lease liabilities**, deferred revenue, other
+- **Non-current liabilities:**
+  - Long-term debt (detail in Section 5)
+  - **Non-current operating lease liabilities** (ASC 842)
+  - Deferred taxes (detail amounts and changes)
+  - Pension/OPEB liabilities
+  - Other non-current liabilities
+- **Equity:** Common stock, additional paid-in capital, retained earnings, accumulated OCI, treasury stock
+- **Total assets, total liabilities, total equity**
+
+**Cash Flow Statement (extract all periods, typically 3 years):**
+- **Operating activities:**
+  - Net income
+  - Add back: Depreciation, amortization, stock-based compensation, deferred taxes
+  - Working capital changes: Receivables, inventory, payables (detail each component separately)
+  - Other operating items
+  - **Net cash from operations**
+- **Investing activities:**
+  - Capital expenditures (note if broken out: maintenance vs growth capex)
+  - Acquisitions (amounts and targets)
+  - Investments and asset sales
+  - **Net cash from investing**
+- **Financing activities:**
+  - Debt proceeds and repayments (separately)
+  - Dividends paid
+  - Stock repurchases (shares and amounts)
+  - Stock issuances
+  - **Net cash from financing**
+- **Net change in cash**
+- **Free cash flow:** If disclosed, extract. Otherwise calculate: Operating cash flow - Capital expenditures
+- **FCF conversion:** FCF ÷ Net Income (calculate %)
+
+## 4. SEGMENT PERFORMANCE (All Periods)
+For each reportable segment extract:
+- Revenue (3 years if available, with YoY % changes)
+- Operating income/EBIT (3 years, with margins)
+- **EBITDA/Adjusted EBITDA by segment** (if disclosed - note: this is RARELY disclosed per ASC 280)
+- Operating/EBITDA margin % (calculate if not disclosed)
+- **Assets allocated to segment** (required disclosure)
+- **Goodwill by segment** (required disclosure per ASC 350)
+- Capital expenditures by segment (if disclosed)
+- Depreciation/amortization by segment (if disclosed)
+- Key operating metrics: Volume, customers, utilization, capacity
+
+## 5. DEBT SCHEDULE (Complete Detail)
+Extract from debt footnote (typically Note on Debt or Long-Term Obligations):
+- **Instrument name:** Senior Notes, Term Loan, Revolving Credit Facility, Convertible Notes, etc.
+- **Principal amount outstanding** (face value)
+- **Maturity date**
+- **Interest rate/coupon:** Fixed rate (%), floating rate (LIBOR/SOFR + spread), or 0% for convertibles
+- **Security/collateral:** Secured or unsecured, assets pledged if disclosed
+- **Covenants:** Leverage ratios, interest coverage, minimum liquidity, restrictions on dividends/buybacks
+- **Guarantees:** Parent guarantee, subsidiary guarantee, cross-default provisions
+
+**Debt Maturity Schedule (extract table showing principal due by year):**
+- Year 1 (within 12 months)
+- Year 2
+- Year 3
+- Year 4
+- Year 5
+- Thereafter (beyond 5 years)
+- Total debt outstanding
+
+**Additional debt metrics:**
+- Fair value vs carrying value if disclosed
+- Weighted average interest rate on total debt
+- Credit ratings if disclosed (S&P, Moody's, Fitch)
+- Debt issuance and extinguishment activity during year
+- Available capacity on revolving credit facilities
+
+**Format as table:**
+```
+| Instrument | Principal | Maturity | Rate | Security | Covenants |
+|------------|-----------|----------|------|----------|-----------|
+| [Name]     | $X.XB     | MM/YYYY  | X.X% | Unsecured| Leverage <Xx |
+```
+
+## 6. OPERATIONAL METRICS (KPIs)
+Extract all disclosed non-financial metrics (all periods available):
+- Volume: Units sold, subscribers, members, customers, accounts
+- Efficiency: Revenue per employee, revenue per unit, same-store sales, utilization %, occupancy %
+- Quality: Retention %, churn %, NPS, defect rates, return rates
+- Capacity: Production capacity, installed capacity, capacity utilization %
+- Growth: New customer adds, organic growth %, acquired growth %
+- Geographic/segment-specific KPIs
+- Calculate YoY % changes for all metrics
+
+## 7. DEPENDENCIES & CONCENTRATIONS
+- **Customer concentration:** All named customers with % of revenue
+- **Supplier concentration:** Critical suppliers, sole-source dependencies, named suppliers with importance
+- **Raw materials:** Key inputs, pricing exposure, supply constraints
+- **Geographic concentration:** % of revenue/production by country/region
+- **Regulatory dependencies:** Licenses, permits, approvals required (FDA, FCC, EPA, etc.)
+- **Technology dependencies:** Patents, IP, third-party licenses, royalty agreements
+- **Infrastructure dependencies:** Distribution networks, platforms, utilities, logistics
+- **Joint ventures:** All JV partners, ownership %, purpose, financial contribution
+
+## 8. RISK FACTORS (Comprehensive)
+Extract ALL risks from Item 1A Risk Factors section:
+- Organize by category: Operational, Financial, Regulatory, Competitive, Strategic, Technology, Legal, Macroeconomic
+- For each risk: Describe threat, potential financial impact if quantified, disclosed mitigation
+- Flag risks with specific dollar amounts, percentages, or timelines
+- Note any risks that materialized during the fiscal year
+- Include litigation risks with case names and potential loss amounts
+- Identify top 5 most material risks based on disclosure length and specificity
+
+## 9. PROPERTIES & FACILITIES
+Extract from Item 2 Properties:
+- All manufacturing/production facilities: Location, purpose, owned vs leased, square footage
+- Distribution centers/warehouses: Locations, owned vs leased
+- Office locations: Corporate HQ, regional offices, R&D centers
+- Retail locations if applicable: Store count by geography
+- Total square footage owned vs leased
+- **Operating leases:** Total lease expense, weighted average remaining lease term, discount rate (ASC 842 disclosures)
+- Significant leases: Terms, expiration dates, renewal options
+
+## 10. LEGAL PROCEEDINGS
+Extract from Item 3 Legal Proceedings:
+- All material litigation: Case name, court, filing date, allegations
+- Potential loss amounts or ranges if disclosed
+- Status: Pending, settled, judgment entered
+- Regulatory investigations or enforcement actions
+- Environmental liabilities and remediation costs
+- Intellectual property disputes
+
+## 11. MANAGEMENT & GOVERNANCE
+- **Executive officers:** Names, titles, ages, tenure (from Part I, Item 1 or Part III, Item 10)
+- **Board of directors:** Names, independence status, committee assignments if disclosed
+- **Note:** Detailed executive compensation (salary, bonus, equity grants) is in the DEF 14A proxy statement, not the 10-K
+- Share ownership: Officers and directors beneficial ownership %
+- Related party transactions if disclosed
+
+## 12. CAPITAL ALLOCATION (3-Year History)
+- **Capital expenditures by category:** Maintenance vs growth (if disclosed), absolute $ and % of revenue
+- **R&D spending:** Absolute $ and % of revenue, 3-year trend
+- **R&D capitalization policy:** Does company expense R&D immediately or capitalize software/development costs? (per ASC 985-20 for software)
+- **Acquisitions:** Target names, purchase price, rationale, goodwill recognized
+- **Dividends:** Quarterly rate, annual total, payout ratio (dividends ÷ net income), dividend policy and restrictions
+- **Share repurchases:** Authorization amounts, shares repurchased, average price, remaining authorization, treasury stock method
+- **Debt activity:** Issuances, repayments, refinancings with amounts and terms
+- **Management's stated capital allocation priorities** (from MD&A)
+
+## 13. STRATEGIC PRIORITIES, OUTLOOK & GUIDANCE
+- **Strategic initiatives:** Transformation programs, cost reduction, growth investments (from Item 1 Business or MD&A)
+- **Any disclosed financial guidance or targets:**
+  - Note: Formal guidance is more common in earnings releases, but extract if mentioned in 10-K
+  - Revenue targets, EBITDA/margin targets, EPS goals, ROIC objectives
+  - Timeline for achieving targets
+- **Segment-specific strategies and priorities**
+- **Management's view on industry trends and competitive position**
+- **Capital allocation priorities going forward**
+- **Investment thesis or value creation plan** if articulated by management
+
+## 14. SUBSEQUENT EVENTS
+Extract from Subsequent Events footnote (typically last note in financial statements):
+- All events occurring between fiscal year-end and 10-K filing date
+- Material transactions: Acquisitions, divestitures, debt activity
+- Legal developments: Settlements, judgments, new litigation
+- Operational changes: Facility closures, restructuring announcements
+- Any events affecting comparability to prior periods
+- Note: Can be 2-3 months of developments between year-end and filing
+
+## 15. KEY MONITORING VARIABLES
+Based on business model, risks, and strategy, synthesize:
+- **Critical financial metrics to track:** EBITDA margins, FCF conversion, leverage ratios, ROIC, working capital trends
+- **Operational KPIs signaling execution:** Volume growth, retention, capacity utilization, same-store sales
+- **Risk factors most likely to materialize:** Which risks have highest probability and impact?
+- **Strategic milestones with timelines:** Product launches, facility openings, debt maturities
+- **Upcoming catalysts:** Contract renewals, regulatory decisions, patent expirations, competitive product launches
+- **Red flags to watch:** Covenant cushion shrinking, customer concentration increasing, margin compression
+
+OUTPUT FORMAT:
+- Valid Markdown with ## headers for each section (0-15)
+- Use tables extensively for financial data, debt schedules, segment data, multi-year comparisons
+- Include ALL disclosed figures with units (%, $M, $B, units, headcount, square footage)
+- Preserve exact terminology from filing (e.g., "Adjusted EBITDA" if that's what company calls it)
+- Write "Not disclosed in 10-K" for sections with no data (but search thoroughly first)
+- Calculate percentage changes (YoY %) for all financial and operational metrics
+- Comprehensive extraction: 5,000-8,000 words
+
+Generate the complete company profile now.
+"""
+
+GEMINI_10Q_PROMPT = """You are creating a comprehensive Quarterly Update for {company_name} ({ticker}) from their Form 10-Q filing for Q{quarter} {fiscal_year}.
+
+EXTRACTION PHILOSOPHY:
+- Extract ALL material data disclosed in the 10-Q - err on the side of inclusion
+- Focus on year-over-year (YoY) comparisons: Current Q vs YoY Prior Q, YTD vs YTD Prior
+- Note: Quarter-over-quarter (QoQ) data is often NOT disclosed in 10-Qs - extract if available but don't assume it exists
+- Use exact figures, names, dates as stated in filing
+- Format tables showing: Current Q | YoY Prior Q | YoY % Change | YTD Current | YTD Prior | YTD % Change
+- This serves ALL industries and company sizes - extract what's disclosed
+- Target: 3,000-5,000 words (comprehensive quarterly extraction)
+
+---
+COMPLETE 10-Q DOCUMENT:
+{full_10q_text}
+
+---
+
+## 0. FILING METADATA
+- **Fiscal quarter:** Q{quarter} {fiscal_year}
+- **Period covered:** [Start date] to [End date] (e.g., July 1, 2024 to September 30, 2024)
+- **Number of days in quarter:** [90/91/92/93 days] (important for daily rate calculations)
+- **Filing date:** [Date 10-Q was filed with SEC]
+- **Fiscal year end:** [Company's fiscal year end date - e.g., December 31 or September 30]
+- **Reporting currency:** USD, CAD, EUR, etc.
+- **Seasonality note:** Is this business seasonal? Which quarters are typically strongest/weakest?
+
+## 1. QUARTERLY FINANCIAL PERFORMANCE
+**Income Statement (extract all periods disclosed: Current Q, YoY Prior Q, YTD Current, YTD Prior):**
+- Revenue line items (product, service, segment breakdowns)
+- Cost of revenue/COGS
+- Gross profit and gross margin %
+- Operating expenses: R&D, SG&A, restructuring, impairments (all line items)
+- **Stock-based compensation (SBC):** Total SBC expense, trend vs prior year
+- Operating income and operating margin %
+- **EBITDA/Adjusted EBITDA:**
+  - Extract from MD&A if company explicitly discloses
+  - If disclosed: Extract all adjustments and EBITDA margin %
+  - If NOT disclosed: Note "EBITDA not disclosed. Approximation: Calculate as Operating Income + Depreciation & Amortization. This is an approximation."
+  - Calculate YoY % changes for EBITDA and margin
+  - This is the PRIMARY earnings metric to track
+- Interest income and interest expense (separately)
+- Other income/expense items
+- Income tax provision and effective tax rate (compare to YoY prior Q)
+- Net income and net income margin %
+- EPS: Basic and diluted
+- **Share count:** Basic and diluted shares outstanding
+  - **Significant share count changes:** Note if shares increased >5% (dilution from equity raise, options) or decreased >5% (buybacks)
+  - Calculate impact on EPS comparability
+
+**Format as table:**
+```
+| Metric | Current Q | YoY Q | YoY % | YTD Current | YTD Prior | YTD % |
+|--------|-----------|-------|-------|-------------|-----------|-------|
+| Revenue | $X.XB    | $X.XB | +X%   | $X.XB       | $X.XB     | +X%   |
+```
+
+## 2. SEGMENT PERFORMANCE (YoY Trends)
+For each reportable segment extract:
+- **Revenue:** Current Q | YoY Prior Q | YoY % Change | YTD Current | YTD Prior | YTD % Change
+- **Operating income/EBIT:** Same format as revenue
+- **EBITDA by segment:** If disclosed (note: RARELY disclosed - extract only if explicitly shown)
+- **Operating/EBITDA margin:** Current Q vs YoY Q (note basis point changes)
+- **Volume/operational metrics:** Units, customers, subscribers (with YoY % changes)
+- **Trend assessment:** Is segment accelerating, decelerating, or stable? (compare Q YoY % vs YTD YoY %)
+
+## 3. BALANCE SHEET (Quarter-End vs Prior Quarter-End vs Year-End)
+**Assets:**
+- **Current assets:** Cash, marketable securities, receivables, inventory, prepaid
+- **Non-current assets:** PP&E (net), operating lease ROU assets, intangibles, goodwill, investments
+
+**Liabilities:**
+- **Current liabilities:** Payables, accrued expenses, current debt, current lease liabilities, deferred revenue
+- **Non-current liabilities:** Long-term debt, non-current lease liabilities, deferred taxes, other
+
+**Equity:**
+- Common stock, APIC, retained earnings, accumulated OCI, treasury stock
+- Book value per share
+
+**Format as table:**
+```
+| Item | Current Q | Prior Q | Year-End | QoQ Change | YE Change |
+|------|-----------|---------|----------|------------|-----------|
+| Cash | $X.XB     | $X.XB   | $X.XB    | +$XXM      | -$XXM     |
+```
+
+**Working Capital Analysis:**
+- Calculate days metrics: Days inventory outstanding (DIO), days sales outstanding (DSO), days payables outstanding (DPO)
+- Compare to YoY prior quarter
+- Note any significant working capital build or release
+
+## 4. DEBT SCHEDULE UPDATE (Complete Detail)
+Extract from debt footnote (typically Note on Debt):
+- **All outstanding debt instruments:**
+  - Instrument name
+  - Principal amount outstanding (current quarter-end)
+  - Change from prior quarter: Issuances, repayments (amounts)
+  - Maturity date
+  - Interest rate/coupon (fixed or floating)
+  - Security/collateral status
+
+**Covenant Compliance:**
+- **Critical ratios:** Leverage (Debt/EBITDA), interest coverage (EBITDA/Interest), minimum liquidity
+- **Actual values vs covenant limits:** How much cushion? (e.g., "Leverage: 3.2x vs 4.0x limit = 0.8x cushion")
+- Any covenant waivers or amendments during quarter?
+
+**Debt Maturity Schedule (updated as of quarter-end):**
+```
+| Period | Amount Due |
+|--------|------------|
+| < 1 yr | $X.XB      |
+| 1-2 yr | $X.XB      |
+| 2-3 yr | $X.XB      |
+| 3-4 yr | $X.XB      |
+| 4-5 yr | $X.XB      |
+| > 5 yr | $X.XB      |
+| Total  | $X.XB      |
+```
+
+**Debt Activity During Quarter:**
+- New debt issued: Amount, terms, use of proceeds
+- Debt repaid: Amount, instrument
+- Amendments or refinancings
+- Credit rating changes if disclosed
+
+## 5. CASH FLOW STATEMENT (QTD & YTD)
+Extract for Current Quarter YTD and Prior Year YTD:
+
+**Operating Activities:**
+- Net income
+- Add back: Depreciation, amortization, stock-based comp, deferred taxes
+- **Working capital changes:** Detail each component (receivables, inventory, payables, accrued expenses)
+- Other operating items
+- **Net cash from operations**
+
+**Investing Activities:**
+- **Capital expenditures:** Maintenance vs growth if disclosed
+- Acquisitions: Amounts and targets
+- Asset sales/dispositions
+- Investments in securities
+- **Net cash from investing**
+
+**Financing Activities:**
+- Debt proceeds and repayments (separately)
+- Dividends paid
+- Stock repurchases: Shares and amounts
+- Stock issuances: Employee plans, offerings
+- **Net cash from financing**
+
+**Calculate:**
+- **Free cash flow (FCF):** Operating cash flow - Capex (for both QTD and YTD)
+- **FCF conversion:** FCF ÷ Net Income (%)
+- **YoY change in FCF:** Current YTD vs Prior YTD ($change and %change)
+
+**Format as table showing YTD comparisons:**
+```
+| Item | YTD Current | YTD Prior | $ Change | % Change |
+|------|-------------|-----------|----------|----------|
+| OCF  | $X.XB       | $X.XB     | +$XXM    | +X%      |
+| Capex| ($XXM)      | ($XXM)    | -$XXM    | -X%      |
+| FCF  | $X.XB       | $X.XB     | +$XXM    | +X%      |
+```
+
+## 6. OPERATIONAL METRICS (YoY Comparisons)
+Extract all disclosed non-financial KPIs:
+- **Volume metrics:** Units, subscribers, customers, accounts
+  - Current Q | YoY Prior Q | YoY % Change
+  - YTD Current | YTD Prior | YTD % Change
+- **Efficiency metrics:** Revenue per user (ARPU), revenue per employee, same-store sales, utilization %
+- **Quality metrics:** Retention %, churn %, NPS
+- **Capacity metrics:** Capacity utilization, occupancy rates
+- **Customer metrics:** Gross adds, churn, net adds
+
+**Analysis:** Do operational trends support or contradict financial results?
+
+## 7. GUIDANCE & OUTLOOK (If Discussed in MD&A)
+**Note:** 10-Qs often DO NOT contain formal financial guidance. Guidance is typically provided in earnings releases and calls, not in the 10-Q filing itself.
+
+**IF guidance is discussed in MD&A, extract:**
+- **Current full-year guidance:**
+  - Revenue range
+  - EBITDA/Adjusted EBITDA range
+  - EPS range
+  - Free cash flow range
+  - Segment-specific guidance
+
+- **Prior guidance** (from previous quarter):
+  - Show what changed: Raised, lowered, maintained, narrowed range
+
+- **Management commentary on outlook:**
+  - What gives confidence? (improving metrics, backlog, demand signals)
+  - What creates caution? (headwinds, uncertainties)
+  - Key assumptions: Volume, pricing, costs, macro environment
+
+**IF NO formal guidance in 10-Q:**
+- Note: "No formal guidance provided in 10-Q. Guidance typically disclosed in earnings releases."
+- Extract any qualitative outlook statements from MD&A
+
+## 8. NEW RISKS & MATERIAL DEVELOPMENTS
+Extract from Risk Factors update and MD&A:
+
+**NEW Risks Added:**
+- Any new risk factors added in this 10-Q not present in prior filings
+- Why added now? What changed?
+
+**Updated Risks:**
+- Existing risks with new details or escalated language
+- Risks that improved or de-escalated
+
+**Material Developments During Quarter:**
+- **Customer wins or losses:** Named customers, contract values, impacts
+- **Supplier changes or disruptions:** Impact on operations or costs
+- **Regulatory actions:** Investigations, approvals, fines, compliance matters
+- **Litigation updates:** New lawsuits, settlements, judgments (with amounts)
+- **Restructuring actions:** Headcount reductions, facility closures, severance charges
+- **M&A activity:** Acquisitions, divestitures with purchase prices and rationale
+- **Strategic pivots:** Program cancellations, strategy shifts
+- **Technology/product developments:** Launches, delays, certifications
+- **Management changes:** CEO, CFO, other C-suite departures or hires
+
+## 9. SUBSEQUENT EVENTS (Since Quarter-End)
+Extract from Subsequent Events footnote:
+- All events occurring between quarter-end and 10-Q filing date (typically 30-45 days)
+- Material transactions, legal developments, operational changes
+- Events affecting forward comparability
+
+## 10. MANAGEMENT COMMENTARY & TONE
+Extract key statements from MD&A:
+
+**What is management emphasizing?**
+- Growth drivers highlighted
+- Strategic priorities reiterated or changed
+- Operational achievements celebrated
+
+**Confident areas:**
+- Where is tone optimistic?
+- What metrics are improving and praised?
+- What initiatives are working?
+
+**Cautious areas:**
+- What concerns or headwinds are discussed?
+- What metrics are deteriorating?
+- What external factors are blamed?
+
+**Competitive environment:**
+- Comments on competition, market share, win rates, pricing environment
+
+**Macroeconomic commentary:**
+- Views on interest rates, inflation, demand, supply chains, consumer spending
+
+**Tone assessment:**
+- Overall: Confident, cautious, defensive, or mixed?
+- Has tone shifted vs prior quarter?
+
+## 11. SEGMENT & GEOGRAPHIC TRENDS
+Extract from segment disclosures and MD&A:
+- Revenue by geography (if disclosed): YoY % changes
+- Same-store sales or organic growth metrics
+- **Price vs volume contribution to growth:** "Revenue grew X% driven by Y% volume and Z% pricing"
+- Customer concentration: Any changes in top customer percentages?
+- Product mix shifts: Which products/services growing fastest?
+- Regional commentary: Which geographies outperforming or underperforming?
+
+## 12. LIQUIDITY & CAPITAL RESOURCES
+Extract from Liquidity section of MD&A:
+- **Total liquidity:** Cash + marketable securities + available credit facilities
+- **Liquidity bridge:** Beginning liquidity → OCF → Capex → Dividends → Buybacks → Debt activity → Ending liquidity
+- **Covenant compliance:** Actual ratios vs limits, cushion to violation
+- **Cash deployment plans:** Near-term use of cash (capex programs, dividends, buybacks, M&A pipeline)
+- **Funding needs:** Upcoming debt maturities (next 12 months), working capital requirements
+- **Credit ratings:** Any updates from S&P, Moody's, Fitch
+
+## 13. SUMMARY OF KEY CHANGES
+Synthesize quarter's developments:
+
+**Top 3-5 Positive Developments:**
+- Revenue acceleration, margin expansion, strong FCF, customer wins, successful cost actions, etc.
+
+**Top 3-5 Negative Developments:**
+- Revenue deceleration, margin compression, FCF decline, guidance cuts, customer losses, etc.
+
+**Segment Trends:**
+- Which segments are accelerating? (YoY % growth improving)
+- Which are decelerating? (YoY % growth slowing)
+- Which are stable?
+
+**Risk Assessment:**
+- **Risk escalations:** What got worse this quarter?
+- **Risk de-escalations:** What improved?
+
+**Strategic Shifts:**
+- Any changes in capital allocation priorities?
+- New strategic initiatives or pivots?
+
+**Financial Health Assessment:**
+- Is company improving, stable, or deteriorating?
+- Based on: EBITDA trend, FCF trend, leverage trend, liquidity position
+
+**Momentum Check:**
+- Is quarter's YoY growth > YTD YoY growth? (accelerating)
+- Is quarter's YoY growth < YTD YoY growth? (decelerating)
+- Apply to revenue, EBITDA, FCF
+
+OUTPUT FORMAT:
+- Valid Markdown with ## headers for each section (0-13)
+- Use comparison tables extensively showing YoY and YTD comparisons
+- Calculate ALL YoY percentage changes for every metric
+- Include ALL disclosed figures with units (%, $M, $B, units, days, headcount)
+- Preserve exact terminology from filing
+- Write "Not disclosed in 10-Q" only if truly absent
+- Focus on CHANGES and TRENDS (what's different vs prior year?)
+- Comprehensive extraction: 3,000-5,000 words
+
+Generate the complete quarterly update now.
+"""
+
+# ==============================================================================
 # PDF/TEXT EXTRACTION
 # ==============================================================================
 
@@ -123,21 +698,34 @@ def fetch_sec_html_text(url: str) -> str:
 # GEMINI AI PROFILE GENERATION
 # ==============================================================================
 
-def generate_company_profile_with_gemini(
+def generate_sec_filing_profile_with_gemini(
     ticker: str,
     content: str,
     config: Dict,
+    filing_type: str,  # '10-K' or '10-Q'
     fiscal_year: int,
-    filing_date: str,
-    gemini_api_key: str,
-    gemini_prompt: str  # Full prompt passed from app.py
+    fiscal_quarter: str = None,  # 'Q1', 'Q2', 'Q3', 'Q4' (required for 10-Q)
+    filing_date: str = None,
+    gemini_api_key: str = None
 ) -> Optional[Dict]:
     """
-    Generate company profile using Gemini 2.5 Flash with Thinking mode.
+    Generate comprehensive SEC filing profile using Gemini 2.5 Flash.
+
+    Supports both 10-K (annual) and 10-Q (quarterly) filings with specialized prompts.
+
+    Args:
+        ticker: Stock ticker (e.g., 'AAPL', 'TSLA')
+        content: Full text of SEC filing
+        config: Ticker configuration dict with company_name, etc.
+        filing_type: '10-K' for annual or '10-Q' for quarterly
+        fiscal_year: Fiscal year (e.g., 2024)
+        fiscal_quarter: 'Q1', 'Q2', 'Q3', 'Q4' (required for 10-Q, None for 10-K)
+        filing_date: Filing date string (optional)
+        gemini_api_key: Gemini API key
 
     Returns:
         {
-            'profile_markdown': str,
+            'profile_markdown': str (5,000-8,000 words for 10-K, 3,000-5,000 for 10-Q),
             'metadata': {
                 'model': str,
                 'generation_time_seconds': int,
@@ -150,32 +738,60 @@ def generate_company_profile_with_gemini(
         LOG.error("Gemini API key not configured")
         return None
 
+    if filing_type not in ['10-K', '10-Q']:
+        LOG.error(f"Unsupported filing type: {filing_type}. Must be '10-K' or '10-Q'")
+        return None
+
+    if filing_type == '10-Q' and not fiscal_quarter:
+        LOG.error("fiscal_quarter is required for 10-Q filings")
+        return None
+
     try:
         genai.configure(api_key=gemini_api_key)
 
         company_name = config.get("company_name", ticker)
 
-        LOG.info(f"Generating company profile for {ticker} using Gemini 2.5 Flash (thinking mode)")
-        LOG.info(f"Content length: {len(content)} chars (~{len(content)//4} tokens)")
+        # Select appropriate prompt based on filing type
+        if filing_type == '10-K':
+            prompt_template = GEMINI_10K_PROMPT
+            filing_desc = f"10-K for FY{fiscal_year}"
+            target_words = "5,000-8,000"
+        else:  # 10-Q
+            prompt_template = GEMINI_10Q_PROMPT
+            filing_desc = f"10-Q for {fiscal_quarter} {fiscal_year}"
+            target_words = "3,000-5,000"
+            # Extract quarter number for prompt (Q3 -> 3)
+            quarter_num = fiscal_quarter[1] if fiscal_quarter else "?"
 
-        # Gemini 2.5 Flash with thinking
+        LOG.info(f"Generating {filing_type} profile for {ticker} ({filing_desc}) using Gemini 2.5 Flash")
+        LOG.info(f"Content length: {len(content):,} chars (~{len(content)//4:,} tokens)")
+        LOG.info(f"Target output: {target_words} words")
+
+        # Gemini 2.5 Flash
         model = genai.GenerativeModel('gemini-2.5-flash')
 
         generation_config = {
             "temperature": 0.3,
-            "max_output_tokens": 8000
+            "max_output_tokens": 16000  # Increased from 8000 to support comprehensive extraction
         }
 
         start_time = datetime.now()
 
-        # Build full prompt with content
-        full_prompt = gemini_prompt.format(
-            company_name=company_name,
-            ticker=ticker,
-            filing_date=filing_date,
-            fiscal_year_end=f"{fiscal_year}-12-31",  # Approximate
-            full_10k_text=content
-        )
+        # Build full prompt with content (different formatting for 10-K vs 10-Q)
+        if filing_type == '10-K':
+            full_prompt = prompt_template.format(
+                company_name=company_name,
+                ticker=ticker,
+                full_10k_text=content[:200000]  # Limit to ~50k tokens to fit context window
+            )
+        else:  # 10-Q
+            full_prompt = prompt_template.format(
+                company_name=company_name,
+                ticker=ticker,
+                quarter=quarter_num,
+                fiscal_year=fiscal_year,
+                full_10q_text=content[:150000]  # 10-Qs are typically shorter
+            )
 
         response = model.generate_content(
             full_prompt,
@@ -188,21 +804,23 @@ def generate_company_profile_with_gemini(
         profile_markdown = response.text
 
         if not profile_markdown or len(profile_markdown) < 1000:
-            LOG.warning(f"Gemini returned suspiciously short profile for {ticker} ({len(profile_markdown)} chars)")
+            LOG.warning(f"Gemini returned suspiciously short profile for {ticker} {filing_type} ({len(profile_markdown)} chars)")
             return None
 
         # Extract metadata
         metadata = {
             'model': 'gemini-2.5-flash',
+            'filing_type': filing_type,
             'generation_time_seconds': generation_time,
             'token_count_input': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
             'token_count_output': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
         }
 
-        LOG.info(f"✅ Generated company profile for {ticker}")
-        LOG.info(f"   Length: {len(profile_markdown)} chars")
+        word_count = len(profile_markdown.split())
+        LOG.info(f"✅ Generated {filing_type} profile for {ticker}")
+        LOG.info(f"   Length: {len(profile_markdown):,} chars (~{word_count:,} words)")
         LOG.info(f"   Time: {generation_time}s")
-        LOG.info(f"   Tokens: {metadata['token_count_input']} in, {metadata['token_count_output']} out")
+        LOG.info(f"   Tokens: {metadata['token_count_input']:,} in, {metadata['token_count_output']:,} out")
 
         return {
             'profile_markdown': profile_markdown,
@@ -210,9 +828,38 @@ def generate_company_profile_with_gemini(
         }
 
     except Exception as e:
-        LOG.error(f"Failed to generate company profile for {ticker}: {e}")
+        LOG.error(f"Failed to generate {filing_type} profile for {ticker}: {e}")
         LOG.error(f"Stacktrace: {traceback.format_exc()}")
         return None
+
+
+# Backward compatibility alias (deprecated)
+def generate_company_profile_with_gemini(
+    ticker: str,
+    content: str,
+    config: Dict,
+    fiscal_year: int,
+    filing_date: str,
+    gemini_api_key: str,
+    gemini_prompt: str = None  # Ignored (using GEMINI_10K_PROMPT instead)
+) -> Optional[Dict]:
+    """
+    DEPRECATED: Use generate_sec_filing_profile_with_gemini() instead.
+
+    This function maintains backward compatibility with existing code.
+    """
+    LOG.warning("generate_company_profile_with_gemini() is deprecated. Use generate_sec_filing_profile_with_gemini()")
+
+    return generate_sec_filing_profile_with_gemini(
+        ticker=ticker,
+        content=content,
+        config=config,
+        filing_type='10-K',  # Default to 10-K for backward compatibility
+        fiscal_year=fiscal_year,
+        fiscal_quarter=None,
+        filing_date=filing_date,
+        gemini_api_key=gemini_api_key
+    )
 
 
 # ==============================================================================

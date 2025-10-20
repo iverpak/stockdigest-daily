@@ -1189,7 +1189,8 @@
                 presentation_date: doc.presentation_date,
                 quarter: doc.quarter,
                 year: doc.year,
-                report_date: doc.report_date
+                report_date: doc.report_date,
+                ai_provider: doc.ai_provider  // Include ai_provider for transcript disambiguation
             }).replace(/"/g, '&quot;');
 
             // Hide Email button for Gemini transcripts (view-only for A/B testing)
@@ -1227,7 +1228,8 @@
                     } else if (docInfo.type === 'presentations') {
                         return d.ticker === docInfo.ticker && d.presentation_date === docInfo.presentation_date;
                     } else if (docInfo.type === 'transcripts') {
-                        return d.ticker === docInfo.ticker && d.quarter === docInfo.quarter && d.year === docInfo.year;
+                        // Include ai_provider to distinguish between Gemini and Sonnet versions
+                        return d.ticker === docInfo.ticker && d.quarter === docInfo.quarter && d.year === docInfo.year && d.ai_provider === docInfo.ai_provider;
                     } else if (docInfo.type === 'press_releases') {
                         return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date;
                     }
@@ -1385,7 +1387,7 @@
                     body = { token, ticker: docInfo.ticker, presentation_date: docInfo.presentation_date };
                 } else if (docInfo.type === 'transcripts') {
                     endpoint = '/api/admin/delete-transcript';
-                    body = { token, ticker: docInfo.ticker, quarter: docInfo.quarter, year: docInfo.year, report_type: 'transcript' };
+                    body = { token, ticker: docInfo.ticker, quarter: docInfo.quarter, year: docInfo.year, report_type: 'transcript', ai_provider: docInfo.ai_provider };
                 } else if (docInfo.type === 'press_releases') {
                     endpoint = '/api/admin/delete-transcript';
                     body = { token, ticker: docInfo.ticker, report_date: docInfo.report_date, report_type: 'press_release' };
@@ -1432,7 +1434,8 @@
                         presentation_date: docInfo.presentation_date,
                         quarter: docInfo.quarter,
                         year: docInfo.year,
-                        report_date: docInfo.report_date
+                        report_date: docInfo.report_date,
+                        ai_provider: docInfo.ai_provider  // Include for transcript disambiguation
                     };
                 }
 

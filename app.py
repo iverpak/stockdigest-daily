@@ -25152,6 +25152,7 @@ async def delete_transcript_api(request: Request):
     quarter = body.get('quarter')
     year = body.get('year')
     report_type = body.get('report_type', 'transcript')  # 'transcript' or 'press_release'
+    ai_provider = body.get('ai_provider')  # 'claude' or 'gemini' for transcript disambiguation
 
     if not ticker:
         return {"status": "error", "message": "Ticker required"}
@@ -25162,15 +25163,27 @@ async def delete_transcript_api(request: Request):
                 if not quarter or not year:
                     return {"status": "error", "message": "Quarter and year required for transcripts"}
 
-                cur.execute("""
-                    DELETE FROM transcript_summaries
-                    WHERE ticker = %s
-                      AND report_type = 'transcript'
-                      AND quarter = %s
-                      AND year = %s
-                """, (ticker, quarter, year))
+                # Include ai_provider to only delete the specific version (Gemini or Sonnet)
+                if ai_provider:
+                    cur.execute("""
+                        DELETE FROM transcript_summaries
+                        WHERE ticker = %s
+                          AND report_type = 'transcript'
+                          AND quarter = %s
+                          AND year = %s
+                          AND ai_provider = %s
+                    """, (ticker, quarter, year, ai_provider))
+                else:
+                    # Fallback: delete all versions if ai_provider not specified
+                    cur.execute("""
+                        DELETE FROM transcript_summaries
+                        WHERE ticker = %s
+                          AND report_type = 'transcript'
+                          AND quarter = %s
+                          AND year = %s
+                    """, (ticker, quarter, year))
 
-                identifier = f"Q{quarter} {year}"
+                identifier = f"Q{quarter} {year} ({ai_provider or 'all versions'})"
             else:  # press_release
                 report_date = body.get('report_date')
                 if not report_date:
@@ -25242,25 +25255,41 @@ async def email_research_api(request: Request):
             elif research_type == 'transcript':
                 quarter = body.get('quarter')
                 year = body.get('year')
+                ai_provider = body.get('ai_provider')  # 'claude' or 'gemini' for disambiguation
                 if not quarter or not year:
                     return {"status": "error", "message": "Quarter and year required"}
 
-                cur.execute("""
-                    SELECT ticker, quarter, year, summary_text
-                    FROM transcript_summaries
-                    WHERE ticker = %s
-                      AND report_type = 'transcript'
-                      AND quarter = %s
-                      AND year = %s
-                    LIMIT 1
-                """, (ticker, quarter, year))
+                # Include ai_provider to fetch the specific version (Gemini or Sonnet)
+                if ai_provider:
+                    cur.execute("""
+                        SELECT ticker, quarter, year, summary_text, ai_provider, ai_model
+                        FROM transcript_summaries
+                        WHERE ticker = %s
+                          AND report_type = 'transcript'
+                          AND quarter = %s
+                          AND year = %s
+                          AND ai_provider = %s
+                        LIMIT 1
+                    """, (ticker, quarter, year, ai_provider))
+                else:
+                    # Fallback: fetch any version if ai_provider not specified
+                    cur.execute("""
+                        SELECT ticker, quarter, year, summary_text, ai_provider, ai_model
+                        FROM transcript_summaries
+                        WHERE ticker = %s
+                          AND report_type = 'transcript'
+                          AND quarter = %s
+                          AND year = %s
+                        LIMIT 1
+                    """, (ticker, quarter, year))
 
                 doc = cur.fetchone()
                 if not doc:
                     return {"status": "error", "message": f"No transcript found for {ticker}"}
 
                 content = doc['summary_text']
-                subject = f"Earnings Transcript: {ticker} Q{quarter} {year}"
+                model_label = f" ({doc.get('ai_model', doc.get('ai_provider', 'AI'))})" if ai_provider else ""
+                subject = f"Earnings Transcript: {ticker} Q{quarter} {year}{model_label}"
 
             elif research_type == 'press_release':
                 report_date = body.get('report_date')

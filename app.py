@@ -21497,21 +21497,33 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                 available_years = []
                 for filing in filings[:10]:
                     try:
-                        period_end = filing.get("period", "")  # Actual fiscal year end date
                         filing_date_str = filing.get("fillingDate", "")
+                        sec_html_url = filing.get("finalLink", "")
 
-                        # Use period end date to determine fiscal year (handles non-standard fiscal years)
-                        if period_end:
-                            year = int(period_end[:4])
-                            period_date = period_end[:10]  # YYYY-MM-DD
-                        elif filing_date_str:
+                        # FMP's /sec_filings doesn't include "period" field
+                        # Extract period end date from finalLink filename instead
+                        # Example: https://www.sec.gov/.../jpm-20241231.htm → 20241231
+                        import re
+                        period_date = None
+                        year = None
+
+                        if sec_html_url:
+                            # Match 8-digit date pattern before .htm (e.g., jpm-20241231.htm)
+                            match = re.search(r'(\d{8})\.htm$', sec_html_url)
+                            if match:
+                                date_str = match.group(1)  # "20241231"
+                                year = int(date_str[:4])  # 2024
+                                period_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"  # "2024-12-31"
+
+                        # Fallback to filing date if we couldn't extract from URL
+                        if not year and filing_date_str:
                             year = int(filing_date_str[:4])
-                            period_date = None
-                        else:
+                            LOG.warning(f"[{ticker}] Could not extract period from finalLink, using filing year: {year}")
+
+                        if not year:
                             continue
 
                         filing_date = filing_date_str[:10] if filing_date_str else None
-                        sec_html_url = filing.get("finalLink", "")
 
                         available_years.append({
                             "year": year,
@@ -21555,15 +21567,28 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                 available_quarters = []
                 for filing in filings[:12]:
                     try:
-                        period_end = filing.get("period", "")  # Actual quarter end date
                         filing_date_str = filing.get("fillingDate", "")
                         sec_html_url = filing.get("finalLink", "")
 
-                        # Use period end date to calculate quarter (handles non-standard fiscal years)
-                        if period_end:
-                            year = int(period_end[:4])
-                            month = int(period_end[5:7])
+                        # FMP's /sec_filings doesn't include "period" field
+                        # Extract period end date from finalLink filename instead
+                        # Example: https://www.sec.gov/.../jpm-20250630.htm → 20250630
+                        import re
+                        period_date = None
+                        year = None
+                        month = None
 
+                        if sec_html_url:
+                            # Match 8-digit date pattern before .htm (e.g., jpm-20250630.htm)
+                            match = re.search(r'(\d{8})\.htm$', sec_html_url)
+                            if match:
+                                date_str = match.group(1)  # "20250630"
+                                year = int(date_str[:4])  # 2025
+                                month = int(date_str[4:6])  # 06
+                                period_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"  # "2025-06-30"
+
+                        # Use period end date to calculate quarter (handles non-standard fiscal years)
+                        if year and month:
                             # Map quarter end month to quarter number
                             # Standard: Q1=March(3), Q2=June(6), Q3=Sept(9), Q4=Dec(12)
                             if month == 3:
@@ -21580,9 +21605,9 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                                 quarter = f"Q{quarter_num}"
 
                             fiscal_year = year
-                            period_date = period_end[:10]  # YYYY-MM-DD
                         elif filing_date_str:
-                            # Fallback to old filing date logic if period missing
+                            # Fallback to old filing date logic if period extraction fails
+                            LOG.warning(f"[{ticker}] Could not extract period from finalLink, using filing date fallback")
                             filing_date = filing_date_str[:10]
                             year = int(filing_date[:4])
                             month = int(filing_date[5:7])
@@ -21609,7 +21634,7 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
 
                         # Skip Q4 10-Qs (shouldn't exist, but filter just in case)
                         if quarter == "Q4":
-                            LOG.debug(f"Skipping {ticker} Q4 10-Q (period: {period_end}) - Q4 is covered by 10-K")
+                            LOG.debug(f"Skipping {ticker} Q4 10-Q (period: {period_date}) - Q4 is covered by 10-K")
                             continue
 
                         available_quarters.append({

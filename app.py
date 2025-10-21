@@ -21490,34 +21490,38 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                         if not filing_date_str:
                             continue
 
-                        # Parse filing date to get fiscal year
+                        # Parse filing date
                         filing_date = filing_date_str[:10]  # YYYY-MM-DD
-                        fiscal_year = int(filing_date[:4])
 
-                        # Determine quarter from accepted date or filing date
+                        # Use accepted date if available (more accurate), otherwise use filing date
                         date_to_parse = accepted_date_str[:10] if accepted_date_str else filing_date
+                        year = int(date_to_parse[:4])
                         month = int(date_to_parse[5:7])
+                        day = int(date_to_parse[8:10])
 
-                        # Map filing month to fiscal quarter
-                        if month in [4, 5]:
-                            quarter = "Q1"
-                        elif month in [7, 8]:
-                            quarter = "Q2"
-                        elif month in [10, 11]:
+                        # Determine quarter based on last calendar quarter end before filing date
+                        # Calendar quarter ends: Q1=March 31, Q2=June 30, Q3=Sept 30, Q4=Dec 31
+                        # NOTE: Q4 10-Q does not exist (covered by 10-K annual report)
+
+                        # Check which quarter end was most recent before this filing date
+                        if month >= 10 or (month == 9 and day == 30):
+                            # Filed in Oct-Dec or on Sept 30 → Last quarter end was Sept 30 (Q3)
                             quarter = "Q3"
+                            fiscal_year = year
+                        elif month >= 7 or (month == 6 and day == 30):
+                            # Filed in July-Sept (before Sept 30) or on June 30 → Last quarter end was June 30 (Q2)
+                            quarter = "Q2"
+                            fiscal_year = year
+                        elif month >= 4 or (month == 3 and day == 31):
+                            # Filed in April-June (before June 30) or on March 31 → Last quarter end was March 31 (Q1)
+                            quarter = "Q1"
+                            fiscal_year = year
                         else:
-                            if month in [1, 2, 3]:
-                                quarter = "Q4"
-                                fiscal_year -= 1
-                            elif month in [6]:
-                                quarter = "Q1"
-                            elif month in [9]:
-                                quarter = "Q2"
-                            elif month in [12]:
-                                quarter = "Q3"
-                            else:
-                                LOG.warning(f"Could not determine quarter for {ticker} filing on {date_to_parse}")
-                                continue
+                            # Filed in Jan-March (before March 31) → Last quarter end was Dec 31 (Q4)
+                            # Q4 10-Q does not exist (that's covered by 10-K)
+                            # This filing is either misclassified or a late 10-K
+                            LOG.debug(f"Skipping {ticker} 10-Q filing on {date_to_parse} - would map to Q4 which doesn't exist for 10-Q")
+                            continue
 
                         available_quarters.append({
                             "quarter": quarter,

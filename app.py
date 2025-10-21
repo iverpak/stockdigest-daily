@@ -26271,10 +26271,22 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
 
                     period_date = period_end[:10]
                 elif filing_date_str:
-                    # Fallback to filing date logic if period missing
-                    year = int(filing_date_str[:4])
-                    month = int(filing_date_str[5:7])
-                    quarter = (month - 1) // 3 + 1
+                    # Fallback: Use correct logic - determine quarter from last quarter end before filing
+                    filing_date = filing_date_str[:10]  # Strip timestamp if present
+                    year = int(filing_date[:4])
+                    month = int(filing_date[5:7])
+                    day = int(filing_date[8:10])
+
+                    # Determine which quarter ended most recently before this filing date
+                    if month >= 10 or (month == 9 and day == 30):
+                        quarter = 3  # Filed Oct-Dec → Q3 (ended Sep 30)
+                    elif month >= 7 or (month == 6 and day == 30):
+                        quarter = 2  # Filed Jul-Sep → Q2 (ended Jun 30)
+                    elif month >= 4 or (month == 3 and day == 31):
+                        quarter = 1  # Filed Apr-Jun → Q1 (ended Mar 31)
+                    else:
+                        # Filed Jan-Mar → would be Q4, but Q4 doesn't have 10-Q
+                        continue
                     period_date = None
                 else:
                     continue

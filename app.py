@@ -21568,7 +21568,42 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                 }
 
             # Format quarters (most recent first, limit to 8)
-            quarters = [f"Q{t['quarter']} {t['year']}" for t in transcripts[:8]]
+            # Calculate quarter from call date instead of using FMP's fiscal labels
+            # This matches our 10-Q logic: determine quarter by last quarter end before call
+            quarters = []
+            for t in transcripts[:8]:
+                try:
+                    # Parse call date
+                    call_date_str = t['date']
+                    year = int(call_date_str[:4])
+                    month = int(call_date_str[5:7])
+                    day = int(call_date_str[8:10])
+
+                    # Determine quarter based on last calendar quarter end before call date
+                    # Calendar quarter ends: Q1=March 31, Q2=June 30, Q3=Sept 30, Q4=Dec 31
+                    if month >= 10 or (month == 9 and day == 30):
+                        # Call in Oct-Dec or on Sept 30 → Reports Q3 (ended Sept 30)
+                        quarter = 3
+                        quarter_year = year
+                    elif month >= 7 or (month == 6 and day == 30):
+                        # Call in July-Sept or on June 30 → Reports Q2 (ended June 30)
+                        quarter = 2
+                        quarter_year = year
+                    elif month >= 4 or (month == 3 and day == 31):
+                        # Call in April-June or on March 31 → Reports Q1 (ended March 31)
+                        quarter = 1
+                        quarter_year = year
+                    else:
+                        # Call in Jan-March → Reports Q4 (ended Dec 31 previous year)
+                        quarter = 4
+                        quarter_year = year - 1
+
+                    quarters.append(f"Q{quarter} {quarter_year}")
+                except (ValueError, KeyError, IndexError) as e:
+                    LOG.warning(f"Failed to parse transcript date for {ticker}: {e}")
+                    # Fallback to FMP labels if parsing fails
+                    quarters.append(f"Q{t['quarter']} {t['year']}")
+
             latest = quarters[0] if quarters else None
 
             return {

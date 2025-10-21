@@ -20766,7 +20766,7 @@ def job_queue_reclaim_loop():
 
             with db() as conn, conn.cursor() as cur:
                 # Find jobs with stale heartbeat (no update in 3 minutes = worker likely dead)
-                # IMPORTANT: Keep original phase so job routes correctly when restarted
+                # CRITICAL: Do NOT overwrite phase - preserve original so job routes correctly when restarted
                 cur.execute("""
                     UPDATE ticker_processing_jobs
                     SET status = 'queued',
@@ -20777,7 +20777,7 @@ def job_queue_reclaim_loop():
                         last_updated = NOW()
                     WHERE status = 'processing'
                     AND last_updated < NOW() - INTERVAL '3 minutes'
-                    RETURNING job_id, ticker, worker_id, phase AS old_phase, progress AS old_progress,
+                    RETURNING job_id, ticker, worker_id, phase, progress AS old_progress,
                               EXTRACT(EPOCH FROM (NOW() - last_updated)) / 60 AS minutes_stale
                 """)
 
@@ -20788,7 +20788,7 @@ def job_queue_reclaim_loop():
                     LOG.warning(f"🔄 Job queue reclaim thread reclaimed {len(reclaimed)} jobs with stale heartbeat:")
                     for job in reclaimed:
                         LOG.info(f"   → {job['ticker']} (job_id: {job['job_id']}, worker: {job['worker_id']}, "
-                                f"was {job['old_phase']} at {job['old_progress']}%, stale for {job['minutes_stale']:.1f}min)")
+                                f"phase: {job['phase']}, was at {job['old_progress']}%, stale for {job['minutes_stale']:.1f}min, phase preserved for retry)")
 
                         # Update batch counters
                         cur.execute("""
@@ -20993,20 +20993,19 @@ async def startup_event():
                 SET status = 'queued',
                     started_at = NULL,
                     worker_id = NULL,
-                    phase = 'restart_recovery',
                     progress = 0,
                     last_updated = NOW(),
                     error_message = COALESCE(error_message, '') || ' | Server restart detected, job reclaimed'
                 WHERE status = 'processing'
                 AND started_at < NOW() - INTERVAL '3 minutes'
-                RETURNING job_id, ticker, phase AS old_phase, progress AS old_progress
+                RETURNING job_id, ticker, phase, progress AS old_progress
             """)
 
             orphaned = cur.fetchall()
             if orphaned:
                 LOG.warning(f"🔄 RECLAIMED {len(orphaned)} orphaned jobs (>3min old, server likely restarted):")
                 for job in orphaned:
-                    LOG.info(f"   → {job['ticker']} was at {job['old_phase']} ({job['old_progress']}%), now queued for retry")
+                    LOG.info(f"   → {job['ticker']} was at {job['phase']} ({job['old_progress']}%), now queued for retry (phase preserved)")
 
             # Also check for jobs processing <3 minutes (possible crash mid-job)
             cur.execute("""

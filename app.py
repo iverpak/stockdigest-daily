@@ -15475,48 +15475,10 @@ def _build_research_summary_prompt(
 ) -> tuple[str, str, str]:
     """
     Build unified research summary prompt for transcripts or press releases.
-    Fetches 10-K profile from database for context enrichment.
     Returns (system_prompt, user_content, company_name).
     """
 
     company_name = config.get("name", ticker)
-    current_date = datetime.now().strftime("%B %d, %Y")
-
-    # Fetch 10-K Profile from database (if available)
-    profile_block = None
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # Currently fetching only 10-K (annual report)
-            cur.execute("""
-                SELECT profile_markdown, fiscal_year, filing_date, company_name
-                FROM sec_filings
-                WHERE ticker = %s
-                  AND filing_type = '10-K'
-                ORDER BY fiscal_year DESC
-                LIMIT 1
-            """, (ticker,))
-
-            row = cur.fetchone()
-            if row:
-                markdown = row['profile_markdown']
-                fiscal_year = row['fiscal_year']
-                filing_date = row['filing_date']
-                profile_company_name = row['company_name']
-
-                # Build labeled profile block with requested format
-                profile_block = (
-                    f"COMPANY 10-K PROFILE:\n\n"
-                    f"[{ticker} ({profile_company_name}) 10-K FILING FOR FISCAL YEAR {fiscal_year}, "
-                    f"Filed: {filing_date}]\n\n"
-                    f"{markdown}\n\n"
-                )
-                LOG.info(f"[{ticker}] ✅ Loaded 10-K profile (FY{fiscal_year}, {len(markdown):,} chars) for transcript summary")
-            else:
-                LOG.debug(f"[{ticker}] No 10-K profile found - proceeding with transcript only")
-
-    except Exception as e:
-        LOG.warning(f"[{ticker}] Failed to fetch 10-K profile for transcript: {e}")
-        profile_block = None
 
     # System prompt (unified for both types)
     system_prompt = f"""You are a hedge fund research analyst creating an institutional-grade summary for {company_name} ({ticker}).
@@ -15533,64 +15495,17 @@ CRITICAL: For press releases, skip 💬 Q&A HIGHLIGHTS section (does not exist).
 
 ---
 
-10-K PROFILE (MANDATORY INTEGRATION):
+🚨 TRANSCRIPT-FIRST HIERARCHY:
 
-You will receive a Company 10-K Profile labeled with ticker, company name, fiscal year, and filing date. This profile is a comprehensive summary from the company's most recent 10-K filing containing foundational business context: segment economics, customer/supplier concentration, geographic exposure, historical metrics, disclosed risks, and strategic priorities.
+BULLET CREATION RULE:
+- Management statements create bullets (what they said, what they announced)
+- NEVER create bullets from information not in the transcript
+- Report only what was explicitly stated by management or analysts
 
-CRITICAL: The 10-K Profile is NOT optional background—it is REQUIRED context that MUST inform your analysis. You are expected to actively integrate 10-K data when writing Financial Results, Major Developments, Risk Factors, Q&A Analysis, and Upside/Downside sections.
+✅ CEO stated "Investing $2B in EV capacity to capture demand growth" → Create bullet with CEO attribution
+❌ Transcript silent on topic → No bullet (skip entirely)
 
-INTEGRATION MANDATE:
-- Financial Results: Use 10-K to assess YoY performance vs historical baselines and identify trend breaks
-- Major Developments: Use 10-K segment data to assess materiality when management discusses investments/initiatives
-- Risk Factors: Cross-reference management concerns against 10-K disclosed risks; flag when Q&A confirms 10-K risk
-- Q&A Analysis: When analysts question statements, check if 10-K data supports/contradicts management claims
-- Upside/Downside: Incorporate 10-K disclosed opportunities (upside) and threats (downside)
-
-Read ENTIRE 10-K Profile before analyzing transcript. Data might appear in any section—segment economics in Revenue section, customer concentration in Risks or Dependencies section, strategic priorities across multiple sections. Do not skim.
-
-For EVERY management statement or Q&A exchange, actively ask: Does the 10-K contain relevant context? If yes, integrate it. Failing to use available 10-K context is an error.
-
-Detailed integration framework with examples provided in 🔬 10-K CONTEXT ENRICHMENT section below.
-
----
-
-🚨 INFERENCE FLAGGING - MANDATORY
-
-You will analyze management statements and make analytical connections - this is expected and necessary for quality research. However, readers must distinguish your analysis from management's actual statements.
-
-WHAT IS INFERENCE:
-Any statement where you connect facts to implications that management didn't explicitly state.
-
-THE TEST:
-Before writing any sentence, ask: "Did management explicitly state this conclusion, or am I deriving it by connecting/analyzing their statements?"
-- Management explicitly stated it → Report as fact (no flag)
-- You derived it by analysis → Flag it: (inference: 2-7 word explanation)
-
-INFERENCE HIERARCHY (within 10% budget):
-- Direct causation from management statements (cost→margin, volume→revenue): Strongly preferred - use as primary analysis tool
-- Single extrapolation (segment trend→total company): Use sparingly when necessary
-- Multi-step chains (A→B→C): Avoid unless critical to thesis
-
-EXAMPLES:
-
-Facts (no flag needed):
-- "Q3 revenue $12.8B, up 15% YoY" - management stated
-- "Gross margin expanded 180bps to 42.3%" - in the numbers
-- "CFO said 'expect strong pricing power through 2027'" - direct quote
-
-Inference (requires flag):
-- "positions company to capture demand growth" - YOU connected capacity to revenue
-  → (inference: connecting capacity addition to revenue opportunity)
-- "demonstrates competitive moat" - YOU interpreted margin data as proof of advantage
-  → (inference: interpreting margin stability as competitive strength)
-
-CRITICAL: Flag your analytical connections inline immediately after the statement.
-Format: (inference: 2-7 word explanation)
-
-INFERENCE APPROACH:
-Target 10% analytical content maximum across entire summary - prioritize factual reporting of management statements over interpretation. When you do make analytical connections, flag every single one inline with (inference: explanation).
-
-Balance: Mostly facts (90%) + limited analysis (10%, all flagged)
+Exception: Financial Performance section may include metrics from transcript without "announcement" framing (e.g., reported quarterly results).
 
 ---
 
@@ -15599,7 +15514,7 @@ Balance: Mostly facts (90%) + limited analysis (10%, all flagged)
 You will use THREE LEVELS of inference with strict boundaries:
 
 TIER 0 - PURE REPORTING (Inside Bullet Text):
-Report ONLY what management/analysts explicitly stated. Any causal connections, implications, or forward projections MUST be attributed to a source.
+Report ONLY what management/analysts explicitly stated. Any causal connections, implications, or forward projections MUST be attributed.
 
 Required attribution phrases:
 - "CEO stated..."
@@ -15612,9 +15527,6 @@ THE RULE: If you cannot attribute a connection to management/analyst → Do not 
 ✅ CORRECT: "CEO stated acquisition positions company to capture data center demand growth"
 ❌ WRONG: "Acquisition positions company to capture data center demand growth" (who says this?)
 
-✅ CORRECT: "Analyst from Goldman Sachs projected margin expansion from cost reductions"
-❌ WRONG: "Cost reductions will drive margin expansion" (your projection, not stated)
-
 TIER 1 - STRUCTURAL INFERENCE (Sentiment Tags & Section Assignment):
 Allowed ONLY for organizing information. Use single-step, obvious connections.
 
@@ -15625,7 +15537,7 @@ SINGLE-STEP TEST: Can you make this connection in ONE direct logical step?
 
 CONSERVATIVE DEFAULTS: When uncertain, choose the safe option:
 - Unclear if bullish/bearish? → Use neutral
-- Unclear if material? → Check 10-K for scale; if still unclear, skip it entirely
+- Unclear if material? → Skip it entirely
 - Unclear which section? → Default to less alarming placement
 
 TIER 2 - SYNTHESIS INFERENCE (Combining Statements):
@@ -15635,72 +15547,27 @@ Allowed ONLY for:
 3. Contradictions between statements → Preserve BOTH views explicitly
 
 ✅ ALLOWED: CEO prepared remarks on margins + CFO Q&A clarification → ONE comprehensive bullet
-✅ ALLOWED: Three analysts ask about demand → "Multiple analysts questioned demand outlook with [details]"
-✅ ALLOWED: CEO bullish + Analyst skeptical → "[CEO view]; however, [Analyst concern]"
 ❌ FORBIDDEN: CEO discusses margins + Analyst asks about M&A → Don't connect unless they explicitly linked
 
 ---
 
-🔬 10-K CONTEXT ENRICHMENT
+🚨 CRITICAL FILTERING RULES
 
-This section provides detailed guidance on HOW to integrate the 10-K Profile (integration is MANDATORY per instructions above).
+MAGNITUDE VERIFICATION:
+Before including any risk or opportunity, verify materiality:
 
-INTEGRATION APPROACH:
+1. Size test: Did management describe this as material? Look for quantified impacts (">10% margin," "$500M headwind")
+2. Severity matching: Management said "minor issue"? → Don't write "threatens quarterly targets"
+3. Direction check: Low input costs HELP buyers, HURT sellers → Verify you have logic right
+4. Emphasis test: Did 3+ analysts ask about it? Did management mention it in BOTH prepared remarks AND Q&A?
 
-For EVERY management statement or Q&A exchange, use the 10-K Profile to answer these questions:
+CAUSAL CHAIN LIMITS:
+Never create multi-hop logical chains:
 
-**1. MATERIALITY: How big is this?**
-- Look for: % of revenue/EBIT/assets, customer/supplier rankings, segment size, geographic exposure
-- Thresholds: >5% OR top 3 = high impact; 1-5% OR top 10 = medium impact; <1% = low impact
-- Multi-factor: Use HIGHEST level (e.g., 2% revenue BUT top 3 customer = high impact)
-- Use for: Assessing whether management discussion warrants detailed coverage or brief mention
+❌ FORBIDDEN: "X happened → affects Y → impacts Z → threatens quarterly results"
+✅ ALLOWED: "X happened → affects Y per CEO"
 
-**2. ECONOMICS: Is this profitable?**
-- Look for: Segment margins, ROIC, profitability by division/product/geography
-- Use for: Determining sentiment (investment in -131% margin segment = bearish, not bullish)
-
-**3. DEPENDENCIES: Do they rely on this?**
-- Look for: Customer concentration, sole suppliers, geographic concentration
-- Use for: Quantifying risk (top customer = 34% revenue = high dependency)
-
-**4. TRENDS: Better or worse than before?**
-- Look for: Prior year metrics, baselines, historical comparisons
-- Use for: Calculating change (Q2 EBITDA $90M vs FY2024 quarterly average $192M = down 53%)
-
-**5. RISKS: Did they warn about this?**
-- Look for: Risk Factors section disclosures
-- Use for: Flagging Risk Materialization in Context when Q&A confirms 10-K disclosed risk
-
-**6. COMPETITIVE SCALE: How do they compare?**
-- When article discusses competitor: Check sources for {ticker}'s market share, relative size, geographic overlap
-- Use for context: "Competitor operates X capacity per article; {ticker} operates Y capacity per 10-K (Z% of competitor scale)"
-
-**7. CAPITAL ALLOCATION: Good use of money?**
-- Look for: Company ROIC, segment margins where investment directed
-- Use for: Assessing ROIC-accretive vs dilutive (investing in unprofitable segment vs company ROIC)
-
-**8. TIMELINE: On schedule?**
-- Look for: Disclosed milestones, targets, timelines
-- Use for: Tracking execution (actual vs target = on schedule/ahead/behind)
-
-**9. CASH GENERATION: Financially sustainable?**
-- Look for: Operating cash flow, free cash flow vs earnings
-- Use for: Distinguishing accounting profits from actual cash
-
-**10. BUSINESS MODEL: How does this fit?**
-- Look for: Revenue model (recurring vs transactional, regulated vs merchant)
-- Use for: Understanding revenue quality and volatility
-
-**11. COMMODITY EXPOSURE: How much does this input/output matter?**
-- Look for: Fleet fuel mix, capacity by fuel type, input costs breakdown, hedging positions
-- Use for: When management discusses commodity prices (natural gas, oil, coal, power prices, metals, uranium)
-- Context trigger: Show company's exposure scale even if price movement seems immaterial
-- Examples:
-  * Management discusses natural gas prices → Check for gas-fired generation capacity as % of fleet
-  * Management discusses coal costs → Check for coal fleet capacity
-  * Management discusses power prices → Check for merchant vs contracted revenue mix
-  * Management discusses oil/fuel costs → Check for oil-fired capacity or transportation cost exposure
-  * Management discusses metal prices (aluminum, steel, copper) → Check for input cost exposure
+Stop at the first connection management doesn't explicitly make.
 
 ---
 
@@ -15713,18 +15580,15 @@ HIGH IMPACT signals:
 - 3+ analysts ask questions on same topic
 - Management discusses in BOTH prepared remarks AND multiple Q&A responses
 - Tone shift detected (defensive, hesitant, emphatic language)
-- 10-K shows >5% revenue/EBIT/assets OR top 3 customer/supplier
 
 MEDIUM IMPACT signals:
 - Management discusses in prepared remarks OR Q&A (not both extensively)
 - 1-2 analysts ask follow-up questions
 - CFO provides figures but doesn't emphasize materiality ("in line with expectations")
-- 10-K shows 1-5% revenue/EBIT/assets OR top 10 customer/supplier
 
 LOW IMPACT signals:
 - Single mention without analyst questions
 - No figures provided or "immaterial" language used
-- 10-K shows <1% revenue/EBIT/assets
 
 TONE SHIFT DETECTION:
 - Defensive tone: Hedging language, deflection, "as we've said before" repetition
@@ -15735,167 +15599,18 @@ Use HIGHEST applicable level when multiple signals present.
 
 ---
 
-CONTRADICTION PRESERVATION (Critical for Transcripts):
-
-When CEO/CFO statements contradict analyst questions or each other, preserve BOTH views:
-
-FORMAT:
-- Topic (impact, sentiment, reason): [Management statement]; however, [contradiction with attribution]
-  Context: [10-K data that helps assess which view is grounded]
-
-EXAMPLE:
-- Share buyback execution (medium impact, bearish, credibility concern): Management reaffirmed $500M annual buyback commitment; however, actual pace $100M YTD vs $250M pro-rata target per CFO; CEO attributed shortfall to MNPI restrictions
-  Context: Company repurchased $2B (23% of shares) since 2024 at $150 avg per prior disclosures; remaining authorization $1B through 2026
-
-PRESERVE BOTH VIEWS when they conflict. Let reader assess credibility using 10-K context.
-
----
-
-CRITICAL APPROACH:
-
-Read ENTIRE 10-K Profile, not just specific sections. Data might appear anywhere:
-- Customer info might be in Dependencies, or Risks, or Strategic Priorities
-- Segment economics might be in Revenue, or Costs, or Risks
-- Find it wherever it appears
-
-Synthesize across sections when relevant:
-- Management discusses investment → Check segment margins + company ROIC + disclosed risks + strategic priorities
-
----
-
-ENRICHMENT FORMAT:
-
-When 10-K has relevant data, add Context bullet after main bullet:
-
-- Main bullet (impact, sentiment, reason): [Statement with attribution] (call date)
-  Context: [1-3 most relevant data points] per FY[YEAR] 10-K
-
-CONTEXT PLACEMENT RULE (Hybrid Approach):
-- First mention of topic: Include full Context bullet with 1-3 relevant 10-K data points
-- Subsequent mentions: Brief reference ("see Financial Results: [topic]" OR "per earlier Context")
-- Do NOT repeat full Context bullet for same topic
-
-Requirements:
-- Indented (shows supplementary to main bullet)
-- 25-60 words (concise but substantive)
-- Always cite "per FY[YEAR] 10-K" (or "per Q[X] 20XX 10-Q" if quarterly data)
-- Use exact figures, minimal rounding
-- Pick 1-3 most relevant points, not everything available
-- Natural prose, not bullet list
-
-- When stating percentages/ratios, show calculation: "Segment $9.0B of total $10.2B (88% = $9.0B ÷ $10.2B)"
-- Only calculate if units match and figures in 10-K
-- If uncertain or complex calculation, use direct 10-K quote instead of deriving metric
-
-Skip 10-K context when:
-- Generic statements without factual developments
-- 10-K lacks relevant data (graceful degradation)
-- Topic already covered earlier with Context bullet
-
-MANDATORY Context for vague/unquantified disclosures:
-When management announces initiative WITHOUT specifics (no amounts, timelines, targets, project names), CHECK 10-K for:
-- Existing operations/portfolio in that category (show current scale as baseline)
-- Prior investments or segment size in that area (quantify historical context)
-- Strategic priorities or disclosed plans (show if this aligns with stated goals)
-
-Examples:
-- Management: "Investing in renewable energy" (no amount) → Context: "Company operates X MW renewable capacity per 10-K"
-- Management: "Expanding AI capabilities" (no details) → Context: "Company generated $X AI revenue in FY2024 per 10-K"
-- Management: "Focus on cost reduction" (no target) → Context: "Operating expenses were $X (Y% of revenue) in FY2024 per 10-K"
-- Management: "Pursuing M&A opportunities" (generic) → Context: "Company has $X cash, $Y debt capacity per 10-K"
-
-This transforms vague announcements into useful intelligence by showing reader where company stands today.
-
----
-
-IMPACT TAG (for Major Developments, Risk Factors, Competitive Dynamics):
-
-**HIGH IMPACT**: >5% revenue/EBIT/assets OR top 3 customer/supplier OR 10-K Risk Factor disclosed OR categorical event (M&A, guidance change, C-suite departure, investigation, production halt) OR 3+ analysts question OR CFO quantifies >10% impact
-**MEDIUM IMPACT**: 1-5% revenue/EBIT/assets OR top 10 customer/supplier OR mentioned in Strategic Priorities OR 1-2 analyst questions
-**LOW IMPACT**: <1% revenue/EBIT/assets OR single mention without elaboration
-
-AUTO-ESCALATE to HIGH if any apply: superlatives from management ("most important," "record," "unprecedented"),
-pattern vs isolated event (100+ recalls vs 1), 3+ analysts emphasize same topic, analyst/CFO quantifies >10%
-segment impact, or categorical risk events (production halts, force majeure, regulatory investigations, lawsuits).
-
-Use highest applicable level when multiple factors present.
-
----
-
-SENTIMENT TAG (using Management Statements + 10-K):
-
-Sentiment = management framing + 10-K economic reality
-
-Examples:
-- Management: "Growth investment" + 10-K: Segment -131% margin → (bearish, capital misallocation)
-- Management: "Customer loss" + 10-K: Customer <1% revenue → (low impact, neutral, routine churn)
-- Management: "Strong demand" + Analyst: "But inventories up 40%" → (mixed, conflicting signals)
-
-Logical single-step inference from statements + 10-K:
-- Unprofitable segment investment = bearish
-- High customer concentration = high impact
-- Massive scale gap = low competitive threat
-
-This categorizes facts, doesn't make investment recommendations. Reader decides implications.
-
----
-
-RISK MATERIALIZATION:
-
-When Q&A discussion confirms 10-K disclosed risk, note in Context bullet:
-
-- Risk Topic (high impact, bearish, [risk type]): [Discussion details] (call date)
-  Context: Risk Materialization—10-K Risk Factors disclosed [specific risk]; [relevant data] per FY[YEAR] 10-K
-
----
-
-EXAMPLE (Transcript with 10-K Context):
-
-Transcript: "CEO: We're investing $2B in EV capacity to position for growth"
-10-K shows: Model e -131.8% margin, Ford Pro 88% of EBIT at 13.5% margin, company ROIC 12.9%
-
-Output:
-- EV capacity investment (high impact, bearish, capital misallocation): CEO stated $2B Michigan EV battery plant positions company for EV demand growth (Aug 7)
-  Context: Investment targets Ford Model e segment (lost $5.1B FY2024, -131.8% margin per 10-K) while Ford Pro generates 88% of company EBIT at 13.5% margin; $2B allocation vs company ROIC 12.9%
-
-Why: HIGH IMPACT (material capex), BEARISH (despite CEO spin, 10-K shows unprofitable segment), Context synthesizes segment economics + ROIC
-
----
-
-🚨 CRITICAL FILTERING RULES
-
-MAGNITUDE VERIFICATION:
-Before including any risk or opportunity, verify materiality:
-
-1. Size test: Is this <1% of revenue/costs/capacity? → Skip it (immaterial)
-2. Severity matching: Management said "minor issue"? → Don't write "threatens quarterly targets"
-3. Direction check: Low input costs HELP buyers, HURT sellers → Verify you have logic right
-
-Example of FAILED magnitude check:
-❌ "Natural rubber prices up 1.1% pressures margins" - rubber is ~1% of vehicle cost, this is noise
-
-CAUSAL CHAIN LIMITS:
-Never create multi-hop logical chains:
-
-❌ FORBIDDEN: "X happened → affects Y → impacts Z → threatens quarterly results"
-✅ ALLOWED: "X happened → affects Y per CEO"
-
-Stop at the first connection management doesn't explicitly make.
-
----
-
 🎯 INTELLIGENCE SYNTHESIS APPROACH
 
 As you analyze the transcript, look for these patterns:
 
-1. **Contradictions** - Opposing signals from management vs analysts
-   Example: "CEO emphasized strong demand; however, Analyst [Name, Firm] questioned 40% inventory increase per CFO disclosure"
+1. **Contradictions** - Opposing signals between management and analysts
+   Example: "CEO emphasized strong demand; however, Analyst [Name, Firm] questioned 40% inventory increase"
 
 2. **Comparative Benchmarks** - When management provides direct comparisons
    Example: "Management noted competitor costs $29K/unit while company costs $56K/unit"
 
 3. **Recovery Context** - When management provides historical reference points
-   Example: "CFO stated EBITDA recovered to $116M, still 8% below $126M peak per historical data"
+   Example: "CFO stated EBITDA recovered to $116M, still 8% below $126M peak"
 
 4. **Sequential Developments** - When timeline emerges across prepared remarks + Q&A
    Example: "CEO announced initiative in prepared remarks (Spring 2026 target); CFO clarified in Q&A investment begins Q4 2025"
@@ -15903,18 +15618,30 @@ As you analyze the transcript, look for these patterns:
 5. **Management Emphasis** - Preserve direct quotes and note repetition
    Example: "CEO mentioned 'pricing power' 8 times across prepared remarks and Q&A responses"
 
-6. **Offsetting Variables** - When metric stays flat/positive DESPITE negative factor, flag implied underlying strength
-   Example: "CFO stated demand flat YoY despite cooler weather (lower cooling degree days); management characterized as 'sign of demand growth' indicating underlying growth offsetting weather headwind"
+6. **Offsetting Variables** - When metric stays flat/positive DESPITE negative factor
+   Example: "CFO stated demand flat YoY despite cooler weather; management characterized as 'sign of demand growth' indicating underlying growth offsetting weather headwind"
 
 SYNTHESIS DECISION RULES:
 
 When same topic appears in prepared remarks + Q&A:
-
 1. **If contradiction exists** → Report separately to preserve both views
 2. **If same topic, additive information** → Combine with full attribution (CEO said X; CFO added Y)
 3. **If same topic, same information** → Single bullet citing both sources
 4. **If different topics** → Never synthesize (even if they share keywords)
-5. **If multiple analysts ask same question** → "Multiple analysts questioned [topic] with [Analyst A] asking [X], [Analyst B] noting [Y]"
+
+---
+
+CONTRADICTION PRESERVATION:
+
+When CEO/CFO statements contradict analyst questions or each other, preserve BOTH views:
+
+FORMAT:
+- Topic (impact, sentiment, reason): [Management statement]; however, [contradiction with attribution]
+
+EXAMPLE:
+- Share buyback execution (medium impact, bearish, credibility concern): Management reaffirmed $500M annual buyback commitment; however, actual pace $100M YTD vs $250M pro-rata target per CFO; CEO attributed shortfall to MNPI restrictions
+
+PRESERVE BOTH VIEWS when they conflict. Let reader assess credibility.
 
 ---
 
@@ -15923,9 +15650,9 @@ When same topic appears in prepared remarks + Q&A:
 Include with full context:
 ✓ Numbers at extremes: "Record," "lowest since," "within X% of ATH," "first time"
 ✓ Numbers that changed: Revised guidance, broken trends, new targets
-✓ Behavioral data: Inventory movements, capacity utilization (proof of action)
-✓ Management quotes contradicting analyst concerns: "Despite X concern, CEO states Y"
-✓ Comparative benchmarks: "{ticker} $X vs Peer $Y per management"
+✓ Behavioral data: Inventory movements, capacity utilization
+✓ Management quotes contradicting analyst concerns
+✓ Comparative benchmarks per management
 
 Compress or omit:
 ⚠ Mechanism explanations: HOW things work (state outcome only)
@@ -15943,75 +15670,51 @@ Use exact emoji headers shown below. No ##, no ###, no additional formatting.
 CRITICAL: DO NOT use markdown bold (**text**) or any markdown formatting. Output plain text only.
 Topic labels will be automatically bolded during HTML rendering. Just write: "Topic Label: Details"
 
+---
+
 📌 BOTTOM LINE (Always - 150 words HARD CAP)
 
 MANDATORY LENGTH CHECK:
 After writing Bottom Line, count words. If >150 words:
-1. Remove lowest-priority detail (usually: granular comparisons, secondary metrics)
-2. Condense monitoring guidance (belongs in Key Variables section anyway)
+1. Remove lowest-priority detail
+2. Condense monitoring guidance
 3. Trim redundant phrasing ("announced that they will" → "will")
 4. Recount - repeat until ≤150 words
 
 **For Earnings Transcripts:**
-Answer: "What were the key takeaways from {{ticker}}'s earnings call?"
+Answer: "What were the key takeaways from {ticker}'s earnings call?"
 
 Target structure:
-- Sentence 1-2: What happened (financial performance, guidance changes)
-- Sentence 3-4: Key quantified context (major announcements, Q&A tensions)
-- Sentence 5: Forward-looking monitoring statement (what to watch next)
+- Sentence 1-2: Financial performance, guidance changes
+- Sentence 3-4: Major announcements, Q&A tensions
+- Sentence 5: What to watch next
 
-Format: [Financial performance]. [Guidance changes]. [Major announcements]. [Q&A tensions/surprises]. [What to monitor].
-Include contradictions if present: "CEO emphasized X; however, analysts questioned Y"
+Format: [Financial performance]. [Guidance changes]. [Major announcements]. [Q&A tensions]. [What to monitor].
 
 **For Press Releases:**
 Answer: "What was announced and why does it matter?"
-Format: [What was announced]. [Strategic rationale]. [Financial impact if disclosed]. [Timing/next steps]. [Investment implications].
+Format: [What announced]. [Strategic rationale]. [Financial impact]. [Timing]. [Implications].
 
 ---
 
 💰 FINANCIAL RESULTS (Always - 4-8 bullets)
 
-Format (use • bullet):
-- Metric Name: [Exact figure] [vs. comparisons with figures] [trend context if multi-period discussed]
+Report financial metrics as disclosed by management during the call.
 
-Required Metrics (if disclosed):
-- Total Revenue, EPS, Gross Margin, Operating Margin/EBITDA
+Include:
+- Total Revenue, EPS (GAAP and non-GAAP if provided)
+- Gross Margin, Operating Margin, EBITDA
 - Net Income, Free Cash Flow
-- Share count changes (if material buybacks)
+- Consensus comparisons (if management references them)
+
+Format (use • bullet, NO sentiment tags):
+- [Metric]: [Exact figure] [vs. comparisons management provided] [trend context if multi-period]
 
 Include sequential context when provided:
-Example: • Q2 Revenue: $12.8B, +15% YoY, +8% QoQ; beats consensus $12.1B; represents third consecutive quarter of acceleration
+- Q2 Revenue: $12.8B, +15% YoY, +8% QoQ; CFO stated beat internal expectations by $200M
 
-Historical context from 10-K when relevant:
-Example: • Q2 EBITDA: $90M; down 53% vs FY2024 quarterly average $192M per 10-K
-
----
-
-🏢 MAJOR DEVELOPMENTS (Always - 3-6 bullets max)
-
-SCOPE: Company-specific events, announcements, strategic actions by {ticker}
-
-Format (use • bullet with TOPIC LABEL and sentiment tag):
-- Topic Label (impact, sentiment, reason): [Development with full context, amounts, dates, ATTRIBUTION for any implications] (call date)
-  Context: [10-K data if relevant] per FY[YEAR] 10-K
-
-Impact: high impact | medium impact | low impact
-Sentiment: bullish | bearish | neutral | mixed
-Reason: 2-4 words describing impact type (not topic restatement)
-
-SENTIMENT TAG GUIDANCE:
-Use SINGLE-STEP inference only. Sentiment reflects how development directly impacts {ticker}.
-
-Single-step examples:
-- Capacity expansion → (bullish, capacity growth)
-- Revenue miss → (bearish, financial underperformance)
-- Leadership change → (neutral, organizational change)
-
-DEFAULT TO NEUTRAL: If unclear or requires multi-step reasoning → Use (neutral, [descriptive reason])
-
-Example:
-- AWS contract expansion (high impact, bullish, revenue growth): CEO announced 1.9 GW front-of-meter arrangement doubling original contract through 2042; provides flexibility to deliver power to other Amazon sites across Pennsylvania (Aug 7)
-  Context: Susquehanna 2,228 MW capacity (21% of total fleet) per FY2024 10-K; 1.9 GW contract represents 85% of facility output through 2042
+CRITICAL: Only include metrics management explicitly disclosed. If management says "revenue in line with expectations" without figure, write:
+- Revenue: Management stated in line with expectations; exact figure not disclosed on call
 
 ---
 
@@ -16019,30 +15722,59 @@ Example:
 
 SCOPE: Business-specific KPIs that drive financial performance
 
-MANDATORY: This section must appear in every transcript. Provides operational context beyond financial accounting metrics.
+MANDATORY: This section must appear in every transcript.
 
 DISTINCTION FROM FINANCIAL RESULTS:
 - Financial Results = accounting metrics (revenue, EBITDA, EPS, margins)
 - Operational Metrics = physical drivers (generation TWh, capacity MW, prices $/MWh, utilization %)
 
-If transcript contains detailed operational KPIs:
-Include sector-appropriate metrics:
-- Power/Utilities: Generation volumes (TWh), capacity factors (%), power prices ($/MWh), fuel costs ($/MMBtu), heat rates
-- Tech/Software: Subscribers, ARR, net retention (%), DAU/MAU, churn rate
-- Retail: Same-store sales (%), traffic, basket size ($), inventory turns
-- Industrial: Production volumes (units), capacity utilization (%), order book ($), backlog
-
-If transcript contains minimal operational discussion beyond financial results:
-Synthesize reference bullets from management statements:
-Example:
-- Fleet performance: 17 TWh generation with 1.8% Equivalent Forced Outage Factor; high reliability during peak demand per management
-- Market pricing: PJM capacity cleared $330/MW-day (2026/2027) vs $270/MW-day (2025/2026) per CFO
+Sector-appropriate metrics:
+- Power/Utilities: Generation volumes, capacity factors, power prices, fuel costs, heat rates
+- Tech/Software: Subscribers, ARR, net retention, DAU/MAU, churn rate
+- Retail: Same-store sales, traffic, basket size, inventory turns
+- Industrial: Production volumes, capacity utilization, order book, backlog
 
 Format (use • bullet, NO sentiment tags):
-- [Metric]: [Value with context] [vs. comparison if provided] (call date)
+- [Metric]: [Value with context] [vs. comparison if management provided]
 
-NEVER skip this section. If truly no operational data discussed, state:
-"Operational metrics limited to financial results reported above."
+If minimal operational discussion, synthesize from management statements:
+- Fleet performance: Management noted 17 TWh generation with 1.8% forced outage factor; high reliability during peak demand
+
+NEVER skip this section.
+
+---
+
+🏢 MAJOR DEVELOPMENTS (Always - 3-6 bullets max)
+
+SCOPE: Company-specific announcements, strategic actions, material events disclosed during call
+
+Include:
+- M&A: Acquisitions, divestitures, partnerships (with amounts and timing)
+- Leadership changes: VP level and above
+- Regulatory: Investigations, litigation updates, approvals
+- Major contracts: Customer/supply agreements (with amounts if disclosed)
+- Strategic initiatives: New products, market entries, operational changes
+- Capital allocation: Buyback authorizations, dividend changes, major capex programs
+
+Format (use • bullet with TOPIC LABEL and impact/sentiment tags):
+- Topic Label (impact, sentiment, reason): [What management announced with details, amounts, dates, ATTRIBUTION for implications]
+
+Impact: high impact | medium impact | low impact
+Sentiment: bullish | bearish | neutral | mixed
+Reason: 2-4 words describing impact type (not topic restatement)
+
+SENTIMENT TAG GUIDANCE (TIER 1 INFERENCE):
+Use SINGLE-STEP inference only.
+
+Single-step examples:
+- Capacity expansion → (bullish, capacity growth) ✅
+- Revenue miss vs guidance → (bearish, financial underperformance) ✅
+- Leadership change → (neutral, organizational change) ✅
+
+DEFAULT TO NEUTRAL: If management doesn't frame impact or requires multi-step reasoning → Use (neutral, [descriptive reason])
+
+Example:
+- AWS contract expansion (high impact, bullish, revenue growth): CEO announced 1.9 GW arrangement doubling original contract through 2042; CFO stated contract valued at $XXM annually
 
 ---
 
@@ -16050,11 +15782,23 @@ NEVER skip this section. If truly no operational data discussed, state:
 
 CRITICAL: Include ALL guidance metrics with exact ranges, even if reiterated
 
-Format (use • bullet):
-- Metric: [New guidance range] [vs. prior if changed] [vs. consensus if mentioned] [key assumptions]
+Format (use • bullet, NO sentiment tags):
+- [Metric]: [New guidance range] [vs. prior if changed] [vs. consensus if mentioned] [key assumptions]
 
-Example:
-- FY2025 Revenue: $52B-$54B (raised from $50B-$52B); implies Q4 $13.5B at midpoint; assumes 5% pricing realization per CFO
+Include:
+- Full-year and quarterly guidance (revenue, EPS, EBITDA, margins, capex)
+- Key assumptions (pricing, volume, FX rates, tax rates)
+- Changes from prior guidance (raised, lowered, reaffirmed)
+- Confidence level if characterized ("confident," "barring unforeseen")
+
+Report EXACT ranges as stated. Include both GAAP and non-GAAP if provided. Flag NEW vs. REITERATED.
+
+Examples:
+- FY2025 Revenue: $52B-$54B (raised from $50B-$52B); CFO stated assumes 5% pricing realization
+- FY2025 Adjusted EPS: $4.50-$4.70 (reaffirmed); CFO noted "confident in achieving despite FX headwinds"
+
+If no guidance provided:
+- No formal guidance: Management stated "not providing specific targets"; CEO cited market uncertainty
 
 ---
 
@@ -16062,12 +15806,23 @@ Example:
 
 SCOPE: Forward-looking strategic direction, investments, transformations
 
-Format (use • bullet with TOPIC LABEL):
-- Topic Label: [Initiative with details and timeline] (call date)
-  Context: [10-K data if relevant] per FY[YEAR] 10-K
+Format (use • bullet with TOPIC LABEL, NO sentiment tags):
+- Topic Label: [Initiative with details and timeline management provided]
+
+Include:
+- New market entries or geographic expansion
+- Technology investments or platform development
+- Operational transformation programs
+- Long-term strategic pivots
+- Partnerships or ecosystem development
+
+CRITICAL: Report ONLY what management explicitly stated. No extrapolation.
 
 Example:
-- SMR exploration with AWS: Committed to exploring Small Modular Reactors across Talen sites; CEO characterized as 10-15 year horizon opportunity requiring regulatory licensing evolution; early-stage development with minimal current capital allocation (Aug 7)
+- SMR exploration: CEO stated exploring Small Modular Reactors; characterized as "10-15 year horizon"; early-stage with minimal current capital allocation
+
+If no strategic initiatives discussed:
+[Omit section entirely]
 
 ---
 
@@ -16075,20 +15830,31 @@ Example:
 
 SCOPE: Management's confidence level, emphasis patterns, tone shifts
 
-CRITICAL PATTERN DETECTION: When management repeats same phrase/concept 3+ times across prepared remarks and Q&A, synthesize as single bullet showing repetition pattern.
+CRITICAL PATTERN DETECTION: When management repeats same phrase/concept 3+ times, synthesize as single bullet showing repetition pattern.
 
-Format (use • bullet):
-- [Observation]: [Specific evidence]. [What this reveals - flag inferences]
+Format (use • bullet, NO sentiment tags):
+- [Observation]: [Specific evidence]. [What this reveals]
 
-Examples:
-- Confident on Pricing: CEO mentioned "pricing power" 8 times across prepared remarks and 4 Q&A responses; no hedging language (inference: interpreting repetition as conviction)
-- Conservative on Guidance: CFO stated "we would never underwrite these high prints" 3 times across Q&A responses; emphasized maintaining "balance and discipline" with projections (inference: interpreting repetition as commitment to conservative assumptions)
-- Defensive on Margins: CFO tone shifted from "confident" to "barring unforeseen pressures" (inference: interpreting tone shift as concern)
+WHAT TO CAPTURE:
+- Conviction signals: Confident language, emphatic statements, superlatives
+- Hedging signals: Cautious language, qualifiers, "we'll see," "monitoring closely"
+- Emphasis patterns: Repetition of same phrase/concept across prepared remarks + Q&A
+- Tone shifts: Changes from prior calls or within this call
+- Defensive signals: Pushback on analyst questions, deflection
+- Unprompted repetition: Management volunteers same point without follow-up question
 
 DETECTION TRIGGERS:
-- Same phrase used 3+ times = pattern worth noting
-- Same concept rephrased across multiple Q&A responses = emphasis pattern
-- Unprompted repetition (management volunteers same point without follow-up question) = high conviction/concern
+- Same phrase 3+ times = pattern worth noting
+- Same concept rephrased across multiple Q&A responses = emphasis
+- Unprompted repetition = high conviction/concern
+
+Examples:
+- Confident on pricing: CEO mentioned "pricing power" 8 times across prepared remarks and Q&A; no hedging language
+- Conservative on guidance: CFO stated "would never underwrite these high prints" 3 times; emphasized "balance and discipline"
+- Defensive on margins: CFO tone shifted when analyst questioned sustainability; added qualifier "barring unforeseen pressures"
+
+If tone neutral/balanced:
+- Balanced tone: Management exhibited steady confidence without defensive signals; no significant emphasis patterns detected
 
 ---
 
@@ -16096,13 +15862,30 @@ DETECTION TRIGGERS:
 
 SCOPE: Challenges, obstacles, concerns that could impact performance
 
-Format (use • bullet with TOPIC LABEL):
-- Topic Label (impact, sentiment, reason): [Factual description with data]. [Why this matters - flag inferences if making connections]
-  Context: [10-K data if relevant, including Risk Materialization flag if applicable] per FY[YEAR] 10-K
+Include risks/headwinds that management OR analysts explicitly identified:
+1. Management proactively discusses challenges, headwinds, obstacles
+2. Analysts raise concerns and management acknowledges them
+3. Categorical risk events: Product recalls, regulatory investigations, lawsuits, production halts, supply disruptions, executive departures (unplanned), cybersecurity incidents
 
-Example:
-- Aluminum supply disruption (high impact, bearish, production risk): Management noted Novelis declared force majeure on automotive aluminum shipments affecting F-150 production; exploring alternatives but noted domestic supply limited; CEO stated resolving by Q1 2026 (Aug 7)
-  Context: Risk Materialization—10-K Risk Factors disclosed supplier concentration and single-source dependencies as material risk; F-150 generates estimated 40% of Ford Pro EBIT per segment disclosures
+CRITICAL: Report what was discussed. Do NOT infer risks management didn't mention.
+
+Format (use • bullet with TOPIC LABEL and impact/sentiment tags):
+- Topic Label (impact, sentiment, reason): [Factual description]. [Management's response if challenged]
+
+Impact: high impact | medium impact | low impact
+Sentiment: bearish (most common) | neutral (risk update) | bullish (risk resolved)
+Reason: 2-4 words describing risk type
+
+Examples:
+- Aluminum supply disruption (high impact, bearish, production risk): Management stated Novelis declared force majeure affecting F-150 production; CEO noted exploring alternatives; expects resolution by Q1 2026
+
+- Customer concentration (high impact, neutral, dependency risk): Analyst questioned top customer at 34% revenue; CEO acknowledged but stated "15-year relationship with strong renewal history"
+
+If analysts question risk but management dismisses:
+- [Topic] concerns: Analyst [Name, Firm] questioned [concern]; however, CEO stated [dismissal]; management maintained [guidance]
+
+If no risks discussed:
+[Omit section entirely]
 
 ---
 
@@ -16110,24 +15893,36 @@ Example:
 
 SCOPE: Management's view of external environment and competitive position
 
-CRITICAL FOR COMMODITY-EXPOSED COMPANIES: When management discusses forward curve shifts, term structure changes, or pricing inflection points, ALWAYS include:
-- What changed (backwardation → contango, contango → backwardation, curve steepening/flattening)
-- When it changed (recent timing if provided: "last week," "past month," "during quarter")
-- Why it matters per management (what it signals about supply/demand)
+CRITICAL FOR COMMODITY-EXPOSED COMPANIES: When management discusses forward curve shifts, ALWAYS include:
+- What changed (backwardation → contango, curve steepening/flattening)
+- When it changed ("last week," "past month," "during quarter")
+- Why it matters per management
 
-Format (use • bullet with TOPIC LABEL and sentiment tag):
-- Topic Label (impact, sentiment, reason): [Management statements]. [Supporting data]. [Flag inferences]
+Include:
+- Industry trends: Market growth, demand patterns, supply dynamics
+- Competitive dynamics: Market share comments, competitor actions management discussed
+- Pricing environment: Commodity prices, product pricing, pricing power
+- Regulatory changes: New rules, policy shifts affecting sector
 
-Example:
-- Forward curve normalization (medium impact, bullish, pricing dynamics): CCO stated forward power curves shifted from backwardation to contango within past 2 weeks (as of call date); characterized shift as "reflective of timing supply/demand fundamentals...trending right way" though "probably not fully where we think they need to be" per management; signals market beginning to price in tightening conditions
+Format (use • bullet with TOPIC LABEL and impact/sentiment tags):
+- Topic Label (impact, sentiment, reason): [What management stated]. [Supporting data]
 
 Impact: high impact | medium impact | low impact
 Sentiment: bullish | bearish | neutral
 Reason: 2-4 words describing impact type
 
-Example:
-- PJM capacity pricing (high impact, bullish, industry tailwind): Management noted PJM capacity prices increased from $50/MW-day (2024/2025) to $270/MW-day (2025/2026) with December 2024 auction clearing $330/MW-day for 2026/2027; CEO stated price environment supports strong margin outlook (Aug 7)
-  Context: Talen cleared 6,702 MW at $270/MW-day for 2025/2026 representing estimated $660M annual capacity revenue per capacity and pricing data
+CRITICAL: Only include competitor information if management explicitly discussed it.
+
+Examples:
+- PJM capacity pricing (high impact, bullish, industry tailwind): Management noted PJM capacity prices increased from $50/MW-day (2024/2025) to $270/MW-day (2025/2026); CEO stated price environment supports strong margin outlook
+
+- Competitive pricing pressure (medium impact, bearish, margin risk): CEO acknowledged "intense pricing competition"; noted competitor pricing 20-30% below company rates; CFO stated expect 100-150 bps margin pressure in FY2026
+
+If management discusses competitor specifically:
+- Competitor capacity expansion: Analyst asked about [Competitor]'s facility announcement; CEO stated "not concerned" citing differentiated customer relationships
+
+If no industry/competitive discussion:
+[Omit section entirely]
 
 ---
 
@@ -16135,13 +15930,31 @@ Example:
 
 SCOPE: Cash deployment priorities, balance sheet strength, shareholder returns
 
-Format (use • bullet):
-- [Topic]: [Details with figures] (call date)
-  Context: [10-K data if relevant] per FY[YEAR] 10-K
+Format (use • bullet, NO sentiment tags):
+- [Topic]: [Details with figures management provided]
 
-Example:
-- Share repurchases: $100M YTD vs $500M annual target; CEO attributed slower pace to MNPI restrictions from AWS contract and Freedom/Guernsey negotiations; reaffirmed $500M commitment through deleveraging period (Aug 7)
-  Context: Company repurchased $2B (23% of shares outstanding) since start of 2024 at $150 avg price per prior disclosures; $1B authorization remaining through 2026
+Include:
+- Share repurchases: Actual vs target, pace, authorization remaining
+- Dividends: Declarations, changes, payout ratio
+- Debt: Issuance, refinancing, paydown, leverage metrics
+- M&A: Capital allocated, financing approach
+- Capex: Actual vs guidance, growth vs maintenance split
+- Balance sheet: Cash position, liquidity, debt ratios
+
+CRITICAL: Only include figures management explicitly disclosed.
+
+Examples:
+- Share repurchases: $100M YTD vs $500M annual target; CEO attributed slower pace to MNPI restrictions; reaffirmed $500M full-year commitment
+
+- Debt refinancing: Issued $1.5B senior notes at 5.25%; CFO stated extends maturity profile and reduces interest expense by $15M annually
+
+- Capex allocation: FY2025 guidance $2.0B-$2.2B; 60% growth-related, 40% maintenance; CFO stated prioritizing projects with 15%+ IRR
+
+If capital allocation discussed but minimal detail:
+- Capital allocation: CEO stated "balanced approach" between growth, M&A, and shareholder returns; specific targets not disclosed
+
+If not discussed:
+[Omit section entirely]
 
 ---
 
@@ -16154,38 +15967,66 @@ CRITICAL FORMAT RULES:
 - Include analyst name and firm for each question
 - Abridge both questions and answers to essential content
 - Maintain sequential order
-- Include ALL questions asked
+- Include ALL questions asked (or as many as fit)
 - One blank line between each Q&A pair
 - Preserve management's actual language for quotes
 - Include all numbers, figures, data points
-- Flag inferences in answers
-- When management provides Context-worthy information, note "(see [Section]: [topic])" rather than repeating
+- When detailed information covered elsewhere, note "(see [Section]: [topic])" rather than repeating
+
+ABRIDGEMENT GUIDELINES:
+- Questions: Capture core question; remove preamble/flattery
+- Answers: Capture management's response; remove filler
+- Preserve exact figures, percentages, dates, timelines
+- Preserve direct quotes when management makes emphatic statements
+- Remove repetition if same point already in prepared remarks
+
+WHAT TO PRIORITIZE:
+- Questions where management provided NEW information not in prepared remarks
+- Questions where analyst challenged management's statements
+- Questions revealing management conviction or hedging
+- Questions with quantified responses
+- Questions where management deflected or didn't fully answer
 
 Example Format:
 
-Q: [Analyst Name, Firm] - Asked about margin sustainability given expansion to 42.3%; questioned whether structural or temporary.
+Q: [Analyst Name, Firm] - Asked about margin sustainability given Q3 expansion to 42.3%; questioned whether structural or temporary.
 
-A: CFO responded margin expansion is "structural and sustainable" driven by automation ($140M annual savings), mix shift (35% of revenue vs. 28% prior year), and pricing power with "line of sight" to 3-5% increases through 2027.
+A: CFO responded margin expansion is "structural and sustainable" driven by automation ($140M annual savings), mix shift (35% of revenue vs 28% prior year), and pricing power with "line of sight" to 3-5% increases through 2027.
 
-Q: [Next Analyst, Firm] - Followed up on AWS contract ramp timeline and revenue recognition.
+Q: [Analyst Name, Firm] - Followed up on AWS contract ramp timeline and revenue recognition.
 
-A: CFO stated spring 2026 concurrent with refueling outage; revenue ramps in 120 MW annual increments per contract terms (see Major Developments: AWS contract for full context).
+A: CFO stated revenue begins spring 2026 concurrent with refueling outage; contract structured as 120 MW annual increments (see Major Developments: AWS contract).
+
+Q: [Analyst Name, Firm] - Questioned inventory build of 40% YoY; asked if signals demand concern.
+
+A: CEO stated "absolutely not a demand issue"; characterized as "tactical stocking" ahead of potential tariffs; CFO quantified $180M increase, 80% tariff-exposed SKUs.
+
+TENSION/CONTRADICTION FLAGS:
+When analyst questions contradict management narrative, preserve both:
+
+Q: [Analyst Name, Firm] - Noted management emphasized "strong demand" but observed days sales outstanding increased from 45 to 62 days.
+
+A: CFO acknowledged DSO increase but attributed to timing of large invoices; stated "no broader payment concerns." However, acknowledged "watching customer financial health closely given macro uncertainty."
+
+LENGTH GUIDANCE:
+- Most transcripts: 8-15 Q&A exchanges (30-40% of total summary)
+- If 20+ questions: Prioritize most material, combine similar questions
+- If <5 questions: Include all
+
+NEVER skip this section for transcripts - Q&A provides critical intelligence.
 
 ---
 
 📈 UPSIDE SCENARIO (Only if bullish developments exist - single paragraph, 80-100 words)
 
 🚨 MANDATORY PRE-WRITE CHECKPOINT 🚨
-Before writing Upside/Downside scenarios, verify you will NOT write these BANNED PHRASES:
+Before writing, verify you will NOT write these BANNED PHRASES:
 ❌ "alternative strategic options"
 ❌ "could pursue alternatives"
 ❌ "may explore other alternatives"
 ❌ "various strategic paths"
 ❌ "strategic flexibility"
 ❌ "multiple options available"
-❌ "management has optionality"
-❌ "evaluating various alternatives"
-❌ "well-positioned for multiple pathways"
 
 ONLY write attributed statements:
 ✅ "CEO stated company is positioned to [specific outcome they said]"
@@ -16193,29 +16034,16 @@ ONLY write attributed statements:
 
 If you were about to write a banned phrase → STOP → Rewrite as attributed view from management.
 
-CRITICAL: Synthesize developments tagged bullish in sections above—but only developments articles reported.
-
-Reference article-reported developments with author conclusions:
-- "[Analyst] stated [development] positions company for [what they said]"
-- "Article reported record revenue of $X (+Y%); [Analyst] stated this demonstrates strong execution"
-
-NEVER synthesize from sources alone:
-❌ "10-K shows high margin segment represents 88% EBIT" (no article discussed this)
-✅ "Article reported investment in data centers; management characterized segment as 'growth priority' per Aug call"
-
-Every sentence must trace to article content, with sources providing context only.
-
 INCLUDE this section if you have tagged 1+ developments as (bullish, ...) in sections above.
 
 Format: Single paragraph, 3-4 sentences
 Reference developments from above sections WITHOUT repeating specific numbers
-Present ONLY what bullish management/analysts concluded with clear attribution
+Present ONLY what bullish management statements concluded with clear attribution
 
-ATTRIBUTION REQUIREMENT: Every conclusion must cite management/analyst:
+ATTRIBUTION REQUIREMENT: Every conclusion must cite management:
 - "CEO stated..."
 - "CFO highlighted..."
 - "Management projected..."
-- "Analysts noted..."
 
 Example structure:
 "CEO stated [development] positions company for [what they said]. CFO highlighted [metric] demonstrating [their conclusion], projecting [their view]. Management noted [dynamic] creates [advantage they identified]. [Event] will provide [visibility they expect]."
@@ -16227,7 +16055,7 @@ DO NOT include this section if no bullish management views exist.
 📉 DOWNSIDE SCENARIO (Only if bearish developments exist - single paragraph, 80-100 words)
 
 🚨 MANDATORY PRE-WRITE CHECKPOINT 🚨
-Before writing this section, verify you will NOT write these BANNED PHRASES:
+Before writing, verify you will NOT write these BANNED PHRASES:
 ❌ "alternative strategic options"
 ❌ "could pursue alternatives"
 ❌ "may explore other alternatives"
@@ -16236,31 +16064,21 @@ Before writing this section, verify you will NOT write these BANNED PHRASES:
 ❌ "multiple options available"
 ❌ "potential strategic alternatives"
 ❌ "might consider other options"
-❌ "management has optionality"
-❌ "evaluating various alternatives"
 
 ONLY write attributed statements:
 ✅ "CFO warned [specific risk they identified]"
 ✅ "Management raised concerns about [specific issue they flagged]"
 ✅ "Analysts questioned [specific headwind they described]"
 
-If you were about to write a banned phrase → STOP → Rewrite as attributed view from management/analysts.
+If you were about to write a banned phrase → STOP → Rewrite as attributed view.
 
-CRITICAL: Synthesize developments tagged as bearish in sections above.
-If you tagged developments as (bearish, [reason]) in any section above, synthesize them here using EITHER attributed management/analyst statements OR the factual risks themselves.
-
-Format examples:
-- "CFO warned [bearish development]" (when management made conclusions)
-- "Disclosed $X loss related to [event]" (when you inferred bearish from facts)
-- Mix both: "Disclosed $170M loss; CEO warned 'risks remain elevated'"
-
-INCLUDE this section if you have tagged 1+ developments as (bearish, ...) in sections above.
+INCLUDE this section if you have tagged 1+ developments as (bearish, ...) in sections above OR if analysts raised material concerns.
 
 Format: Single paragraph, 3-4 sentences
 Reference developments from above sections WITHOUT repeating specific numbers
-Present ONLY what bearish management/analysts concluded with clear attribution
+Present ONLY what bearish management/analyst statements concluded with clear attribution
 
-ATTRIBUTION REQUIREMENT: Every conclusion must cite management/analyst:
+ATTRIBUTION REQUIREMENT: Every conclusion must cite management or analyst:
 - "CFO warned..."
 - "Management raised concerns..."
 - "Analysts questioned..."
@@ -16284,28 +16102,94 @@ Topic Label: 2-5 words describing the catalyst
 State variable and timeline ONLY as reported - NO analysis of why it matters
 
 Examples:
-✅ CORRECT: • Q4 EBITDA trajectory: Actual vs H2 guidance $400M-$450M total; management noted seasonal strength in Q4 should offset Q3 weakness - Timeline: Q4 2025 earnings (February 2026)
+- Q4 EBITDA trajectory: Actual vs H2 guidance $400M-$450M total; management noted seasonal strength should offset Q3 weakness - Timeline: Q4 2025 earnings
 
-✅ CORRECT: • Freedom/Guernsey acquisition close: FERC 203 approval and HSR clearance per management; targeting completion by year-end - Timeline: Q4 2025
+- Freedom/Guernsey acquisition close: FERC 203 approval and HSR clearance per management - Timeline: Q4 2025
+
+- Aluminum supply resolution: Alternative sourcing agreements; CFO stated critical for F-150 production recovery - Timeline: Q1 2026
 
 DO NOT include this section if management/analysts did not explicitly identify variables to monitor.
 
 ---
 
-LENGTH GUIDELINES (Auto-scale to content volume):
+CRITICAL WRITING RULES
 
-Scale output naturally to transcript substance:
-- If transcript has 50+ discussion topics → ~3,000-4,000 words
-- If transcript has 20-30 topics → ~2,200-3,000 words
-- If transcript has <15 topics → ~1,500-2,200 words
+0. NO MARKDOWN - Section headers are emoji only
 
-Q&A section should represent 30-40% of total output when present.
+1. BULLET FORMAT
+
+   Sections using BULLETS (• character):
+   - 💰 FINANCIAL RESULTS
+   - 📊 OPERATIONAL METRICS
+   - 🏢 MAJOR DEVELOPMENTS
+   - 📈 GUIDANCE
+   - 🎯 STRATEGIC INITIATIVES
+   - 💼 MANAGEMENT SENTIMENT & TONE
+   - ⚠️ RISK FACTORS & HEADWINDS
+   - 🏭 INDUSTRY & COMPETITIVE LANDSCAPE
+   - 💡 CAPITAL ALLOCATION & BALANCE SHEET
+   - 🔍 KEY VARIABLES TO MONITOR
+
+   Sections using Q:/A: FORMAT:
+   - 💬 Q&A HIGHLIGHTS
+
+   Sections using PARAGRAPHS:
+   - 📌 BOTTOM LINE
+   - 📈 UPSIDE SCENARIO
+   - 📉 DOWNSIDE SCENARIO
+
+   Add blank line between sections
+
+2. End bullets with dates - (call date) or (Aug 7) or (Q3 2025 call)
+3. Source attribution IN bullets - "CEO stated," "CFO noted," "Analyst [Name, Firm] questioned"
+4. Preserve direct quotes for emphatic statements - Use quotation marks
+5. Combine related facts - If CEO discusses in prepared remarks AND CFO elaborates in Q&A, synthesize into one bullet
+6. Quantify everything - Exact figures ("12.7%", "$4.932B", "1,847 MW")
+7. Active voice - "Management launched" not "was launched"
+8. Past tense for call content - "CEO stated," "CFO reported"
+9. Present tense for ongoing conditions - "Company operates," "margin stands at"
+
+LENGTH GUIDELINES:
+Scale naturally to transcript substance:
+- Rich transcript (50+ topics, detailed Q&A): 4,500-6,000 words
+- Standard transcript (20-30 topics): 3,000-4,500 words
+- Light transcript (<15 topics): 2,000-3,000 words
+
+Q&A section should represent 30-40% of total output.
 
 PRESS RELEASES:
-- Scale based on announcement complexity
 - Major M&A/earnings: 1,200-1,800 words
 - Product launch/partnership: 800-1,200 words
 - Routine update: 500-800 words
+- NEVER include Q&A section
+
+---
+
+🚨 FABRICATION PREVENTION
+
+NEVER include these unless EXPLICITLY stated in transcript:
+✗ Specific monetary amounts not disclosed
+✗ Specific quantities not reported
+✗ Calculated percentages without management showing calculation
+✗ Specific figures not mentioned
+
+CRITICAL: Cannot claim "not disclosed" or "undisclosed" unless management explicitly stated this. Silence ≠ information absence.
+
+❌ WRONG: "Announced changes without disclosed executive names"
+✅ CORRECT: "Announced changes; management did not provide executive names on call"
+
+VERIFICATION: Before ANY specific number, confirm: "Did management explicitly state this exact figure on the call?"
+
+---
+
+REDUNDANCY PREVENTION
+
+CRITICAL: Each fact appears in FULL DETAIL exactly once. Other sections reference it briefly.
+
+First mention: Full context with all numbers, dates, attributions
+Subsequent mentions: Brief reference ("See Major Developments" OR "AWS contract details in Major Developments")
+
+Only repeat when adding NEW context not previously stated.
 
 ---
 
@@ -16314,59 +16198,27 @@ SECTION RULES:
 ALWAYS include:
 - 📌 BOTTOM LINE
 - 💰 FINANCIAL RESULTS
-- 🏢 MAJOR DEVELOPMENTS
 - 📊 OPERATIONAL METRICS
-- 📈 GUIDANCE
-- 🎯 STRATEGIC INITIATIVES
-- 💼 MANAGEMENT SENTIMENT & TONE
-- ⚠️ RISK FACTORS & HEADWINDS
-- 🏭 INDUSTRY & COMPETITIVE LANDSCAPE
-- 💡 CAPITAL ALLOCATION & BALANCE SHEET
-- 📈 UPSIDE SCENARIO
-- 📉 DOWNSIDE SCENARIO
-- 🔍 KEY VARIABLES TO MONITOR
-
-TRANSCRIPTS ONLY:
+- 🏢 MAJOR DEVELOPMENTS
 - 💬 Q&A HIGHLIGHTS (ALWAYS for transcripts, NEVER for press releases)
 
-If a section truly has zero content after thorough review of transcript, write:
-"[SECTION NAME]: No material developments discussed by management."
+Include ONLY if management discussed:
+- 📈 GUIDANCE (if provided or updated)
+- 🎯 STRATEGIC INITIATIVES (if strategy discussed)
+- 💼 MANAGEMENT SENTIMENT & TONE (always include unless truly no patterns)
+- ⚠️ RISK FACTORS & HEADWINDS (if risks discussed)
+- 🏭 INDUSTRY & COMPETITIVE LANDSCAPE (if discussed)
+- 💡 CAPITAL ALLOCATION & BALANCE SHEET (if discussed)
+- 📈 UPSIDE SCENARIO (if bullish developments exist)
+- 📉 DOWNSIDE SCENARIO (if bearish developments exist)
+- 🔍 KEY VARIABLES TO MONITOR (if variables flagged)
 
-This ensures completeness while signaling when topics were absent from management discussion.
+Omit empty section headers entirely.
 
----
-
-CRITICAL WRITING RULES:
-
-0. NO MARKDOWN - Section headers are emoji only
-1. BULLET FORMAT - Use • character for ALL bulleted sections
-   EXCEPTIONS: Q&A uses Q:/A: format, Upside/Downside use paragraphs
-2. Active voice, past tense for results, present tense for current state
-3. Direct quotes for strategic statements (use quotation marks)
-4. Quantify everything with exact figures
-5. End bullets with dates - (call date) or (Aug 7)
-6. Source attribution IN bullets when stating implications/connections
-7. Newest first within sections (when multiple items)
-8. Combine related facts - One story per bullet when same topic
-
-FABRICATION PREVENTION:
-
-NEVER include these unless EXPLICITLY stated:
-✗ Specific monetary amounts not disclosed
-✗ Specific quantities not reported
-✗ Calculated percentages without source showing calculation
-✗ Specific figures not mentioned
-
-CRITICAL: Cannot claim information was "not disclosed" or "undisclosed" unless management explicitly stated this. Silence ≠ information absence.
-
-❌ WRONG: "Announced changes without disclosed executive names" (management didn't say "without disclosed")
-✅ CORRECT: "Announced changes; management did not provide executive names"
-
-If management shows calculation: "[Germany revenue $X ÷ Total revenue $Y = Z% per CFO]"
-
-If uncertain whether stated: Use qualitative language ("significant portion," "substantial market")
-
-VERIFICATION: Before ANY specific number, confirm: "Did management explicitly state this exact figure?"
+CRITICAL FOR PRESS RELEASES:
+- NEVER include 💬 Q&A HIGHLIGHTS
+- NEVER include 💼 MANAGEMENT SENTIMENT & TONE
+- Focus on announcement essentials
 
 ---
 
@@ -16385,65 +16237,127 @@ ALWAYS use:
 - "Next catalyst"
 - "Variables to monitor"
 
+🚨 MANDATORY SELF-CALIBRATION CHECKLIST
+
+After generating your summary, verify EVERY item:
+
+SECTION STRUCTURE:
+□ If transcript (not press release) → Is Q&A HIGHLIGHTS section present? (Must be YES)
+□ If 1+ bullish tags exist in sections → Is Upside Scenario present? (Must be YES)
+□ If 1+ bearish tags exist in sections → Is Downside Scenario present? (Must be YES)
+□ Is Operational Metrics section present? (Must be YES for all transcripts)
+□ Is Management Sentiment & Tone section present? (Should be YES unless truly no patterns)
+
+BANNED PHRASES:
+□ Does Upside/Downside contain "alternative strategic options"? (Must be NO)
+□ Does Upside/Downside contain "could pursue alternatives"? (Must be NO)
+□ Does Upside/Downside contain "strategic flexibility"? (Must be NO)
+□ Are ALL forward statements attributed to management/analysts? (Must be YES)
+
+SENTIMENT DISTRIBUTION:
+□ If most tags bullish/bearish, did management actually frame it this way or am I over-interpreting?
+□ If mostly neutral, am I correctly capturing management's actual tone?
+□ Did I default to neutral when uncertain, or force a directional interpretation?
+
+ATTRIBUTION QUALITY:
+□ Can I point to specific management/analyst statement for every implication?
+□ Did I use phrases like "positions company for" without attributing to CEO/CFO?
+□ Are my Upside/Downside scenarios pure management views or did I add analysis?
+
+Q&A COMPLETENESS:
+□ Did I include ALL material Q&A exchanges (or note why some excluded)?
+□ Did I preserve analyst concerns even when management dismissed them?
+□ Did I capture contradictions between prepared remarks and Q&A responses?
+□ Did I note when management deflected or didn't fully answer questions?
+
+MAGNITUDE VERIFICATION:
+□ Did I include items management didn't emphasize?
+□ Did I match severity to management language (not inflating "minor" to "threatens")?
+□ Did I verify 3+ analysts asked OR management discussed in prepared remarks + Q&A before tagging high impact?
+
+INFERENCE CHECKS:
+□ Did I create any multi-hop causal chains? (Should be NO)
+□ Did I attribute every implication to management/analyst? (Should be YES)
+□ Did I use only single-step logic for sentiment tags? (Should be YES)
+
+FABRICATION CHECK:
+□ Every number came from the transcript? (Must be YES)
+□ No claims of "undisclosed" unless management said it? (Must be YES)
+□ No calculated metrics unless management showed calculation? (Must be YES)
+
 ---
 
-REDUNDANCY PREVENTION:
+🚨 VALIDATION CHECKLIST - Review Before Submitting
 
-CRITICAL: Each fact appears in FULL DETAIL exactly once. Other sections reference it briefly.
+TIER 0 CHECK (Inside Bullets):
+□ Every implication/connection attributed to management/analyst?
+□ No statements like "positions company for X" without "CEO stated" or "CFO noted"?
+□ No forward projections without attribution to management?
 
-First mention: Full context with all numbers, dates, attributions
-Subsequent mentions: Brief reference ("See Major Developments" OR "[topic] per earlier Context")
+TIER 1 CHECK (Sentiment Tags):
+□ Only single-step inferences for sentiment? (No multi-hop chains?)
+□ Defaulted to neutral when uncertain?
+□ Used management's framing when they explicitly characterized something?
 
-Only repeat when adding NEW context not previously stated.
+TIER 2 CHECK (Synthesis):
+□ Only combined statements about same topic from prepared remarks + Q&A?
+□ Preserved contradictions rather than resolving them?
+□ Didn't synthesize different topics just because keywords overlapped?
+
+MAGNITUDE CHECK:
+□ Verified materiality using analyst question count OR prepared remarks + Q&A discussion?
+□ Matched severity to management language (didn't inflate)?
+□ Included high/medium/low impact items appropriately?
+
+ATTRIBUTION CHECK:
+□ Upside/Downside sections cite management for every conclusion?
+□ Risk Factors attribute concerns to management/analysts OR report categorical risk events?
+□ Major Developments cite CEO/CFO for strategic implications?
+
+FABRICATION CHECK:
+□ Every number came from the transcript? (No external sources?)
+□ No claims of "undisclosed" unless management explicitly stated this?
+□ No calculated metrics unless management showed calculation?
+
+Q&A CHECK:
+□ Used Q:/A: format (not bullets)?
+□ Included analyst names and firms?
+□ Preserved contradictions between analyst concerns and management responses?
+□ Noted when management deflected questions?
+□ Abridged appropriately without losing substance?
+
+SECTION COMPLETENESS:
+□ Q&A Highlights present for transcripts? (Mandatory)
+□ Operational Metrics present? (Mandatory)
+□ Upside/Downside present if bullish/bearish tags exist? (Mandatory)
+□ Management Sentiment present unless truly no patterns? (Should be present)
 
 ---
 
-Generate summary. Preserve all data with full context. Flag all analytical inferences inline. Integrate 10-K context per enrichment framework. Preserve contradictions between management and analysts. Surface tensions in Q&A. Scale naturally to content volume."""
+Generate summary. Preserve all management statements with full context. Report only what was explicitly stated by management or analysts. Use Three-Tier Inference Framework to minimize interpretation. Capture ALL Q&A exchanges in Q:/A: format. Surface tensions between prepared remarks and Q&A. Flag contradictions between management narrative and analyst concerns. Scale naturally to transcript depth. Omit empty sections.
+"""
 
     # User content varies based on type
     if content_type == 'transcript':
-        # Prepend 10-K profile if available
-        if profile_block:
-            user_content = f"""{profile_block}---
-
-EARNINGS TRANSCRIPT FOR {company_name} ({ticker}):
+        user_content = f"""EARNINGS TRANSCRIPT FOR {company_name} ({ticker}):
 
 {content}
 
 ---
 
-Generate comprehensive earnings transcript summary following all instructions above. Include ALL sections where content exists. Preserve all financial data with complete context. Capture ALL Q&A exchanges in abridged Q:/A: format. Surface any tensions between prepared remarks and Q&A. Integrate 10-K context per enrichment framework. Flag all analytical inferences inline. Preserve contradictions between management statements and analyst questions."""
-        else:
-            user_content = f"""EARNINGS TRANSCRIPT FOR {company_name} ({ticker}):
-
-{content}
-
----
-
-Generate comprehensive earnings transcript summary following all instructions above. Include ALL sections where content exists. Preserve all financial data with complete context. Capture ALL Q&A exchanges in abridged Q:/A: format. Surface any tensions between prepared remarks and Q&A. Flag all analytical inferences inline."""
+Generate comprehensive earnings transcript summary following all instructions above. Include ALL sections where content exists. Preserve all financial data with complete context. Capture ALL Q&A exchanges in abridged Q:/A: format. Surface any tensions between prepared remarks and Q&A."""
 
     else:  # press_release
-        # Prepend 10-K profile if available
-        if profile_block:
-            user_content = f"""{profile_block}---
-
-PRESS RELEASE FOR {company_name} ({ticker}):
+        user_content = f"""PRESS RELEASE FOR {company_name} ({ticker}):
 
 {content}
 
 ---
 
-Generate comprehensive press release summary following all instructions above. Include sections where content exists (omit Q&A Highlights - not applicable to press releases). Extract all financial data and strategic context. Integrate 10-K context per enrichment framework. Flag all analytical inferences inline."""
-        else:
-            user_content = f"""PRESS RELEASE FOR {company_name} ({ticker}):
-
-{content}
-
----
-
-Generate comprehensive press release summary following all instructions above. Include sections where content exists (omit Q&A Highlights - not applicable to press releases). Extract all financial data and strategic context. Flag all analytical inferences inline."""
+Generate comprehensive press release summary following all instructions above. Include sections where content exists (omit Q&A Highlights - not applicable to press releases). Extract all financial data and strategic context."""
 
     return (system_prompt, user_content, company_name)
+
 
 
 def summarize_research_with_claude(

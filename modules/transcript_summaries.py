@@ -376,17 +376,18 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
     if not summary_text:
         return sections
 
-    # Split by emoji headers (updated Oct 2025 - upside/downside/variables are top-level)
+    # Split by emoji headers (updated Oct 2025 - new section flow)
+    # Order matches new prompt structure: Operational before Major Developments
     section_markers = [
         ("📌 BOTTOM LINE", "bottom_line"),
         ("💰 FINANCIAL RESULTS", "financial_results"),
-        ("🏢 MAJOR DEVELOPMENTS", "major_developments"),
         ("📊 OPERATIONAL METRICS", "operational_metrics"),
+        ("🏢 MAJOR DEVELOPMENTS", "major_developments"),
         ("📈 GUIDANCE", "guidance"),
         ("🎯 STRATEGIC INITIATIVES", "strategic_initiatives"),
         ("💼 MANAGEMENT SENTIMENT", "management_sentiment"),
         ("⚠️ RISK FACTORS", "risk_factors"),
-        ("🏭 INDUSTRY", "industry_competitive"),  # Matches "INDUSTRY & COMPETITIVE"
+        ("🏭 INDUSTRY", "industry_competitive"),  # Matches "INDUSTRY & COMPETITIVE LANDSCAPE"
         ("💡 CAPITAL ALLOCATION", "capital_allocation"),
         ("💬 Q&A HIGHLIGHTS", "qa_highlights"),
         ("📈 UPSIDE SCENARIO", "upside_scenario"),

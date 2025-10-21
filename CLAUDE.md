@@ -337,6 +337,22 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Sends to ADMIN_EMAIL
 
 **Transcript Summaries:**
+
+**MAJOR UPDATE (Oct 21, 2025):** Transcript prompt system redesigned for cleaner, more focused analysis:
+- ❌ **Removed:** 10-K integration (no longer fetches 10-K profiles for context)
+- ❌ **Removed:** Inline inference flagging (no more `(inference: explanation)` tags)
+- ✅ **Kept:** Three-tier inference framework (Tier 0: Attribution, Tier 1: Sentiment tags, Tier 2: Synthesis)
+- ✅ **Updated:** Section order (Operational Metrics before Major Developments)
+- ✅ **Updated:** Target word count remains 3,000-6,000 words for rich transcripts
+- 📊 **New sections:** Capital Allocation & Balance Sheet, Management Sentiment & Tone (expanded)
+- Function: `_build_research_summary_prompt()` in app.py (line 15470)
+
+**Section Flow (14 sections):**
+1. 📌 Bottom Line | 2. 💰 Financial Results | 3. 📊 Operational Metrics | 4. 🏢 Major Developments
+5. 📈 Guidance | 6. 🎯 Strategic Initiatives | 7. 💼 Management Sentiment & Tone | 8. ⚠️ Risk Factors & Headwinds
+9. 🏭 Industry & Competitive Landscape | 10. 💡 Capital Allocation & Balance Sheet | 11. 💬 Q&A Highlights
+12. 📈 Upside Scenario | 13. 📉 Downside Scenario | 14. 🔍 Key Variables to Monitor
+
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=transcript`**: Fetch available earnings transcripts from FMP
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=press_release`**: Fetch available press releases from FMP
 - **`POST /api/admin/generate-transcript-summary`**: Generate AI summary (Claude) of transcript/press release

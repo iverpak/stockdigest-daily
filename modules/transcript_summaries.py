@@ -300,6 +300,7 @@ def generate_transcript_summary_with_claude(
         data = {
             "model": anthropic_model,
             "max_tokens": 16000,  # Allow long summaries (transcripts can be 3-4k words)
+            "temperature": 0.1,  # Low temperature for consistent, factual financial analysis
             "system": [
                 {
                     "type": "text",

@@ -1622,7 +1622,7 @@ def ensure_schema():
                 CREATE TABLE IF NOT EXISTS beta_users (
                     id SERIAL PRIMARY KEY,
                     name VARCHAR(255) NOT NULL,
-                    email VARCHAR(255) UNIQUE NOT NULL,
+                    email VARCHAR(255) NOT NULL,
                     ticker1 VARCHAR(10) NOT NULL,
                     ticker2 VARCHAR(10) NOT NULL,
                     ticker3 VARCHAR(10) NOT NULL,
@@ -1637,6 +1637,14 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_beta_users_status ON beta_users(status);
                 CREATE INDEX IF NOT EXISTS idx_beta_users_created_at ON beta_users(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_beta_users_email ON beta_users(email);
+
+                -- Safeguard 1: Prevent duplicate person (same name + email)
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_beta_users_name_email
+                    ON beta_users(LOWER(name), LOWER(email));
+
+                -- Safeguard 2: Prevent duplicate ticker sets per email
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_beta_users_email_tickers
+                    ON beta_users(LOWER(email), ticker1, ticker2, ticker3);
 
                 -- Add terms versioning columns to existing beta_users table (safe migration)
                 DO $$
@@ -1653,6 +1661,16 @@ def ensure_schema():
 
                 -- Create index AFTER adding columns
                 CREATE INDEX IF NOT EXISTS idx_beta_users_terms_version ON beta_users(terms_version);
+
+                -- Drop old UNIQUE constraint on email (migration for duplicate email support)
+                DO $$
+                BEGIN
+                    -- Check if the old constraint exists
+                    IF EXISTS (SELECT 1 FROM pg_constraint
+                              WHERE conname = 'beta_users_email_key') THEN
+                        ALTER TABLE beta_users DROP CONSTRAINT beta_users_email_key;
+                    END IF;
+                END $$;
 
                 -- Unsubscribe tokens table
                 CREATE TABLE IF NOT EXISTS unsubscribe_tokens (
@@ -21794,13 +21812,28 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
                 "company": config.get("company_name", "Unknown")
             })
 
-        # Check for duplicate email
+        # Check for duplicate combinations (allow same email with different name/tickers)
         with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT email FROM beta_users WHERE email = %s", (email,))
+            # Check 1: Same name + email (duplicate person)
+            cur.execute(
+                "SELECT id FROM beta_users WHERE LOWER(name) = LOWER(%s) AND LOWER(email) = LOWER(%s)",
+                (name, email)
+            )
             if cur.fetchone():
                 return JSONResponse(
                     status_code=400,
-                    content={"status": "error", "message": "Email already registered"}
+                    content={"status": "error", "message": "An account with this name and email already exists. Please use a different name."}
+                )
+
+            # Check 2: Same email + ticker combination
+            cur.execute(
+                "SELECT id FROM beta_users WHERE LOWER(email) = LOWER(%s) AND ticker1 = %s AND ticker2 = %s AND ticker3 = %s",
+                (email, tickers[0], tickers[1], tickers[2])
+            )
+            if cur.fetchone():
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "error", "message": "An account with this email and ticker combination already exists."}
                 )
 
         # Save to database with terms tracking
@@ -26389,6 +26422,419 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
 
     except Exception as e:
         LOG.error(f"Failed to get research status for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/admin/missing-financials-status")
+async def get_missing_financials_status(token: str):
+    """
+    Get status of missing financials (10-K, 10-Q, Transcripts) for all active user tickers.
+    Returns list of tickers with what's available from FMP vs what we have in database.
+    """
+    try:
+        if not check_admin_token(token):
+            return {"status": "error", "message": "Unauthorized"}
+
+        # Get all unique tickers from active users
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ticker1 AS ticker FROM beta_users WHERE status = 'active'
+                UNION
+                SELECT DISTINCT ticker2 AS ticker FROM beta_users WHERE status = 'active'
+                UNION
+                SELECT DISTINCT ticker3 AS ticker FROM beta_users WHERE status = 'active'
+                ORDER BY ticker
+            """)
+            user_tickers = [row['ticker'] for row in cur.fetchall() if row['ticker']]
+
+        if not user_tickers:
+            return {"status": "success", "tickers": [], "message": "No active users found"}
+
+        # Check each ticker for missing financials
+        tickers_status = []
+
+        for ticker in user_tickers:
+            try:
+                # Get ticker config
+                config = get_ticker_config(ticker)
+                if not config:
+                    continue  # Skip tickers not in database
+
+                company_name = config.get('company_name', ticker)
+
+                # Fetch latest 10-K from FMP
+                fmp_10k_response = requests.get(
+                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-K&page=0&apikey={FMP_API_KEY}",
+                    timeout=10
+                )
+                latest_10k_year = None
+                if fmp_10k_response.status_code == 200:
+                    filings = fmp_10k_response.json()
+                    if filings and len(filings) > 0:
+                        period = filings[0].get("period", "")
+                        if period:
+                            latest_10k_year = int(period[:4])
+
+                # Fetch latest 10-Q from FMP
+                fmp_10q_response = requests.get(
+                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}",
+                    timeout=10
+                )
+                latest_10q = None
+                if fmp_10q_response.status_code == 200:
+                    filings = fmp_10q_response.json()
+                    if filings and len(filings) > 0:
+                        period = filings[0].get("period", "")
+                        if period:
+                            year = int(period[:4])
+                            month = int(period[5:7])
+                            quarter = 1 if month == 3 else 2 if month == 6 else 3 if month == 9 else 4
+                            if quarter != 4:  # Skip Q4 (covered by 10-K)
+                                latest_10q = {"year": year, "quarter": quarter}
+
+                # Fetch latest transcript from FMP
+                transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
+                latest_transcript = None
+                if transcript_response.get("valid"):
+                    quarters = transcript_response.get("available_quarters", [])
+                    if quarters:
+                        import re
+                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
+                        if match:
+                            latest_transcript = {"quarter": int(match.group(1)), "year": int(match.group(2))}
+
+                # Check what we have in database
+                with db() as conn, conn.cursor() as cur:
+                    # Check 10-K
+                    cur.execute("""
+                        SELECT fiscal_year FROM sec_filings
+                        WHERE ticker = %s AND filing_type = '10-K'
+                        ORDER BY fiscal_year DESC LIMIT 1
+                    """, (ticker,))
+                    result = cur.fetchone()
+                    our_10k_year = result['fiscal_year'] if result else None
+
+                    # Check 10-Q
+                    cur.execute("""
+                        SELECT fiscal_year, fiscal_quarter FROM sec_filings
+                        WHERE ticker = %s AND filing_type = '10-Q'
+                        ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
+                    """, (ticker,))
+                    result = cur.fetchone()
+                    our_10q = None
+                    if result:
+                        # Extract quarter number from "Q3" format
+                        quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
+                        if quarter_num:
+                            our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
+
+                    # Check transcript
+                    cur.execute("""
+                        SELECT year, quarter FROM transcript_summaries
+                        WHERE ticker = %s AND report_type = 'transcript'
+                        ORDER BY year DESC, quarter DESC LIMIT 1
+                    """, (ticker,))
+                    result = cur.fetchone()
+                    our_transcript = None
+                    if result:
+                        # Extract quarter number from "Q3" format
+                        quarter_str = result['quarter']
+                        quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
+                        if quarter_num:
+                            our_transcript = {"year": result['year'], "quarter": quarter_num}
+
+                # Determine missing items
+                missing_10k = latest_10k_year and (not our_10k_year or latest_10k_year > our_10k_year)
+                missing_10q = latest_10q and (not our_10q or
+                                               latest_10q['year'] > our_10q['year'] or
+                                               (latest_10q['year'] == our_10q['year'] and latest_10q['quarter'] > our_10q['quarter']))
+                missing_transcript = latest_transcript and (not our_transcript or
+                                                             latest_transcript['year'] > our_transcript['year'] or
+                                                             (latest_transcript['year'] == our_transcript['year'] and latest_transcript['quarter'] > our_transcript['quarter']))
+
+                tickers_status.append({
+                    "ticker": ticker,
+                    "company_name": company_name,
+                    "missing_10k": missing_10k,
+                    "missing_10q": missing_10q,
+                    "missing_transcript": missing_transcript,
+                    "latest_10k_year": latest_10k_year,
+                    "latest_10q": latest_10q,
+                    "latest_transcript": latest_transcript,
+                    "our_10k_year": our_10k_year,
+                    "our_10q": our_10q,
+                    "our_transcript": our_transcript
+                })
+
+            except Exception as e:
+                LOG.error(f"Error checking {ticker}: {e}")
+                continue
+
+        return {
+            "status": "success",
+            "tickers": tickers_status,
+            "total_tickers": len(tickers_status)
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get missing financials status: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/generate-missing-financials")
+async def generate_missing_financials(request: Request):
+    """
+    Generate missing financials (10-K, 10-Q, Transcripts) for selected tickers.
+    Queues jobs for missing items only (skips if we have latest).
+    """
+    try:
+        body = await request.json()
+        token = body.get('token')
+
+        if not check_admin_token(token):
+            return {"status": "error", "message": "Unauthorized"}
+
+        selected_tickers = body.get('tickers', [])
+        if not selected_tickers:
+            return {"status": "error", "message": "No tickers selected"}
+
+        LOG.info(f"📑 Generating missing financials for {len(selected_tickers)} tickers")
+
+        jobs_created = []
+        transcripts_to_generate = []
+
+        for ticker in selected_tickers:
+            try:
+                # Get ticker config
+                config = get_ticker_config(ticker)
+                if not config:
+                    LOG.warning(f"Skipping {ticker}: not in database")
+                    continue
+
+                # Fetch latest 10-K from FMP
+                fmp_10k_response = requests.get(
+                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-K&page=0&apikey={FMP_API_KEY}",
+                    timeout=10
+                )
+                if fmp_10k_response.status_code == 200:
+                    filings = fmp_10k_response.json()
+                    if filings and len(filings) > 0:
+                        latest_filing = filings[0]
+                        period = latest_filing.get("period", "")
+                        if period:
+                            latest_year = int(period[:4])
+
+                            # Check if we have this year
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("""
+                                    SELECT fiscal_year FROM sec_filings
+                                    WHERE ticker = %s AND filing_type = '10-K'
+                                    ORDER BY fiscal_year DESC LIMIT 1
+                                """, (ticker,))
+                                result = cur.fetchone()
+                                our_year = result['fiscal_year'] if result else None
+
+                            if not our_year or latest_year > our_year:
+                                # Queue 10-K generation job
+                                batch_id = str(uuid.uuid4())
+                                job_config = {
+                                    "ticker": ticker,
+                                    "filing_type": "10-K",
+                                    "fiscal_year": latest_year,
+                                    "filing_date": latest_filing.get("fillingDate"),
+                                    "period_end_date": period,
+                                    "sec_html_url": latest_filing.get("finalLink"),
+                                    "send_email": True
+                                }
+
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                        VALUES (%s, %s, 1, %s)
+                                    """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_jobs (
+                                            batch_id, ticker, status, phase, progress, config
+                                        )
+                                        VALUES (%s, %s, %s, %s, 0, %s)
+                                        RETURNING job_id
+                                    """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
+
+                                    job_id = cur.fetchone()['job_id']
+                                    conn.commit()
+
+                                jobs_created.append(f"{ticker} 10-K FY{latest_year}")
+                                LOG.info(f"✅ Queued 10-K job for {ticker} FY{latest_year}")
+
+                # Fetch latest 10-Q from FMP
+                fmp_10q_response = requests.get(
+                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}",
+                    timeout=10
+                )
+                if fmp_10q_response.status_code == 200:
+                    filings = fmp_10q_response.json()
+                    if filings and len(filings) > 0:
+                        latest_filing = filings[0]
+                        period = latest_filing.get("period", "")
+                        if period:
+                            year = int(period[:4])
+                            month = int(period[5:7])
+                            quarter = 1 if month == 3 else 2 if month == 6 else 3 if month == 9 else 4
+
+                            if quarter != 4:  # Skip Q4 (covered by 10-K)
+                                # Check if we have this quarter
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        SELECT fiscal_year, fiscal_quarter FROM sec_filings
+                                        WHERE ticker = %s AND filing_type = '10-Q'
+                                        ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
+                                    """, (ticker,))
+                                    result = cur.fetchone()
+                                    our_10q = None
+                                    if result:
+                                        quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
+                                        if quarter_num:
+                                            our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
+
+                                if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
+                                    # Queue 10-Q generation job
+                                    batch_id = str(uuid.uuid4())
+                                    job_config = {
+                                        "ticker": ticker,
+                                        "filing_type": "10-Q",
+                                        "fiscal_year": year,
+                                        "fiscal_quarter": f"Q{quarter}",
+                                        "filing_date": latest_filing.get("fillingDate"),
+                                        "period_end_date": period,
+                                        "sec_html_url": latest_filing.get("finalLink"),
+                                        "send_email": True
+                                    }
+
+                                    with db() as conn, conn.cursor() as cur:
+                                        cur.execute("""
+                                            INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                            VALUES (%s, %s, 1, %s)
+                                        """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                        cur.execute("""
+                                            INSERT INTO ticker_processing_jobs (
+                                                batch_id, ticker, status, phase, progress, config
+                                            )
+                                            VALUES (%s, %s, %s, %s, 0, %s)
+                                            RETURNING job_id
+                                        """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
+
+                                        job_id = cur.fetchone()['job_id']
+                                        conn.commit()
+
+                                    jobs_created.append(f"{ticker} 10-Q Q{quarter} {year}")
+                                    LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
+
+                # Fetch latest transcript
+                transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
+                if transcript_response.get("valid"):
+                    quarters = transcript_response.get("available_quarters", [])
+                    if quarters:
+                        import re
+                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
+                        if match:
+                            quarter = int(match.group(1))
+                            year = int(match.group(2))
+
+                            # Check if we have this transcript
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("""
+                                    SELECT year, quarter FROM transcript_summaries
+                                    WHERE ticker = %s AND report_type = 'transcript'
+                                    ORDER BY year DESC, quarter DESC LIMIT 1
+                                """, (ticker,))
+                                result = cur.fetchone()
+                                our_transcript = None
+                                if result:
+                                    quarter_str = result['quarter']
+                                    quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
+                                    if quarter_num:
+                                        our_transcript = {"year": result['year'], "quarter": quarter_num}
+
+                            if not our_transcript or year > our_transcript['year'] or (year == our_transcript['year'] and quarter > our_transcript['quarter']):
+                                # Add to transcript generation list (synchronous, not job queue)
+                                transcripts_to_generate.append({
+                                    "ticker": ticker,
+                                    "quarter": quarter,
+                                    "year": year
+                                })
+                                LOG.info(f"✅ Will generate transcript for {ticker} Q{quarter} {year}")
+
+            except Exception as e:
+                LOG.error(f"Error processing {ticker}: {e}")
+                continue
+
+        # Generate transcripts synchronously (they're fast - 30-60s each)
+        for item in transcripts_to_generate:
+            try:
+                # Call existing transcript generation endpoint logic
+                from modules.company_profiles import generate_transcript_summary_with_claude
+
+                ticker = item['ticker']
+                quarter = item['quarter']
+                year = item['year']
+
+                # Fetch transcript content from FMP
+                fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
+                response = requests.get(f"{fmp_url}&apikey={FMP_API_KEY}", timeout=30)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data and len(data) > 0:
+                        content = data[0].get('content', '')
+                        if content:
+                            # Generate summary with Claude
+                            config = get_ticker_config(ticker)
+                            result = generate_transcript_summary_with_claude(
+                                ticker, content, config, quarter, year, CLAUDE_API_KEY
+                            )
+
+                            if result:
+                                # Save to database
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO transcript_summaries (
+                                            ticker, company_name, report_type, quarter, year,
+                                            report_date, summary_text, source_url, ai_provider
+                                        )
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                        ON CONFLICT (ticker, report_type, quarter, year)
+                                        DO UPDATE SET
+                                            summary_text = EXCLUDED.summary_text,
+                                            generated_at = NOW()
+                                    """, (
+                                        ticker,
+                                        config.get('company_name'),
+                                        'transcript',
+                                        f"Q{quarter}",
+                                        year,
+                                        data[0].get('date'),
+                                        result['summary_text'],
+                                        fmp_url,
+                                        'claude'
+                                    ))
+                                    conn.commit()
+
+                                jobs_created.append(f"{ticker} Transcript Q{quarter} {year}")
+                                LOG.info(f"✅ Generated transcript for {ticker} Q{quarter} {year}")
+
+            except Exception as e:
+                LOG.error(f"Error generating transcript for {ticker}: {e}")
+                continue
+
+        return {
+            "status": "success",
+            "message": f"Queued {len(jobs_created)} jobs for generation",
+            "jobs_created": jobs_created,
+            "total_jobs": len(jobs_created)
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to generate missing financials: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/restart-worker")

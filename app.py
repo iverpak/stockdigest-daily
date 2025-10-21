@@ -26663,11 +26663,14 @@ async def get_missing_financials_status(token: str):
                 if tenq_response.get("valid"):
                     quarters = tenq_response.get("available_quarters", [])
                     if quarters:
-                        # quarters[0] is like "Q3 2024 (Sep 30, 2024)"
+                        # quarters[0] might be string like "Q3 2024 (Sep 30, 2024)" OR a dict
                         import re
-                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
+                        quarter_str = quarters[0] if isinstance(quarters[0], str) else str(quarters[0])
+                        match = re.match(r"Q(\d+)\s+(\d{4})", quarter_str)
                         if match:
                             latest_10q = {"quarter": int(match.group(1)), "year": int(match.group(2))}
+                        else:
+                            LOG.warning(f"[{ticker}] Could not parse 10-Q quarter: {quarters[0]} (type: {type(quarters[0])})")
 
                 # Fetch latest transcript
                 transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
@@ -26676,9 +26679,12 @@ async def get_missing_financials_status(token: str):
                     quarters = transcript_response.get("available_quarters", [])
                     if quarters:
                         import re
-                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
+                        quarter_str = quarters[0] if isinstance(quarters[0], str) else str(quarters[0])
+                        match = re.match(r"Q(\d+)\s+(\d{4})", quarter_str)
                         if match:
                             latest_transcript = {"quarter": int(match.group(1)), "year": int(match.group(2))}
+                        else:
+                            LOG.warning(f"[{ticker}] Could not parse transcript quarter: {quarters[0]} (type: {type(quarters[0])})")
 
                 # Check what we have in database
                 with db() as conn, conn.cursor() as cur:

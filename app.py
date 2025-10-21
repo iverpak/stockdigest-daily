@@ -1526,7 +1526,7 @@ def ensure_schema():
                 DO $$ BEGIN
                     ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_unique_key UNIQUE(ticker, report_type, quarter, year);
                 EXCEPTION
-                    WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
+                    WHEN duplicate_object OR duplicate_table THEN NULL;  -- Constraint already exists, ignore
                 END $$;
 
                 -- Migration: Add ai_model column if it doesn't exist

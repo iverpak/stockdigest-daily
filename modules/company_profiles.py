@@ -789,13 +789,13 @@ def save_company_profile_to_database(
         cur.execute("""
             INSERT INTO sec_filings (
                 ticker, filing_type, fiscal_year, fiscal_quarter,
-                company_name, industry, filing_date,
+                company_name, industry, filing_date, period_end_date,
                 profile_markdown, source_file, source_type, sec_html_url,
                 ai_provider, ai_model,
                 generation_time_seconds, token_count_input, token_count_output,
                 status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             ticker,
             '10-K',                              # filing_type (always 10-K for now)
@@ -804,6 +804,7 @@ def save_company_profile_to_database(
             config.get('company_name'),
             config.get('industry'),
             config.get('filing_date'),
+            config.get('period_end_date'),       # Actual fiscal year end date
             profile_markdown,
             source_file,
             source_type,

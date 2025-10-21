@@ -19646,6 +19646,7 @@ async def process_company_profile_phase(job: dict):
                 'industry': ticker_config.get('industry'),
                 'fiscal_year': config['fiscal_year'],
                 'filing_date': config['filing_date'],
+                'period_end_date': config.get('period_end_date'),
                 'source_file': source_file
             }
 
@@ -19738,6 +19739,7 @@ async def process_10q_profile_phase(job: dict):
         fiscal_year = config.get('fiscal_year')
         fiscal_quarter = config.get('fiscal_quarter')  # e.g., "Q3"
         filing_date = config.get('filing_date')
+        period_end_date = config.get('period_end_date')  # Actual quarter end date
         sec_html_url = config.get('sec_html_url')
 
         # Progress: 10% - Extracting 10-Q text
@@ -19802,13 +19804,13 @@ async def process_10q_profile_phase(job: dict):
             cur.execute("""
                 INSERT INTO sec_filings (
                     ticker, filing_type, fiscal_year, fiscal_quarter,
-                    company_name, industry, filing_date,
+                    company_name, industry, filing_date, period_end_date,
                     profile_markdown, source_type, sec_html_url,
                     ai_provider, ai_model,
                     generation_time_seconds, token_count_input, token_count_output,
                     status
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 ticker,
                 '10-Q',
@@ -19817,6 +19819,7 @@ async def process_10q_profile_phase(job: dict):
                 ticker_config.get('company_name'),
                 ticker_config.get('industry'),
                 filing_date,
+                period_end_date,
                 profile_markdown,
                 'fmp_sec',  # Always SEC.gov for 10-Q
                 sec_html_url,
@@ -21436,17 +21439,28 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                 available_years = []
                 for filing in filings[:10]:
                     try:
+                        period_end = filing.get("period", "")  # Actual fiscal year end date
                         filing_date_str = filing.get("fillingDate", "")
-                        if filing_date_str:
-                            year = int(filing_date_str[:4])
-                            filing_date = filing_date_str[:10]  # YYYY-MM-DD
-                            sec_html_url = filing.get("finalLink", "")
 
-                            available_years.append({
-                                "year": year,
-                                "filing_date": filing_date,
-                                "sec_html_url": sec_html_url
-                            })
+                        # Use period end date to determine fiscal year (handles non-standard fiscal years)
+                        if period_end:
+                            year = int(period_end[:4])
+                            period_date = period_end[:10]  # YYYY-MM-DD
+                        elif filing_date_str:
+                            year = int(filing_date_str[:4])
+                            period_date = None
+                        else:
+                            continue
+
+                        filing_date = filing_date_str[:10] if filing_date_str else None
+                        sec_html_url = filing.get("finalLink", "")
+
+                        available_years.append({
+                            "year": year,
+                            "filing_date": filing_date,
+                            "period_end_date": period_date,
+                            "sec_html_url": sec_html_url
+                        })
                     except (ValueError, KeyError) as e:
                         LOG.warning(f"Skipping invalid filing entry for {ticker}: {e}")
                         continue
@@ -21483,50 +21497,68 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                 available_quarters = []
                 for filing in filings[:12]:
                     try:
+                        period_end = filing.get("period", "")  # Actual quarter end date
                         filing_date_str = filing.get("fillingDate", "")
-                        accepted_date_str = filing.get("acceptedDate", "")
                         sec_html_url = filing.get("finalLink", "")
 
-                        if not filing_date_str:
+                        # Use period end date to calculate quarter (handles non-standard fiscal years)
+                        if period_end:
+                            year = int(period_end[:4])
+                            month = int(period_end[5:7])
+
+                            # Map quarter end month to quarter number
+                            # Standard: Q1=March(3), Q2=June(6), Q3=Sept(9), Q4=Dec(12)
+                            if month == 3:
+                                quarter = "Q1"
+                            elif month == 6:
+                                quarter = "Q2"
+                            elif month == 9:
+                                quarter = "Q3"
+                            elif month == 12:
+                                quarter = "Q4"
+                            else:
+                                # Non-standard fiscal quarter (e.g., month 1, 4, 7, 10)
+                                quarter_num = (month - 1) // 3 + 1
+                                quarter = f"Q{quarter_num}"
+
+                            fiscal_year = year
+                            period_date = period_end[:10]  # YYYY-MM-DD
+                        elif filing_date_str:
+                            # Fallback to old filing date logic if period missing
+                            filing_date = filing_date_str[:10]
+                            year = int(filing_date[:4])
+                            month = int(filing_date[5:7])
+                            day = int(filing_date[8:10])
+
+                            # Check which quarter end was most recent before this filing date
+                            if month >= 10 or (month == 9 and day == 30):
+                                quarter = "Q3"
+                                fiscal_year = year
+                            elif month >= 7 or (month == 6 and day == 30):
+                                quarter = "Q2"
+                                fiscal_year = year
+                            elif month >= 4 or (month == 3 and day == 31):
+                                quarter = "Q1"
+                                fiscal_year = year
+                            else:
+                                LOG.debug(f"Skipping {ticker} 10-Q filing on {filing_date} - would map to Q4 which doesn't exist for 10-Q")
+                                continue
+                            period_date = None
+                        else:
                             continue
 
-                        # Parse filing date
-                        filing_date = filing_date_str[:10]  # YYYY-MM-DD
+                        filing_date = filing_date_str[:10] if filing_date_str else None
 
-                        # Use accepted date if available (more accurate), otherwise use filing date
-                        date_to_parse = accepted_date_str[:10] if accepted_date_str else filing_date
-                        year = int(date_to_parse[:4])
-                        month = int(date_to_parse[5:7])
-                        day = int(date_to_parse[8:10])
-
-                        # Determine quarter based on last calendar quarter end before filing date
-                        # Calendar quarter ends: Q1=March 31, Q2=June 30, Q3=Sept 30, Q4=Dec 31
-                        # NOTE: Q4 10-Q does not exist (covered by 10-K annual report)
-
-                        # Check which quarter end was most recent before this filing date
-                        if month >= 10 or (month == 9 and day == 30):
-                            # Filed in Oct-Dec or on Sept 30 → Last quarter end was Sept 30 (Q3)
-                            quarter = "Q3"
-                            fiscal_year = year
-                        elif month >= 7 or (month == 6 and day == 30):
-                            # Filed in July-Sept (before Sept 30) or on June 30 → Last quarter end was June 30 (Q2)
-                            quarter = "Q2"
-                            fiscal_year = year
-                        elif month >= 4 or (month == 3 and day == 31):
-                            # Filed in April-June (before June 30) or on March 31 → Last quarter end was March 31 (Q1)
-                            quarter = "Q1"
-                            fiscal_year = year
-                        else:
-                            # Filed in Jan-March (before March 31) → Last quarter end was Dec 31 (Q4)
-                            # Q4 10-Q does not exist (that's covered by 10-K)
-                            # This filing is either misclassified or a late 10-K
-                            LOG.debug(f"Skipping {ticker} 10-Q filing on {date_to_parse} - would map to Q4 which doesn't exist for 10-Q")
+                        # Skip Q4 10-Qs (shouldn't exist, but filter just in case)
+                        if quarter == "Q4":
+                            LOG.debug(f"Skipping {ticker} Q4 10-Q (period: {period_end}) - Q4 is covered by 10-K")
                             continue
 
                         available_quarters.append({
                             "quarter": quarter,
                             "fiscal_year": fiscal_year,
                             "filing_date": filing_date,
+                            "period_end_date": period_date,
                             "sec_html_url": sec_html_url,
                             "label": f"{quarter} {fiscal_year}"
                         })
@@ -25290,6 +25322,7 @@ async def generate_company_profile_api(request: Request):
     fiscal_year = body.get('fiscal_year')
     fiscal_quarter = body.get('fiscal_quarter')  # Required for 10-Q (e.g., 'Q3')
     filing_date = body.get('filing_date')
+    period_end_date = body.get('period_end_date')  # Actual fiscal year/quarter end date
     sec_html_url = body.get('sec_html_url')  # FMP mode (optional)
     file_content = body.get('file_content')  # Base64 encoded (optional)
     file_name = body.get('file_name')  # Optional
@@ -25313,9 +25346,10 @@ async def generate_company_profile_api(request: Request):
             "filing_type": filing_type,
             "fiscal_year": fiscal_year,
             "filing_date": filing_date,
+            "period_end_date": period_end_date,
             "send_email": True
         }
-        
+
         # Add quarter for 10-Q
         if filing_type == '10-Q':
             job_config["fiscal_quarter"] = fiscal_quarter
@@ -25391,6 +25425,7 @@ async def generate_10q_profile_api(request: Request):
     fiscal_year = body.get('fiscal_year')
     fiscal_quarter = body.get('fiscal_quarter')  # e.g., "Q3"
     filing_date = body.get('filing_date')
+    period_end_date = body.get('period_end_date')  # Actual quarter end date
     sec_html_url = body.get('sec_html_url')
 
     try:
@@ -25408,6 +25443,7 @@ async def generate_10q_profile_api(request: Request):
             "fiscal_year": fiscal_year,
             "fiscal_quarter": fiscal_quarter,
             "filing_date": filing_date,
+            "period_end_date": period_end_date,
             "sec_html_url": sec_html_url,
             "send_email": True
         }
@@ -26212,18 +26248,48 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
         if fmp_10q_response.status_code == 200:
             filings_10q = fmp_10q_response.json()[:12]  # Latest 12 quarters (3 years)
             for filing in filings_10q:
-                # Parse quarter from filing period
-                period = filing.get("fillingDate", "")  # e.g., "2024-08-01"
-                if period:
-                    year = int(period[:4])
-                    month = int(period[5:7])
-                    quarter = (month - 1) // 3 + 1  # Jan-Mar=Q1, Apr-Jun=Q2, etc.
-                    available_10q.append({
-                        "quarter": quarter,
-                        "year": year,
-                        "filing_date": filing.get("fillingDate"),
-                        "sec_html_url": filing.get("finalLink")
-                    })
+                # Use period end date to calculate quarter (handles non-standard fiscal years)
+                period_end = filing.get("period", "")  # Actual quarter end date
+                filing_date_str = filing.get("fillingDate", "")
+
+                if period_end:
+                    year = int(period_end[:4])
+                    month = int(period_end[5:7])
+
+                    # Map quarter end month to quarter number
+                    if month == 3:
+                        quarter = 1
+                    elif month == 6:
+                        quarter = 2
+                    elif month == 9:
+                        quarter = 3
+                    elif month == 12:
+                        quarter = 4
+                    else:
+                        # Non-standard fiscal quarter
+                        quarter = (month - 1) // 3 + 1
+
+                    period_date = period_end[:10]
+                elif filing_date_str:
+                    # Fallback to filing date logic if period missing
+                    year = int(filing_date_str[:4])
+                    month = int(filing_date_str[5:7])
+                    quarter = (month - 1) // 3 + 1
+                    period_date = None
+                else:
+                    continue
+
+                # Skip Q4 (covered by 10-K)
+                if quarter == 4:
+                    continue
+
+                available_10q.append({
+                    "quarter": quarter,
+                    "year": year,
+                    "filing_date": filing_date_str,
+                    "period_end_date": period_date,
+                    "sec_html_url": filing.get("finalLink")
+                })
 
         # Fetch available transcripts
         transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")

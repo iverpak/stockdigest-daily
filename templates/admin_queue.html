@@ -395,6 +395,44 @@
             </div>
         </div>
 
+        <!-- Generate Missing Financials Section -->
+        <div style="background: #ffffff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 32px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 style="font-size: 20px; font-weight: 700; color: #1e3a8a;">📑 Generate Missing Financials</h2>
+                <button onclick="toggleFinancialsSection()" style="background: #1e40af; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                    <span id="financials-toggle-text">Show Tickers</span>
+                </button>
+            </div>
+
+            <div id="financials-section" style="display: none;">
+                <p style="color: #6b7280; margin-bottom: 16px; font-size: 14px;">
+                    Select tickers to generate missing 10-K, 10-Q, and Transcripts. Only generates items that are missing (skips if we have latest from FMP).
+                </p>
+
+                <div id="financials-loading" style="text-align: center; padding: 40px; color: #6b7280;">
+                    Loading ticker status...
+                </div>
+
+                <div id="financials-list" style="display: none;">
+                    <!-- Ticker checkboxes will be populated here -->
+                </div>
+
+                <div id="financials-actions" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+                    <div style="display: flex; gap: 12px; align-items: center;">
+                        <button onclick="selectAllFinancials()" style="background: #6b7280; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px;">
+                            ✓ Select All
+                        </button>
+                        <button onclick="clearAllFinancials()" style="background: #6b7280; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px;">
+                            ✗ Clear All
+                        </button>
+                        <button onclick="generateMissingFinancials()" style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 14px; margin-left: auto;">
+                            📑 Generate Missing Financials (<span id="selected-financials-count">0</span> selected)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Global Actions -->
         <div class="global-actions">
             <button class="btn btn-primary" onclick="generateAllReports()">
@@ -1033,6 +1071,188 @@
                 }
             } catch (error) {
                 alert('Failed to regenerate email: ' + error.message);
+            }
+        }
+
+        // Generate Missing Financials Functions
+        let financialsData = [];
+        let financialsSectionExpanded = false;
+
+        function toggleFinancialsSection() {
+            const section = document.getElementById('financials-section');
+            const toggleText = document.getElementById('financials-toggle-text');
+
+            financialsSectionExpanded = !financialsSectionExpanded;
+
+            if (financialsSectionExpanded) {
+                section.style.display = 'block';
+                toggleText.textContent = 'Hide Tickers';
+                loadFinancialsStatus();
+            } else {
+                section.style.display = 'none';
+                toggleText.textContent = 'Show Tickers';
+            }
+        }
+
+        async function loadFinancialsStatus() {
+            const loadingDiv = document.getElementById('financials-loading');
+            const listDiv = document.getElementById('financials-list');
+            const actionsDiv = document.getElementById('financials-actions');
+
+            loadingDiv.style.display = 'block';
+            listDiv.style.display = 'none';
+            actionsDiv.style.display = 'none';
+
+            try {
+                const response = await fetch(`/api/admin/missing-financials-status?token=${token}`);
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    financialsData = result.tickers;
+                    populateFinancialsList(result.tickers);
+                    loadingDiv.style.display = 'none';
+                    listDiv.style.display = 'block';
+                    actionsDiv.style.display = 'block';
+                } else {
+                    loadingDiv.innerHTML = `<span style="color: #ef4444;">Error: ${result.message}</span>`;
+                }
+            } catch (error) {
+                loadingDiv.innerHTML = `<span style="color: #ef4444;">Failed to load ticker status</span>`;
+                console.error('Failed to load financials status:', error);
+            }
+        }
+
+        function populateFinancialsList(tickers) {
+            const listDiv = document.getElementById('financials-list');
+
+            if (tickers.length === 0) {
+                listDiv.innerHTML = '<p style="color: #6b7280; text-align: center; padding: 20px;">No active user tickers found.</p>';
+                return;
+            }
+
+            listDiv.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px;">
+                    ${tickers.map((ticker, index) => {
+                        const missing10K = ticker.missing_10k ? '❌' : '✅';
+                        const missing10Q = ticker.missing_10q ? '❌' : '✅';
+                        const missingTranscript = ticker.missing_transcript ? '❌' : '✅';
+                        const hasMissing = ticker.missing_10k || ticker.missing_10q || ticker.missing_transcript;
+
+                        return `
+                            <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; background: ${hasMissing ? '#fef3c7' : '#f0f9ff'};">
+                                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+                                    <input
+                                        type="checkbox"
+                                        id="ticker-${index}"
+                                        value="${ticker.ticker}"
+                                        onchange="updateSelectedCount()"
+                                        ${hasMissing ? 'checked' : ''}
+                                        style="width: 18px; height: 18px; cursor: pointer;"
+                                    />
+                                    <label for="ticker-${index}" style="font-weight: 600; font-size: 16px; color: #1e40af; cursor: pointer;">
+                                        ${ticker.ticker}
+                                    </label>
+                                </div>
+                                <div style="font-size: 13px; color: #6b7280; line-height: 1.6; margin-left: 30px;">
+                                    <div>${missing10K} 10-K: ${ticker.missing_10k ? `<strong style="color: #92400e;">Missing ${ticker.latest_10k_year || 'latest'}</strong>` : `Have ${ticker.our_10k_year || 'latest'}`}</div>
+                                    <div>${missing10Q} 10-Q: ${ticker.missing_10q ? `<strong style="color: #92400e;">Missing Q${ticker.latest_10q_quarter || '?'} ${ticker.latest_10q_year || ''}</strong>` : `Have Q${ticker.our_10q_quarter || '?'} ${ticker.our_10q_year || ''}`}</div>
+                                    <div>${missingTranscript} Transcript: ${ticker.missing_transcript ? `<strong style="color: #92400e;">Missing Q${ticker.latest_transcript_quarter || '?'} ${ticker.latest_transcript_year || ''}</strong>` : `Have Q${ticker.our_transcript_quarter || '?'} ${ticker.our_transcript_year || ''}`}</div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+
+            updateSelectedCount();
+        }
+
+        function selectAllFinancials() {
+            const checkboxes = document.querySelectorAll('[id^="ticker-"]');
+            checkboxes.forEach(cb => cb.checked = true);
+            updateSelectedCount();
+        }
+
+        function clearAllFinancials() {
+            const checkboxes = document.querySelectorAll('[id^="ticker-"]');
+            checkboxes.forEach(cb => cb.checked = false);
+            updateSelectedCount();
+        }
+
+        function updateSelectedCount() {
+            const checkboxes = document.querySelectorAll('[id^="ticker-"]:checked');
+            document.getElementById('selected-financials-count').textContent = checkboxes.length;
+        }
+
+        async function generateMissingFinancials() {
+            const checkboxes = document.querySelectorAll('[id^="ticker-"]:checked');
+            const selectedTickers = Array.from(checkboxes).map(cb => cb.value);
+
+            if (selectedTickers.length === 0) {
+                alert('❌ No tickers selected!\n\nPlease select at least one ticker to generate financials.');
+                return;
+            }
+
+            // Calculate what will be generated
+            let total10K = 0, total10Q = 0, totalTranscripts = 0;
+            selectedTickers.forEach(ticker => {
+                const data = financialsData.find(t => t.ticker === ticker);
+                if (data) {
+                    if (data.missing_10k) total10K++;
+                    if (data.missing_10q) total10Q++;
+                    if (data.missing_transcript) totalTranscripts++;
+                }
+            });
+
+            const totalJobs = total10K + total10Q + totalTranscripts;
+
+            if (totalJobs === 0) {
+                alert('✅ Nothing to generate!\n\nAll selected tickers already have the latest financials.');
+                return;
+            }
+
+            const confirmMsg = `📑 Generate Missing Financials?\n\nSelected: ${selectedTickers.length} tickers\n\nWill generate:\n• ${total10K} 10-K profiles (5-10 min each)\n• ${total10Q} 10-Q profiles (5-10 min each)\n• ${totalTranscripts} Transcripts (30-60 sec each)\n\nTotal jobs: ${totalJobs}\nEstimated time: ${Math.ceil((total10K + total10Q) * 7 / 3)} minutes (3 concurrent)\n\nYou will receive emails as each completes.\n\nContinue?`;
+
+            if (!confirm(confirmMsg)) return;
+
+            try {
+                // Show loading state
+                const btn = event.target;
+                const originalHTML = btn.innerHTML;
+                btn.innerHTML = '⏳ Submitting jobs...';
+                btn.disabled = true;
+
+                const response = await fetch('/api/admin/generate-missing-financials', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        token: token,
+                        tickers: selectedTickers
+                    })
+                });
+
+                const result = await response.json();
+
+                // Restore button
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+
+                if (result.status === 'success') {
+                    const jobSummary = result.jobs.map(j => `• ${j.ticker}: ${j.items.join(', ')}`).join('\n');
+                    alert(`✅ Queued ${result.total_jobs} jobs for ${result.ticker_count} tickers\n\n${jobSummary}\n\nYou will receive emails as each job completes.\n\nRefresh this page or check /admin/research to see progress.`);
+
+                    // Reload financials status to show updated state
+                    loadFinancialsStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to generate missing financials: ' + error.message);
+                // Restore button on error
+                if (event && event.target) {
+                    event.target.innerHTML = originalHTML;
+                    event.target.disabled = false;
+                }
             }
         }
 

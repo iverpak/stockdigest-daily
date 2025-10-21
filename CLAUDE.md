@@ -273,7 +273,7 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
 **MAJOR UPDATE (Oct 19, 2025):** Migrated to unified `sec_filings` table supporting 10-K, 10-Q, and investor presentations.
 
 **Comprehensive Gemini Prompts:**
-- **10-K Prompt:** 16-section comprehensive extraction (3,000-6,000 words)
+- **10-K Prompt:** 16-section comprehensive extraction (2,000-4,500 words)
   - Section 0: Filing metadata (fiscal year end, currency, accounting standard)
   - Section 3: EBITDA with approximation caveat, ASC 842 leases, ETR trends
   - Section 4: Goodwill by segment, segment EBITDA (rarely disclosed note)
@@ -283,7 +283,7 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Section 13: Strategic priorities + guidance (realistic framing)
   - Supports ALL industries and company sizes
 
-- **10-Q Prompt:** 14-section quarterly extraction (3,000-6,000 words) - **READY FOR FUTURE USE**
+- **10-Q Prompt:** 14-section quarterly extraction (2,000-5,000 words) - **READY FOR FUTURE USE**
   - YoY and YTD comparisons (QoQ noted as often unavailable)
   - Management tone analysis (confident, cautious, defensive, mixed)
   - New risks and material developments delta tracking
@@ -374,7 +374,7 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Properties & Facilities, Legal Proceedings, Management & Governance
   - Capital Allocation (3-year history), Strategic Priorities & Outlook
   - Subsequent Events, Key Monitoring Variables
-  - Target: 3,000-6,000 words
+  - Target: 2,000-4,500 words
 
 - **GEMINI_10Q_PROMPT**: 14-section quarterly analysis (Sections 0-13)
   - Filing Metadata, Quarterly Financial Performance, Segment Performance
@@ -382,7 +382,7 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Operational Metrics, Guidance & Outlook, New Risks & Developments
   - Subsequent Events, Management Tone, Segment Trends, Liquidity
   - Summary of Key Changes (positive/negative developments, momentum check)
-  - Target: 3,000-6,000 words
+  - Target: 2,000-5,000 words
 
 **User Workflow (20x faster than manual file upload):**
 1. Navigate to `/admin/research` → Click "Company Profiles" tab

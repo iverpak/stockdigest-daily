@@ -6747,7 +6747,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "temperature": 0.2,  # ADDED: Low temperature for factual extraction
+                "temperature": 0.0,  # Maximum determinism for consistent article extraction
                 "system": [
                     {
                         "type": "text",
@@ -7050,7 +7050,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "temperature": 0.2,  # ADDED: Low temperature for factual extraction
+                "temperature": 0.0,  # Maximum determinism for consistent article extraction
                 "system": [
                     {
                         "type": "text",
@@ -7299,7 +7299,7 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 512,
-                "temperature": 0.1,
+                "temperature": 0.0,  # Maximum determinism for consistent industry gate scoring
                 "system": [
                     {
                         "type": "text",
@@ -7969,7 +7969,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
             data = {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 8192,
-                "temperature": 0.2,  # ADDED: Low temperature for factual extraction
+                "temperature": 0.0,  # Maximum determinism for consistent article extraction
                 "system": [
                     {
                         "type": "text",
@@ -10600,7 +10600,7 @@ Select the {target_cap} most important articles about {company_name} from the {l
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
-            "temperature": 0.4,
+            "temperature": 0.1,  # Low temperature for consistent triage scoring
             "system": [
                 {
                     "type": "text",
@@ -16486,7 +16486,7 @@ def generate_claude_executive_summary(ticker: str, categories: Dict[str, List[Di
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 10000,
-            "temperature": 0.1,
+            "temperature": 0.0,  # Maximum determinism for consistent executive summaries
             "system": [
                 {
                     "type": "text",

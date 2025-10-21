@@ -1521,6 +1521,13 @@ def ensure_schema():
                     UNIQUE(ticker, report_type, quarter, year)
                 );
 
+                -- Migration: Ensure UNIQUE constraint exists (for existing tables created before constraint was added)
+                DO $$ BEGIN
+                    ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_unique_key UNIQUE(ticker, report_type, quarter, year);
+                EXCEPTION
+                    WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
+                END $$;
+
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_ticker ON transcript_summaries(ticker);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_quarter ON transcript_summaries(quarter, year);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_type ON transcript_summaries(report_type);

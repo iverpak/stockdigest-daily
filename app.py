@@ -26648,36 +26648,28 @@ async def get_missing_financials_status(token: str):
 
                 company_name = config.get('company_name', ticker)
 
-                # Fetch latest 10-K from FMP
-                fmp_10k_response = requests.get(
-                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-K&page=0&apikey={FMP_API_KEY}",
-                    timeout=10
-                )
+                # Use existing validation endpoint (already working in Research page)
+                # Fetch latest 10-K
+                profile_response = await validate_ticker_for_research(ticker=ticker, type="profile")
                 latest_10k_year = None
-                if fmp_10k_response.status_code == 200:
-                    filings = fmp_10k_response.json()
-                    if filings and len(filings) > 0:
-                        period = filings[0].get("period", "")
-                        if period:
-                            latest_10k_year = int(period[:4])
+                if profile_response.get("valid"):
+                    years = profile_response.get("available_years", [])
+                    if years:
+                        latest_10k_year = years[0]["year"]  # Already sorted, first is latest
 
-                # Fetch latest 10-Q from FMP
-                fmp_10q_response = requests.get(
-                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}",
-                    timeout=10
-                )
+                # Fetch latest 10-Q
+                tenq_response = await validate_ticker_for_research(ticker=ticker, type="10q")
                 latest_10q = None
-                if fmp_10q_response.status_code == 200:
-                    filings = fmp_10q_response.json()
-                    if filings and len(filings) > 0:
-                        period = filings[0].get("period", "")
-                        if period:
-                            year = int(period[:4])
-                            month = int(period[5:7])
-                            quarter = 1 if month == 3 else 2 if month == 6 else 3 if month == 9 else 4
-                            latest_10q = {"year": year, "quarter": quarter}
+                if tenq_response.get("valid"):
+                    quarters = tenq_response.get("available_quarters", [])
+                    if quarters:
+                        # quarters[0] is like "Q3 2024 (Sep 30, 2024)"
+                        import re
+                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
+                        if match:
+                            latest_10q = {"quarter": int(match.group(1)), "year": int(match.group(2))}
 
-                # Fetch latest transcript from FMP
+                # Fetch latest transcript
                 transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
                 latest_transcript = None
                 if transcript_response.get("valid"):
@@ -26795,76 +26787,69 @@ async def generate_missing_financials(request: Request):
                     LOG.warning(f"Skipping {ticker}: not in database")
                     continue
 
-                # Fetch latest 10-K from FMP
-                fmp_10k_response = requests.get(
-                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-K&page=0&apikey={FMP_API_KEY}",
-                    timeout=10
-                )
-                if fmp_10k_response.status_code == 200:
-                    filings = fmp_10k_response.json()
-                    if filings and len(filings) > 0:
-                        latest_filing = filings[0]
-                        period = latest_filing.get("period", "")
-                        if period:
-                            latest_year = int(period[:4])
+                # Use existing validation endpoint (same as Research page)
+                # Check latest 10-K from FMP
+                profile_response = await validate_ticker_for_research(ticker=ticker, type="profile")
+                if profile_response.get("valid"):
+                    years = profile_response.get("available_years", [])
+                    if years:
+                        latest_year_data = years[0]  # Already sorted, first is latest
+                        latest_year = latest_year_data["year"]
 
-                            # Check if we have this year
+                        # Check if we have this year
+                        with db() as conn, conn.cursor() as cur:
+                            cur.execute("""
+                                SELECT fiscal_year FROM sec_filings
+                                WHERE ticker = %s AND filing_type = '10-K'
+                                ORDER BY fiscal_year DESC LIMIT 1
+                            """, (ticker,))
+                            result = cur.fetchone()
+                            our_year = result['fiscal_year'] if result else None
+
+                        if not our_year or latest_year > our_year:
+                            # Queue 10-K generation job
+                            batch_id = str(uuid.uuid4())
+                            job_config = {
+                                "ticker": ticker,
+                                "filing_type": "10-K",
+                                "fiscal_year": latest_year,
+                                "filing_date": latest_year_data.get("filing_date"),
+                                "period_end_date": latest_year_data.get("period_end_date"),
+                                "sec_html_url": latest_year_data.get("sec_html_url"),
+                                "send_email": True
+                            }
+
                             with db() as conn, conn.cursor() as cur:
                                 cur.execute("""
-                                    SELECT fiscal_year FROM sec_filings
-                                    WHERE ticker = %s AND filing_type = '10-K'
-                                    ORDER BY fiscal_year DESC LIMIT 1
-                                """, (ticker,))
-                                result = cur.fetchone()
-                                our_year = result['fiscal_year'] if result else None
+                                    INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                    VALUES (%s, %s, 1, %s)
+                                """, (batch_id, 'processing', json.dumps(job_config)))
 
-                            if not our_year or latest_year > our_year:
-                                # Queue 10-K generation job
-                                batch_id = str(uuid.uuid4())
-                                job_config = {
-                                    "ticker": ticker,
-                                    "filing_type": "10-K",
-                                    "fiscal_year": latest_year,
-                                    "filing_date": latest_filing.get("fillingDate"),
-                                    "period_end_date": period,
-                                    "sec_html_url": latest_filing.get("finalLink"),
-                                    "send_email": True
-                                }
+                                cur.execute("""
+                                    INSERT INTO ticker_processing_jobs (
+                                        batch_id, ticker, status, phase, progress, config
+                                    )
+                                    VALUES (%s, %s, %s, %s, 0, %s)
+                                    RETURNING job_id
+                                """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
 
-                                with db() as conn, conn.cursor() as cur:
-                                    cur.execute("""
-                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
-                                        VALUES (%s, %s, 1, %s)
-                                    """, (batch_id, 'processing', json.dumps(job_config)))
+                                job_id = cur.fetchone()['job_id']
+                                conn.commit()
 
-                                    cur.execute("""
-                                        INSERT INTO ticker_processing_jobs (
-                                            batch_id, ticker, status, phase, progress, config
-                                        )
-                                        VALUES (%s, %s, %s, %s, 0, %s)
-                                        RETURNING job_id
-                                    """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
+                            jobs_created.append({"ticker": ticker, "items": [f"10-K FY{latest_year}"]})
+                            LOG.info(f"✅ Queued 10-K job for {ticker} FY{latest_year}")
 
-                                    job_id = cur.fetchone()['job_id']
-                                    conn.commit()
-
-                                jobs_created.append(f"{ticker} 10-K FY{latest_year}")
-                                LOG.info(f"✅ Queued 10-K job for {ticker} FY{latest_year}")
-
-                # Fetch latest 10-Q from FMP
-                fmp_10q_response = requests.get(
-                    f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}",
-                    timeout=10
-                )
-                if fmp_10q_response.status_code == 200:
-                    filings = fmp_10q_response.json()
-                    if filings and len(filings) > 0:
-                        latest_filing = filings[0]
-                        period = latest_filing.get("period", "")
-                        if period:
-                            year = int(period[:4])
-                            month = int(period[5:7])
-                            quarter = 1 if month == 3 else 2 if month == 6 else 3 if month == 9 else 4
+                # Check latest 10-Q from FMP
+                tenq_response = await validate_ticker_for_research(ticker=ticker, type="10q")
+                if tenq_response.get("valid"):
+                    quarters = tenq_response.get("available_quarters", [])
+                    if quarters:
+                        # quarters[0] is like "Q3 2024 (Sep 30, 2024)"
+                        import re
+                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
+                        if match:
+                            quarter = int(match.group(1))
+                            year = int(match.group(2))
 
                             # Check if we have this quarter
                             with db() as conn, conn.cursor() as cur:
@@ -26881,6 +26866,11 @@ async def generate_missing_financials(request: Request):
                                         our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
 
                             if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
+                                # Get full filing details from tenq_response
+                                filing_date = tenq_response.get("available_quarters_data", [{}])[0].get("filing_date") if tenq_response.get("available_quarters_data") else None
+                                period_end_date = tenq_response.get("available_quarters_data", [{}])[0].get("period_end_date") if tenq_response.get("available_quarters_data") else None
+                                sec_html_url = tenq_response.get("available_quarters_data", [{}])[0].get("sec_html_url") if tenq_response.get("available_quarters_data") else None
+
                                 # Queue 10-Q generation job
                                 batch_id = str(uuid.uuid4())
                                 job_config = {
@@ -26888,9 +26878,9 @@ async def generate_missing_financials(request: Request):
                                     "filing_type": "10-Q",
                                     "fiscal_year": year,
                                     "fiscal_quarter": f"Q{quarter}",
-                                    "filing_date": latest_filing.get("fillingDate"),
-                                    "period_end_date": period,
-                                    "sec_html_url": latest_filing.get("finalLink"),
+                                    "filing_date": filing_date,
+                                    "period_end_date": period_end_date,
+                                    "sec_html_url": sec_html_url,
                                     "send_email": True
                                 }
 
@@ -26911,7 +26901,12 @@ async def generate_missing_financials(request: Request):
                                     job_id = cur.fetchone()['job_id']
                                     conn.commit()
 
-                                jobs_created.append(f"{ticker} 10-Q Q{quarter} {year}")
+                                # Append to existing ticker or create new entry
+                                existing = next((j for j in jobs_created if j["ticker"] == ticker), None)
+                                if existing:
+                                    existing["items"].append(f"10-Q Q{quarter} {year}")
+                                else:
+                                    jobs_created.append({"ticker": ticker, "items": [f"10-Q Q{quarter} {year}"]})
                                 LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
 
                 # Fetch latest transcript
@@ -27004,18 +26999,28 @@ async def generate_missing_financials(request: Request):
                                     ))
                                     conn.commit()
 
-                                jobs_created.append(f"{ticker} Transcript Q{quarter} {year}")
+                                # Append to existing ticker or create new entry
+                                existing = next((j for j in jobs_created if j["ticker"] == ticker), None)
+                                if existing:
+                                    existing["items"].append(f"Transcript Q{quarter} {year}")
+                                else:
+                                    jobs_created.append({"ticker": ticker, "items": [f"Transcript Q{quarter} {year}"]})
                                 LOG.info(f"✅ Generated transcript for {ticker} Q{quarter} {year}")
 
             except Exception as e:
                 LOG.error(f"Error generating transcript for {ticker}: {e}")
                 continue
 
+        # Calculate totals
+        total_jobs = sum(len(j["items"]) for j in jobs_created)
+        ticker_count = len(jobs_created)
+
         return {
             "status": "success",
-            "message": f"Queued {len(jobs_created)} jobs for generation",
-            "jobs_created": jobs_created,
-            "total_jobs": len(jobs_created)
+            "message": f"Queued {total_jobs} jobs for {ticker_count} tickers",
+            "jobs": jobs_created,
+            "total_jobs": total_jobs,
+            "ticker_count": ticker_count
         }
 
     except Exception as e:

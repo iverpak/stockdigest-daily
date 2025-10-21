@@ -341,7 +341,7 @@ def generate_sec_filing_profile_with_gemini(
         model = genai.GenerativeModel('gemini-2.5-flash')
 
         generation_config = {
-            "temperature": 0.3,
+            "temperature": 0.0,  # Maximum determinism for completely consistent extraction
             "max_output_tokens": 32768  # Increased to 32,768 for comprehensive extraction (Oct 2025)
         }
 
@@ -542,7 +542,7 @@ def generate_investor_presentation_analysis_with_gemini(
         model = genai.GenerativeModel('gemini-2.5-pro')
 
         generation_config = {
-            "temperature": 0.3,
+            "temperature": 0.0,  # Maximum determinism for completely consistent extraction
             "max_output_tokens": 32768  # Increased to 32,768 for comprehensive extraction (Oct 2025)
         }
 

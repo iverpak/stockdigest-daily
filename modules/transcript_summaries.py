@@ -220,7 +220,7 @@ def generate_transcript_summary_with_gemini(
         model = genai.GenerativeModel(
             model_name='gemini-2.5-flash',
             generation_config={
-                'temperature': 0.3,
+                'temperature': 0.0,  # Maximum determinism for completely consistent transcripts
                 'max_output_tokens': 16000,  # Allow up to 4k words
             }
         )
@@ -300,7 +300,7 @@ def generate_transcript_summary_with_claude(
         data = {
             "model": anthropic_model,
             "max_tokens": 16000,  # Allow long summaries (transcripts can be 3-4k words)
-            "temperature": 0.1,  # Low temperature for consistent, factual financial analysis
+            "temperature": 0.0,  # Maximum determinism for completely consistent financial analysis
             "system": [
                 {
                     "type": "text",

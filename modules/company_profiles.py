@@ -609,7 +609,9 @@ def generate_company_profile_email(
     profile_markdown: str,
     stock_price: str = "$0.00",
     price_change_pct: str = None,
-    price_change_color: str = "#4ade80"
+    price_change_color: str = "#4ade80",
+    filing_type: str = "10-K",  # "10-K", "10-Q", or "PRESENTATION"
+    fiscal_quarter: Optional[str] = None  # e.g., "Q2" (for 10-Q only)
 ) -> Dict[str, str]:
     """
     Generate company profile email HTML.
@@ -622,7 +624,12 @@ def generate_company_profile_email(
     current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
 
     # Handle fiscal_year for presentations (can be None)
-    fiscal_year_display = f"FY{fiscal_year}" if fiscal_year else filing_date
+    if filing_type == "10-Q" and fiscal_quarter:
+        fiscal_year_display = f"{fiscal_quarter} {fiscal_year}"
+    elif fiscal_year:
+        fiscal_year_display = f"FY {fiscal_year}"  # Add space: "FY 2024" instead of "FY2024"
+    else:
+        fiscal_year_display = filing_date
 
     # Extract first ~2000 chars for email preview
     profile_preview = profile_markdown[:2000] + "..." if len(profile_markdown) > 2000 else profile_markdown
@@ -745,7 +752,14 @@ def generate_company_profile_email(
 </body>
 </html>'''
 
-    subject = f"📋 Company Profile: {company_name} ({ticker}) {fiscal_year_display}"
+    # Generate subject based on filing type
+    if filing_type == "10-Q":
+        subject = f"10-Q Profile: {company_name} ({ticker}) - {fiscal_year_display}"
+    elif filing_type == "10-K":
+        subject = f"10-K Profile: {company_name} ({ticker}) - {fiscal_year_display}"
+    else:
+        # Presentations or other types
+        subject = f"📋 Company Profile: {company_name} ({ticker}) {fiscal_year_display}"
 
     return {"html": html, "subject": subject}
 

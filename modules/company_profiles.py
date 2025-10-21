@@ -341,7 +341,7 @@ def generate_sec_filing_profile_with_gemini(
 
         generation_config = {
             "temperature": 0.3,
-            "max_output_tokens": 16000  # Increased from 8000 to support comprehensive extraction
+            "max_output_tokens": 32768  # Increased to 32,768 for comprehensive extraction (Oct 2025)
         }
 
         start_time = datetime.now()
@@ -542,7 +542,7 @@ def generate_investor_presentation_analysis_with_gemini(
 
         generation_config = {
             "temperature": 0.3,
-            "max_output_tokens": 16000  # 3,000-6,000 words target (scales with deck length)
+            "max_output_tokens": 32768  # Increased to 32,768 for comprehensive extraction (Oct 2025)
         }
 
         start_time = datetime.now()

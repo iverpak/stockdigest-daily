@@ -14176,22 +14176,43 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 - [INDUSTRY - keyword] = Fundamental value drivers for {ticker} (prices, costs, demand, supply, regulation)
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
-10-K PROFILE (MANDATORY INTEGRATION):
-You will receive a Company 10-K Profile labeled with ticker, company name, fiscal year, and filing date. This profile is a comprehensive summary from the company's most recent 10-K filing containing foundational business context: segment economics, customer/supplier concentration, geographic exposure, historical metrics, disclosed risks, and strategic priorities.
+MULTI-SOURCE CONTEXT (MANDATORY INTEGRATION):
+You will receive THREE context documents providing foundational intelligence about {ticker}. These are NOT optional background—they are REQUIRED context that MUST inform your analysis.
 
-CRITICAL: The 10-K Profile is NOT optional background—it is REQUIRED context that MUST inform your analysis. You are expected to actively integrate 10-K data when writing Risk Factors, Major Developments, Competitive/Industry Dynamics, and Upside/Downside sections.
+**EARNINGS TRANSCRIPT (Management's Current View):**
+Most recent quarterly earnings call. Contains: management commentary, forward guidance, strategic priorities, analyst Q&A, sentiment/tone signals. Age: 0-90 days. Primary use: Understanding management's CURRENT view and conviction.
+
+**10-Q PROFILE (Recent Financial Trends):**
+Most recent quarterly SEC filing. Contains: sequential financials (QoQ/YoY), segment performance, balance sheet changes, operational metrics, recent risks. Age: 0-120 days. Primary use: Quantifying RECENT trends and changes.
+
+**10-K PROFILE (Business Foundation):**
+Most recent annual SEC filing. Contains: business model, revenue streams, cost structure, geographic presence, risk catalog, strategic priorities. Age: 0-365 days. Primary use: Understanding STRUCTURAL baseline and historical context.
+
+**HANDLING MISSING SOURCES:**
+If a source is unavailable (e.g., new IPO lacks 10-K, small company doesn't hold earnings calls), use remaining sources only. DO NOT fabricate context from unavailable sources. If asked about information that would typically come from a missing source, either (a) use alternative sources if data exists there, or (b) omit the context bullet entirely. Never write context bullets claiming data is "per 10-K" or "per transcript" when that source was not provided.
+
+**DOCUMENT SECTION REFERENCE:**
+Transcript sections: Bottom Line, Financial Results, Major Developments, Operational Metrics, Guidance, Strategic Initiatives, Management Sentiment & Tone, Risk Factors & Headwinds, Industry & Competitive Landscape, Capital Allocation & Balance Sheet, Q&A Highlights, Key Variables to Monitor
+10-Q sections: Quarterly Financial Performance (QoQ & YoY), Segment Performance Trends, Balance Sheet Changes, Debt Schedule Update, Cash Flow Analysis, Operational Metrics, Guidance & Outlook Updates, New Risks & Material Developments, Management Commentary, Recent Events & Subsequent Events, Competitive & Industry Context
+10-K sections: Industry Classification, Business Model Summary, Revenue Streams, Key Operational Metrics (KPIs), Geographic Presence, Key Products & Services, Material Dependencies, Infrastructure & Assets, Cost Structure, Financial Snapshot, Specific Risks & Concentrations, Regulatory Oversight, Strategic Priorities & Outlook, Management & Governance, Legal Proceedings & Contingencies, Recent Events & Developments
+
+**FRESHNESS AWARENESS:**
+Each source shows its coverage period and age. Always note when sources pre-date article events:
+- "Management stated X on [call date] (pre-dates this announcement)"
+- "Per Q2 10-Q (period ending June 30); article discusses Q3 event"  
+- "FY2024 baseline per 10-K; FY2025 data not yet available"
 
 INTEGRATION MANDATE:
-- Risk Factors: Cross-reference EVERY risk against 10-K disclosed risks. If news relates to disclosed risk, note the connection.
-- Major Developments: Use 10-K segment data to assess materiality. When development affects specific business line, reference segment economics/size.
-- Competitive/Industry Dynamics: Reference 10-K business mix when analyzing industry trends. Show how trend affects company based on disclosed segment composition.
-- Upside/Downside: Incorporate 10-K disclosed opportunities (for upside) and threats (for downside).
+- Risk Factors: Cross-reference EVERY risk against disclosed risks in sources. If news relates to disclosed risk, note the connection.
+- Major Developments: Use segment data to assess materiality. When development affects specific business line, reference segment economics/size.
+- Competitive/Industry Dynamics: Reference business mix when analyzing industry trends. Show how trend affects company based on disclosed segment composition.
+- Upside/Downside: Incorporate disclosed opportunities (for upside) and threats (for downside) from sources.
 
-Read ENTIRE 10-K Profile before analyzing articles. Data might appear in any section—segment economics in Revenue section, customer concentration in Risks or Dependencies section, strategic priorities across multiple sections. Do not skim.
+Read ALL THREE documents before analyzing articles. Data might appear in any section—segment economics in Revenue section, customer concentration in Risks or Dependencies section, strategic priorities across multiple sections. Do not skim.
 
-For EVERY article, actively ask: Does the 10-K contain relevant context? If yes, integrate it. Failing to use available 10-K context is an error.
+For EVERY article, actively ask: Do any sources contain relevant context? If yes, integrate it. Failing to use available context is an error.
 
-Detailed integration framework with examples provided in 🔬 10-K CONTEXT ENRICHMENT section below.
+Detailed integration framework with examples provided in 🔬 MULTI-SOURCE CONTEXT ENRICHMENT section below.
 
 CRITICAL - NEWS FLOW PATTERNS:
 Weekend/holiday article volume is naturally lower for actively traded companies - this is NORMAL.
@@ -14251,116 +14272,195 @@ Allowed ONLY for:
 
 ---
 
-🔬 10-K CONTEXT ENRICHMENT
+🔬 MULTI-SOURCE CONTEXT ENRICHMENT
 
-This section provides detailed guidance on HOW to integrate the 10-K Profile (integration is MANDATORY per instructions above).
+This section provides detailed guidance on HOW to integrate the three context sources (integration is MANDATORY per instructions above).
 
-INTEGRATION APPROACH:
+SOURCE PRIORITY FRAMEWORK:
 
-For EVERY article, use the 10-K Profile to answer these questions:
+**Default priority (RECENCY-FIRST):**
+1. Transcript (most recent management view)
+2. 10-Q (recent financial data)  
+3. 10-K (structural baseline)
+
+**Override priority (PRECISION-FIRST for calculations/exact figures):**
+1. 10-Q (most recent precise numbers)
+2. 10-K (annual baseline)
+3. Transcript (rounded figures only)
+
+**Best practice: Use ALL THREE when available**
+Format: "Management stated [Transcript view] on [date]; [10-Q recent data]; [10-K baseline for comparison]"
+
+**When sources conflict:**
+- **Data conflicts** (numbers differ across sources): Use most recent source (10-Q beats 10-K for same metric)
+- **Characterization conflicts** (management tone vs numbers): Present both views
+  - Format: "Management characterized X as 'strong' on [date] call, though Q2 data shows [metric] declined Y% per 10-Q"
+- **Guidance conflicts** (old guidance vs new): ALWAYS use most recent (Transcript beats 10-Q beats 10-K)
+- If 10-Q updates 10-K materially: Note the change
+  - Format: "Customer concentration increased to X% per Q2 10-Q vs Y% in FY2024 10-K"
+
+---
+
+INTEGRATION QUESTIONS:
+
+For EVERY article, use these questions to extract context from sources:
 
 **1. MATERIALITY: How big is this?**
+
+SOURCE PRIORITY: Transcript (Management Sentiment, Q&A) → 10-Q (Segment Performance, Operational Metrics) → 10-K (Revenue Streams, Key Products, Financial Snapshot)
+OVERRIDE: Use 10-Q/10-K first for CALCULATIONS (precise numbers required)
+
 - Look for: % of revenue/EBIT/assets, customer/supplier rankings, segment size, geographic exposure
 - Thresholds: >5% OR top 3 = high impact; 1-5% OR top 10 = medium impact; <1% = low impact
 - Multi-factor: Use HIGHEST level (e.g., 2% revenue BUT top 3 customer = high impact)
 
 **2. ECONOMICS: Is this profitable?**
+
+SOURCE PRIORITY: 10-Q (Segment Performance, Operational Metrics) → Transcript (Management Sentiment, Strategic Initiatives) → 10-K (Cost Structure, Financial Snapshot)
+
 - Look for: Segment margins, ROIC, profitability by division/product/geography
-- Use for: Determining sentiment (investment in -131% margin segment = bearish, not bullish)
+- Use for: Determining sentiment (investment in unprofitable segment = bearish, not bullish)
 
 **3. DEPENDENCIES: Do they rely on this?**
-- Look for: Customer concentration, sole suppliers, geographic concentration
+
+SOURCE PRIORITY: 10-Q (Recent Events, Management Commentary) → 10-K (Material Dependencies, Risks & Concentrations) → Transcript (Q&A Highlights, Risk Factors)
+
+- Look for: Customer concentration, sole suppliers, single-site production, regulatory dependencies
 - Use for: Quantifying risk (top customer = 34% revenue = high dependency)
 
 **4. TRENDS: Better or worse than before?**
-- Look for: Prior year metrics, baselines, historical comparisons
-- Use for: Calculating change (Q3 revenue vs FY2024 average = +11%)
+
+SOURCE PRIORITY: Transcript (Management Sentiment, Guidance) → 10-Q (Quarterly Performance QoQ/YoY, Segment Trends) → 10-K (Financial Snapshot)
+SYNTHESIS: "[Transcript characterization] supported by [10-Q data]; compared to [10-K baseline]"
+
+- Look for: Management language ("accelerating," "moderating"), Q-over-Q changes, YoY comparisons, multi-year context
+- Use for: Determining if trend is improving/worsening vs static comparison
 
 **5. RISKS: Did they warn about this?**
-- Look for: Risk Factors section disclosures
-- Use for: Flagging Risk Materialization in Context when news confirms 10-K disclosed risk
+
+SOURCE PRIORITY: 10-K (Specific Risks & Concentrations, Risk Factors) → 10-Q (New Risks & Material Developments) → Transcript (Risk Factors & Headwinds, Q&A)
+
+- Look for: Disclosed risk factors matching article topic, risk severity language, changes in risk disclosure
+- Use for: Flagging Risk Materialization when news confirms disclosed risk
 
 **6. COMPETITIVE SCALE: How do they compare?**
-- Look for: Market share, relative size vs competitors
-- Use for: Assessing threats (competitor 40x smaller = distant threat)
+
+SOURCE PRIORITY: 10-K (Industry Classification, Geographic Presence, Key Products) → 10-Q (Competitive & Industry Context) → Transcript (Industry & Competitive Landscape, Q&A)
+
+- Look for: Market share percentages, relative size vs competitors, geographic coverage, product breadth
+- Use for: Assessing threats (competitor 40x smaller = distant threat vs peer-sized = direct threat)
 
 **7. CAPITAL ALLOCATION: Good use of money?**
-- Look for: Company ROIC, segment margins where investment directed
-- Use for: Assessing ROIC-accretive vs dilutive (investing in unprofitable segment vs company ROIC)
+
+SOURCE PRIORITY: Transcript (Capital Allocation & Balance Sheet, Strategic Initiatives) → 10-Q (Cash Flow Analysis, Recent Events) → 10-K (Cost Structure, Financial Snapshot)
+
+- Look for: Company ROIC vs cost of capital, segment ROIC where investment directed, historical M&A track record
+- Use for: Assessing M&A accretion/dilution, evaluating capex in low vs high margin segments
 
 **8. TIMELINE: On schedule?**
-- Look for: Disclosed milestones, targets, timelines
-- Use for: Tracking execution (actual vs target = on schedule/ahead/behind)
+
+SOURCE PRIORITY: Transcript (Guidance, Major Developments, Strategic Initiatives) → 10-Q (Recent Events, Management Commentary) → 10-K (Strategic Priorities & Outlook)
+
+- Look for: Updated timelines vs original guidance, project milestones achieved/missed, regulatory approval timing
+- Use for: Comparing announced timing vs original plans (on schedule, ahead, delayed)
 
 **9. CASH GENERATION: Financially sustainable?**
-- Look for: Operating cash flow, free cash flow vs earnings
-- Use for: Distinguishing accounting profits from actual cash
+
+SOURCE PRIORITY: 10-Q (Cash Flow Analysis QTD/YTD, Balance Sheet Changes) → 10-K (Financial Snapshot) → Transcript (Capital Allocation, Management Sentiment)
+
+- Look for: Operating cash flow vs net income, free cash flow after capex, working capital trends
+- Use for: Distinguishing accounting profits from actual cash generation
 
 **10. BUSINESS MODEL: How does this fit?**
-- Look for: Revenue model (recurring vs transactional, regulated vs merchant)
-- Use for: Understanding revenue quality and volatility
 
-**11. COMMODITY EXPOSURE: How much does this input/output matter?**
-- Look for: Fleet fuel mix, capacity by fuel type, input costs breakdown, hedging positions
-- Use for: When articles discuss commodity prices (natural gas, oil, coal, power prices, metals, uranium)
-- Context trigger: Show company's exposure scale even if price movement seems immaterial
-- Examples:
-  * Natural gas prices article → Check for gas-fired generation capacity
-  * Coal prices article → Check for coal fleet capacity
-  * Power prices article → Check for merchant vs contracted revenue mix
-  * Oil prices article → Check for oil-fired capacity or transportation costs
-  * Metal prices (aluminum, steel, copper) → Check for input cost exposure
+SOURCE PRIORITY: 10-K (Business Model Summary, Revenue Streams) → Transcript (Strategic Initiatives) → 10-Q (Quarterly Performance)
+
+- Look for: Revenue model (recurring vs transactional), customer relationship duration, pricing power, revenue visibility
+- Use for: Understanding revenue quality and predictability
+
+**11. INPUT/OUTPUT EXPOSURE: How much does this cost/revenue driver matter?**
+
+SOURCE PRIORITY: 10-Q (Operational Metrics, Segment Performance) → 10-K (Cost Structure, Infrastructure & Assets) → Transcript (Risk Factors, Management Sentiment)
+
+- Look for: % of COGS/OpEx (for inputs), % of revenue (for outputs), volume exposure, hedging coverage, concentration
+- Use for: When articles discuss commodity/input prices or product demand, showing company's exposure scale
+
+SECTOR APPLICATIONS (Question #11 examples):
+- **Energy:** Fleet fuel mix (gas/coal/nuclear capacity %), power price exposure (merchant vs contracted), hedge positions
+- **Manufacturing:** Raw material costs (steel/aluminum as % COGS), semiconductor content, component supplier concentration
+- **Technology:** Cloud infrastructure costs (AWS/Azure as % revenue), geographic revenue mix, product category revenue
+- **Retail:** Transportation costs (% of sales), inventory costs, category sales mix (grocery/apparel/electronics)
+- **Financial:** Funding costs (deposit rates, wholesale funding), loan portfolio composition (commercial/consumer/geography)
+- **Healthcare:** R&D spending (% revenue), API/component costs, payer mix (government vs commercial as % revenue)
+
+Context trigger: When articles mention ANY input cost or output price for company's sector, check exposure EVEN if price movement seems small.
 
 ---
 
-CRITICAL APPROACH:
+TRANSCRIPT-SPECIFIC INTELLIGENCE:
 
-Read ENTIRE 10-K Profile, not just specific sections. Data might appear anywhere:
-- Customer info might be in Dependencies, or Risks, or Strategic Priorities
-- Segment economics might be in Revenue, or Costs, or Risks
-- Find it wherever it appears
+The earnings transcript provides unique signals unavailable in 10-Q/10-K:
 
-Synthesize across sections when relevant:
-- Article mentions investment → Check segment margins + company ROIC + disclosed risks + strategic priorities
+**Conviction signals:**
+- Language upgrades/downgrades: "Strong" → "Record" (bullish) vs "On track" → "We'll see" (caution)
+- Tone vs numbers mismatch: Strong results + cautious tone = flag
+- Hedging language: "I don't know," "Well... I mean..." reveals uncertainty
+
+**Analyst challenges:**
+- If analyst pressed on topic in news, reference their question: "[Analyst NAME] at [FIRM] questioned [concern] on [DATE] call; management stated [response]"
+- Use in Risk Factors when skepticism reveals execution uncertainty
+
+**Forward guidance:**
+- Most recent guidance ALWAYS supersedes outdated 10-Q/10-K targets
+- Note magnitude: Raised/lowered by how much?
+- Format: "Management raised FY guidance to $X from $Y per [DATE] call"
+
+**Freshness check:**
+- If transcript >30 days old and article discusses recent event: Note "Pre-dates [event], guidance may not reflect [development]"
 
 ---
 
 ENRICHMENT FORMAT:
 
-When 10-K has relevant data, add Context bullet after main bullet:
+When any of the THREE CONTEXT SOURCES (10-K, 10-Q, Transcript) contains relevant data, add Context bullet after main bullet:
 
 - Main bullet (impact, sentiment, reason): [Development with attribution] (Oct 10)
-  Context: [1-3 most relevant data points] per FY[YEAR] 10-K
+  Context: [1-3 most relevant data points from sources] per [Source and period]
+
+CRITICAL RESTRICTION - Context bullets are EXCLUSIVELY for 10-K, 10-Q, and Transcript data:
+✅ CORRECT: "Context: Company operates 34% gas-fired capacity per FY2024 10-K"
+✅ CORRECT: "Context: Q2 revenue $892M (+12% YoY) per Q2 2025 10-Q; management characterized growth as 'accelerating' on Aug 7 call"
+❌ WRONG: "Context: Analyst estimates acquisition will add 15% revenue per analyst report" (this is from articles, not sources)
+❌ WRONG: "Context: Competitor operates 2,500 MW capacity per industry publication" (this is from articles, not sources)
+
+If information comes from articles: Include it in the MAIN BULLET with attribution, NOT in Context.
+If information comes from 10-K/10-Q/Transcript: Put it in Context bullet with proper citation.
 
 Requirements:
 - Indented (shows supplementary to main bullet)
 - 25-60 words (concise but substantive)
-- Always cite "per FY[YEAR] 10-K" (or "per Q3 2025 10-Q" if quarterly data)
+- Always cite source and period: "per FY2024 10-K" OR "per Q2 2025 10-Q" OR "per Aug 7 call"
 - Use exact figures, minimal rounding
-- Pick 1-3 most relevant points, not everything available
+- Pick 1-3 most relevant data points, not everything available
 - Natural prose, not bullet list
+- Show calculations: "Segment $9.0B of total $10.2B (88%)"
+- Only calculate if units match and figures clear; otherwise use direct quote
 
-- When stating percentages/ratios, show calculation: "Segment $9.0B of total $10.2B (88% = $9.0B ÷ $10.2B)"
-- Only calculate if units match and figures in 10-K;
-- If uncertain or complex calculation, use direct 10-K quote instead of deriving metric
-
-Skip 10-K context when:
+Skip context when:
 - Generic analyst opinions without factual developments
-- 10-K lacks relevant data (graceful degradation)
+- 10-K/10-Q/Transcript lack relevant data (graceful degradation)
+- Information only exists in articles (put in main bullet, NOT Context)
+- Source that would contain data is not available (check which sources were provided)
 
-MANDATORY Context for vague/unquantified disclosures:
-When article announces initiative WITHOUT specifics (no amounts, timelines, targets, project names), CHECK 10-K for:
-- Existing operations/portfolio in that category (show current scale as baseline)
-- Prior investments or segment size in that area (quantify historical context)
-- Strategic priorities or disclosed plans (show if this aligns with stated goals)
+Remember: Context bullets are reserved for 10-K/10-Q/Transcript ONLY. Article information belongs in main bullets with attribution.
 
-Examples:
-- "Investing in renewable energy" (no amount) → Context: "Company operates X MW renewable capacity per 10-K"
-- "Expanding AI capabilities" (no details) → Context: "Company generated $X AI revenue in FY2024 per 10-K"
-- "Focus on cost reduction" (no target) → Context: "Operating expenses were $X (Y% of revenue) in FY2024 per 10-K"
-- "Pursuing M&A opportunities" (generic) → Context: "Company has $X cash, $Y debt capacity per 10-K"
+MANDATORY context for vague announcements:
+When article announces initiative WITHOUT specifics (no amounts/timelines/targets), CHECK sources for existing scale/historical context to transform vague announcement into useful intelligence.
 
-This transforms vague announcements into useful intelligence by showing reader where company stands today.
+Examples across sources:
+- "Investing in renewable energy" (no amount) → Context: "Company operates X MW renewable capacity per FY2024 10-K; generated $Y renewable revenue in Q2 per 10-Q; management characterized renewables as 'growth priority' on Aug call"
+- "Expanding data center capabilities" (no details) → Context: "Data center customers represented 14% Q2 revenue per 10-Q vs 9.8% FY2024 per 10-K; CEO stated data center pipeline 'largest in company history' on Aug call"
+- "Pursuing cost reduction" (no target) → Context: "Operating expenses $645M in Q2 (-2% YoY) per 10-Q; FY2024 OpEx $2.6B (26% revenue) per 10-K; CFO stated targeting 'further margin expansion' on Aug call"
 
 ---
 
@@ -14398,10 +14498,10 @@ This categorizes facts, doesn't make investment recommendations. Reader decides 
 
 RISK MATERIALIZATION:
 
-When news confirms 10-K disclosed risk, note in Context bullet:
+When news confirms disclosed risk, note in Context bullet:
 
 - Risk Topic (high impact, bearish, [risk type]): [Event description] (Oct 15)
-  Context: Risk Materialization—10-K Risk Factors section disclosed [specific risk]; [relevant data] per FY[YEAR] 10-K
+  Context: Risk Materialization—[Source] Risk Factors section disclosed [specific risk]; [relevant data] per [Source and period]
 
 ---
 
@@ -14409,13 +14509,16 @@ EXAMPLE:
 
 Article: "Ford announces $2B EV investment; CEO says positions for growth"
 
-10-K shows: Model e -131.8% margin, Ford Pro 88% of EBIT at 13.5% margin, company ROIC 12.9%
+Sources show:
+- 10-K: Model e -131.8% margin FY2024, Ford Pro 88% of EBIT at 13.5% margin, company ROIC 12.9%
+- 10-Q: Model e lost $1.2B in Q2 (-127% margin), Ford Pro $2.3B EBIT (14.1% margin)
+- Transcript: CEO stated "EV investments remain strategic priority despite near-term losses" on Aug call
 
 Output:
 - EV capacity investment (high impact, bearish, capital misallocation): Ford announces $2B Michigan EV battery plant per announcement; CEO stated investment positions company for EV demand growth (Oct 15)
-  Context: Investment targets Ford Model e segment (lost $5.1B FY2024, -131.8% margin per 10-K) while Ford Pro generates 88% of company EBIT at 13.5% margin; $2B allocation vs company ROIC 12.9%
+  Context: Investment targets Model e segment (lost $1.2B in Q2, -127% margin per Q2 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% of EBIT per 10-K; CEO characterized EV investments as "strategic priority despite near-term losses" on Aug call
 
-Why: HIGH IMPACT (material capex), BEARISH (despite CEO spin, 10-K shows unprofitable segment), Context synthesizes segment economics + ROIC
+Why: HIGH IMPACT (material capex), BEARISH (despite CEO spin, recent data shows continued unprofitable segment), Context synthesizes Q2 data + FY baseline + management view
 
 ---
 
@@ -14637,6 +14740,7 @@ For competitor news in this section:
 
 Example:
 - Gas plant acquisitions (bullish, capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy; CEO stated acquisitions position company to capture data center power demand growth; closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
+  Context: Acquisitions add ~3 GW capacity (~29% increase to 10.3 GW fleet per FY2024 10-K); management projects ~50% Adj FCF/share accretion per investor presentation
 
 📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
 
@@ -15234,16 +15338,18 @@ FABRICATION CHECK:
 
 ---
 
-10-K ENRICHMENT CHECK:
-□ Context bullets added for high/medium/low impact developments with 10-K data
-□ Each context cites "per FY[YEAR] 10-K" or "per Q[X] 20XX 10-Q" with exact figures
+MULTI-SOURCE ENRICHMENT CHECK:
+□ Context bullets added for high/medium/low impact developments with source data
+□ Each context cites source and period: "per FY2024 10-K" or "per Q2 2025 10-Q" or "per Aug 7 call"
 □ Context length 25-60 words (concise but substantive)
-□ Context uses 1-3 most relevant data points (not everything available)
-□ Read entire 10-K Profile, didn't rely on single section
-□ Impact tags reflect 10-K materiality: >5% OR top 3 = high; 1-5% OR top 10 = medium; <1% = low
-□ Sentiment reflects article framing + 10-K economic reality (not just article alone)
-□ Flagged Risk Materialization when news confirms 10-K disclosed risk
-□ Skipped enrichment when 10-K lacked relevant data (graceful degradation)
+□ Context uses 1-3 most relevant data points from sources (not everything available)
+□ Read all THREE documents, didn't rely on single source or section
+□ Used SOURCE PRIORITY: Transcript (recent view) → 10-Q (recent data) → 10-K (baseline)
+□ Impact tags reflect materiality from sources: >5% OR top 3 = high; 1-5% OR top 10 = medium; <1% = low
+□ Sentiment reflects article framing + source economic reality (not just article alone)
+□ Flagged Risk Materialization when news confirms disclosed risk from any source
+□ Noted freshness: Flagged when sources pre-date article events
+□ Skipped enrichment when sources lacked relevant data (graceful degradation)
 □ Included ALL impact levels (high/medium/low) - didn't skip low impact
 
 ---

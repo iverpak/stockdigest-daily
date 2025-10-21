@@ -25707,6 +25707,185 @@ async def delete_company_profile_api(request: Request):
         LOG.error(f"Failed to delete company profile for {ticker}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+@APP.post("/api/admin/delete-sec-filing")
+async def delete_sec_filing_api(request: Request):
+    """Delete a SEC filing (10-K or 10-Q) from database
+
+    Body parameters:
+        token: Admin auth token
+        ticker: Ticker symbol
+        filing_type: '10-K' or '10-Q'
+        fiscal_year: Fiscal year (required)
+        fiscal_quarter: Fiscal quarter for 10-Q (e.g., 'Q1', 'Q2', optional for 10-K)
+    """
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    filing_type = body.get('filing_type', '10-K')
+    fiscal_year = body.get('fiscal_year')
+    fiscal_quarter = body.get('fiscal_quarter')  # For 10-Q
+
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+    if not fiscal_year:
+        return {"status": "error", "message": "Fiscal year required"}
+    if filing_type not in ['10-K', '10-Q']:
+        return {"status": "error", "message": "Invalid filing_type. Must be '10-K' or '10-Q'"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            if filing_type == '10-Q':
+                if not fiscal_quarter:
+                    return {"status": "error", "message": "Fiscal quarter required for 10-Q"}
+
+                # Delete specific 10-Q filing
+                cur.execute("""
+                    DELETE FROM sec_filings
+                    WHERE ticker = %s AND filing_type = '10-Q'
+                    AND fiscal_year = %s AND fiscal_quarter = %s
+                """, (ticker, fiscal_year, fiscal_quarter))
+                doc_label = f"{fiscal_quarter} {fiscal_year}"
+            else:
+                # Delete specific 10-K filing
+                cur.execute("""
+                    DELETE FROM sec_filings
+                    WHERE ticker = %s AND filing_type = '10-K' AND fiscal_year = %s
+                """, (ticker, fiscal_year))
+                doc_label = f"FY {fiscal_year}"
+
+            conn.commit()
+
+            if cur.rowcount > 0:
+                LOG.info(f"🗑️ Deleted {filing_type} {doc_label} for {ticker}")
+                return {"status": "success", "message": f"{filing_type} {doc_label} for {ticker} deleted successfully"}
+            else:
+                return {"status": "error", "message": f"No {filing_type} {doc_label} found for {ticker}"}
+
+    except Exception as e:
+        LOG.error(f"Failed to delete {filing_type} for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/email-sec-filing")
+async def email_sec_filing_api(request: Request):
+    """Email a SEC filing (10-K or 10-Q) to admin
+
+    Body parameters:
+        token: Admin auth token
+        ticker: Ticker symbol
+        filing_type: '10-K' or '10-Q'
+        fiscal_year: Fiscal year (required)
+        fiscal_quarter: Fiscal quarter for 10-Q (e.g., 'Q1', 'Q2', optional for 10-K)
+    """
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    filing_type = body.get('filing_type', '10-K')
+    fiscal_year = body.get('fiscal_year')
+    fiscal_quarter = body.get('fiscal_quarter')  # For 10-Q
+
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+    if not fiscal_year:
+        return {"status": "error", "message": "Fiscal year required"}
+    if filing_type not in ['10-K', '10-Q']:
+        return {"status": "error", "message": "Invalid filing_type. Must be '10-K' or '10-Q'"}
+
+    try:
+        # Get filing from database
+        with db() as conn, conn.cursor() as cur:
+            if filing_type == '10-Q':
+                if not fiscal_quarter:
+                    return {"status": "error", "message": "Fiscal quarter required for 10-Q"}
+
+                cur.execute("""
+                    SELECT
+                        ticker, company_name, industry, fiscal_year, fiscal_quarter, filing_date,
+                        profile_markdown, source_file, ai_provider, ai_model,
+                        generation_time_seconds, token_count_input, token_count_output
+                    FROM sec_filings
+                    WHERE ticker = %s AND filing_type = '10-Q'
+                    AND fiscal_year = %s AND fiscal_quarter = %s
+                """, (ticker, fiscal_year, fiscal_quarter))
+                doc_label = f"{fiscal_quarter} {fiscal_year}"
+            else:
+                cur.execute("""
+                    SELECT
+                        ticker, company_name, industry, fiscal_year, filing_date,
+                        profile_markdown, source_file, ai_provider, ai_model,
+                        generation_time_seconds, token_count_input, token_count_output
+                    FROM sec_filings
+                    WHERE ticker = %s AND filing_type = '10-K' AND fiscal_year = %s
+                """, (ticker, fiscal_year))
+                doc_label = f"FY {fiscal_year}"
+
+            profile = cur.fetchone()
+            if not profile:
+                return {"status": "error", "message": f"No {filing_type} {doc_label} found for {ticker}"}
+
+        # Import the email generation function from company_profiles module
+        from modules.company_profiles import generate_company_profile_email
+
+        # Get stock price for email header
+        stock_price = "$0.00"
+        price_change_pct = None
+        price_change_color = "#4ade80"
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT financial_last_price, financial_price_change_pct
+                FROM ticker_reference
+                WHERE ticker = %s
+            """, (ticker,))
+            price_data = cur.fetchone()
+
+            if price_data and price_data['financial_last_price']:
+                stock_price = f"${price_data['financial_last_price']:.2f}"
+                if price_data['financial_price_change_pct'] is not None:
+                    pct = price_data['financial_price_change_pct']
+                    price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                    price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+        # Generate email HTML
+        period_label = f"{profile['fiscal_quarter']} {profile['fiscal_year']}" if filing_type == '10-Q' else f"FY {profile['fiscal_year']}"
+
+        email_data = generate_company_profile_email(
+            ticker=profile['ticker'],
+            company_name=profile['company_name'],
+            industry=profile['industry'] or 'N/A',
+            fiscal_year=profile['fiscal_year'],
+            filing_date=str(profile['filing_date']) if profile['filing_date'] else None,
+            profile_markdown=profile['profile_markdown'],
+            source_file=profile['source_file'],
+            stock_price=stock_price,
+            price_change=price_change_pct,
+            price_change_color=price_change_color,
+            filing_type=filing_type,
+            fiscal_quarter=profile.get('fiscal_quarter')  # Include quarter for 10-Q
+        )
+
+        # Send email
+        send_email(
+            to=os.getenv("ADMIN_EMAIL"),
+            subject=f"📑 {filing_type} {period_label}: {profile['company_name']} ({ticker})",
+            html_content=email_data["html"],
+            bcc=None
+        )
+
+        LOG.info(f"📧 Emailed {filing_type} {period_label} for {ticker} to admin")
+        return {"status": "success", "message": f"{filing_type} {period_label} emailed successfully"}
+
+    except Exception as e:
+        LOG.error(f"Failed to email {filing_type} for {ticker}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/admin/regenerate-company-profile")
 async def regenerate_company_profile_api(request: Request):
     """Regenerate an existing company profile using same source"""

@@ -13968,93 +13968,116 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
     """Helper: Build executive summary prompt and extract company name. Returns (system_prompt, user_content, company_name) or None."""
     company_name = config.get("name", ticker)
 
-    # Fetch 10-K Profile from database (if available)
-    # FUTURE: Can expand to include 10-Q and presentations for richer context
+    # Fetch multi-source context from database (Transcript, 10-Q, 10-K)
+    # Order: Transcript → 10-Q → 10-K (recency-first priority)
     profile_block = None
     try:
         with db() as conn, conn.cursor() as cur:
-            # Currently fetching only 10-K (annual report)
+            context_blocks = []
+            sources_loaded = []
+
+            # 1. EARNINGS TRANSCRIPT (Management's Current View)
+            # Fetch most recent earnings call transcript
+            cur.execute("""
+                SELECT summary_text, quarter, year, report_date, company_name
+                FROM transcript_summaries
+                WHERE ticker = %s AND report_type = 'transcript'
+                ORDER BY year DESC, quarter DESC
+                LIMIT 1
+            """, (ticker,))
+
+            transcript_row = cur.fetchone()
+            if transcript_row:
+                summary_text = transcript_row['summary_text']
+                quarter = transcript_row['quarter']
+                year = transcript_row['year']
+                report_date = transcript_row['report_date']
+                transcript_company_name = transcript_row['company_name'] or company_name
+
+                # Format date as "Aug 7, 2025"
+                date_formatted = report_date.strftime('%b %d, %Y') if report_date else "Unknown Date"
+
+                context_blocks.append(
+                    f"EARNINGS TRANSCRIPT:\n\n"
+                    f"[{ticker} ({transcript_company_name}) {quarter} {year} Earnings Call ({date_formatted})]\n\n"
+                    f"{summary_text}\n\n"
+                )
+                LOG.info(f"[{ticker}] ✅ Loaded Transcript ({quarter} {year}, {len(summary_text):,} chars)")
+                sources_loaded.append(f"Transcript ({quarter} {year})")
+            else:
+                LOG.debug(f"[{ticker}] No Transcript found - proceeding without earnings call context")
+
+            # 2. 10-Q PROFILE (Recent Financial Trends)
+            # Fetch most recent quarterly SEC filing
+            cur.execute("""
+                SELECT profile_markdown, fiscal_year, fiscal_quarter, filing_date, company_name
+                FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-Q'
+                ORDER BY fiscal_year DESC, fiscal_quarter DESC
+                LIMIT 1
+            """, (ticker,))
+
+            tenq_row = cur.fetchone()
+            if tenq_row:
+                markdown = tenq_row['profile_markdown']
+                fiscal_quarter = tenq_row['fiscal_quarter']
+                fiscal_year = tenq_row['fiscal_year']
+                filing_date = tenq_row['filing_date']
+                tenq_company_name = tenq_row['company_name'] or company_name
+
+                # Format date as "Aug 1, 2025"
+                date_formatted = filing_date.strftime('%b %d, %Y') if filing_date else "Unknown Date"
+
+                context_blocks.append(
+                    f"LATEST QUARTERLY REPORT (10-Q):\n\n"
+                    f"[{ticker} ({tenq_company_name}) {fiscal_quarter} {fiscal_year} 10-Q Filing, Filed: {date_formatted}]\n\n"
+                    f"{markdown}\n\n"
+                )
+                LOG.info(f"[{ticker}] ✅ Loaded 10-Q profile ({fiscal_quarter} {fiscal_year}, {len(markdown):,} chars)")
+                sources_loaded.append(f"10-Q ({fiscal_quarter} {fiscal_year})")
+            else:
+                LOG.debug(f"[{ticker}] No 10-Q found - proceeding without quarterly SEC context")
+
+            # 3. 10-K PROFILE (Business Foundation)
+            # Fetch most recent annual SEC filing
             cur.execute("""
                 SELECT profile_markdown, fiscal_year, filing_date, company_name
                 FROM sec_filings
-                WHERE ticker = %s
-                  AND filing_type = '10-K'
+                WHERE ticker = %s AND filing_type = '10-K'
                 ORDER BY fiscal_year DESC
                 LIMIT 1
             """, (ticker,))
 
-            row = cur.fetchone()
-            if row:
-                markdown = row['profile_markdown']
-                fiscal_year = row['fiscal_year']
-                filing_date = row['filing_date']
-                profile_company_name = row['company_name']
+            tenk_row = cur.fetchone()
+            if tenk_row:
+                markdown = tenk_row['profile_markdown']
+                fiscal_year = tenk_row['fiscal_year']
+                filing_date = tenk_row['filing_date']
+                tenk_company_name = tenk_row['company_name'] or company_name
 
-                # Build labeled profile block with requested format
-                profile_block = (
+                # Format date as "Feb 15, 2025"
+                date_formatted = filing_date.strftime('%b %d, %Y') if filing_date else "Unknown Date"
+
+                context_blocks.append(
                     f"COMPANY 10-K PROFILE:\n\n"
-                    f"[{ticker} ({profile_company_name}) 10-K FILING FOR FISCAL YEAR {fiscal_year}, "
-                    f"Filed: {filing_date}]\n\n"
+                    f"[{ticker} ({tenk_company_name}) 10-K FILING FOR FISCAL YEAR {fiscal_year}, Filed: {date_formatted}]\n\n"
                     f"{markdown}\n\n"
                 )
                 LOG.info(f"[{ticker}] ✅ Loaded 10-K profile (FY{fiscal_year}, {len(markdown):,} chars)")
+                sources_loaded.append(f"10-K (FY{fiscal_year})")
             else:
-                LOG.debug(f"[{ticker}] No 10-K profile found - proceeding with articles only")
+                LOG.debug(f"[{ticker}] No 10-K found - proceeding without annual SEC context")
 
-            # FUTURE: Multi-material context injection (10-K + 10-Q + Presentation)
-            # Uncomment when ready to test enhanced context
-            #
-            # context_blocks = []
-            #
-            # # 1. Latest 10-K (full company overview)
-            # if row:
-            #     context_blocks.append(
-            #         f"COMPANY 10-K PROFILE:\n"
-            #         f"[{ticker} ({profile_company_name}) 10-K FILING FOR FISCAL YEAR {fiscal_year}, Filed: {filing_date}]\n\n"
-            #         f"{markdown}\n\n"
-            #     )
-            #
-            # # 2. Latest 10-Q (recent quarterly performance)
-            # cur.execute("""
-            #     SELECT profile_markdown, fiscal_year, fiscal_quarter, filing_date
-            #     FROM sec_filings
-            #     WHERE ticker = %s AND filing_type = '10-Q'
-            #     ORDER BY fiscal_year DESC, fiscal_quarter DESC
-            #     LIMIT 1
-            # """, (ticker,))
-            # latest_10q = cur.fetchone()
-            # if latest_10q:
-            #     context_blocks.append(
-            #         f"LATEST QUARTERLY REPORT (10-Q):\n"
-            #         f"[{ticker} {latest_10q['fiscal_quarter']} {latest_10q['fiscal_year']}, Filed: {latest_10q['filing_date']}]\n\n"
-            #         f"{latest_10q['profile_markdown']}\n\n"
-            #     )
-            #     LOG.info(f"[{ticker}] ✅ Loaded 10-Q ({latest_10q['fiscal_quarter']} {latest_10q['fiscal_year']})")
-            #
-            # # 3. Latest investor presentation (management outlook)
-            # cur.execute("""
-            #     SELECT profile_markdown, fiscal_year, fiscal_quarter, presentation_date, presentation_type
-            #     FROM sec_filings
-            #     WHERE ticker = %s AND filing_type = 'PRESENTATION'
-            #     ORDER BY fiscal_year DESC, fiscal_quarter DESC
-            #     LIMIT 1
-            # """, (ticker,))
-            # latest_deck = cur.fetchone()
-            # if latest_deck:
-            #     context_blocks.append(
-            #         f"LATEST INVESTOR PRESENTATION:\n"
-            #         f"[{ticker} {latest_deck['presentation_type']} - {latest_deck['fiscal_quarter']} {latest_deck['fiscal_year']}]\n\n"
-            #         f"{latest_deck['profile_markdown']}\n\n"
-            #     )
-            #     LOG.info(f"[{ticker}] ✅ Loaded presentation ({latest_deck['presentation_type']})")
-            #
-            # # Combine all context (if multiple materials available)
-            # if len(context_blocks) > 1:
-            #     profile_block = "\n---\n".join(context_blocks)
-            #     LOG.info(f"[{ticker}] 🚀 Enhanced context: {len(context_blocks)} materials loaded")
+            # Combine all available context sources
+            if context_blocks:
+                profile_block = "\n---\n\n".join(context_blocks)
+                LOG.info(f"[{ticker}] 📚 Context loaded: {', '.join(sources_loaded)}")
+            else:
+                profile_block = None
+                LOG.info(f"[{ticker}] 📚 No context sources available - generating from articles only")
 
     except Exception as e:
-        LOG.warning(f"[{ticker}] Failed to fetch 10-K profile: {e}")
+        LOG.warning(f"[{ticker}] Failed to fetch context sources: {e}")
         profile_block = None
 
     # Collect ALL flagged articles across all categories

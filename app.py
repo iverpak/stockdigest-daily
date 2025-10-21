@@ -14233,8 +14233,21 @@ Articles provided in UNIFIED TIMELINE sorted newest to oldest. Each has a catego
 - [INDUSTRY - keyword] = Fundamental value drivers for {ticker} (prices, costs, demand, supply, regulation)
 - [COMPETITOR] = Articles about {ticker}'s competitors
 
-MULTI-SOURCE CONTEXT (MANDATORY INTEGRATION):
-You will receive THREE context documents providing foundational intelligence about {ticker}. These are NOT optional background—they are REQUIRED context that MUST inform your analysis.
+🚨 ARTICLE-FIRST HIERARCHY:
+
+BULLET CREATION RULE:
+- Articles create bullets (what happened, who said what)
+- Sources create context (how big, compared to what)
+- NEVER reverse: Sources alone never create bullets
+
+✅ Article: "Ford invests $2B in EVs" + 10-K: Model e margin data → Bullet with context
+❌ 10-K shows Model e losses + No article discusses → No bullet (skip entirely)
+
+Exception: Financial Performance section may include metrics from articles without "announcement" framing.
+
+
+MULTI-SOURCE CONTEXT (ENRICHMENT ONLY):
+Three reference documents provide background on {ticker}. Use ONLY to enrich article-driven bullets with quantifying context. Never create bullets from these sources alone.
 
 **EARNINGS TRANSCRIPT (Management's Current View):**
 Most recent quarterly earnings call. Contains: management commentary, forward guidance, strategic priorities, analyst Q&A, sentiment/tone signals. Age: 0-90 days. Primary use: Understanding management's CURRENT view and conviction.
@@ -14259,15 +14272,15 @@ Each source shows its coverage period and age. Always note when sources pre-date
 - "Per Q2 10-Q (period ending June 30); article discusses Q3 event"  
 - "FY2024 baseline per 10-K; FY2025 data not yet available"
 
-INTEGRATION MANDATE:
-- Risk Factors: Cross-reference EVERY risk against disclosed risks in sources. If news relates to disclosed risk, note the connection.
-- Major Developments: Use segment data to assess materiality. When development affects specific business line, reference segment economics/size.
-- Competitive/Industry Dynamics: Reference business mix when analyzing industry trends. Show how trend affects company based on disclosed segment composition.
-- Upside/Downside: Incorporate disclosed opportunities (for upside) and threats (for downside) from sources.
+ARTICLE-FIRST RULE:
+Every bullet must be triggered by an article development. Sources provide context ONLY when article discusses the topic.
 
-Read ALL THREE documents before analyzing articles. Data might appear in any section—segment economics in Revenue section, customer concentration in Risks or Dependencies section, strategic priorities across multiple sections. Do not skim.
+Process:
+1. Article reports development → Create bullet
+2. Check sources for quantifying context → Add Context bullet if relevant data exists
+3. No article about topic → No bullet (even if sources discuss it)
 
-For EVERY article, actively ask: Do any sources contain relevant context? If yes, integrate it. Failing to use available context is an error.
+When article mentions risk/segment/trend: Check sources for disclosed data to quantify materiality. Skip context if sources lack relevant data.
 
 Detailed integration framework with examples provided in 🔬 MULTI-SOURCE CONTEXT ENRICHMENT section below.
 
@@ -14335,17 +14348,15 @@ This section provides detailed guidance on HOW to integrate the three context so
 
 SOURCE PRIORITY FRAMEWORK:
 
-**Default priority (RECENCY-FIRST):**
-1. Transcript (most recent management view)
-2. 10-Q (recent financial data)  
-3. 10-K (structural baseline)
+When article triggers bullet and sources have relevant context:
 
-**Override priority (PRECISION-FIRST for calculations/exact figures):**
-1. 10-Q (most recent precise numbers)
-2. 10-K (annual baseline)
-3. Transcript (rounded figures only)
+**Default (RECENCY-FIRST):**
+Check Transcript → 10-Q → 10-K for management view/characterization
 
-**Best practice: Use ALL THREE when available**
+**For calculations (PRECISION-FIRST):**
+Check 10-Q → 10-K → Transcript for exact figures
+
+Use 1-3 most relevant data points. Don't force all three sources if one suffices.
 Format: "Management stated [Transcript view] on [date]; [10-Q recent data]; [10-K baseline for comparison]"
 
 **When sources conflict:**
@@ -14360,7 +14371,7 @@ Format: "Management stated [Transcript view] on [date]; [10-Q recent data]; [10-
 
 INTEGRATION QUESTIONS:
 
-For EVERY article, use these questions to extract context from sources:
+When article discusses a development, use these questions to find relevant source context:
 
 **1. MATERIALITY: How big is this?**
 
@@ -14456,16 +14467,15 @@ Context trigger: When articles mention ANY input cost or output price for compan
 
 TRANSCRIPT-SPECIFIC INTELLIGENCE:
 
-The earnings transcript provides unique signals unavailable in 10-Q/10-K:
+When article discusses topic AND transcript covered same topic:
 
 **Conviction signals:**
-- Language upgrades/downgrades: "Strong" → "Record" (bullish) vs "On track" → "We'll see" (caution)
-- Tone vs numbers mismatch: Strong results + cautious tone = flag
-- Hedging language: "I don't know," "Well... I mean..." reveals uncertainty
+- Management tone on that topic: Language shifts ("strong" → "record" vs "on track" → "we'll see")
+- Tone vs numbers mismatch for that development
+- Hedging language revealing uncertainty about that topic
 
 **Analyst challenges:**
-- If analyst pressed on topic in news, reference their question: "[Analyst NAME] at [FIRM] questioned [concern] on [DATE] call; management stated [response]"
-- Use in Risk Factors when skepticism reveals execution uncertainty
+- When article discusses topic analyst questioned: "[Analyst NAME] at [FIRM] questioned [concern] on [DATE] call; management stated [response]"
 
 **Forward guidance:**
 - Most recent guidance ALWAYS supersedes outdated 10-Q/10-K targets
@@ -14475,23 +14485,28 @@ The earnings transcript provides unique signals unavailable in 10-Q/10-K:
 **Freshness check:**
 - If transcript >30 days old and article discusses recent event: Note "Pre-dates [event], guidance may not reflect [development]"
 
+Never create bullets from transcript discussion alone. Article must discuss the topic first.
+
 ---
 
 ENRICHMENT FORMAT:
 
-When any of the THREE CONTEXT SOURCES (10-K, 10-Q, Transcript) contains relevant data, add Context bullet after main bullet:
+When article discusses development AND sources contain quantifying data, add Context bullet:
 
-- Main bullet (impact, sentiment, reason): [Development with attribution] (Oct 10)
-  Context: [1-3 most relevant data points from sources] per [Source and period]
+- Main bullet (impact, sentiment, reason): [Article development with attribution] (Oct 10)
+  Context: [1-3 source data points] per [Source and period]
 
-CRITICAL RESTRICTION - Context bullets are EXCLUSIVELY for 10-K, 10-Q, and Transcript data:
-✅ CORRECT: "Context: Company operates 34% gas-fired capacity per FY2024 10-K"
-✅ CORRECT: "Context: Q2 revenue $892M (+12% YoY) per Q2 2025 10-Q; management characterized growth as 'accelerating' on Aug 7 call"
-❌ WRONG: "Context: Analyst estimates acquisition will add 15% revenue per analyst report" (this is from articles, not sources)
-❌ WRONG: "Context: Competitor operates 2,500 MW capacity per industry publication" (this is from articles, not sources)
+CRITICAL RESTRICTIONS:
+1. Main bullet = Article content ONLY (what happened, who said what, explicit facts reported)
+2. Context bullet = Source data ONLY (10-K/10-Q/Transcript figures)
+3. Never mix: Article data stays in main bullet, source data stays in context
 
-If information comes from articles: Include it in the MAIN BULLET with attribution, NOT in Context.
-If information comes from 10-K/10-Q/Transcript: Put it in Context bullet with proper citation.
+✅ CORRECT: Main has article facts; Context has 10-K/10-Q/Transcript figures
+❌ WRONG: Main bullet created from 10-K discussion when no article reported it
+❌ WRONG: Context contains article quotes, analyst estimates, or competitor data from news
+
+If no article discusses topic: No bullet exists, even if sources mention it.
+If article discusses topic but sources lack data: Main bullet only, skip context.
 
 Requirements:
 - Indented (shows supplementary to main bullet)
@@ -14512,26 +14527,25 @@ Skip context when:
 Remember: Context bullets are reserved for 10-K/10-Q/Transcript ONLY. Article information belongs in main bullets with attribution.
 
 MANDATORY context for vague announcements:
-When article announces initiative WITHOUT specifics (no amounts/timelines/targets), CHECK sources for existing scale/historical context to transform vague announcement into useful intelligence.
+When article announces initiative WITHOUT specifics, check sources for scale/baseline data:
 
-Examples across sources:
-- "Investing in renewable energy" (no amount) → Context: "Company operates X MW renewable capacity per FY2024 10-K; generated $Y renewable revenue in Q2 per 10-Q; management characterized renewables as 'growth priority' on Aug call"
-- "Expanding data center capabilities" (no details) → Context: "Data center customers represented 14% Q2 revenue per 10-Q vs 9.8% FY2024 per 10-K; CEO stated data center pipeline 'largest in company history' on Aug call"
-- "Pursuing cost reduction" (no target) → Context: "Operating expenses $645M in Q2 (-2% YoY) per 10-Q; FY2024 OpEx $2.6B (26% revenue) per 10-K; CFO stated targeting 'further margin expansion' on Aug call"
+- Article: "Investing in renewable energy" → Context: "Company operates X MW renewable capacity per FY2024 10-K; Q2 renewable revenue $Y per 10-Q"
+- Article: "Expanding data center capabilities" → Context: "Data center customers 14% Q2 revenue per 10-Q vs 9.8% FY2024 per 10-K"
+
+Trigger: Article announces → Sources quantify. Never reverse (sources discuss → create bullet).
 
 ---
-
 IMPACT TAG (for Major Developments, Competitive Dynamics, Risk Factors):
 
-**HIGH IMPACT**: >5% revenue/EBIT/assets OR top 3 customer/supplier OR 10-K Risk Factor disclosed OR categorical event (FDA action, CEO fraud, M&A, bankruptcy, production halt)
-**MEDIUM IMPACT**: 1-5% revenue/EBIT/assets OR top 10 customer/supplier OR mentioned in Strategic Priorities
-**LOW IMPACT**: <1% revenue/EBIT/assets
+Calculate impact from article context + source materiality:
 
-AUTO-ESCALATE to HIGH if any apply: superlatives in articles ("most," "record," "unprecedented"), 
-pattern vs isolated event (100+ recalls vs 1), 3+ articles emphasize same topic, analyst quantifies >10% 
-segment impact, or categorical risk events (production halts, force majeure, regulatory investigations).
+**HIGH IMPACT**: Article discusses development that affects >5% revenue/EBIT/assets per sources OR involves top 3 customer/supplier per sources OR categorical event (FDA action, CEO fraud, M&A >$1B, bankruptcy, production halt)
+**MEDIUM IMPACT**: Article discusses development that affects 1-5% revenue/EBIT/assets per sources OR top 10 customer/supplier per sources
+**LOW IMPACT**: Article discusses development that affects <1% revenue/EBIT/assets per sources
 
-Use highest applicable level when multiple factors present.
+AUTO-ESCALATE if articles use superlatives ("most," "record," "unprecedented"), 3+ articles emphasize same topic, or analyst quantifies >10% segment impact.
+
+When sources lack materiality data: Use article framing (authors call it "major" = high, "minor" = low).
 
 ---
 
@@ -14555,10 +14569,12 @@ This categorizes facts, doesn't make investment recommendations. Reader decides 
 
 RISK MATERIALIZATION:
 
-When news confirms disclosed risk, note in Context bullet:
+When article reports event AND sources disclosed this risk, note in Context:
 
-- Risk Topic (high impact, bearish, [risk type]): [Event description] (Oct 15)
-  Context: Risk Materialization—[Source] Risk Factors section disclosed [specific risk]; [relevant data] per [Source and period]
+- Risk Topic (high impact, bearish, [risk type]): [Article event description] (Oct 15)
+  Context: Risk Materialization—[Source] disclosed [risk]; [relevant data] per [Source and period]
+
+Trigger: Article reports event → Sources show it was disclosed risk. Never create risk bullet from sources alone.
 
 ---
 
@@ -14567,15 +14583,17 @@ EXAMPLE:
 Article: "Ford announces $2B EV investment; CEO says positions for growth"
 
 Sources show:
-- 10-K: Model e -131.8% margin FY2024, Ford Pro 88% of EBIT at 13.5% margin, company ROIC 12.9%
-- 10-Q: Model e lost $1.2B in Q2 (-127% margin), Ford Pro $2.3B EBIT (14.1% margin)
+- 10-K: Model e -131.8% margin FY2024, Ford Pro 88% of EBIT at 13.5% margin
+- 10-Q: Model e lost $1.2B Q2 (-127% margin), Ford Pro $2.3B EBIT (14.1% margin)
 - Transcript: CEO stated "EV investments remain strategic priority despite near-term losses" on Aug call
 
 Output:
 - EV capacity investment (high impact, bearish, capital misallocation): Ford announces $2B Michigan EV battery plant per announcement; CEO stated investment positions company for EV demand growth (Oct 15)
-  Context: Investment targets Model e segment (lost $1.2B in Q2, -127% margin per Q2 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% of EBIT per 10-K; CEO characterized EV investments as "strategic priority despite near-term losses" on Aug call
+  Context: Investment targets Model e segment (lost $1.2B Q2, -127% margin per Q2 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% EBIT per 10-K; CEO characterized EV investments as "strategic priority" on Aug call
 
-Why: HIGH IMPACT (material capex), BEARISH (despite CEO spin, recent data shows continued unprofitable segment), Context synthesizes Q2 data + FY baseline + management view
+Article content (main bullet): $2B investment announcement, CEO quote about growth positioning
+Source content (context): Model e margins, Ford Pro EBIT %, CEO transcript characterization
+Why separation matters: Article triggered bullet; sources quantified why it's bearish (investing in -127% margin segment)
 
 ---
 
@@ -14728,9 +14746,9 @@ If FLAGGED ARTICLE COUNT ≥ 1:
 [What happened]. [Key data points]. [What to monitor next].
 Include contradictions if present: "X rallied though expert notes Y"
 
-🔴 MAJOR DEVELOPMENTS (Only if material developments exist - 3-6 bullets max)
+🔴 MAJOR DEVELOPMENTS (Only if articles report developments - 3-6 bullets max)
 
-SCOPE: Company-specific events, announcements, actions by {ticker}
+SCOPE: Company events articles explicitly reported. Sources provide context only, never create bullets.
 
 SECTION ASSIGNMENT RULE:
 Major Developments:
@@ -14799,9 +14817,12 @@ Example:
 - Gas plant acquisitions (bullish, capacity expansion): Launched $2.69B senior notes plus $1.2B term loan to fund Freedom Energy Center (1,045 MW Pennsylvania) and Guernsey Power Station (1,836 MW Ohio) acquisitions from Caithness Energy; CEO stated acquisitions position company to capture data center power demand growth; closing October 27 subject to acquisition completion by July 17, 2026 (Oct 9-10)
   Context: Acquisitions add ~3 GW capacity (~29% increase to 10.3 GW fleet per FY2024 10-K); management projects ~50% Adj FCF/share accretion per investor presentation
 
-📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if data available - 2-4 bullets max)
+📊 FINANCIAL/OPERATIONAL PERFORMANCE (Only if articles report data - 2-4 bullets max)
 
 Source: [COMPANY] articles only
+
+ARTICLE REQUIREMENT: Articles must explicitly report the metrics. Unlike other sections, "announcement" framing not required—articles discussing historical results, current metrics, or guidance updates all qualify.
+Sources provide comparative context only (QoQ/YoY from 10-Q, baseline from 10-K).
 
 CRITICAL CONTEXT RULES:
 - Historical data: Flag with period "Q2 2025 (quarter ended June 30): Revenue $X"
@@ -14823,11 +14844,11 @@ Format (use • bullet, NO sentiment tags):
 Example:
 - Q3 revenue $12.8B (+15% YoY), beat consensus $12.1B per [Source]; full-year guidance raised to $52B from $50B (Oct 10)
 
-⚠️ RISK FACTORS (Only if risks identified - 2-4 bullets max)
+⚠️ RISK FACTORS (Only if articles report risks - 2-4 bullets max)
 
 Source: [COMPANY], [INDUSTRY], [COMPETITOR] articles
 
-APPROACH: Report developments that article authors explicitly identified or framed as risks to {ticker}.
+BULLET CREATION: Article must report the risk/event. Sources quantify materiality via context bullets only.
 
 RISK FACTORS INCLUSION CRITERIA:
 
@@ -14996,10 +15017,12 @@ EXCLUDE from competitor coverage:
 
 APPROACH: Report developments and any competitive implications that article authors explicitly stated for {ticker}.
 
-SYNTHESIS OPPORTUNITIES:
-- When competitor metric + {ticker} metric both exist in articles: Present comparatively
-- When competitor announcement + {ticker} position mentioned: Report both with attribution
-- When industry trend + multiple data points in articles: Synthesize with attribution
+SYNTHESIS OPPORTUNITIES (ARTICLE-DRIVEN ONLY):
+- When articles provide competitor metric + {ticker} metric: Present comparatively
+- When articles mention competitor announcement + {ticker} position: Report both with attribution
+- When articles provide industry trend + multiple data points: Synthesize with attribution
+
+Sources provide {ticker} context only. Never pull competitor data from sources or articles not in your timeline.
 
 Include (report what authors stated):
 - Competitor M&A: Transaction details, amounts, companies - ONLY if articles discuss {ticker} impact
@@ -15392,6 +15415,8 @@ ATTRIBUTION CHECK:
 FABRICATION CHECK:
 □ No claims of "undisclosed" or "not provided" unless article explicitly stated this?
 □ Article silence treated as missing information, not as information absence?
+□ Every bullet triggered by article, not by source document discussion?
+□ Context bullets contain source data only, zero article information?
 
 ---
 
@@ -15647,8 +15672,8 @@ For EVERY management statement or Q&A exchange, use the 10-K Profile to answer t
 - Use for: Flagging Risk Materialization in Context when Q&A confirms 10-K disclosed risk
 
 **6. COMPETITIVE SCALE: How do they compare?**
-- Look for: Market share, relative size vs competitors
-- Use for: Assessing threats (competitor 40x smaller = distant threat)
+- When article discusses competitor: Check sources for {ticker}'s market share, relative size, geographic overlap
+- Use for context: "Competitor operates X capacity per article; {ticker} operates Y capacity per 10-K (Z% of competitor scale)"
 
 **7. CAPITAL ALLOCATION: Good use of money?**
 - Look for: Company ROIC, segment margins where investment directed
@@ -16168,13 +16193,17 @@ ONLY write attributed statements:
 
 If you were about to write a banned phrase → STOP → Rewrite as attributed view from management.
 
-CRITICAL: Synthesize developments tagged as bullish in sections above.
-If you tagged developments as (bullish, [reason]) in any section above, synthesize them here using EITHER attributed management statements OR the factual developments themselves.
+CRITICAL: Synthesize developments tagged bullish in sections above—but only developments articles reported.
 
-Format examples:
-- "CEO stated [bullish development]" (when management made conclusions)
-- "Posted record revenue of $X (+Y%)" (when you inferred bullish from facts)
-- Mix both: "Record deliveries of 497K; CEO stated this demonstrates strong execution"
+Reference article-reported developments with author conclusions:
+- "[Analyst] stated [development] positions company for [what they said]"
+- "Article reported record revenue of $X (+Y%); [Analyst] stated this demonstrates strong execution"
+
+NEVER synthesize from sources alone:
+❌ "10-K shows high margin segment represents 88% EBIT" (no article discussed this)
+✅ "Article reported investment in data centers; management characterized segment as 'growth priority' per Aug call"
+
+Every sentence must trace to article content, with sources providing context only.
 
 INCLUDE this section if you have tagged 1+ developments as (bullish, ...) in sections above.
 

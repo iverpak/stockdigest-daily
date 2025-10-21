@@ -26663,14 +26663,20 @@ async def get_missing_financials_status(token: str):
                 if tenq_response.get("valid"):
                     quarters = tenq_response.get("available_quarters", [])
                     if quarters:
-                        # quarters[0] might be string like "Q3 2024 (Sep 30, 2024)" OR a dict
-                        import re
-                        quarter_str = quarters[0] if isinstance(quarters[0], str) else str(quarters[0])
-                        match = re.match(r"Q(\d+)\s+(\d{4})", quarter_str)
-                        if match:
-                            latest_10q = {"quarter": int(match.group(1)), "year": int(match.group(2))}
+                        # quarters[0] is a dict with {quarter: "Q2", fiscal_year: 2025, ...}
+                        q = quarters[0]
+                        if isinstance(q, dict):
+                            # Extract quarter number from "Q2" -> 2
+                            quarter_str = q.get("quarter", "")
+                            quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
+                            if quarter_num and q.get("fiscal_year"):
+                                latest_10q = {"quarter": quarter_num, "year": q["fiscal_year"]}
                         else:
-                            LOG.warning(f"[{ticker}] Could not parse 10-Q quarter: {quarters[0]} (type: {type(quarters[0])})")
+                            # Fallback: try parsing string format
+                            import re
+                            match = re.match(r"Q(\d+)\s+(\d{4})", str(q))
+                            if match:
+                                latest_10q = {"quarter": int(match.group(1)), "year": int(match.group(2))}
 
                 # Fetch latest transcript
                 transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
@@ -26678,13 +26684,20 @@ async def get_missing_financials_status(token: str):
                 if transcript_response.get("valid"):
                     quarters = transcript_response.get("available_quarters", [])
                     if quarters:
-                        import re
-                        quarter_str = quarters[0] if isinstance(quarters[0], str) else str(quarters[0])
-                        match = re.match(r"Q(\d+)\s+(\d{4})", quarter_str)
-                        if match:
-                            latest_transcript = {"quarter": int(match.group(1)), "year": int(match.group(2))}
+                        # quarters[0] is a dict with {quarter: "Q2", fiscal_year: 2025, ...}
+                        q = quarters[0]
+                        if isinstance(q, dict):
+                            # Extract quarter number from "Q2" -> 2
+                            quarter_str = q.get("quarter", "")
+                            quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
+                            if quarter_num and q.get("fiscal_year"):
+                                latest_transcript = {"quarter": quarter_num, "year": q["fiscal_year"]}
                         else:
-                            LOG.warning(f"[{ticker}] Could not parse transcript quarter: {quarters[0]} (type: {type(quarters[0])})")
+                            # Fallback: try parsing string format
+                            import re
+                            match = re.match(r"Q(\d+)\s+(\d{4})", str(q))
+                            if match:
+                                latest_transcript = {"quarter": int(match.group(1)), "year": int(match.group(2))}
 
                 # Check what we have in database
                 with db() as conn, conn.cursor() as cur:
@@ -26850,32 +26863,34 @@ async def generate_missing_financials(request: Request):
                 if tenq_response.get("valid"):
                     quarters = tenq_response.get("available_quarters", [])
                     if quarters:
-                        # quarters[0] is like "Q3 2024 (Sep 30, 2024)"
-                        import re
-                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
-                        if match:
-                            quarter = int(match.group(1))
-                            year = int(match.group(2))
+                        # quarters[0] is a dict with {quarter: "Q2", fiscal_year: 2025, ...}
+                        q = quarters[0]
+                        if isinstance(q, dict):
+                            # Extract quarter number from "Q2" -> 2
+                            quarter_str = q.get("quarter", "")
+                            quarter = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
+                            year = q.get("fiscal_year")
 
-                            # Check if we have this quarter
-                            with db() as conn, conn.cursor() as cur:
-                                cur.execute("""
-                                    SELECT fiscal_year, fiscal_quarter FROM sec_filings
-                                    WHERE ticker = %s AND filing_type = '10-Q'
-                                    ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
-                                """, (ticker,))
-                                result = cur.fetchone()
-                                our_10q = None
-                                if result:
-                                    quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
-                                    if quarter_num:
-                                        our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
+                            if quarter and year:
+                                # Check if we have this quarter
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        SELECT fiscal_year, fiscal_quarter FROM sec_filings
+                                        WHERE ticker = %s AND filing_type = '10-Q'
+                                        ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
+                                    """, (ticker,))
+                                    result = cur.fetchone()
+                                    our_10q = None
+                                    if result:
+                                        quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
+                                        if quarter_num:
+                                            our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
 
-                            if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
-                                # Get full filing details from tenq_response
-                                filing_date = tenq_response.get("available_quarters_data", [{}])[0].get("filing_date") if tenq_response.get("available_quarters_data") else None
-                                period_end_date = tenq_response.get("available_quarters_data", [{}])[0].get("period_end_date") if tenq_response.get("available_quarters_data") else None
-                                sec_html_url = tenq_response.get("available_quarters_data", [{}])[0].get("sec_html_url") if tenq_response.get("available_quarters_data") else None
+                                if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
+                                    # Get full filing details from dict
+                                    filing_date = q.get("filing_date")
+                                    period_end_date = q.get("period_end_date")
+                                    sec_html_url = q.get("sec_html_url")
 
                                 # Queue 10-Q generation job
                                 batch_id = str(uuid.uuid4())

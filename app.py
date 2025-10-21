@@ -26858,43 +26858,43 @@ async def generate_missing_financials(request: Request):
                                     period_end_date = q.get("period_end_date")
                                     sec_html_url = q.get("sec_html_url")
 
-                                # Queue 10-Q generation job
-                                batch_id = str(uuid.uuid4())
-                                job_config = {
-                                    "ticker": ticker,
-                                    "filing_type": "10-Q",
-                                    "fiscal_year": year,
-                                    "fiscal_quarter": f"Q{quarter}",
-                                    "filing_date": filing_date,
-                                    "period_end_date": period_end_date,
-                                    "sec_html_url": sec_html_url,
-                                    "send_email": True
-                                }
+                                    # Queue 10-Q generation job
+                                    batch_id = str(uuid.uuid4())
+                                    job_config = {
+                                        "ticker": ticker,
+                                        "filing_type": "10-Q",
+                                        "fiscal_year": year,
+                                        "fiscal_quarter": f"Q{quarter}",
+                                        "filing_date": filing_date,
+                                        "period_end_date": period_end_date,
+                                        "sec_html_url": sec_html_url,
+                                        "send_email": True
+                                    }
 
-                                with db() as conn, conn.cursor() as cur:
-                                    cur.execute("""
-                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
-                                        VALUES (%s, %s, 1, %s)
-                                    """, (batch_id, 'processing', json.dumps(job_config)))
+                                    with db() as conn, conn.cursor() as cur:
+                                        cur.execute("""
+                                            INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                            VALUES (%s, %s, 1, %s)
+                                        """, (batch_id, 'processing', json.dumps(job_config)))
 
-                                    cur.execute("""
-                                        INSERT INTO ticker_processing_jobs (
-                                            batch_id, ticker, status, phase, progress, config
-                                        )
-                                        VALUES (%s, %s, %s, %s, 0, %s)
-                                        RETURNING job_id
-                                    """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
+                                        cur.execute("""
+                                            INSERT INTO ticker_processing_jobs (
+                                                batch_id, ticker, status, phase, progress, config
+                                            )
+                                            VALUES (%s, %s, %s, %s, 0, %s)
+                                            RETURNING job_id
+                                        """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
 
-                                    job_id = cur.fetchone()['job_id']
-                                    conn.commit()
+                                        job_id = cur.fetchone()['job_id']
+                                        conn.commit()
 
-                                # Append to existing ticker or create new entry
-                                existing = next((j for j in jobs_created if j["ticker"] == ticker), None)
-                                if existing:
-                                    existing["items"].append(f"10-Q Q{quarter} {year}")
-                                else:
-                                    jobs_created.append({"ticker": ticker, "items": [f"10-Q Q{quarter} {year}"]})
-                                LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
+                                    # Append to existing ticker or create new entry
+                                    existing = next((j for j in jobs_created if j["ticker"] == ticker), None)
+                                    if existing:
+                                        existing["items"].append(f"10-Q Q{quarter} {year}")
+                                    else:
+                                        jobs_created.append({"ticker": ticker, "items": [f"10-Q Q{quarter} {year}"]})
+                                    LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
 
                 # Fetch latest transcript
                 transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
@@ -26956,11 +26956,13 @@ async def generate_missing_financials(request: Request):
                         if content:
                             # Generate summary with Claude
                             config = get_ticker_config(ticker)
-                            result = generate_transcript_summary_with_claude(
-                                ticker, content, config, quarter, year, CLAUDE_API_KEY
+                            summary_text = generate_transcript_summary_with_claude(
+                                ticker, content, config, 'transcript',
+                                ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
+                                _build_research_summary_prompt
                             )
 
-                            if result:
+                            if summary_text:
                                 # Save to database
                                 with db() as conn, conn.cursor() as cur:
                                     cur.execute("""
@@ -26980,7 +26982,7 @@ async def generate_missing_financials(request: Request):
                                         f"Q{quarter}",
                                         year,
                                         data[0].get('date'),
-                                        result['summary_text'],
+                                        summary_text,
                                         fmp_url,
                                         'claude'
                                     ))

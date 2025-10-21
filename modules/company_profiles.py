@@ -14,6 +14,7 @@ import os
 from typing import Dict, Optional
 from datetime import datetime, timezone
 import pytz
+import markdown
 
 LOG = logging.getLogger(__name__)
 
@@ -631,12 +632,29 @@ def generate_company_profile_email(
     else:
         fiscal_year_display = filing_date
 
-    # Extract first ~2000 chars for email preview
-    profile_preview = profile_markdown[:2000] + "..." if len(profile_markdown) > 2000 else profile_markdown
+    # Convert full markdown to HTML with table support
+    # Use markdown library with extensions for tables, fenced code blocks, and newlines
+    profile_html_content = markdown.markdown(
+        profile_markdown,
+        extensions=['tables', 'fenced_code', 'nl2br']
+    )
 
-    # Convert markdown to simple HTML (basic conversion - just wrap in pre tag for monospace)
-    # TODO: Could use a proper markdown library here for better rendering
-    profile_html = f'<div style="font-family: monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; color: #374151; background-color: #f9fafb; padding: 16px; border-radius: 4px; overflow-x: auto;">{profile_preview}</div>'
+    # Wrap in styled div for email rendering
+    profile_html = f'''<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.6; color: #374151; background-color: #f9fafb; padding: 20px; border-radius: 4px; overflow-x: auto;">
+        <style>
+            table {{ border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 12px; }}
+            th {{ background-color: #1e40af; color: white; padding: 8px; text-align: left; border: 1px solid #ddd; font-weight: 600; }}
+            td {{ padding: 8px; border: 1px solid #ddd; }}
+            tr:nth-child(even) {{ background-color: #f3f4f6; }}
+            h1 {{ color: #1e40af; font-size: 20px; margin-top: 24px; margin-bottom: 12px; border-bottom: 2px solid #1e40af; padding-bottom: 6px; }}
+            h2 {{ color: #1e3a8a; font-size: 18px; margin-top: 20px; margin-bottom: 10px; }}
+            h3 {{ color: #1e40af; font-size: 16px; margin-top: 16px; margin-bottom: 8px; }}
+            code {{ background-color: #e5e7eb; padding: 2px 4px; border-radius: 3px; font-family: monospace; font-size: 12px; }}
+            pre {{ background-color: #1f2937; color: #f3f4f6; padding: 12px; border-radius: 4px; overflow-x: auto; }}
+            pre code {{ background-color: transparent; padding: 0; color: #f3f4f6; }}
+        </style>
+        {profile_html_content}
+    </div>'''
 
     # Build HTML (same structure as transcript email)
     html = f'''<!DOCTYPE html>
@@ -664,7 +682,7 @@ def generate_company_profile_email(
 
                     <!-- Header -->
                     <tr>
-                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
+                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 58%;">
@@ -693,18 +711,10 @@ def generate_company_profile_email(
                     <tr>
                         <td class="content-padding" style="padding: 24px;">
 
-                            <!-- Profile Preview -->
+                            <!-- Company Profile (Full Content) -->
                             <div style="margin-bottom: 20px;">
-                                <h2 style="font-size: 16px; font-weight: 700; color: #1e40af; margin: 0 0 12px 0;">Profile Preview (First 2,000 Characters)</h2>
+                                <h2 style="font-size: 16px; font-weight: 700; color: #1e40af; margin: 0 0 12px 0;">Company Profile ({len(profile_markdown):,} characters)</h2>
                                 {profile_html}
-                            </div>
-
-                            <!-- Full Profile Info Box -->
-                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    Full company profile ({len(profile_markdown):,} characters) saved to database.
-                                    Access via Admin Panel at https://stockdigest.app/admin
-                                </p>
                             </div>
 
                         </td>
@@ -712,7 +722,7 @@ def generate_company_profile_email(
 
                     <!-- Footer -->
                     <tr>
-                        <td style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9); border-radius: 0 0 8px 8px;">
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9); border-radius: 0 0 8px 8px;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td>

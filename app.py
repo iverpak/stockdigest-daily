@@ -27005,6 +27005,31 @@ async def generate_missing_financials(request: Request):
                                     ))
                                     conn.commit()
 
+                                # Send email notification
+                                try:
+                                    subject = f"Earnings Transcript: {ticker} Q{quarter} {year} ({ANTHROPIC_MODEL})"
+                                    html_body = f"""
+                                    <html>
+                                    <head>
+                                        <style>
+                                            body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                                            h1 {{ color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; }}
+                                            h2 {{ color: #1e3a8a; margin-top: 24px; }}
+                                            pre {{ background: #f3f4f6; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }}
+                                        </style>
+                                    </head>
+                                    <body>
+                                        <h1>{subject}</h1>
+                                        <pre>{summary_text}</pre>
+                                    </body>
+                                    </html>
+                                    """
+                                    send_email(subject=subject, body_html=html_body, to_email=DIGEST_TO)
+                                    LOG.info(f"📧 Emailed transcript for {ticker} Q{quarter} {year} to {DIGEST_TO}")
+                                except Exception as email_error:
+                                    LOG.error(f"Failed to email transcript for {ticker}: {email_error}")
+                                    # Continue processing even if email fails
+
                                 # Append to existing ticker or create new entry
                                 existing = next((j for j in jobs_created if j["ticker"] == ticker), None)
                                 if existing:

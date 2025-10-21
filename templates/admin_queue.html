@@ -399,9 +399,14 @@
         <div style="background: #ffffff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 32px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h2 style="font-size: 20px; font-weight: 700; color: #1e3a8a;">📑 Generate Missing Financials</h2>
-                <button onclick="toggleFinancialsSection()" style="background: #1e40af; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
-                    <span id="financials-toggle-text">Show Tickers</span>
-                </button>
+                <div style="display: flex; gap: 8px;">
+                    <button onclick="refreshFinancialsStatus()" id="financials-refresh-btn" style="background: #6b7280; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600; display: none;">
+                        🔄 Refresh
+                    </button>
+                    <button onclick="toggleFinancialsSection()" style="background: #1e40af; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                        <span id="financials-toggle-text">Show Tickers</span>
+                    </button>
+                </div>
             </div>
 
             <div id="financials-section" style="display: none;">
@@ -1081,16 +1086,26 @@
         function toggleFinancialsSection() {
             const section = document.getElementById('financials-section');
             const toggleText = document.getElementById('financials-toggle-text');
+            const refreshBtn = document.getElementById('financials-refresh-btn');
 
             financialsSectionExpanded = !financialsSectionExpanded;
 
             if (financialsSectionExpanded) {
                 section.style.display = 'block';
                 toggleText.textContent = 'Hide Tickers';
+                refreshBtn.style.display = 'block';  // Show refresh button
                 loadFinancialsStatus();
             } else {
                 section.style.display = 'none';
                 toggleText.textContent = 'Show Tickers';
+                refreshBtn.style.display = 'none';  // Hide refresh button
+            }
+        }
+
+        function refreshFinancialsStatus() {
+            // Force reload of financials data
+            if (financialsSectionExpanded) {
+                loadFinancialsStatus();
             }
         }
 
@@ -1154,9 +1169,9 @@
                                     </label>
                                 </div>
                                 <div style="font-size: 13px; color: #6b7280; line-height: 1.6; margin-left: 30px;">
-                                    <div>${missing10K} 10-K: ${ticker.missing_10k ? `<strong style="color: #92400e;">Missing ${ticker.latest_10k_year || 'latest'}</strong>` : `Have ${ticker.our_10k_year || 'latest'}`}</div>
-                                    <div>${missing10Q} 10-Q: ${ticker.missing_10q ? `<strong style="color: #92400e;">Missing Q${ticker.latest_10q_quarter || '?'} ${ticker.latest_10q_year || ''}</strong>` : `Have Q${ticker.our_10q_quarter || '?'} ${ticker.our_10q_year || ''}`}</div>
-                                    <div>${missingTranscript} Transcript: ${ticker.missing_transcript ? `<strong style="color: #92400e;">Missing Q${ticker.latest_transcript_quarter || '?'} ${ticker.latest_transcript_year || ''}</strong>` : `Have Q${ticker.our_transcript_quarter || '?'} ${ticker.our_transcript_year || ''}`}</div>
+                                    <div>${missing10K} 10-K: ${ticker.missing_10k ? `<strong style="color: #92400e;">Missing FY ${ticker.latest_10k_year || '?'}</strong>` : `Have FY ${ticker.our_10k_year || '?'}`}</div>
+                                    <div>${missing10Q} 10-Q: ${ticker.missing_10q ? `<strong style="color: #92400e;">Missing Q${ticker.latest_10q?.quarter || '?'} ${ticker.latest_10q?.year || ''}</strong>` : ticker.our_10q ? `Have Q${ticker.our_10q.quarter} ${ticker.our_10q.year}` : 'None'}</div>
+                                    <div>${missingTranscript} Transcript: ${ticker.missing_transcript ? `<strong style="color: #92400e;">Missing Q${ticker.latest_transcript?.quarter || '?'} ${ticker.latest_transcript?.year || ''}</strong>` : ticker.our_transcript ? `Have Q${ticker.our_transcript.quarter} ${ticker.our_transcript.year}` : 'None'}</div>
                                 </div>
                             </div>
                         `;

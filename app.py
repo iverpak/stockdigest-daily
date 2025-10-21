@@ -1511,6 +1511,7 @@ def ensure_schema():
                     summary_text TEXT NOT NULL,  -- Full AI-generated summary
                     source_url TEXT,  -- FMP API URL for reference
                     ai_provider VARCHAR(20) NOT NULL,  -- 'claude' or 'openai'
+                    ai_model VARCHAR(50),  -- Model name (e.g., 'claude-sonnet-4.5', 'gemini-2.5-flash')
                     generated_at TIMESTAMPTZ DEFAULT NOW(),
 
                     -- Job tracking
@@ -1526,6 +1527,13 @@ def ensure_schema():
                     ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_unique_key UNIQUE(ticker, report_type, quarter, year);
                 EXCEPTION
                     WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
+                END $$;
+
+                -- Migration: Add ai_model column if it doesn't exist
+                DO $$ BEGIN
+                    ALTER TABLE transcript_summaries ADD COLUMN ai_model VARCHAR(50);
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;  -- Column already exists, ignore
                 END $$;
 
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_ticker ON transcript_summaries(ticker);
@@ -26975,12 +26983,13 @@ async def generate_missing_financials(request: Request):
                                     cur.execute("""
                                         INSERT INTO transcript_summaries (
                                             ticker, company_name, report_type, quarter, year,
-                                            report_date, summary_text, source_url, ai_provider
+                                            report_date, summary_text, source_url, ai_provider, ai_model
                                         )
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                         ON CONFLICT (ticker, report_type, quarter, year)
                                         DO UPDATE SET
                                             summary_text = EXCLUDED.summary_text,
+                                            ai_model = EXCLUDED.ai_model,
                                             generated_at = NOW()
                                     """, (
                                         ticker,
@@ -26991,7 +27000,8 @@ async def generate_missing_financials(request: Request):
                                         data[0].get('date'),
                                         summary_text,
                                         fmp_url,
-                                        'claude'
+                                        'claude',
+                                        ANTHROPIC_MODEL
                                     ))
                                     conn.commit()
 

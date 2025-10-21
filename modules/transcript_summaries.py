@@ -771,9 +771,10 @@ def save_transcript_summary_to_database(
                 ai_provider, ai_model, processing_duration_seconds
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ticker, report_type, quarter, year, ai_provider)
+            ON CONFLICT (ticker, report_type, quarter, year)
             DO UPDATE SET
                 summary_text = EXCLUDED.summary_text,
+                ai_provider = EXCLUDED.ai_provider,
                 ai_model = EXCLUDED.ai_model,
                 processing_duration_seconds = EXCLUDED.processing_duration_seconds,
                 generated_at = NOW()

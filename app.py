@@ -1662,6 +1662,34 @@ def ensure_schema():
                 -- Create index AFTER adding columns
                 CREATE INDEX IF NOT EXISTS idx_beta_users_terms_version ON beta_users(terms_version);
 
+                -- Unsubscribe tokens table (create first, before constraint migrations)
+                CREATE TABLE IF NOT EXISTS unsubscribe_tokens (
+                    id SERIAL PRIMARY KEY,
+                    user_email VARCHAR(255) NOT NULL,
+                    token VARCHAR(64) UNIQUE NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    used_at TIMESTAMPTZ,
+                    ip_address VARCHAR(45),
+                    user_agent TEXT
+                    -- NOTE: No foreign key constraint. Email can appear multiple times in beta_users,
+                    -- and unsubscribing one email should unsubscribe ALL accounts with that email.
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_email ON unsubscribe_tokens(user_email);
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
+
+                -- Drop foreign key constraint on unsubscribe_tokens (if exists) BEFORE dropping email UNIQUE
+                -- This migration handles existing databases that have the FK constraint
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.table_constraints
+                              WHERE constraint_name = 'unsubscribe_tokens_user_email_fkey'
+                              AND table_name = 'unsubscribe_tokens') THEN
+                        ALTER TABLE unsubscribe_tokens DROP CONSTRAINT unsubscribe_tokens_user_email_fkey;
+                    END IF;
+                END $$;
+
                 -- Drop old UNIQUE constraint on email (migration for duplicate email support)
                 DO $$
                 BEGIN
@@ -1671,22 +1699,6 @@ def ensure_schema():
                         ALTER TABLE beta_users DROP CONSTRAINT beta_users_email_key;
                     END IF;
                 END $$;
-
-                -- Unsubscribe tokens table
-                CREATE TABLE IF NOT EXISTS unsubscribe_tokens (
-                    id SERIAL PRIMARY KEY,
-                    user_email VARCHAR(255) NOT NULL,
-                    token VARCHAR(64) UNIQUE NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    used_at TIMESTAMPTZ,
-                    ip_address VARCHAR(45),
-                    user_agent TEXT,
-                    FOREIGN KEY (user_email) REFERENCES beta_users(email) ON DELETE CASCADE
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
-                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_email ON unsubscribe_tokens(user_email);
-                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
 
                 -- Daily Email Queue: Workflow for beta user emails
                 CREATE TABLE IF NOT EXISTS email_queue (

@@ -34,7 +34,7 @@ CRITICAL INSTRUCTIONS:
 - Use actual numbers with units
 - Extract only facts explicitly stated in the filing
 - Skip sections with no disclosed data
-- Target length: 5-10 pages (~5,000-10,000 words)
+- Target length: 5-7 pages (~3,000-6,000 words)
 
 ---
 COMPLETE 10-K DOCUMENT:
@@ -82,7 +82,7 @@ CRITICAL INSTRUCTIONS:
 - Extract only facts explicitly stated in the filing
 - Show QoQ and YoY comparisons with percentage changes
 - Skip sections with no disclosed data
-- Target length: 5-10 pages (~5,000-10,000 words)
+- Target length: 5-7 pages (~3,000-6,000 words)
 
 ---
 COMPLETE 10-Q DOCUMENT:
@@ -287,7 +287,7 @@ def generate_sec_filing_profile_with_gemini(
 
     Returns:
         {
-            'profile_markdown': str (5,000-10,000 words for 10-K, 5,000-10,000 for 10-Q),
+            'profile_markdown': str (3,000-6,000 words for 10-K, 3,000-6,000 for 10-Q),
             'metadata': {
                 'model': str,
                 'generation_time_seconds': int,
@@ -324,11 +324,11 @@ def generate_sec_filing_profile_with_gemini(
         if filing_type == '10-K':
             prompt_template = GEMINI_10K_PROMPT
             filing_desc = f"10-K for FY{fiscal_year}"
-            target_words = "5,000-10,000"
+            target_words = "3,000-6,000"
         else:  # 10-Q
             prompt_template = GEMINI_10Q_PROMPT
             filing_desc = f"10-Q for {fiscal_quarter} {fiscal_year}"
-            target_words = "5,000-10,000"
+            target_words = "3,000-6,000"
             # Extract quarter number for prompt (Q3 -> 3)
             quarter_num = fiscal_quarter[1] if fiscal_quarter else "?"
 

@@ -13977,12 +13977,13 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
             sources_loaded = []
 
             # 1. EARNINGS TRANSCRIPT (Management's Current View)
-            # Fetch most recent earnings call transcript
+            # Fetch most recent earnings call transcript (prefer Claude, fallback to any provider)
             cur.execute("""
-                SELECT summary_text, quarter, year, report_date, company_name
+                SELECT summary_text, quarter, year, report_date, company_name, ai_provider
                 FROM transcript_summaries
                 WHERE ticker = %s AND report_type = 'transcript'
-                ORDER BY year DESC, quarter DESC
+                ORDER BY year DESC, quarter DESC,
+                         CASE WHEN ai_provider = 'claude' THEN 0 ELSE 1 END
                 LIMIT 1
             """, (ticker,))
 
@@ -13993,6 +13994,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                 year = transcript_row['year']
                 report_date = transcript_row['report_date']
                 transcript_company_name = transcript_row['company_name'] or company_name
+                ai_provider = transcript_row['ai_provider']
 
                 # Format date as "Aug 7, 2025"
                 date_formatted = report_date.strftime('%b %d, %Y') if report_date else "Unknown Date"
@@ -14002,7 +14004,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                     f"[{ticker} ({transcript_company_name}) {quarter} {year} Earnings Call ({date_formatted})]\n\n"
                     f"{summary_text}\n\n"
                 )
-                LOG.info(f"[{ticker}] ✅ Loaded Transcript ({quarter} {year}, {len(summary_text):,} chars)")
+                LOG.info(f"[{ticker}] ✅ Loaded Transcript ({quarter} {year}, {ai_provider}, {len(summary_text):,} chars)")
                 sources_loaded.append(f"Transcript ({quarter} {year})")
             else:
                 LOG.debug(f"[{ticker}] No Transcript found - proceeding without earnings call context")
@@ -14010,7 +14012,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
             # 2. 10-Q PROFILE (Recent Financial Trends)
             # Fetch most recent quarterly SEC filing
             cur.execute("""
-                SELECT profile_markdown, fiscal_year, fiscal_quarter, filing_date, company_name
+                SELECT profile_markdown, fiscal_year, fiscal_quarter, filing_date, company_name, ai_provider
                 FROM sec_filings
                 WHERE ticker = %s AND filing_type = '10-Q'
                 ORDER BY fiscal_year DESC, fiscal_quarter DESC
@@ -14024,6 +14026,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                 fiscal_year = tenq_row['fiscal_year']
                 filing_date = tenq_row['filing_date']
                 tenq_company_name = tenq_row['company_name'] or company_name
+                ai_provider_10q = tenq_row.get('ai_provider', 'unknown')
 
                 # Format date as "Aug 1, 2025"
                 date_formatted = filing_date.strftime('%b %d, %Y') if filing_date else "Unknown Date"
@@ -14033,7 +14036,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                     f"[{ticker} ({tenq_company_name}) {fiscal_quarter} {fiscal_year} 10-Q Filing, Filed: {date_formatted}]\n\n"
                     f"{markdown}\n\n"
                 )
-                LOG.info(f"[{ticker}] ✅ Loaded 10-Q profile ({fiscal_quarter} {fiscal_year}, {len(markdown):,} chars)")
+                LOG.info(f"[{ticker}] ✅ Loaded 10-Q profile ({fiscal_quarter} {fiscal_year}, {ai_provider_10q}, {len(markdown):,} chars)")
                 sources_loaded.append(f"10-Q ({fiscal_quarter} {fiscal_year})")
             else:
                 LOG.debug(f"[{ticker}] No 10-Q found - proceeding without quarterly SEC context")
@@ -14041,7 +14044,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
             # 3. 10-K PROFILE (Business Foundation)
             # Fetch most recent annual SEC filing
             cur.execute("""
-                SELECT profile_markdown, fiscal_year, filing_date, company_name
+                SELECT profile_markdown, fiscal_year, filing_date, company_name, ai_provider
                 FROM sec_filings
                 WHERE ticker = %s AND filing_type = '10-K'
                 ORDER BY fiscal_year DESC
@@ -14054,6 +14057,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                 fiscal_year = tenk_row['fiscal_year']
                 filing_date = tenk_row['filing_date']
                 tenk_company_name = tenk_row['company_name'] or company_name
+                ai_provider_10k = tenk_row.get('ai_provider', 'unknown')
 
                 # Format date as "Feb 15, 2025"
                 date_formatted = filing_date.strftime('%b %d, %Y') if filing_date else "Unknown Date"
@@ -14063,7 +14067,7 @@ def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict
                     f"[{ticker} ({tenk_company_name}) 10-K FILING FOR FISCAL YEAR {fiscal_year}, Filed: {date_formatted}]\n\n"
                     f"{markdown}\n\n"
                 )
-                LOG.info(f"[{ticker}] ✅ Loaded 10-K profile (FY{fiscal_year}, {len(markdown):,} chars)")
+                LOG.info(f"[{ticker}] ✅ Loaded 10-K profile (FY{fiscal_year}, {ai_provider_10k}, {len(markdown):,} chars)")
                 sources_loaded.append(f"10-K (FY{fiscal_year})")
             else:
                 LOG.debug(f"[{ticker}] No 10-K found - proceeding without annual SEC context")

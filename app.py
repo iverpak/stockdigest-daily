@@ -26514,10 +26514,6 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
                 else:
                     continue
 
-                # Skip Q4 (covered by 10-K)
-                if quarter == 4:
-                    continue
-
                 available_10q.append({
                     "quarter": quarter,
                     "year": year,
@@ -26679,8 +26675,7 @@ async def get_missing_financials_status(token: str):
                             year = int(period[:4])
                             month = int(period[5:7])
                             quarter = 1 if month == 3 else 2 if month == 6 else 3 if month == 9 else 4
-                            if quarter != 4:  # Skip Q4 (covered by 10-K)
-                                latest_10q = {"year": year, "quarter": quarter}
+                            latest_10q = {"year": year, "quarter": quarter}
 
                 # Fetch latest transcript from FMP
                 transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
@@ -26871,54 +26866,53 @@ async def generate_missing_financials(request: Request):
                             month = int(period[5:7])
                             quarter = 1 if month == 3 else 2 if month == 6 else 3 if month == 9 else 4
 
-                            if quarter != 4:  # Skip Q4 (covered by 10-K)
-                                # Check if we have this quarter
+                            # Check if we have this quarter
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("""
+                                    SELECT fiscal_year, fiscal_quarter FROM sec_filings
+                                    WHERE ticker = %s AND filing_type = '10-Q'
+                                    ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
+                                """, (ticker,))
+                                result = cur.fetchone()
+                                our_10q = None
+                                if result:
+                                    quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
+                                    if quarter_num:
+                                        our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
+
+                            if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
+                                # Queue 10-Q generation job
+                                batch_id = str(uuid.uuid4())
+                                job_config = {
+                                    "ticker": ticker,
+                                    "filing_type": "10-Q",
+                                    "fiscal_year": year,
+                                    "fiscal_quarter": f"Q{quarter}",
+                                    "filing_date": latest_filing.get("fillingDate"),
+                                    "period_end_date": period,
+                                    "sec_html_url": latest_filing.get("finalLink"),
+                                    "send_email": True
+                                }
+
                                 with db() as conn, conn.cursor() as cur:
                                     cur.execute("""
-                                        SELECT fiscal_year, fiscal_quarter FROM sec_filings
-                                        WHERE ticker = %s AND filing_type = '10-Q'
-                                        ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
-                                    """, (ticker,))
-                                    result = cur.fetchone()
-                                    our_10q = None
-                                    if result:
-                                        quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
-                                        if quarter_num:
-                                            our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
+                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                        VALUES (%s, %s, 1, %s)
+                                    """, (batch_id, 'processing', json.dumps(job_config)))
 
-                                if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
-                                    # Queue 10-Q generation job
-                                    batch_id = str(uuid.uuid4())
-                                    job_config = {
-                                        "ticker": ticker,
-                                        "filing_type": "10-Q",
-                                        "fiscal_year": year,
-                                        "fiscal_quarter": f"Q{quarter}",
-                                        "filing_date": latest_filing.get("fillingDate"),
-                                        "period_end_date": period,
-                                        "sec_html_url": latest_filing.get("finalLink"),
-                                        "send_email": True
-                                    }
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_jobs (
+                                            batch_id, ticker, status, phase, progress, config
+                                        )
+                                        VALUES (%s, %s, %s, %s, 0, %s)
+                                        RETURNING job_id
+                                    """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
 
-                                    with db() as conn, conn.cursor() as cur:
-                                        cur.execute("""
-                                            INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
-                                            VALUES (%s, %s, 1, %s)
-                                        """, (batch_id, 'processing', json.dumps(job_config)))
+                                    job_id = cur.fetchone()['job_id']
+                                    conn.commit()
 
-                                        cur.execute("""
-                                            INSERT INTO ticker_processing_jobs (
-                                                batch_id, ticker, status, phase, progress, config
-                                            )
-                                            VALUES (%s, %s, %s, %s, 0, %s)
-                                            RETURNING job_id
-                                        """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
-
-                                        job_id = cur.fetchone()['job_id']
-                                        conn.commit()
-
-                                    jobs_created.append(f"{ticker} 10-Q Q{quarter} {year}")
-                                    LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
+                                jobs_created.append(f"{ticker} 10-Q Q{quarter} {year}")
+                                LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
 
                 # Fetch latest transcript
                 transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")

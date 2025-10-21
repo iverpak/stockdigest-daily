@@ -1169,9 +1169,9 @@
                                     </label>
                                 </div>
                                 <div style="font-size: 13px; color: #6b7280; line-height: 1.6; margin-left: 30px;">
-                                    <div>${missing10K} 10-K: ${ticker.missing_10k ? `<strong style="color: #92400e;">Missing FY ${ticker.latest_10k_year || '?'}</strong>` : `Have FY ${ticker.our_10k_year || '?'}`}</div>
-                                    <div>${missing10Q} 10-Q: ${ticker.missing_10q ? `<strong style="color: #92400e;">Missing Q${ticker.latest_10q?.quarter || '?'} ${ticker.latest_10q?.year || ''}</strong>` : ticker.our_10q ? `Have Q${ticker.our_10q.quarter} ${ticker.our_10q.year}` : 'None'}</div>
-                                    <div>${missingTranscript} Transcript: ${ticker.missing_transcript ? `<strong style="color: #92400e;">Missing Q${ticker.latest_transcript?.quarter || '?'} ${ticker.latest_transcript?.year || ''}</strong>` : ticker.our_transcript ? `Have Q${ticker.our_transcript.quarter} ${ticker.our_transcript.year}` : 'None'}</div>
+                                    <div>${missing10K} 10-K: FY ${ticker.latest_10k_year || '?'}</div>
+                                    <div>${missing10Q} 10-Q: ${ticker.latest_10q ? `Q${ticker.latest_10q.quarter} ${ticker.latest_10q.year}` : 'None available'}</div>
+                                    <div>${missingTranscript} Transcript: ${ticker.latest_transcript ? `Q${ticker.latest_transcript.quarter} ${ticker.latest_transcript.year}` : 'None available'}</div>
                                 </div>
                             </div>
                         `;

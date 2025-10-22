@@ -27044,65 +27044,130 @@ async def get_missing_financials_status(token: str):
         LOG.error(f"Failed to get missing financials status: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
-@APP.post("/api/admin/generate-missing-financials")
-async def generate_missing_financials(request: Request):
+async def process_ticker_missing_financials(ticker: str):
     """
-    Generate missing financials (10-K, 10-Q, Transcripts) for selected tickers.
-    Queues jobs for missing items only (skips if we have latest).
+    Process one ticker for missing financials - fetches 10-K, 10-Q, Transcript in PARALLEL.
+    Returns: (ticker_jobs, ticker_transcripts) or Exception
     """
     try:
-        body = await request.json()
-        token = body.get('token')
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            LOG.warning(f"Skipping {ticker}: not in database")
+            return ([], [])
 
-        if not check_admin_token(token):
-            return {"status": "error", "message": "Unauthorized"}
+        # PARALLEL FMP API CALLS - All 3 fetched simultaneously
+        profile_response, tenq_response, transcript_response = await asyncio.gather(
+            validate_ticker_for_research(ticker=ticker, type="profile"),
+            validate_ticker_for_research(ticker=ticker, type="10q"),
+            validate_ticker_for_research(ticker=ticker, type="transcript"),
+            return_exceptions=True
+        )
 
-        selected_tickers = body.get('tickers', [])
-        if not selected_tickers:
-            return {"status": "error", "message": "No tickers selected"}
+        # Handle exceptions from parallel calls
+        if isinstance(profile_response, Exception):
+            LOG.error(f"10-K fetch failed for {ticker}: {profile_response}")
+            profile_response = {"valid": False}
+        if isinstance(tenq_response, Exception):
+            LOG.error(f"10-Q fetch failed for {ticker}: {tenq_response}")
+            tenq_response = {"valid": False}
+        if isinstance(transcript_response, Exception):
+            LOG.error(f"Transcript fetch failed for {ticker}: {transcript_response}")
+            transcript_response = {"valid": False}
 
-        LOG.info(f"📑 Generating missing financials for {len(selected_tickers)} tickers")
+        ticker_jobs = []
+        ticker_transcripts = []
 
-        jobs_created = []
-        transcripts_to_generate = []
+        # Process 10-K
+        if profile_response.get("valid"):
+            years = profile_response.get("available_years", [])
+            if years:
+                latest_year_data = years[0]
+                latest_year = latest_year_data["year"]
 
-        for ticker in selected_tickers:
-            try:
-                # Get ticker config
-                config = get_ticker_config(ticker)
-                if not config:
-                    LOG.warning(f"Skipping {ticker}: not in database")
-                    continue
+                # Check if we have this year
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT fiscal_year FROM sec_filings
+                        WHERE ticker = %s AND filing_type = '10-K'
+                        ORDER BY fiscal_year DESC LIMIT 1
+                    """, (ticker,))
+                    result = cur.fetchone()
+                    our_year = result['fiscal_year'] if result else None
 
-                # Use existing validation endpoint (same as Research page)
-                # Check latest 10-K from FMP
-                profile_response = await validate_ticker_for_research(ticker=ticker, type="profile")
-                if profile_response.get("valid"):
-                    years = profile_response.get("available_years", [])
-                    if years:
-                        latest_year_data = years[0]  # Already sorted, first is latest
-                        latest_year = latest_year_data["year"]
+                if not our_year or latest_year > our_year:
+                    # Queue 10-K generation job
+                    batch_id = str(uuid.uuid4())
+                    job_config = {
+                        "ticker": ticker,
+                        "filing_type": "10-K",
+                        "fiscal_year": latest_year,
+                        "filing_date": latest_year_data.get("filing_date"),
+                        "period_end_date": latest_year_data.get("period_end_date"),
+                        "sec_html_url": latest_year_data.get("sec_html_url"),
+                        "send_email": True
+                    }
 
-                        # Check if we have this year
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                            VALUES (%s, %s, 1, %s)
+                        """, (batch_id, 'processing', json.dumps(job_config)))
+
+                        cur.execute("""
+                            INSERT INTO ticker_processing_jobs (
+                                batch_id, ticker, status, phase, progress, config
+                            )
+                            VALUES (%s, %s, %s, %s, 0, %s)
+                            RETURNING job_id
+                        """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
+
+                        job_id = cur.fetchone()['job_id']
+                        conn.commit()
+
+                    ticker_jobs.append({"ticker": ticker, "items": [f"10-K FY{latest_year}"]})
+                    LOG.info(f"✅ Queued 10-K job for {ticker} FY{latest_year}")
+
+        # Process 10-Q
+        if tenq_response.get("valid"):
+            quarters = tenq_response.get("available_quarters", [])
+            if quarters:
+                q = quarters[0]
+                if isinstance(q, dict):
+                    quarter_str = q.get("quarter", "")
+                    quarter = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
+                    year = q.get("fiscal_year")
+
+                    if quarter and year:
+                        # Check if we have this quarter
                         with db() as conn, conn.cursor() as cur:
                             cur.execute("""
-                                SELECT fiscal_year FROM sec_filings
-                                WHERE ticker = %s AND filing_type = '10-K'
-                                ORDER BY fiscal_year DESC LIMIT 1
+                                SELECT fiscal_year, fiscal_quarter FROM sec_filings
+                                WHERE ticker = %s AND filing_type = '10-Q'
+                                ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
                             """, (ticker,))
                             result = cur.fetchone()
-                            our_year = result['fiscal_year'] if result else None
+                            our_10q = None
+                            if result:
+                                quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
+                                if quarter_num:
+                                    our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
 
-                        if not our_year or latest_year > our_year:
-                            # Queue 10-K generation job
+                        if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
+                            filing_date = q.get("filing_date")
+                            period_end_date = q.get("period_end_date")
+                            sec_html_url = q.get("sec_html_url")
+
+                            # Queue 10-Q generation job
                             batch_id = str(uuid.uuid4())
                             job_config = {
                                 "ticker": ticker,
-                                "filing_type": "10-K",
-                                "fiscal_year": latest_year,
-                                "filing_date": latest_year_data.get("filing_date"),
-                                "period_end_date": latest_year_data.get("period_end_date"),
-                                "sec_html_url": latest_year_data.get("sec_html_url"),
+                                "filing_type": "10-Q",
+                                "fiscal_year": year,
+                                "fiscal_quarter": f"Q{quarter}",
+                                "filing_date": filing_date,
+                                "period_end_date": period_end_date,
+                                "sec_html_url": sec_html_url,
                                 "send_email": True
                             }
 
@@ -27118,137 +27183,108 @@ async def generate_missing_financials(request: Request):
                                     )
                                     VALUES (%s, %s, %s, %s, 0, %s)
                                     RETURNING job_id
-                                """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
+                                """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
 
                                 job_id = cur.fetchone()['job_id']
                                 conn.commit()
 
-                            jobs_created.append({"ticker": ticker, "items": [f"10-K FY{latest_year}"]})
-                            LOG.info(f"✅ Queued 10-K job for {ticker} FY{latest_year}")
-
-                # Check latest 10-Q from FMP
-                tenq_response = await validate_ticker_for_research(ticker=ticker, type="10q")
-                if tenq_response.get("valid"):
-                    quarters = tenq_response.get("available_quarters", [])
-                    if quarters:
-                        # quarters[0] is a dict with {quarter: "Q2", fiscal_year: 2025, ...}
-                        q = quarters[0]
-                        if isinstance(q, dict):
-                            # Extract quarter number from "Q2" -> 2
-                            quarter_str = q.get("quarter", "")
-                            quarter = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
-                            year = q.get("fiscal_year")
-
-                            if quarter and year:
-                                # Check if we have this quarter
-                                with db() as conn, conn.cursor() as cur:
-                                    cur.execute("""
-                                        SELECT fiscal_year, fiscal_quarter FROM sec_filings
-                                        WHERE ticker = %s AND filing_type = '10-Q'
-                                        ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
-                                    """, (ticker,))
-                                    result = cur.fetchone()
-                                    our_10q = None
-                                    if result:
-                                        quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
-                                        if quarter_num:
-                                            our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
-
-                                if not our_10q or year > our_10q['year'] or (year == our_10q['year'] and quarter > our_10q['quarter']):
-                                    # Get full filing details from dict
-                                    filing_date = q.get("filing_date")
-                                    period_end_date = q.get("period_end_date")
-                                    sec_html_url = q.get("sec_html_url")
-
-                                    # Queue 10-Q generation job
-                                    batch_id = str(uuid.uuid4())
-                                    job_config = {
-                                        "ticker": ticker,
-                                        "filing_type": "10-Q",
-                                        "fiscal_year": year,
-                                        "fiscal_quarter": f"Q{quarter}",
-                                        "filing_date": filing_date,
-                                        "period_end_date": period_end_date,
-                                        "sec_html_url": sec_html_url,
-                                        "send_email": True
-                                    }
-
-                                    with db() as conn, conn.cursor() as cur:
-                                        cur.execute("""
-                                            INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
-                                            VALUES (%s, %s, 1, %s)
-                                        """, (batch_id, 'processing', json.dumps(job_config)))
-
-                                        cur.execute("""
-                                            INSERT INTO ticker_processing_jobs (
-                                                batch_id, ticker, status, phase, progress, config
-                                            )
-                                            VALUES (%s, %s, %s, %s, 0, %s)
-                                            RETURNING job_id
-                                        """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
-
-                                        job_id = cur.fetchone()['job_id']
-                                        conn.commit()
-
-                                    # Append to existing ticker or create new entry
-                                    existing = next((j for j in jobs_created if j["ticker"] == ticker), None)
-                                    if existing:
-                                        existing["items"].append(f"10-Q Q{quarter} {year}")
-                                    else:
-                                        jobs_created.append({"ticker": ticker, "items": [f"10-Q Q{quarter} {year}"]})
-                                    LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
-
-                # Fetch latest transcript
-                transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
-                if transcript_response.get("valid"):
-                    quarters = transcript_response.get("available_quarters", [])
-                    if quarters:
-                        # quarters[0] is a dict: {"quarter": 2, "year": 2026, "label": "Q2 FY2026", ...}
-                        # Extract quarter and year from dict (preferred method)
-                        if isinstance(quarters[0], dict):
-                            quarter = quarters[0].get('quarter')
-                            year = quarters[0].get('year')
-                        else:
-                            # Fallback: Parse from label string (backward compatibility)
-                            import re
-                            match = re.match(r"Q(\d+)\s+FY(\d{4})", quarters[0]['label'])
-                            if match:
-                                quarter = int(match.group(1))
-                                year = int(match.group(2))
+                            # Append to existing ticker or create new entry
+                            existing = next((j for j in ticker_jobs if j["ticker"] == ticker), None)
+                            if existing:
+                                existing["items"].append(f"10-Q Q{quarter} {year}")
                             else:
-                                LOG.warning(f"Failed to parse transcript quarter for {ticker}: {quarters[0]}")
-                                quarter = None
-                                year = None
+                                ticker_jobs.append({"ticker": ticker, "items": [f"10-Q Q{quarter} {year}"]})
+                            LOG.info(f"✅ Queued 10-Q job for {ticker} Q{quarter} {year}")
 
-                        if quarter and year:
+        # Process Transcript
+        if transcript_response.get("valid"):
+            quarters = transcript_response.get("available_quarters", [])
+            if quarters:
+                if isinstance(quarters[0], dict):
+                    quarter = quarters[0].get('quarter')
+                    year = quarters[0].get('year')
+                else:
+                    # Fallback: Parse from label string
+                    import re
+                    match = re.match(r"Q(\d+)\s+FY(\d{4})", quarters[0]['label'])
+                    if match:
+                        quarter = int(match.group(1))
+                        year = int(match.group(2))
+                    else:
+                        LOG.warning(f"Failed to parse transcript quarter for {ticker}: {quarters[0]}")
+                        quarter = None
+                        year = None
 
-                            # Check if we have this transcript
-                            with db() as conn, conn.cursor() as cur:
-                                cur.execute("""
-                                    SELECT year, quarter FROM transcript_summaries
-                                    WHERE ticker = %s AND report_type = 'transcript'
-                                    ORDER BY year DESC, quarter DESC LIMIT 1
-                                """, (ticker,))
-                                result = cur.fetchone()
-                                our_transcript = None
-                                if result:
-                                    quarter_str = result['quarter']
-                                    quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
-                                    if quarter_num:
-                                        our_transcript = {"year": result['year'], "quarter": quarter_num}
+                if quarter and year:
+                    # Check if we have this transcript
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT year, quarter FROM transcript_summaries
+                            WHERE ticker = %s AND report_type = 'transcript'
+                            ORDER BY year DESC, quarter DESC LIMIT 1
+                        """, (ticker,))
+                        result = cur.fetchone()
+                        our_transcript = None
+                        if result:
+                            quarter_str = result['quarter']
+                            quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
+                            if quarter_num:
+                                our_transcript = {"year": result['year'], "quarter": quarter_num}
 
-                            if not our_transcript or year > our_transcript['year'] or (year == our_transcript['year'] and quarter > our_transcript['quarter']):
-                                # Add to transcript generation list (synchronous, not job queue)
-                                transcripts_to_generate.append({
-                                    "ticker": ticker,
-                                    "quarter": quarter,
-                                    "year": year
-                                })
-                                LOG.info(f"✅ Will generate transcript for {ticker} Q{quarter} {year}")
+                    if not our_transcript or year > our_transcript['year'] or (year == our_transcript['year'] and quarter > our_transcript['quarter']):
+                        ticker_transcripts.append({
+                            "ticker": ticker,
+                            "quarter": quarter,
+                            "year": year
+                        })
+                        LOG.info(f"✅ Will generate transcript for {ticker} Q{quarter} FY{year}")
 
-            except Exception as e:
-                LOG.error(f"Error processing {ticker}: {e}")
+        return (ticker_jobs, ticker_transcripts)
+
+    except Exception as e:
+        LOG.error(f"Error processing {ticker}: {e}")
+        return ([], [])
+
+
+@APP.post("/api/admin/generate-missing-financials")
+async def generate_missing_financials(request: Request):
+    """
+    Generate missing financials (10-K, 10-Q, Transcripts) for selected tickers.
+    Queues jobs for missing items only (skips if we have latest).
+
+    OPTIMIZED: Uses parallel FMP API calls (all tickers processed concurrently).
+    """
+    try:
+        body = await request.json()
+        token = body.get('token')
+
+        if not check_admin_token(token):
+            return {"status": "error", "message": "Unauthorized"}
+
+        selected_tickers = body.get('tickers', [])
+        if not selected_tickers:
+            return {"status": "error", "message": "No tickers selected"}
+
+        LOG.info(f"📑 Generating missing financials for {len(selected_tickers)} tickers")
+
+        # PARALLEL PROCESSING - All tickers processed simultaneously
+        ticker_results = await asyncio.gather(*[
+            process_ticker_missing_financials(ticker)
+            for ticker in selected_tickers
+        ], return_exceptions=True)
+
+        # Collect results from parallel processing
+        jobs_created = []
+        transcripts_to_generate = []
+
+        for result in ticker_results:
+            if isinstance(result, Exception):
+                LOG.error(f"Ticker processing failed: {result}")
                 continue
+
+            ticker_jobs, ticker_transcripts = result
+            jobs_created.extend(ticker_jobs)
+            transcripts_to_generate.extend(ticker_transcripts)
 
         # Generate transcripts synchronously (they're fast - 30-60s each)
         for item in transcripts_to_generate:

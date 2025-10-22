@@ -26564,6 +26564,204 @@ async def email_research_api(request: Request):
         LOG.error(f"Failed to email {research_type} for {ticker}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+# =============================================================================
+# PARALLEL FMP API HELPERS (for faster research status loading)
+# =============================================================================
+
+async def fetch_fmp_10k_list_async(ticker: str, session: aiohttp.ClientSession) -> List[Dict]:
+    """Fetch 10-K filings from FMP using aiohttp (parallel-safe)"""
+    try:
+        fmp_url = f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-K&page=0&apikey={FMP_API_KEY}"
+        async with session.get(fmp_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            filings = await response.json()
+
+            # Extract years and dates (last 10 years)
+            available_years = []
+            for filing in filings[:10]:
+                try:
+                    filing_date_str = filing.get("fillingDate", "")
+                    sec_html_url = filing.get("finalLink", "")
+
+                    # Extract period end date from finalLink filename
+                    # Example: https://www.sec.gov/.../jpm-20241231.htm → 20241231
+                    period_date = None
+                    year = None
+
+                    if sec_html_url:
+                        match = re.search(r'(\d{8})\.htm$', sec_html_url)
+                        if match:
+                            date_str = match.group(1)  # "20241231"
+                            year = int(date_str[:4])  # 2024
+                            period_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"  # "2024-12-31"
+
+                    # Fallback to filing date if we couldn't extract from URL
+                    if not year and filing_date_str:
+                        year = int(filing_date_str[:4])
+
+                    if not year:
+                        continue
+
+                    filing_date = filing_date_str[:10] if filing_date_str else None
+
+                    available_years.append({
+                        "year": year,
+                        "filing_date": filing_date,
+                        "period_end_date": period_date,
+                        "sec_html_url": sec_html_url
+                    })
+                except (ValueError, KeyError) as e:
+                    LOG.warning(f"Skipping invalid 10-K filing entry for {ticker}: {e}")
+                    continue
+
+            return available_years
+    except Exception as e:
+        LOG.error(f"Failed to fetch FMP 10-K list for {ticker}: {e}")
+        return []
+
+
+async def fetch_fmp_10q_list_async(ticker: str, session: aiohttp.ClientSession) -> List[Dict]:
+    """Fetch 10-Q filings from FMP using aiohttp (parallel-safe)"""
+    try:
+        fmp_url = f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}"
+        async with session.get(fmp_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            filings = await response.json()
+
+            # Extract quarters and dates (last 12 quarters = 3 years)
+            available_quarters = []
+            for filing in filings[:12]:
+                try:
+                    filing_date_str = filing.get("fillingDate", "")
+                    sec_html_url = filing.get("finalLink", "")
+
+                    # Extract period end date from finalLink filename
+                    period_date = None
+                    year = None
+                    month = None
+
+                    if sec_html_url:
+                        match = re.search(r'(\d{8})\.htm$', sec_html_url)
+                        if match:
+                            date_str = match.group(1)  # "20250630"
+                            year = int(date_str[:4])  # 2025
+                            month = int(date_str[4:6])  # 06
+                            period_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"  # "2025-06-30"
+
+                    # Use period end date to calculate quarter
+                    if year and month:
+                        if month == 3:
+                            quarter = "Q1"
+                        elif month == 6:
+                            quarter = "Q2"
+                        elif month == 9:
+                            quarter = "Q3"
+                        elif month == 12:
+                            quarter = "Q4"
+                        else:
+                            quarter_num = (month - 1) // 3 + 1
+                            quarter = f"Q{quarter_num}"
+                        fiscal_year = year
+                    elif filing_date_str:
+                        # Fallback to filing date logic
+                        filing_date = filing_date_str[:10]
+                        year = int(filing_date[:4])
+                        month = int(filing_date[5:7])
+                        day = int(filing_date[8:10])
+
+                        if month >= 10 or (month == 9 and day == 30):
+                            quarter = "Q3"
+                            fiscal_year = year
+                        elif month >= 7 or (month == 6 and day == 30):
+                            quarter = "Q2"
+                            fiscal_year = year
+                        elif month >= 4 or (month == 3 and day == 31):
+                            quarter = "Q1"
+                            fiscal_year = year
+                        else:
+                            continue
+                        period_date = None
+                    else:
+                        continue
+
+                    filing_date = filing_date_str[:10] if filing_date_str else None
+
+                    # Skip Q4 10-Qs
+                    if quarter == "Q4":
+                        continue
+
+                    available_quarters.append({
+                        "quarter": quarter,
+                        "fiscal_year": fiscal_year,
+                        "filing_date": filing_date,
+                        "period_end_date": period_date,
+                        "sec_html_url": sec_html_url,
+                        "label": f"{quarter} {fiscal_year}"
+                    })
+                except (ValueError, KeyError) as e:
+                    LOG.warning(f"Skipping invalid 10-Q filing entry for {ticker}: {e}")
+                    continue
+
+            return available_quarters
+    except Exception as e:
+        LOG.error(f"Failed to fetch FMP 10-Q list for {ticker}: {e}")
+        return []
+
+
+async def fetch_fmp_transcripts_async(ticker: str, session: aiohttp.ClientSession) -> List[Dict]:
+    """Fetch transcripts from FMP using aiohttp (parallel-safe)"""
+    try:
+        # Use existing fetch_fmp_transcript_list but make it async-safe
+        # NOTE: This function still uses requests internally, but we'll refactor later
+        # For now, run it in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        transcripts = await loop.run_in_executor(None, fetch_fmp_transcript_list, ticker, FMP_API_KEY)
+
+        if not transcripts:
+            return []
+
+        # Format quarters using FMP's fiscal year data directly
+        quarters = []
+        for t in transcripts[:8]:
+            try:
+                quarters.append({
+                    "quarter": t['quarter'],
+                    "year": t['year'],
+                    "call_date": t['date'][:10],
+                    "label": f"Q{t['quarter']} FY{t['year']}"
+                })
+            except (ValueError, KeyError, IndexError) as e:
+                LOG.warning(f"Failed to parse transcript data for {ticker}: {e}")
+                continue
+
+        return quarters
+    except Exception as e:
+        LOG.error(f"Failed to fetch FMP transcripts for {ticker}: {e}")
+        return []
+
+
+async def fetch_fmp_press_releases_async(ticker: str, session: aiohttp.ClientSession) -> List[Dict]:
+    """Fetch press releases from FMP using aiohttp (parallel-safe)"""
+    try:
+        # Use existing fetch_fmp_press_releases but make it async-safe
+        loop = asyncio.get_event_loop()
+        releases = await loop.run_in_executor(None, fetch_fmp_press_releases, ticker, FMP_API_KEY, 20)
+
+        if not releases:
+            return []
+
+        # Format releases (limit to 10 most recent)
+        formatted_releases = []
+        for release in releases[:10]:
+            formatted_releases.append({
+                "date": release.get("date"),
+                "title": release.get("title")
+            })
+
+        return formatted_releases
+    except Exception as e:
+        LOG.error(f"Failed to fetch FMP press releases for {ticker}: {e}")
+        return []
+
+
 @APP.get("/api/admin/ticker-research-status")
 async def get_ticker_research_status(ticker: str = Query(...), token: str = Query(...)):
     """Get comprehensive research status for a ticker - what's available from FMP + what's already generated"""
@@ -26573,112 +26771,37 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
     ticker = ticker.upper().strip()
 
     try:
-        # Validate ticker and fetch 10-Ks
-        profile_response = await validate_ticker_for_research(ticker=ticker, type="profile")
-        if not profile_response.get("valid"):
-            return {"status": "error", "message": profile_response.get("error", "Invalid ticker")}
+        # Validate ticker exists in database
+        config = get_ticker_config(ticker)
+        if not config or not config.get('has_full_config', True):
+            return {"status": "error", "message": "Ticker not found in database"}
 
-        company_name = profile_response.get("company_name")
-        industry = profile_response.get("industry")
+        company_name = config.get("company_name", ticker)
+        industry = config.get("industry", "N/A")
 
-        # Fetch available 10-Ks from FMP
-        available_10k = profile_response.get("available_years", [])
+        # PARALLEL API CALLS - All 4 FMP endpoints fetched simultaneously
+        async with aiohttp.ClientSession() as session:
+            available_10k, available_10q, available_transcripts, available_press_releases = await asyncio.gather(
+                fetch_fmp_10k_list_async(ticker, session),
+                fetch_fmp_10q_list_async(ticker, session),
+                fetch_fmp_transcripts_async(ticker, session),
+                fetch_fmp_press_releases_async(ticker, session),
+                return_exceptions=True  # Continue even if one fails
+            )
 
-        # Fetch available 10-Qs from FMP (same endpoint, just filter by type)
-        fmp_10q_response = requests.get(
-            f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-Q&page=0&apikey={FMP_API_KEY}",
-            timeout=10
-        )
-        available_10q = []
-        if fmp_10q_response.status_code == 200:
-            filings_10q = fmp_10q_response.json()[:12]  # Latest 12 quarters (3 years)
-            for filing in filings_10q:
-                # Use period end date to calculate quarter (handles non-standard fiscal years)
-                period_end = filing.get("period", "")  # Actual quarter end date
-                filing_date_str = filing.get("fillingDate", "")
-
-                if period_end:
-                    year = int(period_end[:4])
-                    month = int(period_end[5:7])
-
-                    # Map quarter end month to quarter number
-                    if month == 3:
-                        quarter = 1
-                    elif month == 6:
-                        quarter = 2
-                    elif month == 9:
-                        quarter = 3
-                    elif month == 12:
-                        quarter = 4
-                    else:
-                        # Non-standard fiscal quarter
-                        quarter = (month - 1) // 3 + 1
-
-                    period_date = period_end[:10]
-                elif filing_date_str:
-                    # Fallback: Use correct logic - determine quarter from last quarter end before filing
-                    filing_date = filing_date_str[:10]  # Strip timestamp if present
-                    year = int(filing_date[:4])
-                    month = int(filing_date[5:7])
-                    day = int(filing_date[8:10])
-
-                    # Determine which quarter ended most recently before this filing date
-                    if month >= 10 or (month == 9 and day == 30):
-                        quarter = 3  # Filed Oct-Dec → Q3 (ended Sep 30)
-                    elif month >= 7 or (month == 6 and day == 30):
-                        quarter = 2  # Filed Jul-Sep → Q2 (ended Jun 30)
-                    elif month >= 4 or (month == 3 and day == 31):
-                        quarter = 1  # Filed Apr-Jun → Q1 (ended Mar 31)
-                    else:
-                        # Filed Jan-Mar → would be Q4, but Q4 doesn't have 10-Q
-                        continue
-                    period_date = None
-                else:
-                    continue
-
-                available_10q.append({
-                    "quarter": quarter,
-                    "year": year,
-                    "filing_date": filing_date_str,
-                    "period_end_date": period_date,
-                    "sec_html_url": filing.get("finalLink")
-                })
-
-        # Fetch available transcripts
-        transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
-        available_transcripts = []
-        if transcript_response.get("valid"):
-            quarters = transcript_response.get("available_quarters", [])
-            for q in quarters[:8]:  # Latest 8 quarters
-                # Now receiving objects with quarter, year, call_date, label
-                if isinstance(q, dict):
-                    available_transcripts.append({
-                        "quarter": q['quarter'],
-                        "year": q['year'],
-                        "call_date": q['call_date'],
-                        "label": q['label']
-                    })
-                else:
-                    # Fallback for old string format (shouldn't happen after deployment)
-                    match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))
-                    if match:
-                        available_transcripts.append({
-                            "quarter": int(match.group(1)),
-                            "year": int(match.group(2)),
-                            "call_date": None,
-                            "label": str(q)
-                        })
-
-        # Fetch available press releases
-        pr_response = await validate_ticker_for_research(ticker=ticker, type="press_release")
-        available_press_releases = []
-        if pr_response.get("valid"):
-            releases = pr_response.get("available_releases", [])[:10]  # Latest 10
-            for release in releases:
-                available_press_releases.append({
-                    "date": release.get("date"),
-                    "title": release.get("title")
-                })
+        # Handle exceptions from parallel calls
+        if isinstance(available_10k, Exception):
+            LOG.error(f"10-K fetch failed for {ticker}: {available_10k}")
+            available_10k = []
+        if isinstance(available_10q, Exception):
+            LOG.error(f"10-Q fetch failed for {ticker}: {available_10q}")
+            available_10q = []
+        if isinstance(available_transcripts, Exception):
+            LOG.error(f"Transcript fetch failed for {ticker}: {available_transcripts}")
+            available_transcripts = []
+        if isinstance(available_press_releases, Exception):
+            LOG.error(f"Press release fetch failed for {ticker}: {available_press_releases}")
+            available_press_releases = []
 
         # Check what's already generated in database
         with db() as conn, conn.cursor() as cur:

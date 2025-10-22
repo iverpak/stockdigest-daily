@@ -46,39 +46,16 @@ def fetch_fmp_transcript_list(ticker: str, fmp_api_key: str) -> List[Dict]:
 
         data = response.json()
 
-        if not isinstance(data, list):
-            LOG.error(f"FMP transcript list returned non-list for {ticker}: {type(data)}")
-            return []
-
-        # FMP can return two formats:
-        # 1. Array of arrays: [[quarter, year, date], ...]
-        # 2. Array of objects: [{"quarter": 2, "year": 2026, "date": "..."}, ...]
-        # Handle both formats
+        # FMP returns: [[quarter, year, date], ...]
+        # Convert to dict format
         transcripts = []
         for item in data:
-            try:
-                if isinstance(item, dict):
-                    # Format 2: Object with keys
-                    if 'quarter' in item and 'year' in item and 'date' in item:
-                        transcripts.append({
-                            "quarter": item['quarter'],
-                            "year": item['year'],
-                            "date": item['date']
-                        })
-                    else:
-                        LOG.warning(f"FMP transcript object missing keys for {ticker}: {list(item.keys())}")
-                elif isinstance(item, (list, tuple)) and len(item) >= 3:
-                    # Format 1: Array [quarter, year, date]
-                    transcripts.append({
-                        "quarter": item[0],
-                        "year": item[1],
-                        "date": item[2]
-                    })
-                else:
-                    LOG.warning(f"FMP transcript item has unexpected format for {ticker}: {type(item)}")
-            except (KeyError, IndexError, TypeError) as e:
-                LOG.warning(f"Failed to parse transcript item for {ticker}: {e} - item: {item}")
-                continue
+            if len(item) >= 3:
+                transcripts.append({
+                    "quarter": item[0],
+                    "year": item[1],
+                    "date": item[2]
+                })
 
         LOG.info(f"Found {len(transcripts)} transcripts for {ticker}")
         return transcripts

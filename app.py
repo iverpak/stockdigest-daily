@@ -14355,6 +14355,30 @@ Allowed ONLY for:
 ✅ ALLOWED: Two analysts both conclude "supply constraints pressure margins" → Synthesize their shared view
 ❌ FORBIDDEN: Article A about competitor + Article B about {ticker} → Don't connect unless articles linked them
 
+BANNED LANGUAGE TRANSFORMATIONS:
+
+Never upgrade article language to more formal, specific, or confident terms:
+
+❌ "sources say exploring" → "pursuing/negotiating/finalizing"
+❌ "could potentially" → "plans to/expects to/will"
+❌ "analyst sees possible" → "analyst projects/forecasts/expects"
+❌ "better than expected" → "exceeding targets/outperforming"
+❌ "facing challenges" → "crisis/severe pressure/critical situation"
+❌ "considering options" → "evaluating acquisition/preparing to launch"
+❌ "may announce" → "will announce/expected to announce"
+❌ "report suggests" → "confirmed/verified"
+❌ "unnamed sources indicate" → "company disclosed/management stated"
+❌ "industry observers note" → "analysts conclude"
+
+RULE: Preserve exact language and confidence level from articles. If article hedged, you hedge.
+
+Examples:
+✅ Article: "Bloomberg reports company exploring strategic alternatives" → Your summary: "exploring strategic alternatives per Bloomberg"
+❌ Article: "Bloomberg reports company exploring strategic alternatives" → Your summary: "pursuing acquisition per Bloomberg"
+
+✅ Article: "Analyst sees possible 5% margin expansion" → Your summary: "analyst sees possible 5% margin expansion"
+❌ Article: "Analyst sees possible 5% margin expansion" → Your summary: "analyst projects 5% margin expansion"
+
 ---
 
 🔬 MULTI-SOURCE CONTEXT ENRICHMENT
@@ -14739,6 +14763,25 @@ Topic labels will be automatically bolded during HTML rendering. Just write: "To
 
 📌 BOTTOM LINE (Always - 150 words HARD CAP)
 
+EDITORIAL BANS FOR BOTTOM LINE:
+
+Never characterize market sentiment, article tone, or analyst dynamics:
+
+❌ BANNED: "growing concerns/mounting pressure/increasing skepticism/heightened uncertainty/market anxiety/investor worries/analysts increasingly pessimistic"
+✅ NEUTRAL: "analysts downgraded/articles reported/sources stated" + specific claim
+
+Examples:
+❌ "Growing concerns about margins emerged this week"
+✅ "Three analysts questioned margins; Morgan Stanley downgraded to Underweight"
+
+❌ "Mounting pressure on management following earnings miss"
+✅ "Stock fell 12% post-earnings; WSJ reported board reviewing CEO performance"
+
+❌ "Articles revealed increasing skepticism"
+✅ "Five negative articles published (vs 2 positive); Barclays cut price target 15%"
+
+RULE: Report facts (analyst actions, stock moves, article counts, specific claims), never characterize emotions or sentiment trends.
+
 MANDATORY LENGTH CHECK:
 After writing Bottom Line, count words. If >150 words:
 1. Remove lowest-priority detail (usually: granular peer comparisons, secondary metrics)
@@ -15105,6 +15148,28 @@ ONLY write attributed statements:
 
 If you were about to write a banned phrase → STOP → Rewrite as attributed view from articles.
 
+SYNTHESIS CONFIDENCE PRESERVATION:
+
+When combining article claims, preserve weakest confidence level:
+
+❌ Article A: "may expand" + Article B: "exploring capacity" → "positioned for aggressive growth"
+✅ Article A: "may expand" + Article B: "exploring capacity" → "[Analyst] noted may expand; [Source] reported exploring capacity options"
+
+❌ "analyst sees possible upside" + "strong demand noted" → "expects significant margin expansion"
+✅ "analyst sees possible upside" + "strong demand noted" → "[Analyst] sees possible upside from strong demand per [Source]"
+
+❌ "sources say considering" + "could announce deal" → "expected to complete acquisition"
+✅ "sources say considering" + "could announce deal" → "WSJ sources say considering acquisition; Bloomberg noted could announce by Q4"
+
+Confidence hierarchy (preserve lowest):
+CERTAIN: "announced/disclosed/confirmed" → Keep exact
+STRONG: "expects/projects/will" → Keep exact
+MODERATE: "likely/probable/sees opportunity" → Keep exact
+WEAK: "may/could/possible/exploring" → Keep exact
+SPECULATIVE: "sources say/unconfirmed" → Keep exact + source attribution
+
+RULE: Don't upgrade article certainty. If article hedged ("may benefit"), you hedge. Always preserve source attribution.
+
 CRITICAL: Synthesize developments tagged as bullish in sections above.
 If you tagged developments as (bullish, [reason]) in any section above, synthesize them here using EITHER attributed author statements OR the factual developments themselves.
 
@@ -15149,6 +15214,26 @@ ONLY write attributed statements:
 ✅ "[Source] noted [specific headwind they described]"
 
 If you were about to write a banned phrase → STOP → Rewrite as attributed view from articles.
+
+SYNTHESIS CONFIDENCE PRESERVATION:
+
+When combining article claims, preserve weakest confidence level:
+
+❌ Article A: "faces challenges" + Article B: "monitoring costs" → "expects severe margin pressure"
+✅ Article A: "faces challenges" + Article B: "monitoring costs" → "[Analyst] noted challenges; CFO stated monitoring costs per [Source]"
+
+❌ "analyst sees risk" + "declining demand reported" → "positioned for significant headwinds"
+✅ "analyst sees risk" + "declining demand reported" → "[Analyst] sees risk from declining demand per [Source data]"
+
+❌ "sources say may divest" + "could face regulatory pressure" → "expects forced asset sales"
+✅ "sources say may divest" + "could face regulatory pressure" → "WSJ sources say may divest assets; Reuters noted could face regulatory review"
+
+Confidence hierarchy (preserve lowest):
+CERTAIN: "disclosed losses/confirmed writedown" → Keep exact
+STRONG: "expects challenges/will face pressure" → Keep exact
+MODERATE: "likely headwinds/probable impact" → Keep exact
+WEAK: "may face/could see/monitoring" → Keep exact
+SPECULATIVE: "sources warn/unconfirmed concerns" → Keep exact + source attribution
 
 CRITICAL: Synthesize developments tagged as bearish in sections above.
 If you tagged developments as (bearish, [reason]) in any section above, synthesize them here using EITHER attributed author statements OR the factual risks themselves.
@@ -15564,6 +15649,23 @@ Allowed ONLY for:
 ✅ ALLOWED: CEO prepared remarks on margins + CFO Q&A clarification → ONE comprehensive bullet
 ❌ FORBIDDEN: CEO discusses margins + Analyst asks about M&A → Don't connect unless they explicitly linked
 
+BANNED LANGUAGE TRANSFORMATIONS:
+
+Never upgrade management language to more formal, specific, or confident terms:
+
+❌ "better than expected" → "exceeding targets/goals/objectives/plan"
+❌ "more than we thought/anticipated" → "above guidance/forecast/estimates"
+❌ "on track" → "ahead of schedule/timeline"
+❌ "improving" → "outperforming/beating expectations"
+❌ "working on it" → "committed to/prioritizing/focused on"
+❌ "talking with" → "negotiating with/partnering with"
+❌ "looking at" → "pursuing/evaluating/considering"
+❌ "hope to" → "plan to/expect to/targeting"
+❌ "might/could/may" → "will/shall"
+❌ "challenging" → "crisis/severe/critical"
+
+RULE: Preserve management's exact confidence level. If they hedged, you hedge.
+
 ---
 
 🚨 CRITICAL FILTERING RULES
@@ -15688,6 +15790,22 @@ Topic labels will be automatically bolded during HTML rendering. Just write: "To
 ---
 
 📌 BOTTOM LINE (Always - 150 words HARD CAP)
+
+EDITORIAL BANS FOR BOTTOM LINE:
+
+Never characterize Q&A dynamics, management tone, or analyst behavior:
+
+❌ BANNED: "tension/tensions emerged/controversy/concerns raised/pressure mounting/questioned credibility/pushback/defensive/evasive/reluctant/hesitant"
+✅ NEUTRAL: "analysts questioned/asked about/raised questions on" + "management stated/responded/clarified/addressed"
+
+Examples:
+❌ "Q&A revealed tensions on pricing" 
+✅ "Multiple analysts questioned pricing sustainability; management stated..."
+
+❌ "Key tensions emerged in Q&A"
+✅ "Multiple analysts questioned X; management addressed Y"
+
+RULE: Report actions (asked/stated), never emotions (tension/defensive/concern).
 
 MANDATORY LENGTH CHECK:
 After writing Bottom Line, count words. If >150 words:
@@ -16060,6 +16178,27 @@ ATTRIBUTION REQUIREMENT: Every conclusion must cite management:
 - "CFO highlighted..."
 - "Management projected..."
 
+SYNTHESIS CONFIDENCE PRESERVATION:
+
+When combining statements, preserve management's weakest confidence level:
+
+❌ "seeing improvement" + "ahead of plan" → "outperforming across metrics"
+✅ "seeing improvement" + "ahead of plan" → "management noted improvement and stated ahead of plan"
+
+❌ "exploring options" + "talking to partners" → "actively pursuing partnerships"
+✅ "exploring options" + "talking to partners" → "management stated exploring options including partner discussions"
+
+❌ "hopeful about approval" + "on track for filing" → "confident in regulatory success"
+✅ "hopeful about approval" + "on track for filing" → "management expressed optimism on approval timing with filing on track"
+
+Confidence hierarchy (preserve lowest):
+CERTAIN: "will/committed/guaranteed" → Keep exact
+STRONG: "expect/plan/target" → Keep exact
+MODERATE: "believe/think/anticipate" → Keep exact
+WEAK: "hope/may/could/exploring" → Keep exact
+
+RULE: Synthesis cannot increase confidence. If combining weak + strong statement, preserve both separately.
+
 Example structure:
 "CEO stated [development] positions company for [what they said]. CFO highlighted [metric] demonstrating [their conclusion], projecting [their view]. Management noted [dynamic] creates [advantage they identified]. [Event] will provide [visibility they expect]."
 
@@ -16098,6 +16237,27 @@ ATTRIBUTION REQUIREMENT: Every conclusion must cite management or analyst:
 - "Management raised concerns..."
 - "Analysts questioned..."
 - "CEO noted risks..."
+
+SYNTHESIS CONFIDENCE PRESERVATION:
+
+When combining statements, preserve management's weakest confidence level:
+
+❌ "seeing challenges" + "monitoring situation" → "facing severe headwinds"
+✅ "seeing challenges" + "monitoring situation" → "management noted challenges and stated monitoring situation"
+
+❌ "may see pressure" + "watching costs" → "expects significant margin compression"
+✅ "may see pressure" + "watching costs" → "CFO noted may see pressure and stated watching costs"
+
+❌ "analyst raised concern" + "management acknowledged risk" → "confirmed substantial threat"
+✅ "analyst raised concern" + "management acknowledged risk" → "analyst questioned sustainability; management acknowledged risk exists"
+
+Confidence hierarchy (preserve lowest):
+CERTAIN: "will face/confirmed headwind" → Keep exact
+STRONG: "expect pressure/anticipate challenges" → Keep exact
+MODERATE: "may see/could face" → Keep exact
+WEAK: "monitoring/watching/assessing" → Keep exact
+
+RULE: Don't escalate risk language. If management hedged ("may"), you hedge. If analyst concerned but management dismissed, preserve both views.
 
 Example structure:
 "CFO flagged [risk] constraining [what they stated]. Analysts noted [threat] creates [pressure they identified]. Management highlighted [headwind] continuing [trajectory they described], potentially pressuring [outcome they projected]. [Event] may reveal [concerns they raised]."

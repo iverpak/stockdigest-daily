@@ -19807,44 +19807,50 @@ async def process_company_profile_phase(job: dict):
             update_job_status(job_id, progress=95)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
-            # Get stock price for email
-            stock_price = "$0.00"
-            price_change_pct = None
-            price_change_color = "#4ade80"
+            try:
+                # Get stock price for email
+                stock_price = "$0.00"
+                price_change_pct = None
+                price_change_color = "#4ade80"
 
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT financial_last_price, financial_price_change_pct
-                    FROM ticker_reference
-                    WHERE ticker = %s
-                """, (ticker,))
-                price_data = cur.fetchone()
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT financial_last_price, financial_price_change_pct
+                        FROM ticker_reference
+                        WHERE ticker = %s
+                    """, (ticker,))
+                    price_data = cur.fetchone()
 
-                if price_data and price_data['financial_last_price']:
-                    stock_price = f"${price_data['financial_last_price']:.2f}"
-                    if price_data['financial_price_change_pct'] is not None:
-                        pct = price_data['financial_price_change_pct']
-                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+                    if price_data and price_data['financial_last_price']:
+                        stock_price = f"${price_data['financial_last_price']:.2f}"
+                        if price_data['financial_price_change_pct'] is not None:
+                            pct = price_data['financial_price_change_pct']
+                            price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                            price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
 
-            email_data = generate_company_profile_email(
-                ticker=ticker,
-                company_name=ticker_config['company_name'],
-                industry=ticker_config.get('industry', 'N/A'),
-                fiscal_year=config['fiscal_year'],
-                filing_date=config['filing_date'],
-                profile_markdown=profile_markdown,
-                stock_price=stock_price,
-                price_change_pct=price_change_pct,
-                price_change_color=price_change_color,
-                filing_type="10-K"
-            )
+                email_data = generate_company_profile_email(
+                    ticker=ticker,
+                    company_name=ticker_config['company_name'],
+                    industry=ticker_config.get('industry', 'N/A'),
+                    fiscal_year=config['fiscal_year'],
+                    filing_date=config['filing_date'],
+                    profile_markdown=profile_markdown,
+                    stock_price=stock_price,
+                    price_change_pct=price_change_pct,
+                    price_change_color=price_change_color,
+                    filing_type="10-K"
+                )
 
-            send_email(
-                subject=email_data['subject'],
-                html_body=email_data['html'],
-                to='stockdigest.research@gmail.com'
-            )
+                send_email(
+                    subject=email_data['subject'],
+                    html_body=email_data['html'],
+                    to=DIGEST_TO  # ✅ FIXED: Was hardcoded 'stockdigest.research@gmail.com'
+                )
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+                # Continue - profile was saved successfully, email failure shouldn't mark job as failed
 
         # Clean up temp file (only in file upload mode)
         if 'file_path' in locals() and file_path and os.path.exists(file_path):
@@ -19986,46 +19992,52 @@ async def process_10q_profile_phase(job: dict):
             update_job_status(job_id, progress=95)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
-            # Get stock price
-            stock_price = "$0.00"
-            price_change_pct = None
-            price_change_color = "#4ade80"
+            try:
+                # Get stock price
+                stock_price = "$0.00"
+                price_change_pct = None
+                price_change_color = "#4ade80"
 
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT financial_last_price, financial_price_change_pct
-                    FROM ticker_reference
-                    WHERE ticker = %s
-                """, (ticker,))
-                price_data = cur.fetchone()
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT financial_last_price, financial_price_change_pct
+                        FROM ticker_reference
+                        WHERE ticker = %s
+                    """, (ticker,))
+                    price_data = cur.fetchone()
 
-                if price_data and price_data['financial_last_price']:
-                    stock_price = f"${price_data['financial_last_price']:.2f}"
-                    if price_data['financial_price_change_pct'] is not None:
-                        pct = price_data['financial_price_change_pct']
-                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+                    if price_data and price_data['financial_last_price']:
+                        stock_price = f"${price_data['financial_last_price']:.2f}"
+                        if price_data['financial_price_change_pct'] is not None:
+                            pct = price_data['financial_price_change_pct']
+                            price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                            price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
 
-            # Generate email (reuse company profile email function)
-            email_data = generate_company_profile_email(
-                ticker=ticker,
-                company_name=ticker_config['company_name'],
-                industry=ticker_config.get('industry', 'N/A'),
-                fiscal_year=fiscal_year,
-                filing_date=filing_date,
-                profile_markdown=profile_markdown,
-                stock_price=stock_price,
-                price_change_pct=price_change_pct,
-                price_change_color=price_change_color,
-                filing_type="10-Q",
-                fiscal_quarter=fiscal_quarter
-            )
+                # Generate email (reuse company profile email function)
+                email_data = generate_company_profile_email(
+                    ticker=ticker,
+                    company_name=ticker_config['company_name'],
+                    industry=ticker_config.get('industry', 'N/A'),
+                    fiscal_year=fiscal_year,
+                    filing_date=filing_date,
+                    profile_markdown=profile_markdown,
+                    stock_price=stock_price,
+                    price_change_pct=price_change_pct,
+                    price_change_color=price_change_color,
+                    filing_type="10-Q",
+                    fiscal_quarter=fiscal_quarter
+                )
 
-            send_email(
-                subject=email_data['subject'],
-                html_body=email_data['html'],
-                to='stockdigest.research@gmail.com'
-            )
+                send_email(
+                    subject=email_data['subject'],
+                    html_body=email_data['html'],
+                    to=DIGEST_TO  # ✅ FIXED: Was hardcoded 'stockdigest.research@gmail.com'
+                )
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+                # Continue - profile was saved successfully, email failure shouldn't mark job as failed
 
         # Mark complete
         update_job_status(job_id, status='completed', progress=100)
@@ -27191,11 +27203,24 @@ async def generate_missing_financials(request: Request):
                 if transcript_response.get("valid"):
                     quarters = transcript_response.get("available_quarters", [])
                     if quarters:
-                        import re
-                        match = re.match(r"Q(\d+)\s+FY(\d{4})", quarters[0])  # Updated to match "Q2 FY2026" format
-                        if match:
-                            quarter = int(match.group(1))
-                            year = int(match.group(2))
+                        # quarters[0] is a dict: {"quarter": 2, "year": 2026, "label": "Q2 FY2026", ...}
+                        # Extract quarter and year from dict (preferred method)
+                        if isinstance(quarters[0], dict):
+                            quarter = quarters[0].get('quarter')
+                            year = quarters[0].get('year')
+                        else:
+                            # Fallback: Parse from label string (backward compatibility)
+                            import re
+                            match = re.match(r"Q(\d+)\s+FY(\d{4})", quarters[0]['label'])
+                            if match:
+                                quarter = int(match.group(1))
+                                year = int(match.group(2))
+                            else:
+                                LOG.warning(f"Failed to parse transcript quarter for {ticker}: {quarters[0]}")
+                                quarter = None
+                                year = None
+
+                        if quarter and year:
 
                             # Check if we have this transcript
                             with db() as conn, conn.cursor() as cur:

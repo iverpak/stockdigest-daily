@@ -27187,6 +27187,10 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
             key = f"{year}-Q{quarter}"
             item['generated'] = generated_10q.get(key)
 
+            # Normalize fields to match transcript format (frontend expects 'year' and numeric 'quarter')
+            item['year'] = year
+            item['quarter'] = int(quarter)
+
         for item in available_transcripts:
             year = item.get('year')
             quarter = item.get('quarter')

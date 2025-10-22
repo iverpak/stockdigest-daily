@@ -26507,7 +26507,8 @@ async def email_research_api(request: Request):
 
                 content = doc['summary_text']
                 model_label = f" ({doc.get('ai_model', doc.get('ai_provider', 'AI'))})" if ai_provider else ""
-                subject = f"Earnings Transcript: {ticker} Q{quarter} {year}{model_label}"
+                # doc['quarter'] from database already has "Q" prefix (e.g., "Q2")
+                subject = f"Earnings Transcript: {ticker} {doc['quarter']} FY{year}{model_label}"
 
             elif research_type == 'press_release':
                 report_date = body.get('report_date')
@@ -27158,7 +27159,8 @@ async def generate_missing_financials(request: Request):
 
                                 # Send email notification
                                 try:
-                                    subject = f"Earnings Transcript: {ticker} Q{quarter} {year} ({ANTHROPIC_MODEL})"
+                                    # quarter here is an integer (2), so Q{quarter} = "Q2"
+                                    subject = f"Earnings Transcript: {ticker} Q{quarter} FY{year} ({ANTHROPIC_MODEL})"
                                     html_body = f"""
                                     <html>
                                     <head>

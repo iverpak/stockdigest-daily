@@ -20062,6 +20062,139 @@ async def process_10q_profile_phase(job: dict):
         )
 
 
+async def process_transcript_phase(job: dict):
+    """Process earnings transcript generation (30-60s, Claude)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread
+        start_heartbeat_thread(job_id)
+
+        quarter = config.get('quarter')  # Integer: 2
+        year = config.get('year')  # Integer: 2026
+
+        # Progress: 10% - Fetching transcript from FMP
+        update_job_status(job_id, progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching transcript Q{quarter} FY{year} from FMP...")
+
+        # Fetch transcript content from FMP
+        from modules.transcript_summaries import generate_transcript_summary_with_claude
+
+        fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
+        response = requests.get(f"{fmp_url}&apikey={FMP_API_KEY}", timeout=30)
+
+        if response.status_code != 200:
+            raise ValueError(f"FMP API returned status {response.status_code}")
+
+        data = response.json()
+        if not data or len(data) == 0:
+            raise ValueError(f"No transcript data returned from FMP")
+
+        content = data[0].get('content', '')
+        if not content:
+            raise ValueError(f"Transcript content is empty")
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Fetched {len(content)} characters")
+
+        # Progress: 30% - Generating summary with Claude (this takes 30-60s)
+        update_job_status(job_id, progress=30)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with Claude (30-60s)...")
+
+        ticker_config = get_ticker_config(ticker)
+        summary_text = generate_transcript_summary_with_claude(
+            ticker, content, ticker_config, 'transcript',
+            ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
+            _build_research_summary_prompt
+        )
+
+        if not summary_text:
+            raise ValueError("Claude summary generation failed")
+
+        # Progress: 80% - Saving to database
+        update_job_status(job_id, progress=80)
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO transcript_summaries (
+                    ticker, company_name, report_type, quarter, year,
+                    report_date, summary_text, source_url, ai_provider, ai_model
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, report_type, quarter, year)
+                DO UPDATE SET
+                    summary_text = EXCLUDED.summary_text,
+                    ai_model = EXCLUDED.ai_model,
+                    generated_at = NOW()
+            """, (
+                ticker,
+                ticker_config.get('company_name'),
+                'transcript',
+                f"Q{quarter}",
+                year,
+                data[0].get('date'),
+                summary_text,
+                fmp_url,
+                'claude',
+                ANTHROPIC_MODEL
+            ))
+            conn.commit()
+
+        # Progress: 95% - Sending email
+        if config.get('send_email', True):
+            update_job_status(job_id, progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+
+            try:
+                subject = f"Earnings Transcript: {ticker} Q{quarter} FY{year} ({ANTHROPIC_MODEL})"
+                html_body = f"""
+                <html>
+                <head>
+                    <style>
+                        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                        h1 {{ color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; }}
+                        h2 {{ color: #1e3a8a; margin-top: 24px; }}
+                        pre {{ background: #f3f4f6; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>{subject}</h1>
+                    <pre>{summary_text}</pre>
+                </body>
+                </html>
+                """
+                send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+                # Continue - transcript was saved successfully, email failure shouldn't mark job as failed
+
+        # Mark complete
+        update_job_status(job_id, status='completed', progress=100)
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Transcript generation complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Transcript generation failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
+
+
 async def process_presentation_phase(job: dict):
     """Process investor presentation analysis (5-15 min, Gemini 2.5 Pro with multimodal vision)"""
     job_id = job['job_id']
@@ -20317,6 +20450,11 @@ async def process_ticker_job(job: dict):
     # ROUTE: If this is a 10-Q generation job, handle separately
     if phase == '10q_generation':
         await process_10q_profile_phase(job)
+        return
+
+    # ROUTE: If this is a transcript generation job, handle separately
+    if phase == 'transcript_generation':
+        await process_transcript_phase(job)
         return
 
     # ROUTE: If this is an investor presentation job, handle separately
@@ -27047,7 +27185,8 @@ async def get_missing_financials_status(token: str):
 async def process_ticker_missing_financials(ticker: str):
     """
     Process one ticker for missing financials - fetches 10-K, 10-Q, Transcript in PARALLEL.
-    Returns: (ticker_jobs, ticker_transcripts) or Exception
+    Creates jobs for all missing items (10-K, 10-Q, Transcripts).
+    Returns: ticker_jobs (list of job dicts) or [] on error
     """
     try:
         # Get ticker config
@@ -27076,7 +27215,6 @@ async def process_ticker_missing_financials(ticker: str):
             transcript_response = {"valid": False}
 
         ticker_jobs = []
-        ticker_transcripts = []
 
         # Process 10-K
         if profile_response.get("valid"):
@@ -27232,18 +27370,45 @@ async def process_ticker_missing_financials(ticker: str):
                                 our_transcript = {"year": result['year'], "quarter": quarter_num}
 
                     if not our_transcript or year > our_transcript['year'] or (year == our_transcript['year'] and quarter > our_transcript['quarter']):
-                        ticker_transcripts.append({
+                        # Queue transcript generation job (same as 10-K/10-Q)
+                        batch_id = str(uuid.uuid4())
+                        job_config = {
                             "ticker": ticker,
                             "quarter": quarter,
-                            "year": year
-                        })
-                        LOG.info(f"✅ Will generate transcript for {ticker} Q{quarter} FY{year}")
+                            "year": year,
+                            "send_email": True
+                        }
 
-        return (ticker_jobs, ticker_transcripts)
+                        with db() as conn, conn.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                VALUES (%s, %s, 1, %s)
+                            """, (batch_id, 'processing', json.dumps(job_config)))
+
+                            cur.execute("""
+                                INSERT INTO ticker_processing_jobs (
+                                    batch_id, ticker, status, phase, progress, config
+                                )
+                                VALUES (%s, %s, %s, %s, 0, %s)
+                                RETURNING job_id
+                            """, (batch_id, ticker, 'queued', 'transcript_generation', json.dumps(job_config)))
+
+                            job_id = cur.fetchone()['job_id']
+                            conn.commit()
+
+                        # Append to existing ticker or create new entry
+                        existing = next((j for j in ticker_jobs if j["ticker"] == ticker), None)
+                        if existing:
+                            existing["items"].append(f"Transcript Q{quarter} FY{year}")
+                        else:
+                            ticker_jobs.append({"ticker": ticker, "items": [f"Transcript Q{quarter} FY{year}"]})
+                        LOG.info(f"✅ Queued transcript job for {ticker} Q{quarter} FY{year}")
+
+        return ticker_jobs
 
     except Exception as e:
         LOG.error(f"Error processing {ticker}: {e}")
-        return ([], [])
+        return []
 
 
 @APP.post("/api/admin/generate-missing-financials")
@@ -27275,109 +27440,17 @@ async def generate_missing_financials(request: Request):
 
         # Collect results from parallel processing
         jobs_created = []
-        transcripts_to_generate = []
 
         for result in ticker_results:
             if isinstance(result, Exception):
                 LOG.error(f"Ticker processing failed: {result}")
                 continue
 
-            ticker_jobs, ticker_transcripts = result
+            ticker_jobs = result
             jobs_created.extend(ticker_jobs)
-            transcripts_to_generate.extend(ticker_transcripts)
 
-        # Generate transcripts synchronously (they're fast - 30-60s each)
-        for item in transcripts_to_generate:
-            try:
-                # Call existing transcript generation endpoint logic
-                from modules.transcript_summaries import generate_transcript_summary_with_claude
-
-                ticker = item['ticker']
-                quarter = item['quarter']
-                year = item['year']
-
-                # Fetch transcript content from FMP
-                fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
-                response = requests.get(f"{fmp_url}&apikey={FMP_API_KEY}", timeout=30)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    if data and len(data) > 0:
-                        content = data[0].get('content', '')
-                        if content:
-                            # Generate summary with Claude
-                            config = get_ticker_config(ticker)
-                            summary_text = generate_transcript_summary_with_claude(
-                                ticker, content, config, 'transcript',
-                                ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
-                                _build_research_summary_prompt
-                            )
-
-                            if summary_text:
-                                # Save to database
-                                with db() as conn, conn.cursor() as cur:
-                                    cur.execute("""
-                                        INSERT INTO transcript_summaries (
-                                            ticker, company_name, report_type, quarter, year,
-                                            report_date, summary_text, source_url, ai_provider, ai_model
-                                        )
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                        ON CONFLICT (ticker, report_type, quarter, year)
-                                        DO UPDATE SET
-                                            summary_text = EXCLUDED.summary_text,
-                                            ai_model = EXCLUDED.ai_model,
-                                            generated_at = NOW()
-                                    """, (
-                                        ticker,
-                                        config.get('company_name'),
-                                        'transcript',
-                                        f"Q{quarter}",
-                                        year,
-                                        data[0].get('date'),
-                                        summary_text,
-                                        fmp_url,
-                                        'claude',
-                                        ANTHROPIC_MODEL
-                                    ))
-                                    conn.commit()
-
-                                # Send email notification
-                                try:
-                                    # quarter here is an integer (2), so Q{quarter} = "Q2"
-                                    subject = f"Earnings Transcript: {ticker} Q{quarter} FY{year} ({ANTHROPIC_MODEL})"
-                                    html_body = f"""
-                                    <html>
-                                    <head>
-                                        <style>
-                                            body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
-                                            h1 {{ color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; }}
-                                            h2 {{ color: #1e3a8a; margin-top: 24px; }}
-                                            pre {{ background: #f3f4f6; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }}
-                                        </style>
-                                    </head>
-                                    <body>
-                                        <h1>{subject}</h1>
-                                        <pre>{summary_text}</pre>
-                                    </body>
-                                    </html>
-                                    """
-                                    send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
-                                    LOG.info(f"📧 Emailed transcript for {ticker} Q{quarter} {year} to {DIGEST_TO}")
-                                except Exception as email_error:
-                                    LOG.error(f"Failed to email transcript for {ticker}: {email_error}")
-                                    # Continue processing even if email fails
-
-                                # Append to existing ticker or create new entry
-                                existing = next((j for j in jobs_created if j["ticker"] == ticker), None)
-                                if existing:
-                                    existing["items"].append(f"Transcript Q{quarter} {year}")
-                                else:
-                                    jobs_created.append({"ticker": ticker, "items": [f"Transcript Q{quarter} {year}"]})
-                                LOG.info(f"✅ Generated transcript for {ticker} Q{quarter} {year}")
-
-            except Exception as e:
-                LOG.error(f"Error generating transcript for {ticker}: {e}")
-                continue
+        # Transcripts now queued as jobs (no longer generated inline)
+        # Worker will process them with proper concurrency control
 
         # Calculate totals
         total_jobs = sum(len(j["items"]) for j in jobs_created)

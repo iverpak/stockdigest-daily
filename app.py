@@ -1511,6 +1511,16 @@ def ensure_schema():
 
                 CREATE INDEX IF NOT EXISTS idx_exec_summ_ticker_date ON executive_summaries(ticker, summary_date DESC);
 
+                -- PHASE 1 EXECUTIVE SUMMARIES: Add JSONB column for structured output
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS summary_json JSONB;
+                CREATE INDEX IF NOT EXISTS idx_executive_summaries_json ON executive_summaries USING GIN (summary_json);
+
+                -- Add metadata columns for Phase 1 monitoring
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS generation_phase VARCHAR(20) DEFAULT 'phase1';
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS prompt_tokens INTEGER;
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS completion_tokens INTEGER;
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS generation_time_ms INTEGER;
+
                 -- TRANSCRIPT SUMMARIES: Store earnings transcript and press release summaries
                 CREATE TABLE IF NOT EXISTS transcript_summaries (
                     id SERIAL PRIMARY KEY,
@@ -1928,43 +1938,65 @@ def update_ticker_article_summary(ticker: str, article_id: int, ai_summary: str,
                 update_domain_quality_stats(domain)
 
 @with_deadlock_retry()
-def save_executive_summary(ticker: str, summary_text: str, ai_provider: str,
-                          article_ids: List[int], company_count: int,
-                          industry_count: int, competitor_count: int) -> None:
+def save_executive_summary(
+    ticker: str,
+    summary_text: str,
+    ai_provider: str,
+    article_ids: List[int],
+    company_count: int,
+    industry_count: int,
+    competitor_count: int,
+    summary_json: Dict = None,  # NEW: Structured JSON (Phase 1)
+    prompt_tokens: int = 0,     # NEW: Metadata
+    completion_tokens: int = 0, # NEW: Metadata
+    generation_time_ms: int = 0 # NEW: Metadata
+) -> None:
     """
     Store/update executive summary for ticker on current date.
     Overwrites if run multiple times same day.
 
     Args:
         ticker: Target company ticker (e.g., "NVDA")
-        summary_text: Generated executive summary
+        summary_text: Generated executive summary (JSON string for Phase 1)
         ai_provider: "claude" or "openai"
         article_ids: List of article IDs included in summary
         company_count: Number of company articles analyzed
         industry_count: Number of industry articles analyzed
         competitor_count: Number of competitor articles analyzed
+        summary_json: Structured JSON output (Phase 1) - stored in JSONB column
+        prompt_tokens: Token count for prompt
+        completion_tokens: Token count for completion
+        generation_time_ms: Generation time in milliseconds
     """
     with db() as conn, conn.cursor() as cur:
         article_ids_json = json.dumps(article_ids)
 
         cur.execute("""
             INSERT INTO executive_summaries
-                (ticker, summary_date, summary_text, ai_provider, article_ids,
-                 company_articles_count, industry_articles_count, competitor_articles_count)
-            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s)
+                (ticker, summary_date, summary_text, summary_json, ai_provider, article_ids,
+                 company_articles_count, industry_articles_count, competitor_articles_count,
+                 generation_phase, prompt_tokens, completion_tokens, generation_time_ms)
+            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, 'phase1', %s, %s, %s)
             ON CONFLICT (ticker, summary_date)
             DO UPDATE SET
                 summary_text = EXCLUDED.summary_text,
+                summary_json = EXCLUDED.summary_json,
                 ai_provider = EXCLUDED.ai_provider,
                 article_ids = EXCLUDED.article_ids,
                 company_articles_count = EXCLUDED.company_articles_count,
                 industry_articles_count = EXCLUDED.industry_articles_count,
                 competitor_articles_count = EXCLUDED.competitor_articles_count,
+                generation_phase = EXCLUDED.generation_phase,
+                prompt_tokens = EXCLUDED.prompt_tokens,
+                completion_tokens = EXCLUDED.completion_tokens,
+                generation_time_ms = EXCLUDED.generation_time_ms,
                 generated_at = NOW()
-        """, (ticker, summary_text, ai_provider, article_ids_json,
-              company_count, industry_count, competitor_count))
+        """, (ticker, summary_text, json.dumps(summary_json) if summary_json else None,
+              ai_provider, article_ids_json,
+              company_count, industry_count, competitor_count,
+              prompt_tokens, completion_tokens, generation_time_ms))
 
-        LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, {len(article_ids)} articles)")
+        LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, Phase 1, {len(article_ids)} articles, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
 
 # NEW FEED ARCHITECTURE V2 - Category per Relationship Functions
 def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None,
@@ -16817,20 +16849,48 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 
         company_name = config.get("name", ticker)
 
-        # Use Claude with OpenAI fallback
-        ai_analysis_summary, model_used = generate_executive_summary_with_fallback(ticker, categories, config)
+        # PHASE 1: Generate executive summary from articles only (NO filings)
+        from modules.executive_summary_phase1 import (
+            generate_executive_summary_phase1,
+            validate_phase1_json
+        )
+
+        phase1_result = generate_executive_summary_phase1(
+            ticker=ticker,
+            categories=categories,
+            config=config,
+            anthropic_api_key=ANTHROPIC_API_KEY
+        )
+
+        ai_analysis_summary = None
+        model_used = "none"
+        json_output = None
+        prompt_tokens = 0
+        completion_tokens = 0
+        generation_time_ms = 0
+
+        if phase1_result:
+            json_output = phase1_result["json_output"]
+            model_used = phase1_result["model_used"]
+            prompt_tokens = phase1_result.get("prompt_tokens", 0)
+            completion_tokens = phase1_result.get("completion_tokens", 0)
+            generation_time_ms = phase1_result.get("generation_time_ms", 0)
+
+            # Validate JSON structure
+            is_valid, error_msg = validate_phase1_json(json_output)
+            if not is_valid:
+                LOG.error(f"[{ticker}] Phase 1 JSON validation failed: {error_msg}")
+                ai_analysis_summary = None
+                json_output = None
+            else:
+                # Store JSON as string for database
+                json_string = json.dumps(json_output, indent=2)
+                ai_analysis_summary = json_string
+
+                LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 1 - {model_used}) [{ticker}]: Generated valid JSON ({len(json_string)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
 
         if ai_analysis_summary:
-            # NEW badges removed per user request (Oct 2025)
-            all_articles = (
-                [a for a in categories.get("company", []) if a.get("ai_summary")] +
-                [a for a in categories.get("industry", []) if a.get("ai_summary")] +
-                [a for a in categories.get("competitor", []) if a.get("ai_summary")]
-            )
-            # ai_analysis_summary = insert_new_badges(ai_analysis_summary, all_articles)  # DISABLED
-            LOG.info(f"✅ EXECUTIVE SUMMARY ({model_used}) [{ticker}]: Generated summary ({len(ai_analysis_summary)} chars)")
-
-            # Save to database with model tracking
+            # Save to database with model tracking and JSON
             # CRITICAL: Save ALL flagged article IDs (not just those with ai_summary)
             # This ensures regenerate shows same articles as original Email #3
             article_ids = []
@@ -16842,10 +16902,21 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
             company_count = len([a for a in categories.get("company", []) if a.get("ai_summary")])
             industry_count = len([a for a in categories.get("industry", []) if a.get("ai_summary")])
             competitor_count = len([a for a in categories.get("competitor", []) if a.get("ai_summary")])
-            save_executive_summary(ticker, ai_analysis_summary, model_used.lower(), article_ids,
-                                 company_count, industry_count, competitor_count)
+            save_executive_summary(
+                ticker,
+                ai_analysis_summary,  # JSON string
+                model_used.lower(),
+                article_ids,
+                company_count,
+                industry_count,
+                competitor_count,
+                summary_json=json_output,  # Structured JSON
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                generation_time_ms=generation_time_ms
+            )
         else:
-            LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: No summary generated (both APIs failed)")
+            LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: Phase 1 generation failed")
 
         summaries[ticker] = {
             "ai_analysis_summary": ai_analysis_summary or "",
@@ -17440,11 +17511,18 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
 
         if openai_summary:
             html.append("<div class='company-summary'>")
-            html.append(f"<div class='summary-title'>📰 Executive Summary (Deep Analysis) - {model_used}</div>")
+            html.append(f"<div class='summary-title'>📰 Executive Summary (Phase 1 - Articles Only) - {model_used}</div>")
             html.append("<div class='summary-content'>")
 
-            # Parse and render using same system as Email #3 (keep emojis for Email #2)
-            sections = parse_executive_summary_sections(openai_summary)
+            # Parse Phase 1 JSON and show FULL structure (filing hints + topic labels)
+            from modules.executive_summary_phase1 import convert_phase1_to_enhanced_sections
+            try:
+                json_output = json.loads(openai_summary)
+                sections = convert_phase1_to_enhanced_sections(json_output)
+            except json.JSONDecodeError as e:
+                LOG.error(f"[{ticker}] Failed to parse Phase 1 JSON in Email #2: {e}")
+                sections = {}  # Empty sections, show error in email
+
             summary_html = build_executive_summary_html(sections, strip_emojis=False)
             html.append(summary_html)
 
@@ -18464,7 +18542,7 @@ def generate_email_html_core(
                 ytd_return_pct = f"{'+' if ytd >= 0 else ''}{ytd:.2f}%"
                 ytd_return_color = "#4ade80" if ytd >= 0 else "#ef4444"
 
-    # Fetch executive summary from database
+    # Fetch executive summary from database (Phase 1 JSON)
     executive_summary_text = ""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
@@ -18478,8 +18556,14 @@ def generate_email_html_core(
         else:
             LOG.warning(f"No executive summary found for {ticker}")
 
-    # Parse executive summary into sections
-    sections = parse_executive_summary_sections(executive_summary_text)
+    # Parse Phase 1 JSON and show SIMPLE bullets (no metadata)
+    from modules.executive_summary_phase1 import convert_phase1_to_sections_dict
+    try:
+        json_output = json.loads(executive_summary_text)
+        sections = convert_phase1_to_sections_dict(json_output)
+    except json.JSONDecodeError as e:
+        LOG.error(f"[{ticker}] Failed to parse Phase 1 JSON in Email #3: {e}")
+        sections = {}  # Empty sections
 
     # Fetch flagged articles (already sorted by SQL)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -28244,37 +28328,61 @@ async def regenerate_email_api(request: Request):
                 categories[category].append(dict(article))
             flagged_article_ids.append(article['id'])
 
-        # Step 5: Regenerate executive summary using Claude
-        LOG.info(f"[{ticker}] Regenerating executive summary with {len(flagged_article_ids)} articles")
+        # Step 5: Regenerate executive summary using Phase 1 (articles only)
+        LOG.info(f"[{ticker}] Regenerating executive summary (Phase 1) with {len(flagged_article_ids)} articles")
 
-        summary_text = generate_claude_executive_summary(ticker, categories, config)
+        from modules.executive_summary_phase1 import (
+            generate_executive_summary_phase1,
+            validate_phase1_json
+        )
 
-        if not summary_text:
-            # Fallback to OpenAI if Claude fails
-            LOG.warning(f"[{ticker}] Claude summary failed, trying OpenAI fallback")
-            summary_text = generate_openai_executive_summary(ticker, categories, config)
+        phase1_result = generate_executive_summary_phase1(
+            ticker=ticker,
+            categories=categories,
+            config=config,
+            anthropic_api_key=ANTHROPIC_API_KEY
+        )
 
-        if not summary_text:
+        if not phase1_result:
             return {
                 "status": "error",
-                "message": "Failed to generate executive summary (both Claude and OpenAI failed)"
+                "message": "Failed to generate Phase 1 executive summary"
             }
+
+        json_output = phase1_result["json_output"]
+        model_used = phase1_result["model_used"]
+        prompt_tokens = phase1_result.get("prompt_tokens", 0)
+        completion_tokens = phase1_result.get("completion_tokens", 0)
+        generation_time_ms = phase1_result.get("generation_time_ms", 0)
+
+        # Validate JSON structure
+        is_valid, error_msg = validate_phase1_json(json_output)
+        if not is_valid:
+            return {
+                "status": "error",
+                "message": f"Phase 1 JSON validation failed: {error_msg}"
+            }
+
+        # Store JSON as string
+        summary_text = json.dumps(json_output, indent=2)
 
         # Step 6: Save executive summary to database
         company_count = len(categories['company'])
         industry_count = len(categories['industry'])
         competitor_count = len(categories['competitor'])
 
-        ai_provider = "claude"  # Primary provider (fallback to OpenAI happens above)
-
         save_executive_summary(
             ticker=ticker,
-            summary_text=summary_text,
-            ai_provider=ai_provider,
+            summary_text=summary_text,  # JSON string
+            ai_provider=model_used.lower(),
             article_ids=flagged_article_ids,
             company_count=company_count,
             industry_count=industry_count,
-            competitor_count=competitor_count
+            competitor_count=competitor_count,
+            summary_json=json_output,  # Structured JSON
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            generation_time_ms=generation_time_ms
         )
 
         LOG.info(f"✅ [{ticker}] Executive summary saved")

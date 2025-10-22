@@ -26644,7 +26644,7 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
         if transcript_response.get("valid"):
             quarters = transcript_response.get("available_quarters", [])
             for q_str in quarters[:8]:  # Latest 8 quarters
-                match = re.match(r"Q(\d+)\s+(\d{4})", q_str)
+                match = re.match(r"Q(\d+)\s+FY(\d{4})", q_str)  # Updated to match "Q2 FY2026" format
                 if match:
                     available_transcripts.append({
                         "quarter": int(match.group(1)),
@@ -26790,7 +26790,7 @@ async def get_missing_financials_status(token: str):
                         else:
                             # Fallback: try parsing string format
                             import re
-                            match = re.match(r"Q(\d+)\s+(\d{4})", str(q))
+                            match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))  # Updated to match "Q2 FY2026" format
                             if match:
                                 latest_10q = {"quarter": int(match.group(1)), "year": int(match.group(2))}
 
@@ -26809,9 +26809,9 @@ async def get_missing_financials_status(token: str):
                             if quarter_num and q.get("fiscal_year"):
                                 latest_transcript = {"quarter": quarter_num, "year": q["fiscal_year"]}
                         else:
-                            # Fallback: try parsing string format
+                            # Fallback: try parsing string format (transcripts are now strings like "Q2 FY2026")
                             import re
-                            match = re.match(r"Q(\d+)\s+(\d{4})", str(q))
+                            match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))  # Updated to match "Q2 FY2026" format
                             if match:
                                 latest_transcript = {"quarter": int(match.group(1)), "year": int(match.group(2))}
 

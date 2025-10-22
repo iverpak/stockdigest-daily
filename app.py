@@ -26571,7 +26571,7 @@ async def email_research_api(request: Request):
         </html>
         """
 
-        send_email(subject=subject, body_html=html_body, to_email=DIGEST_TO)
+        send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
 
         LOG.info(f"📧 Emailed {research_type} for {ticker} to {DIGEST_TO}")
         return {
@@ -27184,7 +27184,7 @@ async def generate_missing_financials(request: Request):
                                     </body>
                                     </html>
                                     """
-                                    send_email(subject=subject, body_html=html_body, to_email=DIGEST_TO)
+                                    send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
                                     LOG.info(f"📧 Emailed transcript for {ticker} Q{quarter} {year} to {DIGEST_TO}")
                                 except Exception as email_error:
                                     LOG.error(f"Failed to email transcript for {ticker}: {email_error}")

@@ -46,16 +46,42 @@ def fetch_fmp_transcript_list(ticker: str, fmp_api_key: str) -> List[Dict]:
 
         data = response.json()
 
+        # Handle error responses from FMP
+        if isinstance(data, dict):
+            if 'Error Message' in data:
+                LOG.error(f"FMP API error for {ticker}: {data['Error Message']}")
+                return []
+            # Unexpected dict response
+            LOG.error(f"FMP returned dict instead of list for {ticker}: {data}")
+            return []
+
+        if not isinstance(data, list):
+            LOG.error(f"FMP returned unexpected type for {ticker}: {type(data)}")
+            return []
+
         # FMP returns: [[quarter, year, date], ...]
         # Convert to dict format
         transcripts = []
         for item in data:
-            if len(item) >= 3:
-                transcripts.append({
-                    "quarter": item[0],
-                    "year": item[1],
-                    "date": item[2]
-                })
+            try:
+                if isinstance(item, (list, tuple)) and len(item) >= 3:
+                    transcripts.append({
+                        "quarter": item[0],
+                        "year": item[1],
+                        "date": item[2]
+                    })
+                elif isinstance(item, dict) and all(k in item for k in ['quarter', 'year', 'date']):
+                    # Handle object format (some tickers return this)
+                    transcripts.append({
+                        "quarter": item['quarter'],
+                        "year": item['year'],
+                        "date": item['date']
+                    })
+                else:
+                    LOG.warning(f"Skipping invalid transcript item for {ticker}: {item}")
+            except (KeyError, IndexError, TypeError) as e:
+                LOG.warning(f"Failed to parse transcript item for {ticker}: {e} - item: {item}")
+                continue
 
         LOG.info(f"Found {len(transcripts)} transcripts for {ticker}")
         return transcripts

@@ -15,8 +15,13 @@ from typing import Dict, Optional
 from datetime import datetime, timezone
 import pytz
 import markdown
+from jinja2 import Environment, FileSystemLoader
 
 LOG = logging.getLogger(__name__)
+
+# Initialize Jinja2 template environment
+template_env = Environment(loader=FileSystemLoader('templates'))
+research_template = template_env.get_template('email_research_report.html')
 
 # ==============================================================================
 # GEMINI PROMPTS (10-K and 10-Q)
@@ -615,32 +620,45 @@ def generate_company_profile_email(
     fiscal_quarter: Optional[str] = None  # e.g., "Q2" (for 10-Q only)
 ) -> Dict[str, str]:
     """
-    Generate company profile email HTML.
+    Generate company profile email HTML using unified Jinja2 template.
 
     Returns:
         {"html": Full email HTML, "subject": Email subject}
     """
-    LOG.info(f"Generating company profile email for {ticker}")
+    LOG.info(f"Generating company profile email for {ticker} using unified template")
 
     current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
 
-    # Handle fiscal_year for presentations (can be None)
-    if filing_type == "10-Q" and fiscal_quarter:
-        fiscal_year_display = f"{fiscal_quarter} {fiscal_year}"
-    elif fiscal_year:
-        fiscal_year_display = f"FY {fiscal_year}"  # Add space: "FY 2024" instead of "FY2024"
+    # Determine report type label
+    if filing_type == "10-Q":
+        report_type_label = "10-Q QUARTERLY REPORT"
+    elif filing_type == "10-K":
+        report_type_label = "10-K ANNUAL REPORT"
     else:
-        fiscal_year_display = filing_date
+        report_type_label = "COMPANY PROFILE"
 
-    # Convert full markdown to HTML with table support
-    # Use markdown library with extensions for tables, fenced code blocks, and newlines
+    # Handle fiscal period display
+    if filing_type == "10-Q" and fiscal_quarter:
+        fiscal_period = f"{fiscal_quarter} {fiscal_year}"
+    elif fiscal_year:
+        fiscal_period = f"FY {fiscal_year}"
+    else:
+        fiscal_period = filing_date
+
+    # Date label for header
+    date_label = f"Generated: {current_date} | {fiscal_period}"
+
+    # Filing date display (optional in template)
+    filing_date_display = f"Form {filing_type} Filed: {filing_date}"
+
+    # Convert markdown to HTML with table support
     profile_html_content = markdown.markdown(
         profile_markdown,
         extensions=['tables', 'fenced_code', 'nl2br']
     )
 
-    # Wrap in styled div for email rendering
-    profile_html = f'''<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.6; color: #374151; background-color: #f9fafb; padding: 20px; border-radius: 4px; overflow-x: auto;">
+    # Wrap content with styling for better email rendering
+    content_html = f'''<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.6; color: #374151; background-color: #f9fafb; padding: 20px; border-radius: 4px; overflow-x: auto;">
         <style>
             table {{ border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 12px; }}
             th {{ background-color: #1e40af; color: white; padding: 8px; text-align: left; border: 1px solid #ddd; font-weight: 600; }}
@@ -653,123 +671,33 @@ def generate_company_profile_email(
             pre {{ background-color: #1f2937; color: #f3f4f6; padding: 12px; border-radius: 4px; overflow-x: auto; }}
             pre code {{ background-color: transparent; padding: 0; color: #f3f4f6; }}
         </style>
+        <h2 style="font-size: 16px; font-weight: 700; color: #1e40af; margin: 0 0 12px 0;">Company Profile ({len(profile_markdown):,} characters)</h2>
         {profile_html_content}
     </div>'''
 
-    # Build HTML (same structure as transcript email)
-    html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{ticker} Company Profile</title>
-    <style>
-        @media only screen and (max-width: 600px) {{
-            .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
-            .price-box {{ padding: 8px 10px !important; }}
-            .company-name {{ font-size: 20px !important; }}
-        }}
-    </style>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
-
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td align="center" style="padding: 40px 20px;">
-
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px;">
-
-                    <!-- Header -->
-                    <tr>
-                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">COMPANY PROFILE</div>
-                                    </td>
-                                    <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">Generated: {current_date} | {fiscal_year_display}</div>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="width: 58%; vertical-align: top;">
-                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
-                                        <div style="font-size: 13px; margin-top: 2px; opacity: 0.9; color: #ffffff;">{ticker} | {industry}</div>
-                                        <div style="font-size: 11px; margin-top: 4px; opacity: 0.8; color: #ffffff;">Form 10-K Filed: {filing_date}</div>
-                                    </td>
-                                    <td align="right" style="width: 42%; vertical-align: top;">
-                                        <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff; margin-bottom: 2px;">{stock_price}</div>
-                                        {f'<div style="font-size: 13px; font-weight: 600; color: {price_change_color};">{price_change_pct}</div>' if price_change_pct else ''}
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                    <!-- Content -->
-                    <tr>
-                        <td class="content-padding" style="padding: 24px;">
-
-                            <!-- Company Profile (Full Content) -->
-                            <div style="margin-bottom: 20px;">
-                                <h2 style="font-size: 16px; font-weight: 700; color: #1e40af; margin: 0 0 12px 0;">Company Profile ({len(profile_markdown):,} characters)</h2>
-                                {profile_html}
-                            </div>
-
-                        </td>
-                    </tr>
-
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9); border-radius: 0 0 8px 8px;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest Research Tools</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Company Profile Analysis</div>
-
-                                        <!-- Legal Disclaimer -->
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                            For informational and educational purposes only. Not investment advice. See Terms of Service for full disclaimer.
-                                        </div>
-
-                                        <!-- Links -->
-                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Contact</a>
-                                        </div>
-
-                                        <!-- Copyright -->
-                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
-                                            © 2025 StockDigest. All rights reserved.
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                </table>
-
-            </td>
-        </tr>
-    </table>
-
-</body>
-</html>'''
+    # Render template with variables
+    html = research_template.render(
+        report_title=f"{ticker} Company Profile",
+        report_type_label=report_type_label,
+        company_name=company_name,
+        ticker=ticker,
+        industry=industry,
+        fiscal_period=fiscal_period,
+        date_label=date_label,
+        filing_date=filing_date_display,
+        stock_price=stock_price,
+        price_change_pct=price_change_pct,
+        price_change_color=price_change_color,
+        content_html=content_html
+    )
 
     # Generate subject based on filing type
     if filing_type == "10-Q":
-        subject = f"10-Q Profile: {company_name} ({ticker}) - {fiscal_year_display}"
+        subject = f"10-Q Profile: {company_name} ({ticker}) - {fiscal_period}"
     elif filing_type == "10-K":
-        subject = f"10-K Profile: {company_name} ({ticker}) - {fiscal_year_display}"
+        subject = f"10-K Profile: {company_name} ({ticker}) - {fiscal_period}"
     else:
-        # Presentations or other types
-        subject = f"📋 Company Profile: {company_name} ({ticker}) {fiscal_year_display}"
+        subject = f"📋 Company Profile: {company_name} ({ticker}) {fiscal_period}"
 
     return {"html": html, "subject": subject}
 

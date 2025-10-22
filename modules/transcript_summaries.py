@@ -13,8 +13,13 @@ import traceback
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 import pytz
+from jinja2 import Environment, FileSystemLoader
 
 LOG = logging.getLogger(__name__)
+
+# Initialize Jinja2 template environment
+template_env = Environment(loader=FileSystemLoader('templates'))
+research_template = template_env.get_template('email_research_report.html')
 
 # ==============================================================================
 # FMP API INTEGRATION
@@ -41,16 +46,39 @@ def fetch_fmp_transcript_list(ticker: str, fmp_api_key: str) -> List[Dict]:
 
         data = response.json()
 
-        # FMP returns: [[quarter, year, date], ...]
-        # Convert to dict format
+        if not isinstance(data, list):
+            LOG.error(f"FMP transcript list returned non-list for {ticker}: {type(data)}")
+            return []
+
+        # FMP can return two formats:
+        # 1. Array of arrays: [[quarter, year, date], ...]
+        # 2. Array of objects: [{"quarter": 2, "year": 2026, "date": "..."}, ...]
+        # Handle both formats
         transcripts = []
         for item in data:
-            if len(item) >= 3:
-                transcripts.append({
-                    "quarter": item[0],
-                    "year": item[1],
-                    "date": item[2]
-                })
+            try:
+                if isinstance(item, dict):
+                    # Format 2: Object with keys
+                    if 'quarter' in item and 'year' in item and 'date' in item:
+                        transcripts.append({
+                            "quarter": item['quarter'],
+                            "year": item['year'],
+                            "date": item['date']
+                        })
+                    else:
+                        LOG.warning(f"FMP transcript object missing keys for {ticker}: {list(item.keys())}")
+                elif isinstance(item, (list, tuple)) and len(item) >= 3:
+                    # Format 1: Array [quarter, year, date]
+                    transcripts.append({
+                        "quarter": item[0],
+                        "year": item[1],
+                        "date": item[2]
+                    })
+                else:
+                    LOG.warning(f"FMP transcript item has unexpected format for {ticker}: {type(item)}")
+            except (KeyError, IndexError, TypeError) as e:
+                LOG.warning(f"Failed to parse transcript item for {ticker}: {e} - item: {item}")
+                continue
 
         LOG.info(f"Found {len(transcripts)} transcripts for {ticker}")
         return transcripts
@@ -590,7 +618,7 @@ def generate_transcript_email(
     price_change_color: str = "#4ade80"
 ) -> Dict[str, str]:
     """
-    Generate transcript/press release email HTML.
+    Generate transcript/press release email HTML using unified Jinja2 template.
 
     Returns:
         {
@@ -598,7 +626,7 @@ def generate_transcript_email(
             "subject": Email subject line
         }
     """
-    LOG.info(f"Generating transcript email for {ticker} ({report_type})")
+    LOG.info(f"Generating transcript email for {ticker} ({report_type}) using unified template")
 
     # Parse sections from summary text
     sections = parse_transcript_summary_sections(summary_text)
@@ -606,128 +634,50 @@ def generate_transcript_email(
     # Build summary HTML
     summary_html = build_transcript_summary_html(sections, report_type)
 
-    # Header labels based on report type
+    current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
+
+    # Configure based on report type
     if report_type == 'transcript':
-        report_label = "EARNINGS CALL TRANSCRIPT"
-        current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
+        report_type_label = "EARNINGS CALL TRANSCRIPT"
+        fiscal_period = f"{quarter} {year}"
         date_label = f"Generated: {current_date} | Call Date: {report_date}"
+        filing_date_display = f"Call Date: {report_date}"
         transition_text = f"Summary generated from {company_name} {quarter} {year} earnings call transcript."
         fmp_link_text = "View full transcript on FMP"
     else:  # press_release
-        report_label = "PRESS RELEASE"
-        current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
+        report_type_label = "PRESS RELEASE"
+        fiscal_period = report_date
         date_label = f"Generated: {current_date} | Release Date: {report_date}"
+        filing_date_display = f"Release Date: {report_date}"
         transition_text = f"Summary generated from {company_name} press release dated {report_date}."
         fmp_link_text = "View original release on FMP"
 
-    # Build full HTML
-    html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{ticker} Research Summary</title>
-    <style>
-        @media only screen and (max-width: 600px) {{
-            .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
-            .price-box {{ padding: 8px 10px !important; }}
-            .company-name {{ font-size: 20px !important; }}
-        }}
-    </style>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+    # Build FMP link box HTML
+    fmp_link_html = f'''
+    <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+        <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+            {transition_text} <a href="{fmp_url}" style="color: #1e40af; text-decoration: none;">→ {fmp_link_text}</a>
+        </p>
+    </div>'''
 
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td align="center" style="padding: 40px 20px;">
+    # Combine summary HTML with FMP link
+    content_html = summary_html + fmp_link_html
 
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
-
-                    <!-- Header -->
-                    <tr>
-                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{report_label}</div>
-                                    </td>
-                                    <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{date_label}</div>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="width: 58%; vertical-align: top;">
-                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
-                                        <div style="font-size: 13px; margin-top: 2px; opacity: 0.9; color: #ffffff;">{ticker}</div>
-                                    </td>
-                                    <td align="right" style="width: 42%; vertical-align: top;">
-                                        <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff; margin-bottom: 2px;">{stock_price}</div>
-                                        {f'<div style="font-size: 13px; font-weight: 600; color: {price_change_color};">{price_change_pct}</div>' if price_change_pct else ''}
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                    <!-- Content -->
-                    <tr>
-                        <td class="content-padding" style="padding: 24px;">
-
-                            <!-- Summary Sections -->
-                            {summary_html}
-
-                            <!-- Transition Box with FMP Link -->
-                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    {transition_text} <a href="{fmp_url}" style="color: #1e40af; text-decoration: none;">→ {fmp_link_text}</a>
-                                </p>
-                            </div>
-
-                        </td>
-                    </tr>
-
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9); border-radius: 0 0 8px 8px;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest Research Tools</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Earnings & Press Release Analysis</div>
-
-                                        <!-- Legal Disclaimer -->
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                            For informational and educational purposes only. Not investment advice. See Terms of Service for full disclaimer.
-                                        </div>
-
-                                        <!-- Links -->
-                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Contact</a>
-                                        </div>
-
-                                        <!-- Copyright -->
-                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
-                                            © 2025 StockDigest. All rights reserved.
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                </table>
-
-            </td>
-        </tr>
-    </table>
-
-</body>
-</html>'''
+    # Render template with variables
+    html = research_template.render(
+        report_title=f"{ticker} Research Summary",
+        report_type_label=report_type_label,
+        company_name=company_name,
+        ticker=ticker,
+        industry=None,  # Transcripts don't include industry
+        fiscal_period=fiscal_period,
+        date_label=date_label,
+        filing_date=filing_date_display,
+        stock_price=stock_price,
+        price_change_pct=price_change_pct,
+        price_change_color=price_change_color,
+        content_html=content_html
+    )
 
     # Subject line
     if report_type == 'transcript':

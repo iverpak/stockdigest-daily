@@ -697,6 +697,19 @@ PRIVACY_VERSION = "1.0"
 TERMS_LAST_UPDATED = "October 7, 2025"
 PRIVACY_LAST_UPDATED = "October 7, 2025"
 
+# Background job tracking for financials checking (in-memory, single-job at a time)
+_financials_check_job = {
+    "job_id": None,
+    "status": "idle",  # idle | running | complete | error
+    "progress": 0,  # 0-100
+    "message": "",
+    "started_at": None,
+    "completed_at": None,
+    "results": None,  # Will store ticker list when complete
+    "error": None
+}
+_financials_check_lock = threading.Lock()
+
 DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
 # FIXED: Enhanced spam filtering with more comprehensive domain list
@@ -21927,11 +21940,20 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                 }
 
             # Format quarters using FMP's fiscal year data directly (most recent first, limit to 8)
-            # FMP returns: [quarter, fiscal_year, call_date]
-            # Example: [2, 2026, "2025-08-27"] = Q2 FY2026
+            # FMP returns dict format after parsing: {quarter: X, year: Y, date: "..."}
+            # Example: {quarter: 2, year: 2026, date: "2025-08-27"} = Q2 FY2026
             quarters = []
             for t in transcripts[:8]:
                 try:
+                    # Validate required fields
+                    if not isinstance(t, dict):
+                        LOG.warning(f"Transcript item is not a dict for {ticker}: {type(t)}")
+                        continue
+
+                    if 'quarter' not in t or 'year' not in t or 'date' not in t:
+                        LOG.warning(f"Transcript missing required fields for {ticker}: {list(t.keys())}")
+                        continue
+
                     # Return objects with quarter, year, and call_date
                     quarters.append({
                         "quarter": t['quarter'],
@@ -21939,9 +21961,20 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                         "call_date": t['date'][:10],  # Strip time, keep date only (YYYY-MM-DD)
                         "label": f"Q{t['quarter']} FY{t['year']}"
                     })
-                except (ValueError, KeyError, IndexError) as e:
-                    LOG.warning(f"Failed to parse transcript data for {ticker}: {e}")
+                except (ValueError, KeyError, IndexError, TypeError) as e:
+                    LOG.warning(f"Failed to parse transcript data for {ticker}: {e} - item: {t}")
                     continue
+
+            if not quarters:
+                LOG.warning(f"No valid quarters parsed for {ticker} from {len(transcripts)} transcripts")
+                return {
+                    "valid": True,
+                    "company_name": company_name,
+                    "latest_quarter": None,
+                    "available_quarters": [],
+                    "warning": f"Found {len(transcripts)} transcripts but failed to parse them. Check logs.",
+                    "ticker": ticker
+                }
 
             latest = quarters[0]['label'] if quarters else None
 
@@ -21976,8 +22009,8 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
             }
 
     except Exception as e:
-        LOG.error(f"FMP validation failed for {ticker}: {e}")
-        return {"valid": False, "error": str(e)}
+        LOG.error(f"FMP validation failed for {ticker}: {e}", exc_info=True)
+        return {"valid": False, "error": f"Failed to validate ticker: {str(e)}"}
 
 
 class BetaSignupRequest(BaseModel):
@@ -25329,25 +25362,42 @@ def get_all_users(token: str = Query(...)):
 
 @APP.post("/api/admin/approve-user")
 async def approve_user(request: Request):
-    """Approve a pending user"""
+    """Approve a pending user by account_id (supports multi-account per email)"""
     body = await request.json()
     token = body.get('token')
-    email = body.get('email')
+    account_id = body.get('account_id')  # NEW: Use account_id instead of email
+    email = body.get('email')  # Keep for backward compatibility
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
         with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE beta_users
-                SET status = 'active'
-                WHERE email = %s
-            """, (email,))
-            conn.commit()
-
-            LOG.info(f"✅ Approved user: {email}")
-            return {"status": "success", "message": f"Approved {email}"}
+            if account_id:
+                # NEW: Update specific account only
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'active'
+                    WHERE account_id = %s
+                    RETURNING email, ticker1, ticker2, ticker3
+                """, (account_id,))
+                result = cur.fetchone()
+                if result:
+                    conn.commit()
+                    LOG.info(f"✅ Approved account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
+                    return {"status": "success", "message": f"Approved account {account_id}"}
+                else:
+                    return {"status": "error", "message": f"Account {account_id} not found"}
+            else:
+                # OLD: Backward compatibility - update all accounts with this email
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'active'
+                    WHERE email = %s
+                """, (email,))
+                conn.commit()
+                LOG.warning(f"✅ Approved ALL accounts for: {email} (deprecated - use account_id)")
+                return {"status": "success", "message": f"Approved {email}"}
     except Exception as e:
         LOG.error(f"Failed to approve user: {e}")
         return {"status": "error", "message": str(e)}
@@ -25379,75 +25429,126 @@ async def reject_user(request: Request):
 
 @APP.post("/api/admin/pause-user")
 async def pause_user(request: Request):
-    """Pause an active user"""
+    """Pause an active user by account_id (supports multi-account per email)"""
     body = await request.json()
     token = body.get('token')
-    email = body.get('email')
+    account_id = body.get('account_id')  # NEW: Use account_id instead of email
+    email = body.get('email')  # Keep for backward compatibility
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
         with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE beta_users
-                SET status = 'paused'
-                WHERE email = %s
-            """, (email,))
-            conn.commit()
-
-            LOG.info(f"⏸️ Paused user: {email}")
-            return {"status": "success", "message": f"Paused {email}"}
+            if account_id:
+                # NEW: Update specific account only
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'paused'
+                    WHERE account_id = %s
+                    RETURNING email, ticker1, ticker2, ticker3
+                """, (account_id,))
+                result = cur.fetchone()
+                if result:
+                    conn.commit()
+                    LOG.info(f"⏸️ Paused account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
+                    return {"status": "success", "message": f"Paused account {account_id}"}
+                else:
+                    return {"status": "error", "message": f"Account {account_id} not found"}
+            else:
+                # OLD: Backward compatibility - update all accounts with this email
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'paused'
+                    WHERE email = %s
+                """, (email,))
+                conn.commit()
+                LOG.warning(f"⏸️ Paused ALL accounts for: {email} (deprecated - use account_id)")
+                return {"status": "success", "message": f"Paused {email}"}
     except Exception as e:
         LOG.error(f"Failed to pause user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/cancel-user")
 async def cancel_user(request: Request):
-    """Cancel a user (same as unsubscribe)"""
+    """Cancel a user by account_id (supports multi-account per email)"""
     body = await request.json()
     token = body.get('token')
-    email = body.get('email')
+    account_id = body.get('account_id')  # NEW: Use account_id instead of email
+    email = body.get('email')  # Keep for backward compatibility
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
         with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE beta_users
-                SET status = 'cancelled'
-                WHERE email = %s
-            """, (email,))
-            conn.commit()
-
-            LOG.info(f"🗑️ Cancelled user: {email}")
-            return {"status": "success", "message": f"Cancelled {email}"}
+            if account_id:
+                # NEW: Update specific account only
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'cancelled'
+                    WHERE account_id = %s
+                    RETURNING email, ticker1, ticker2, ticker3
+                """, (account_id,))
+                result = cur.fetchone()
+                if result:
+                    conn.commit()
+                    LOG.info(f"🗑️ Cancelled account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
+                    return {"status": "success", "message": f"Cancelled account {account_id}"}
+                else:
+                    return {"status": "error", "message": f"Account {account_id} not found"}
+            else:
+                # OLD: Backward compatibility - update all accounts with this email
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'cancelled'
+                    WHERE email = %s
+                """, (email,))
+                conn.commit()
+                LOG.warning(f"🗑️ Cancelled ALL accounts for: {email} (deprecated - use account_id)")
+                return {"status": "success", "message": f"Cancelled {email}"}
     except Exception as e:
         LOG.error(f"Failed to cancel user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/reactivate-user")
 async def reactivate_user(request: Request):
-    """Reactivate a paused or cancelled user"""
+    """Reactivate a paused or cancelled user by account_id (supports multi-account per email)"""
     body = await request.json()
     token = body.get('token')
-    email = body.get('email')
+    account_id = body.get('account_id')  # NEW: Use account_id instead of email
+    email = body.get('email')  # Keep for backward compatibility
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
         with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE beta_users
-                SET status = 'active'
-                WHERE email = %s
-            """, (email,))
-            conn.commit()
-
-            LOG.info(f"▶️ Reactivated user: {email}")
-            return {"status": "success", "message": f"Reactivated {email}"}
+            if account_id:
+                # NEW: Update specific account only
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'active'
+                    WHERE account_id = %s
+                    RETURNING email, ticker1, ticker2, ticker3
+                """, (account_id,))
+                result = cur.fetchone()
+                if result:
+                    conn.commit()
+                    LOG.info(f"▶️ Reactivated account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
+                    return {"status": "success", "message": f"Reactivated account {account_id}"}
+                else:
+                    return {"status": "error", "message": f"Account {account_id} not found"}
+            else:
+                # OLD: Backward compatibility - update all accounts with this email
+                cur.execute("""
+                    UPDATE beta_users
+                    SET status = 'active'
+                    WHERE email = %s
+                """, (email,))
+                conn.commit()
+                LOG.warning(f"▶️ Reactivated ALL accounts for: {email} (deprecated - use account_id)")
+                return {"status": "success", "message": f"Reactivated {email}"}
     except Exception as e:
         LOG.error(f"Failed to reactivate user: {e}")
         return {"status": "error", "message": str(e)}
@@ -27229,9 +27330,173 @@ async def check_ticker_missing_financials_status(ticker: str):
         return None
 
 
+@APP.post("/api/admin/start-financials-check")
+async def start_financials_check(request: Request):
+    """
+    NEW: Start background job to check missing financials (non-blocking).
+    Returns immediately with job_id. Use GET /api/admin/financials-check-status to poll.
+    """
+    try:
+        body = await request.json()
+        token = body.get('token')
+
+        if not check_admin_token(token):
+            return {"status": "error", "message": "Unauthorized"}
+
+        global _financials_check_job
+
+        with _financials_check_lock:
+            # Check if a job is already running
+            if _financials_check_job["status"] == "running":
+                return {
+                    "status": "error",
+                    "message": "Check already in progress",
+                    "job_id": _financials_check_job["job_id"]
+                }
+
+            # Create new job
+            import uuid
+            job_id = str(uuid.uuid4())[:8]
+            _financials_check_job = {
+                "job_id": job_id,
+                "status": "running",
+                "progress": 0,
+                "message": "Starting check...",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "results": None,
+                "error": None
+            }
+
+        # Start background task (don't await it)
+        asyncio.create_task(_run_financials_check_job(job_id))
+
+        return {
+            "status": "success",
+            "message": "Check started",
+            "job_id": job_id
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to start financials check: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@APP.get("/api/admin/financials-check-status")
+def get_financials_check_status(token: str, job_id: str = None):
+    """
+    NEW: Get status of background financials check job.
+    Poll this endpoint every 2-3 seconds until status is 'complete' or 'error'.
+    """
+    try:
+        if not check_admin_token(token):
+            return {"status": "error", "message": "Unauthorized"}
+
+        with _financials_check_lock:
+            # Return current job status
+            return {
+                "status": "success",
+                "job": {
+                    "job_id": _financials_check_job["job_id"],
+                    "status": _financials_check_job["status"],
+                    "progress": _financials_check_job["progress"],
+                    "message": _financials_check_job["message"],
+                    "started_at": _financials_check_job["started_at"],
+                    "completed_at": _financials_check_job["completed_at"],
+                    "results": _financials_check_job["results"],
+                    "error": _financials_check_job["error"]
+                }
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to get financials check status: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+async def _run_financials_check_job(job_id: str):
+    """
+    Background task to check missing financials for all active user tickers.
+    Updates global _financials_check_job state as it progresses.
+    """
+    try:
+        global _financials_check_job
+
+        # Get all unique tickers from active users
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ticker1 AS ticker FROM beta_users WHERE status = 'active'
+                UNION
+                SELECT DISTINCT ticker2 AS ticker FROM beta_users WHERE status = 'active'
+                UNION
+                SELECT DISTINCT ticker3 AS ticker FROM beta_users WHERE status = 'active'
+                ORDER BY ticker
+            """)
+            user_tickers = [row['ticker'] for row in cur.fetchall() if row['ticker']]
+
+        if not user_tickers:
+            with _financials_check_lock:
+                _financials_check_job["status"] = "complete"
+                _financials_check_job["progress"] = 100
+                _financials_check_job["message"] = "No active users found"
+                _financials_check_job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                _financials_check_job["results"] = []
+            return
+
+        total_tickers = len(user_tickers)
+        LOG.info(f"[FINANCIALS CHECK] Starting check for {total_tickers} tickers")
+
+        # Update status: fetching data
+        with _financials_check_lock:
+            _financials_check_job["progress"] = 10
+            _financials_check_job["message"] = f"Checking {total_tickers} tickers with FMP..."
+
+        # PARALLEL PROCESSING - All tickers checked simultaneously
+        ticker_results = await asyncio.gather(*[
+            check_ticker_missing_financials_status(ticker)
+            for ticker in user_tickers
+        ], return_exceptions=True)
+
+        # Collect results from parallel processing
+        tickers_status = []
+        for idx, result in enumerate(ticker_results):
+            if isinstance(result, Exception):
+                LOG.error(f"Ticker status check failed: {result}")
+                continue
+            if result is not None:  # Skip None returns (ticker not in database)
+                tickers_status.append(result)
+
+            # Update progress
+            progress = 10 + int((idx + 1) / total_tickers * 85)  # 10-95%
+            with _financials_check_lock:
+                _financials_check_job["progress"] = progress
+                _financials_check_job["message"] = f"Checked {idx + 1}/{total_tickers} tickers..."
+
+        # Complete
+        with _financials_check_lock:
+            _financials_check_job["status"] = "complete"
+            _financials_check_job["progress"] = 100
+            _financials_check_job["message"] = f"Check complete - found {len(tickers_status)} tickers"
+            _financials_check_job["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _financials_check_job["results"] = tickers_status
+
+        LOG.info(f"[FINANCIALS CHECK] Complete - {len(tickers_status)} tickers processed")
+
+    except Exception as e:
+        LOG.error(f"[FINANCIALS CHECK] Failed: {e}", exc_info=True)
+        with _financials_check_lock:
+            _financials_check_job["status"] = "error"
+            _financials_check_job["progress"] = 0
+            _financials_check_job["message"] = "Check failed"
+            _financials_check_job["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _financials_check_job["error"] = str(e)
+
+
 @APP.get("/api/admin/missing-financials-status")
 async def get_missing_financials_status(token: str):
     """
+    DEPRECATED: Use POST /api/admin/start-financials-check + polling instead.
+    This endpoint still works but blocks the HTTP request for 10-30 seconds.
+
     Get status of missing financials (10-K, 10-Q, Transcripts) for all active user tickers.
     Returns list of tickers with what's available from FMP vs what we have in database.
 

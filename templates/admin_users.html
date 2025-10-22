@@ -442,22 +442,22 @@
 
                             <div class="actions">
                         ${user.status === 'pending' ? `
-                            <button class="btn btn-success" onclick="approveUser('${user.email}')">✅ Approve</button>
+                            <button class="btn btn-success" onclick="approveUser(${user.id}, '${user.email}')">✅ Approve</button>
                             <button class="btn btn-danger" onclick="rejectUser('${user.email}')">❌ Reject</button>
                             <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
                         ` : ''}
                         ${user.status === 'active' ? `
-                            <button class="btn btn-warning" onclick="pauseUser('${user.email}')">⏸️ Pause</button>
-                            <button class="btn btn-danger" onclick="cancelUser('${user.email}')">🗑️ Cancel</button>
+                            <button class="btn btn-warning" onclick="pauseUser(${user.id}, '${user.email}')">⏸️ Pause</button>
+                            <button class="btn btn-danger" onclick="cancelUser(${user.id}, '${user.email}')">🗑️ Cancel</button>
                             <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
                         ` : ''}
                         ${user.status === 'paused' ? `
-                            <button class="btn btn-success" onclick="reactivateUser('${user.email}')">▶️ Reactivate</button>
-                            <button class="btn btn-danger" onclick="cancelUser('${user.email}')">🗑️ Cancel</button>
+                            <button class="btn btn-success" onclick="reactivateUser(${user.id}, '${user.email}')">▶️ Reactivate</button>
+                            <button class="btn btn-danger" onclick="cancelUser(${user.id}, '${user.email}')">🗑️ Cancel</button>
                             <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
                         ` : ''}
                         ${user.status === 'cancelled' ? `
-                            <button class="btn btn-secondary" onclick="reactivateUser('${user.email}')">🔄 Reactivate</button>
+                            <button class="btn btn-secondary" onclick="reactivateUser(${user.id}, '${user.email}')">🔄 Reactivate</button>
                             <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
                         ` : ''}
                             </div>
@@ -507,14 +507,14 @@
             }
         }
 
-        async function approveUser(email) {
-            if (!confirm(`Approve user ${email}?`)) return;
+        async function approveUser(account_id, email) {
+            if (!confirm(`Approve account ${account_id} (${email})?`)) return;
 
             try {
                 const response = await fetch('/api/admin/approve-user', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, email})
+                    body: JSON.stringify({token, account_id})  // Send account_id instead of email
                 });
 
                 const result = await response.json();
@@ -549,14 +549,14 @@
             }
         }
 
-        async function pauseUser(email) {
-            if (!confirm(`Pause user ${email}? They will stop receiving emails.`)) return;
+        async function pauseUser(account_id, email) {
+            if (!confirm(`Pause account ${account_id} (${email})? They will stop receiving emails for these tickers.`)) return;
 
             try {
                 const response = await fetch('/api/admin/pause-user', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, email})
+                    body: JSON.stringify({token, account_id})  // Send account_id instead of email
                 });
 
                 const result = await response.json();
@@ -570,14 +570,14 @@
             }
         }
 
-        async function cancelUser(email) {
-            if (!confirm(`Cancel user ${email}? This is the same as unsubscribing.`)) return;
+        async function cancelUser(account_id, email) {
+            if (!confirm(`Cancel account ${account_id} (${email})? This is the same as unsubscribing.`)) return;
 
             try {
                 const response = await fetch('/api/admin/cancel-user', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, email})
+                    body: JSON.stringify({token, account_id})  // Send account_id instead of email
                 });
 
                 const result = await response.json();
@@ -591,14 +591,14 @@
             }
         }
 
-        async function reactivateUser(email) {
-            if (!confirm(`Reactivate user ${email}? They will start receiving emails again.`)) return;
+        async function reactivateUser(account_id, email) {
+            if (!confirm(`Reactivate account ${account_id} (${email})? They will start receiving emails again for these tickers.`)) return;
 
             try {
                 const response = await fetch('/api/admin/reactivate-user', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, email})
+                    body: JSON.stringify({token, account_id})  // Send account_id instead of email
                 });
 
                 const result = await response.json();

@@ -1119,20 +1119,81 @@
             actionsDiv.style.display = 'none';
 
             try {
-                const response = await fetch(`/api/admin/missing-financials-status?token=${token}`);
-                const result = await response.json();
+                // Start background check job
+                loadingDiv.innerHTML = '<div style="color: #6b7280;">Starting check...</div>';
 
-                if (result.status === 'success') {
-                    financialsData = result.tickers;
-                    populateFinancialsList(result.tickers);
-                    loadingDiv.style.display = 'none';
-                    listDiv.style.display = 'block';
-                    actionsDiv.style.display = 'block';
-                } else {
-                    loadingDiv.innerHTML = `<span style="color: #ef4444;">Error: ${result.message}</span>`;
+                const startResponse = await fetch('/api/admin/start-financials-check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: token })
+                });
+                const startResult = await startResponse.json();
+
+                if (startResult.status !== 'success') {
+                    loadingDiv.innerHTML = `<span style="color: #ef4444;">Error: ${startResult.message}</span>`;
+                    return;
                 }
+
+                const jobId = startResult.job_id;
+
+                // Poll for status updates
+                let pollCount = 0;
+                const maxPolls = 60; // Max 3 minutes (60 * 3s)
+
+                const pollStatus = async () => {
+                    pollCount++;
+
+                    try {
+                        const statusResponse = await fetch(`/api/admin/financials-check-status?token=${token}&job_id=${jobId}`);
+                        const statusResult = await statusResponse.json();
+
+                        if (statusResult.status !== 'success') {
+                            loadingDiv.innerHTML = `<span style="color: #ef4444;">Error: ${statusResult.message}</span>`;
+                            return;
+                        }
+
+                        const job = statusResult.job;
+
+                        // Update loading message with progress
+                        loadingDiv.innerHTML = `
+                            <div style="color: #6b7280;">
+                                <div style="margin-bottom: 12px;">${job.message}</div>
+                                <div style="background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden;">
+                                    <div style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); height: 100%; width: ${job.progress}%; transition: width 0.3s;"></div>
+                                </div>
+                                <div style="margin-top: 8px; font-size: 12px;">${job.progress}% complete</div>
+                            </div>
+                        `;
+
+                        if (job.status === 'complete') {
+                            // Success - display results
+                            financialsData = job.results || [];
+                            populateFinancialsList(financialsData);
+                            loadingDiv.style.display = 'none';
+                            listDiv.style.display = 'block';
+                            actionsDiv.style.display = 'block';
+                        } else if (job.status === 'error') {
+                            // Error
+                            loadingDiv.innerHTML = `<span style="color: #ef4444;">Check failed: ${job.error || 'Unknown error'}</span>`;
+                        } else if (job.status === 'running') {
+                            // Still running - poll again after 2 seconds
+                            if (pollCount < maxPolls) {
+                                setTimeout(pollStatus, 2000);
+                            } else {
+                                loadingDiv.innerHTML = '<span style="color: #ef4444;">Check timed out - please try again</span>';
+                            }
+                        }
+                    } catch (error) {
+                        loadingDiv.innerHTML = `<span style="color: #ef4444;">Failed to check status</span>`;
+                        console.error('Failed to poll financials status:', error);
+                    }
+                };
+
+                // Start polling
+                setTimeout(pollStatus, 2000);
+
             } catch (error) {
-                loadingDiv.innerHTML = `<span style="color: #ef4444;">Failed to load ticker status</span>`;
+                loadingDiv.innerHTML = `<span style="color: #ef4444;">Failed to start check</span>`;
                 console.error('Failed to load financials status:', error);
             }
         }

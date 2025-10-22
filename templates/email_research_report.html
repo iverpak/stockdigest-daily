@@ -24,16 +24,27 @@
                         <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
-                                    <td style="width: 100%;">
+                                    <td style="width: 58%;">
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{{ report_type_label }}</div>
+                                    </td>
+                                    <td align="right" style="width: 42%;">
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{{ date_label }}</div>
                                     </td>
                                 </tr>
                                 <tr>
-                                    <td style="width: 100%; vertical-align: top;">
-                                        <h1 class="company-name" style="margin: 8px 0 0 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{{ company_name }}</h1>
-                                        <div style="margin-top: 10px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{{ ticker }} • {{ fiscal_period }}</div>
+                                    <td style="width: 58%; vertical-align: top;">
+                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{{ company_name }}</h1>
+                                        <div style="font-size: 13px; margin-top: 2px; opacity: 0.9; color: #ffffff;">{{ ticker }}{% if industry %} | {{ industry }}{% endif %}</div>
                                         {% if filing_date %}
-                                        <div style="margin-top: 4px; font-size: 11px; opacity: 0.8; color: #ffffff;">Filed: {{ filing_date }}</div>
+                                        <div style="font-size: 11px; margin-top: 4px; opacity: 0.8; color: #ffffff;">{{ filing_date }}</div>
+                                        {% endif %}
+                                    </td>
+                                    <td align="right" style="width: 42%; vertical-align: top;">
+                                        {% if stock_price %}
+                                        <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff; margin-bottom: 2px;">{{ stock_price }}</div>
+                                        {% if price_change_pct %}
+                                        <div style="font-size: 13px; font-weight: 600; color: {{ price_change_color }};">{{ price_change_pct }}</div>
+                                        {% endif %}
                                         {% endif %}
                                     </td>
                                 </tr>

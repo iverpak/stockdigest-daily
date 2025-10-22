@@ -21771,42 +21771,17 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                     "ticker": ticker
                 }
 
-            # Format quarters (most recent first, limit to 8)
-            # Calculate quarter from call date instead of using FMP's fiscal labels
-            # This matches our 10-Q logic: determine quarter by last quarter end before call
+            # Format quarters using FMP's fiscal year data directly (most recent first, limit to 8)
+            # FMP returns: [quarter, fiscal_year, call_date]
+            # Example: [2, 2026, "2025-08-27"] = Q2 FY2026
             quarters = []
             for t in transcripts[:8]:
                 try:
-                    # Parse call date
-                    call_date_str = t['date']
-                    year = int(call_date_str[:4])
-                    month = int(call_date_str[5:7])
-                    day = int(call_date_str[8:10])
-
-                    # Determine quarter based on last calendar quarter end before call date
-                    # Calendar quarter ends: Q1=March 31, Q2=June 30, Q3=Sept 30, Q4=Dec 31
-                    if month >= 10 or (month == 9 and day == 30):
-                        # Call in Oct-Dec or on Sept 30 → Reports Q3 (ended Sept 30)
-                        quarter = 3
-                        quarter_year = year
-                    elif month >= 7 or (month == 6 and day == 30):
-                        # Call in July-Sept or on June 30 → Reports Q2 (ended June 30)
-                        quarter = 2
-                        quarter_year = year
-                    elif month >= 4 or (month == 3 and day == 31):
-                        # Call in April-June or on March 31 → Reports Q1 (ended March 31)
-                        quarter = 1
-                        quarter_year = year
-                    else:
-                        # Call in Jan-March → Reports Q4 (ended Dec 31 previous year)
-                        quarter = 4
-                        quarter_year = year - 1
-
-                    quarters.append(f"Q{quarter} {quarter_year}")
+                    # Use FMP's fiscal quarter and year directly
+                    quarters.append(f"Q{t['quarter']} FY{t['year']}")
                 except (ValueError, KeyError, IndexError) as e:
-                    LOG.warning(f"Failed to parse transcript date for {ticker}: {e}")
-                    # Fallback to FMP labels if parsing fails
-                    quarters.append(f"Q{t['quarter']} {t['year']}")
+                    LOG.warning(f"Failed to parse transcript data for {ticker}: {e}")
+                    continue
 
             latest = quarters[0] if quarters else None
 
@@ -26277,7 +26252,7 @@ async def get_transcripts_api(token: str = None):
                     "ticker": t['ticker'],
                     "quarter": t['quarter'],
                     "year": t['year'],
-                    "quarter_label": f"Q{t['quarter']} {t['year']}",
+                    "quarter_label": f"{t['quarter']} FY{t['year']}",  # quarter already has 'Q' prefix (e.g., 'Q2')
                     "report_date": str(t['report_date']) if t['report_date'] else None,
                     "summary_text": t['summary_text'],
                     "ai_provider": t['ai_provider'],
@@ -27077,7 +27052,7 @@ async def generate_missing_financials(request: Request):
                     quarters = transcript_response.get("available_quarters", [])
                     if quarters:
                         import re
-                        match = re.match(r"Q(\d+)\s+(\d{4})", quarters[0])
+                        match = re.match(r"Q(\d+)\s+FY(\d{4})", quarters[0])  # Updated to match "Q2 FY2026" format
                         if match:
                             quarter = int(match.group(1))
                             year = int(match.group(2))

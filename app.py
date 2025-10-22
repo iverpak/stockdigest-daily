@@ -27178,12 +27178,21 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
             item['generated'] = generated_10k.get(item['year'])
 
         for item in available_10q:
-            key = f"{item['year']}-Q{item['quarter']}"
+            # Handle both 'year' and 'fiscal_year' keys, 'quarter' can be "Q1" or 1
+            year = item.get('fiscal_year') or item.get('year')
+            quarter = item.get('quarter', '')
+            # Strip Q prefix if present
+            if isinstance(quarter, str) and quarter.startswith('Q'):
+                quarter = quarter[1:]
+            key = f"{year}-Q{quarter}"
             item['generated'] = generated_10q.get(key)
 
         for item in available_transcripts:
-            key = f"{item['year']}-Q{item['quarter']}"
-            item['generated'] = generated_transcripts.get(key)
+            year = item.get('year')
+            quarter = item.get('quarter')
+            if year and quarter:
+                key = f"{year}-Q{quarter}"
+                item['generated'] = generated_transcripts.get(key)
 
         for item in available_press_releases:
             item['generated'] = generated_press_releases.get(item['date'])

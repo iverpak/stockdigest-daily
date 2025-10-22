@@ -22140,7 +22140,7 @@ def get_or_create_unsubscribe_token(account_id_or_email, ticker1: str = None, ti
         with db() as conn, conn.cursor() as cur:
             # Get account info
             cur.execute("""
-                SELECT account_id, email FROM beta_users WHERE account_id = %s
+                SELECT id, email FROM beta_users WHERE id = %s
             """, (account_id,))
             account = cur.fetchone()
 

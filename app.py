@@ -21777,13 +21777,18 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
             quarters = []
             for t in transcripts[:8]:
                 try:
-                    # Use FMP's fiscal quarter and year directly
-                    quarters.append(f"Q{t['quarter']} FY{t['year']}")
+                    # Return objects with quarter, year, and call_date
+                    quarters.append({
+                        "quarter": t['quarter'],
+                        "year": t['year'],
+                        "call_date": t['date'][:10],  # Strip time, keep date only (YYYY-MM-DD)
+                        "label": f"Q{t['quarter']} FY{t['year']}"
+                    })
                 except (ValueError, KeyError, IndexError) as e:
                     LOG.warning(f"Failed to parse transcript data for {ticker}: {e}")
                     continue
 
-            latest = quarters[0] if quarters else None
+            latest = quarters[0]['label'] if quarters else None
 
             return {
                 "valid": True,
@@ -26643,14 +26648,25 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
         available_transcripts = []
         if transcript_response.get("valid"):
             quarters = transcript_response.get("available_quarters", [])
-            for q_str in quarters[:8]:  # Latest 8 quarters
-                match = re.match(r"Q(\d+)\s+FY(\d{4})", q_str)  # Updated to match "Q2 FY2026" format
-                if match:
+            for q in quarters[:8]:  # Latest 8 quarters
+                # Now receiving objects with quarter, year, call_date, label
+                if isinstance(q, dict):
                     available_transcripts.append({
-                        "quarter": int(match.group(1)),
-                        "year": int(match.group(2)),
-                        "label": q_str
+                        "quarter": q['quarter'],
+                        "year": q['year'],
+                        "call_date": q['call_date'],
+                        "label": q['label']
                     })
+                else:
+                    # Fallback for old string format (shouldn't happen after deployment)
+                    match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))
+                    if match:
+                        available_transcripts.append({
+                            "quarter": int(match.group(1)),
+                            "year": int(match.group(2)),
+                            "call_date": None,
+                            "label": str(q)
+                        })
 
         # Fetch available press releases
         pr_response = await validate_ticker_for_research(ticker=ticker, type="press_release")
@@ -26800,18 +26816,18 @@ async def get_missing_financials_status(token: str):
                 if transcript_response.get("valid"):
                     quarters = transcript_response.get("available_quarters", [])
                     if quarters:
-                        # quarters[0] is a dict with {quarter: "Q2", fiscal_year: 2025, ...}
+                        # quarters[0] is now a dict with {quarter: 2, year: 2026, call_date: "2025-08-05", label: "Q2 FY2026"}
                         q = quarters[0]
                         if isinstance(q, dict):
-                            # Extract quarter number from "Q2" -> 2
-                            quarter_str = q.get("quarter", "")
-                            quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
-                            if quarter_num and q.get("fiscal_year"):
-                                latest_transcript = {"quarter": quarter_num, "year": q["fiscal_year"]}
+                            # New format: quarter is already an integer
+                            quarter_num = q.get("quarter") if isinstance(q.get("quarter"), int) else None
+                            year = q.get("year")
+                            if quarter_num and year:
+                                latest_transcript = {"quarter": quarter_num, "year": year}
                         else:
-                            # Fallback: try parsing string format (transcripts are now strings like "Q2 FY2026")
+                            # Fallback: try parsing string format (shouldn't happen after deployment)
                             import re
-                            match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))  # Updated to match "Q2 FY2026" format
+                            match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))
                             if match:
                                 latest_transcript = {"quarter": int(match.group(1)), "year": int(match.group(2))}
 

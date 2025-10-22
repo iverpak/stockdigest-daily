@@ -22067,12 +22067,12 @@ def generate_unsubscribe_token(email: str) -> str:
         with db() as conn, conn.cursor() as cur:
             # Get first account for this email (legacy behavior)
             cur.execute("""
-                SELECT account_id FROM beta_users WHERE email = %s LIMIT 1
+                SELECT id FROM beta_users WHERE email = %s LIMIT 1
             """, (email,))
             account = cur.fetchone()
 
             if account:
-                return generate_unsubscribe_token_for_account(account['account_id'], email)
+                return generate_unsubscribe_token_for_account(account['id'], email)
             else:
                 LOG.error(f"No account found for email {email}")
                 return ""
@@ -22094,20 +22094,20 @@ def get_account_id_from_email(email: str, ticker1: str = None, ticker2: str = No
             if ticker1 and ticker2 and ticker3:
                 # Find exact account with these tickers
                 cur.execute("""
-                    SELECT account_id FROM beta_users
+                    SELECT id FROM beta_users
                     WHERE email = %s AND ticker1 = %s AND ticker2 = %s AND ticker3 = %s
                     LIMIT 1
                 """, (email, ticker1, ticker2, ticker3))
             else:
                 # Get first account for this email
                 cur.execute("""
-                    SELECT account_id FROM beta_users
+                    SELECT id FROM beta_users
                     WHERE email = %s
                     LIMIT 1
                 """, (email,))
 
             result = cur.fetchone()
-            return result['account_id'] if result else None
+            return result['id'] if result else None
     except Exception as e:
         LOG.error(f"Error getting account_id for {email}: {e}")
         return None
@@ -25378,7 +25378,7 @@ async def approve_user(request: Request):
                 cur.execute("""
                     UPDATE beta_users
                     SET status = 'active'
-                    WHERE account_id = %s
+                    WHERE id = %s
                     RETURNING email, ticker1, ticker2, ticker3
                 """, (account_id,))
                 result = cur.fetchone()
@@ -25445,7 +25445,7 @@ async def pause_user(request: Request):
                 cur.execute("""
                     UPDATE beta_users
                     SET status = 'paused'
-                    WHERE account_id = %s
+                    WHERE id = %s
                     RETURNING email, ticker1, ticker2, ticker3
                 """, (account_id,))
                 result = cur.fetchone()
@@ -25487,7 +25487,7 @@ async def cancel_user(request: Request):
                 cur.execute("""
                     UPDATE beta_users
                     SET status = 'cancelled'
-                    WHERE account_id = %s
+                    WHERE id = %s
                     RETURNING email, ticker1, ticker2, ticker3
                 """, (account_id,))
                 result = cur.fetchone()
@@ -25529,7 +25529,7 @@ async def reactivate_user(request: Request):
                 cur.execute("""
                     UPDATE beta_users
                     SET status = 'active'
-                    WHERE account_id = %s
+                    WHERE id = %s
                     RETURNING email, ticker1, ticker2, ticker3
                 """, (account_id,))
                 result = cur.fetchone()

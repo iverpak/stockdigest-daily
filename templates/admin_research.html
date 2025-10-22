@@ -528,7 +528,7 @@
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <strong>${item.year}</strong> (Filed: ${item.filing_date})
+                                <strong>FY${item.year}</strong> (Filed: ${item.filing_date})
                                 <span style="color: #059669; font-size: 13px; margin-left: 12px;">✓ Generated on ${genDate}</span>
                             </div>
                             <div>
@@ -544,13 +544,10 @@
                         </div>
                     `;
                 } else {
-                    const periodDisplay = item.period_end_date
-                        ? `${item.year} (${formatShortDate(item.period_end_date)})`
-                        : `${item.year}`;
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <strong>${periodDisplay}</strong>
+                                <strong>FY${item.year}</strong>
                                 ${item.filing_date ? `<span style="color: #6b7280; font-size: 12px; margin-left: 8px;">Filed: ${formatShortDate(item.filing_date)}</span>` : ''}
                             </div>
                             <button onclick="generate10K('${ticker}', ${item.year}, '${item.filing_date}', '${item.period_end_date || ''}', '${item.sec_html_url}')"
@@ -577,7 +574,7 @@
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <strong>Q${item.quarter} ${item.year}</strong> (Filed: ${item.filing_date})
+                                <strong>Q${item.quarter} FY${item.year}</strong> (Filed: ${item.filing_date})
                                 <span style="color: #059669; font-size: 13px; margin-left: 12px;">✓ Generated on ${genDate}</span>
                             </div>
                             <div>
@@ -593,13 +590,10 @@
                         </div>
                     `;
                 } else {
-                    const periodDisplay = item.period_end_date
-                        ? `Q${item.quarter} ${item.year} (${formatShortDate(item.period_end_date)})`
-                        : `Q${item.quarter} ${item.year}`;
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <strong>${periodDisplay}</strong>
+                                <strong>Q${item.quarter} FY${item.year}</strong>
                                 ${item.filing_date ? `<span style="color: #6b7280; font-size: 12px; margin-left: 8px;">Filed: ${formatShortDate(item.filing_date)}</span>` : ''}
                             </div>
                             <button onclick="generate10Q('${ticker}', ${item.year}, ${item.quarter}, '${item.filing_date}', '${item.period_end_date || ''}', '${item.sec_html_url}')"

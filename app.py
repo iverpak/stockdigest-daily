@@ -21485,10 +21485,11 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
     try:
         with db() as conn, conn.cursor() as cur:
             # Validate token and get user info
+            # NEW: Use account_id for per-account unsubscribe
             cur.execute("""
-                SELECT ut.user_email, ut.used_at, bu.name, bu.status
+                SELECT ut.account_id, ut.user_email, ut.used_at, bu.name, bu.status, bu.ticker1, bu.ticker2, bu.ticker3
                 FROM unsubscribe_tokens ut
-                JOIN beta_users bu ON ut.user_email = bu.email
+                JOIN beta_users bu ON ut.account_id = bu.account_id
                 WHERE ut.token = %s
             """, (token,))
             result = cur.fetchone()
@@ -21535,8 +21536,12 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                     </html>
                 """, status_code=404)
 
+            account_id = result['account_id']
             email = result['user_email']
             name = result['name']
+            ticker1 = result['ticker1']
+            ticker2 = result['ticker2']
+            ticker3 = result['ticker3']
             already_cancelled = result['status'] == 'cancelled'
             already_used = result['used_at'] is not None
 
@@ -21545,13 +21550,13 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
             user_agent = request.headers.get('user-agent', '')
 
             if not already_cancelled:
-                # Mark user as unsubscribed
+                # Mark THIS ACCOUNT as unsubscribed (not all accounts with this email)
                 cur.execute("""
                     UPDATE beta_users
                     SET status = 'cancelled'
-                    WHERE email = %s
-                """, (email,))
-                LOG.info(f"Unsubscribed user: {email}")
+                    WHERE account_id = %s
+                """, (account_id,))
+                LOG.info(f"Unsubscribed account {account_id} ({email}) for tickers [{ticker1}, {ticker2}, {ticker3}]")
 
             if not already_used:
                 # Mark token as used
@@ -21984,67 +21989,147 @@ class BetaSignupRequest(BaseModel):
     ticker3: str
 
 
-def generate_unsubscribe_token(email: str) -> str:
+def generate_unsubscribe_token_for_account(account_id: int, email: str) -> str:
     """
-    Generate cryptographically secure unsubscribe token for user.
+    Generate cryptographically secure unsubscribe token for a specific account.
     Returns: 43-character URL-safe token
+
+    NEW: Uses account_id for per-account unsubscribe.
     """
     token = secrets.token_urlsafe(32)  # 32 bytes = 43 chars base64
 
     try:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO unsubscribe_tokens (user_email, token)
-                VALUES (%s, %s)
+                INSERT INTO unsubscribe_tokens (account_id, user_email, token)
+                VALUES (%s, %s, %s)
                 ON CONFLICT (token) DO NOTHING
                 RETURNING token
-            """, (email, token))
+            """, (account_id, email, token))
             result = cur.fetchone()
 
             if not result:
                 # Token collision (astronomically rare), retry
-                LOG.warning(f"Token collision for {email}, regenerating")
-                return generate_unsubscribe_token(email)
+                LOG.warning(f"Token collision for account {account_id}, regenerating")
+                return generate_unsubscribe_token_for_account(account_id, email)
 
             conn.commit()
-            LOG.info(f"Generated unsubscribe token for {email}")
+            LOG.info(f"Generated unsubscribe token for account {account_id} ({email})")
             return token
+    except Exception as e:
+        LOG.error(f"Error generating unsubscribe token for account {account_id}: {e}")
+        raise
+
+
+def generate_unsubscribe_token(email: str) -> str:
+    """
+    DEPRECATED: Use generate_unsubscribe_token_for_account() instead.
+    Legacy function maintained for backward compatibility only.
+    """
+    # This is kept for backward compatibility but should not be used for new code
+    LOG.warning(f"DEPRECATED: generate_unsubscribe_token() called for {email}. Use account_id version instead.")
+    token = secrets.token_urlsafe(32)
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get first account for this email (legacy behavior)
+            cur.execute("""
+                SELECT account_id FROM beta_users WHERE email = %s LIMIT 1
+            """, (email,))
+            account = cur.fetchone()
+
+            if account:
+                return generate_unsubscribe_token_for_account(account['account_id'], email)
+            else:
+                LOG.error(f"No account found for email {email}")
+                return ""
     except Exception as e:
         LOG.error(f"Error generating unsubscribe token: {e}")
         raise
 
 
-def get_or_create_unsubscribe_token(email: str) -> str:
+def get_account_id_from_email(email: str, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> Optional[int]:
     """
-    Get existing unsubscribe token or create new one.
-    Reuses token if user hasn't unsubscribed yet.
-    Returns empty string if email is not a beta user (admin/test emails).
+    Helper function to get account_id from email.
+    If tickers provided, finds exact match.
+    Otherwise returns first account for that email.
+
+    Returns None if no account found.
     """
     try:
         with db() as conn, conn.cursor() as cur:
-            # First, check if email exists in beta_users (required for foreign key)
+            if ticker1 and ticker2 and ticker3:
+                # Find exact account with these tickers
+                cur.execute("""
+                    SELECT account_id FROM beta_users
+                    WHERE email = %s AND ticker1 = %s AND ticker2 = %s AND ticker3 = %s
+                    LIMIT 1
+                """, (email, ticker1, ticker2, ticker3))
+            else:
+                # Get first account for this email
+                cur.execute("""
+                    SELECT account_id FROM beta_users
+                    WHERE email = %s
+                    LIMIT 1
+                """, (email,))
+
+            result = cur.fetchone()
+            return result['account_id'] if result else None
+    except Exception as e:
+        LOG.error(f"Error getting account_id for {email}: {e}")
+        return None
+
+
+def get_or_create_unsubscribe_token(account_id_or_email, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> str:
+    """
+    Get existing unsubscribe token or create new one for a specific account.
+    Reuses token if account hasn't unsubscribed yet.
+    Returns empty string if account not found.
+
+    Parameters:
+        account_id_or_email: Can be either int (account_id) or str (email for backward compatibility)
+        ticker1, ticker2, ticker3: Optional tickers to find specific account (only used with email)
+
+    NEW: Supports both account_id (preferred) and email (legacy) for backward compatibility.
+    """
+    try:
+        # Determine if we received account_id or email
+        if isinstance(account_id_or_email, int):
+            account_id = account_id_or_email
+        else:
+            # Legacy: email provided, lookup account_id
+            email = account_id_or_email
+            account_id = get_account_id_from_email(email, ticker1, ticker2, ticker3)
+            if not account_id:
+                LOG.warning(f"No account found for email {email}")
+                return ""
+
+        with db() as conn, conn.cursor() as cur:
+            # Get account info
             cur.execute("""
-                SELECT email FROM beta_users WHERE email = %s
-            """, (email,))
-            user_exists = cur.fetchone()
+                SELECT account_id, email FROM beta_users WHERE account_id = %s
+            """, (account_id,))
+            account = cur.fetchone()
 
-            if not user_exists:
-                LOG.warning(f"Email {email} not in beta_users, skipping unsubscribe token generation")
-                return ""  # Return empty string for admin/test emails
+            if not account:
+                LOG.warning(f"Account ID {account_id} not found, skipping unsubscribe token generation")
+                return ""
 
-            # Check if unused token exists
+            email = account['email']
+
+            # Check if unused token exists for this account
             cur.execute("""
                 SELECT token FROM unsubscribe_tokens
-                WHERE user_email = %s AND used_at IS NULL
+                WHERE account_id = %s AND used_at IS NULL
                 ORDER BY created_at DESC LIMIT 1
-            """, (email,))
+            """, (account_id,))
             result = cur.fetchone()
 
             if result:
                 return result['token']
 
             # No unused token found, generate new one
-            return generate_unsubscribe_token(email)
+            return generate_unsubscribe_token_for_account(account_id, email)
     except Exception as e:
         LOG.error(f"Error getting unsubscribe token: {e}")
         # Fallback: return empty string (email will have generic unsubscribe link)

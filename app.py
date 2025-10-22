@@ -27017,11 +27017,140 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
         LOG.error(f"Failed to get research status for {ticker}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+async def check_ticker_missing_financials_status(ticker: str):
+    """
+    Check one ticker for missing financials - fetches 10-K, 10-Q, Transcript in PARALLEL.
+    Returns: status dict with missing items info
+    """
+    try:
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            return None  # Skip tickers not in database
+
+        company_name = config.get('company_name', ticker)
+
+        # PARALLEL FMP API CALLS - All 3 fetched simultaneously
+        profile_response, tenq_response, transcript_response = await asyncio.gather(
+            validate_ticker_for_research(ticker=ticker, type="profile"),
+            validate_ticker_for_research(ticker=ticker, type="10q"),
+            validate_ticker_for_research(ticker=ticker, type="transcript"),
+            return_exceptions=True
+        )
+
+        # Handle exceptions from parallel calls
+        if isinstance(profile_response, Exception):
+            LOG.error(f"10-K fetch failed for {ticker}: {profile_response}")
+            profile_response = {"valid": False}
+        if isinstance(tenq_response, Exception):
+            LOG.error(f"10-Q fetch failed for {ticker}: {tenq_response}")
+            tenq_response = {"valid": False}
+        if isinstance(transcript_response, Exception):
+            LOG.error(f"Transcript fetch failed for {ticker}: {transcript_response}")
+            transcript_response = {"valid": False}
+
+        # Extract latest from FMP
+        latest_10k_year = None
+        if profile_response.get("valid"):
+            years = profile_response.get("available_years", [])
+            if years:
+                latest_10k_year = years[0]["year"]
+
+        latest_10q = None
+        if tenq_response.get("valid"):
+            quarters = tenq_response.get("available_quarters", [])
+            if quarters:
+                q = quarters[0]
+                if isinstance(q, dict):
+                    quarter_str = q.get("quarter", "")
+                    quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
+                    if quarter_num and q.get("fiscal_year"):
+                        latest_10q = {"quarter": quarter_num, "year": q["fiscal_year"]}
+
+        latest_transcript = None
+        if transcript_response.get("valid"):
+            quarters = transcript_response.get("available_quarters", [])
+            if quarters:
+                q = quarters[0]
+                if isinstance(q, dict):
+                    quarter_num = q.get("quarter") if isinstance(q.get("quarter"), int) else None
+                    year = q.get("year")
+                    if quarter_num and year:
+                        latest_transcript = {"quarter": quarter_num, "year": year}
+
+        # Check what we have in database
+        with db() as conn, conn.cursor() as cur:
+            # Check 10-K
+            cur.execute("""
+                SELECT fiscal_year FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-K'
+                ORDER BY fiscal_year DESC LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+            our_10k_year = result['fiscal_year'] if result else None
+
+            # Check 10-Q
+            cur.execute("""
+                SELECT fiscal_year, fiscal_quarter FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-Q'
+                ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+            our_10q = None
+            if result:
+                quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
+                if quarter_num:
+                    our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
+
+            # Check transcript
+            cur.execute("""
+                SELECT year, quarter FROM transcript_summaries
+                WHERE ticker = %s AND report_type = 'transcript'
+                ORDER BY year DESC, quarter DESC LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+            our_transcript = None
+            if result:
+                quarter_str = result['quarter']
+                quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
+                if quarter_num:
+                    our_transcript = {"year": result['year'], "quarter": quarter_num}
+
+        # Determine missing items
+        missing_10k = latest_10k_year and (not our_10k_year or latest_10k_year > our_10k_year)
+        missing_10q = latest_10q and (not our_10q or
+                                       latest_10q['year'] > our_10q['year'] or
+                                       (latest_10q['year'] == our_10q['year'] and latest_10q['quarter'] > our_10q['quarter']))
+        missing_transcript = latest_transcript and (not our_transcript or
+                                                     latest_transcript['year'] > our_transcript['year'] or
+                                                     (latest_transcript['year'] == our_transcript['year'] and latest_transcript['quarter'] > our_transcript['quarter']))
+
+        return {
+            "ticker": ticker,
+            "company_name": company_name,
+            "missing_10k": missing_10k,
+            "missing_10q": missing_10q,
+            "missing_transcript": missing_transcript,
+            "latest_10k_year": latest_10k_year,
+            "latest_10q": latest_10q,
+            "latest_transcript": latest_transcript,
+            "our_10k_year": our_10k_year,
+            "our_10q": our_10q,
+            "our_transcript": our_transcript
+        }
+
+    except Exception as e:
+        LOG.error(f"Error checking status for {ticker}: {e}")
+        return None
+
+
 @APP.get("/api/admin/missing-financials-status")
 async def get_missing_financials_status(token: str):
     """
     Get status of missing financials (10-K, 10-Q, Transcripts) for all active user tickers.
     Returns list of tickers with what's available from FMP vs what we have in database.
+
+    OPTIMIZED: Uses parallel FMP API calls (all tickers processed concurrently).
     """
     try:
         if not check_admin_token(token):
@@ -27042,145 +27171,31 @@ async def get_missing_financials_status(token: str):
         if not user_tickers:
             return {"status": "success", "tickers": [], "message": "No active users found"}
 
-        # Check each ticker for missing financials
+        # PARALLEL PROCESSING - All tickers checked simultaneously
+        ticker_results = await asyncio.gather(*[
+            check_ticker_missing_financials_status(ticker)
+            for ticker in user_tickers
+        ], return_exceptions=True)
+
+        # Collect results from parallel processing
         tickers_status = []
-
-        for ticker in user_tickers:
-            try:
-                # Get ticker config
-                config = get_ticker_config(ticker)
-                if not config:
-                    continue  # Skip tickers not in database
-
-                company_name = config.get('company_name', ticker)
-
-                # Use existing validation endpoint (already working in Research page)
-                # Fetch latest 10-K
-                profile_response = await validate_ticker_for_research(ticker=ticker, type="profile")
-                latest_10k_year = None
-                if profile_response.get("valid"):
-                    years = profile_response.get("available_years", [])
-                    if years:
-                        latest_10k_year = years[0]["year"]  # Already sorted, first is latest
-
-                # Fetch latest 10-Q
-                tenq_response = await validate_ticker_for_research(ticker=ticker, type="10q")
-                latest_10q = None
-                if tenq_response.get("valid"):
-                    quarters = tenq_response.get("available_quarters", [])
-                    if quarters:
-                        # quarters[0] is a dict with {quarter: "Q2", fiscal_year: 2025, ...}
-                        q = quarters[0]
-                        if isinstance(q, dict):
-                            # Extract quarter number from "Q2" -> 2
-                            quarter_str = q.get("quarter", "")
-                            quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
-                            if quarter_num and q.get("fiscal_year"):
-                                latest_10q = {"quarter": quarter_num, "year": q["fiscal_year"]}
-                        else:
-                            # Fallback: try parsing string format
-                            import re
-                            match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))  # Updated to match "Q2 FY2026" format
-                            if match:
-                                latest_10q = {"quarter": int(match.group(1)), "year": int(match.group(2))}
-
-                # Fetch latest transcript
-                transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
-                latest_transcript = None
-                if transcript_response.get("valid"):
-                    quarters = transcript_response.get("available_quarters", [])
-                    if quarters:
-                        # quarters[0] is now a dict with {quarter: 2, year: 2026, call_date: "2025-08-05", label: "Q2 FY2026"}
-                        q = quarters[0]
-                        if isinstance(q, dict):
-                            # New format: quarter is already an integer
-                            quarter_num = q.get("quarter") if isinstance(q.get("quarter"), int) else None
-                            year = q.get("year")
-                            if quarter_num and year:
-                                latest_transcript = {"quarter": quarter_num, "year": year}
-                        else:
-                            # Fallback: try parsing string format (shouldn't happen after deployment)
-                            import re
-                            match = re.match(r"Q(\d+)\s+FY(\d{4})", str(q))
-                            if match:
-                                latest_transcript = {"quarter": int(match.group(1)), "year": int(match.group(2))}
-
-                # Check what we have in database
-                with db() as conn, conn.cursor() as cur:
-                    # Check 10-K
-                    cur.execute("""
-                        SELECT fiscal_year FROM sec_filings
-                        WHERE ticker = %s AND filing_type = '10-K'
-                        ORDER BY fiscal_year DESC LIMIT 1
-                    """, (ticker,))
-                    result = cur.fetchone()
-                    our_10k_year = result['fiscal_year'] if result else None
-
-                    # Check 10-Q
-                    cur.execute("""
-                        SELECT fiscal_year, fiscal_quarter FROM sec_filings
-                        WHERE ticker = %s AND filing_type = '10-Q'
-                        ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
-                    """, (ticker,))
-                    result = cur.fetchone()
-                    our_10q = None
-                    if result:
-                        # Extract quarter number from "Q3" format
-                        quarter_num = int(result['fiscal_quarter'][1]) if result['fiscal_quarter'] and len(result['fiscal_quarter']) > 1 else None
-                        if quarter_num:
-                            our_10q = {"year": result['fiscal_year'], "quarter": quarter_num}
-
-                    # Check transcript
-                    cur.execute("""
-                        SELECT year, quarter FROM transcript_summaries
-                        WHERE ticker = %s AND report_type = 'transcript'
-                        ORDER BY year DESC, quarter DESC LIMIT 1
-                    """, (ticker,))
-                    result = cur.fetchone()
-                    our_transcript = None
-                    if result:
-                        # Extract quarter number from "Q3" format
-                        quarter_str = result['quarter']
-                        quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
-                        if quarter_num:
-                            our_transcript = {"year": result['year'], "quarter": quarter_num}
-
-                # Determine missing items
-                missing_10k = latest_10k_year and (not our_10k_year or latest_10k_year > our_10k_year)
-                missing_10q = latest_10q and (not our_10q or
-                                               latest_10q['year'] > our_10q['year'] or
-                                               (latest_10q['year'] == our_10q['year'] and latest_10q['quarter'] > our_10q['quarter']))
-                missing_transcript = latest_transcript and (not our_transcript or
-                                                             latest_transcript['year'] > our_transcript['year'] or
-                                                             (latest_transcript['year'] == our_transcript['year'] and latest_transcript['quarter'] > our_transcript['quarter']))
-
-                tickers_status.append({
-                    "ticker": ticker,
-                    "company_name": company_name,
-                    "missing_10k": missing_10k,
-                    "missing_10q": missing_10q,
-                    "missing_transcript": missing_transcript,
-                    "latest_10k_year": latest_10k_year,
-                    "latest_10q": latest_10q,
-                    "latest_transcript": latest_transcript,
-                    "our_10k_year": our_10k_year,
-                    "our_10q": our_10q,
-                    "our_transcript": our_transcript
-                })
-
-            except Exception as e:
-                LOG.error(f"Error checking {ticker}: {e}")
+        for result in ticker_results:
+            if isinstance(result, Exception):
+                LOG.error(f"Ticker status check failed: {result}")
                 continue
+            if result is not None:  # Skip None returns (ticker not in database)
+                tickers_status.append(result)
 
         return {
             "status": "success",
             "tickers": tickers_status,
-            "total_tickers": len(tickers_status)
+            "total": len(tickers_status)
         }
 
     except Exception as e:
         LOG.error(f"Failed to get missing financials status: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
 
 async def process_ticker_missing_financials(ticker: str):
     """

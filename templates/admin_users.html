@@ -570,14 +570,14 @@
             }
         }
 
-        async function cancelUser(account_id, email) {
-            if (!confirm(`Cancel account ${account_id} (${email})? This is the same as unsubscribing.`)) return;
+        async function cancelUser(email) {
+            if (!confirm(`Cancel user ${email}? This is the same as unsubscribing.`)) return;
 
             try {
                 const response = await fetch('/api/admin/cancel-user', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, account_id})  // Send account_id instead of email
+                    body: JSON.stringify({token, email})
                 });
 
                 const result = await response.json();

@@ -10,6 +10,15 @@ INPUT:
 - 10-Q summary (12 sections)
 - Transcript summary (14 sections)
 
+GUIDING PRINCIPLE: ONLY INCLUDE RELEVANT CONTEXT
+
+Don't force context just because filing_hints exist. Only include filing data that genuinely quantifies, explains, or contextualizes the bullet.
+
+- If sections don't contain relevant data → Use "No relevant filing context found for this development"
+- Better to have no context than forced/tangential context
+- Phase 1's hints are suggestions, not requirements
+- Empty hints (all empty arrays) → Skip search, use escape hatch immediately
+
 YOUR TASK:
 For each bullet in Phase 1, generate 4 enrichment fields:
 

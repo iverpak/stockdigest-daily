@@ -28259,7 +28259,19 @@ async def regenerate_email_api(request: Request):
         if date_str:
             target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         else:
-            target_date = datetime.now().date()
+            # Use EST timezone with 12pm cutoff for regeneration window
+            # Allows regenerating yesterday's summaries until 12pm EST today
+            eastern = pytz.timezone('America/Toronto')
+            now_est = datetime.now(eastern)
+
+            if now_est.hour < 12:
+                # Before 12pm EST - use yesterday's date
+                target_date = (now_est - timedelta(days=1)).date()
+                LOG.info(f"🔄 [{ticker}] Before 12pm EST cutoff - using yesterday's date: {target_date}")
+            else:
+                # 12pm EST or later - use today's date
+                target_date = now_est.date()
+                LOG.info(f"🔄 [{ticker}] After 12pm EST cutoff - using today's date: {target_date}")
 
         LOG.info(f"🔄 [{ticker}] Regenerating Email #3 for {target_date}")
 

@@ -481,6 +481,8 @@ COMPARISON HIERARCHY (always use in this order):
 2. Year-over-year (Y/Y): "Q3 16.1% vs Q3 2024 18.7%" - shows growth removing seasonality  
 3. Full-year scaling: "2.9M vehicles = 1.6 years of FY2024 deliveries (1,789K)" - shows magnitude
 4. YTD forward implications: "YTD 1,218K implies Q4 needs 571K" - peak analysis ✅
+5. Consensus implications: When bullet mentions consensus forecast, calculate full scenario range
+   ✅ "YTD 1,218K implies Q4 needs 862K for consensus 2.08M (+73% vs Q3), 732K for Barclays 1.95M (+47%), or 571K to match FY2024 (+15%)"
 
 NEVER use YTD for backward comparisons when quarterly or full-year data exists.
 

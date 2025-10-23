@@ -266,19 +266,20 @@ TIER 0 (Direct statements):
 ✓ Report what filings explicitly state with citations
 ✓ Quote management explanations: "management attributed X to Y per call"
 
-TIER 1 (Calculations):
+TIER 1 (Calculations and comparisons):
 ✓ Math: YoY %, QoQ %, basis points, ratios, forecast math
 ✓ "Q4 needs 732K to hit 2.08M" (subtraction)
 ✓ "Margin 16.1% vs 18.7% prior year (260 bps compression)" (calculation)
+✓ "Services margin 58.3% vs automotive margin 16.1% per Q2 10-Q" (comparison)
 
-TIER 2 (Synthesis across filings - same topic):
+TIER 2 (Combining data from multiple filings - same metric):
 ✓ Combine 10-Q + 10-K + Transcript data about SAME metric/event
 ✓ "Customer 28% Q2 revenue per 10-Q vs 22% FY2024 per 10-K; management called relationship 'strategic' per call"
 
 NOT ALLOWED (causal inferences without explicit filing statement):
 ❌ "High installed base suggests limited upgrade pool" (your logic, not stated)
 ❌ "Margin pressure likely from input costs" (unless management said "likely")
-❌ "Trails competitors' AI spending" (competitor data not in filings)
+❌ "Trails competitors' AI spending" (competitor data not in target company filings)
 ❌ "Creating sustainability concerns" (unless management/analyst stated this)
 
 CRITICAL: Use "suggests/implies/likely/creates" ONLY when:

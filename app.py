@@ -28568,6 +28568,47 @@ async def regenerate_email_api(request: Request):
                 hours = int(hours_range) + 24  # Add 1-day buffer
                 LOG.info(f"[{ticker}] Calculated hours={hours} from article range ({oldest.date()} to {newest.date()})")
 
+        # Step 7.5: Generate and send Email #2 (Content QA) - NEW
+        LOG.info(f"[{ticker}] 📧 Generating Email #2 (Content QA) with regenerated executive summary")
+        try:
+            # Fetch articles with enhanced content (same function used in production)
+            # Uses existing flagged articles and AI summaries - only executive summary is new
+            articles_by_ticker_dict = await fetch_digest_articles_with_enhanced_content(
+                hours=hours,
+                tickers=[ticker],
+                show_ai_analysis=True,
+                show_descriptions=True,
+                flagged_article_ids=flagged_article_ids,
+                mode='test'  # Don't save to database (already in email_queue)
+            )
+
+            # Check if function returned articles
+            if articles_by_ticker_dict and ticker in articles_by_ticker_dict:
+                # Build HTML (same function used in production)
+                days = int(hours / 24) if hours >= 24 else 1
+                email2_html = await build_enhanced_digest_html(
+                    articles_by_ticker_dict,
+                    days,
+                    show_ai_analysis=True,
+                    show_descriptions=True,
+                    flagged_article_ids=flagged_article_ids
+                )
+
+                # Send Email #2 with "(Regenerated)" in subject
+                config = get_ticker_config(ticker)
+                company_name = config.get("company_name", ticker) if config else ticker
+                email2_subject = f"📝 Content QA (Regenerated): {company_name} ({ticker}) - {len(flagged_article_ids)} articles analyzed"
+
+                send_email(email2_subject, email2_html)
+                LOG.info(f"✅ [{ticker}] Email #2 (Content QA) sent successfully")
+            else:
+                LOG.warning(f"[{ticker}] No articles returned from fetch_digest_articles_with_enhanced_content")
+
+        except Exception as e:
+            LOG.error(f"[{ticker}] ❌ Failed to generate/send Email #2: {e}")
+            LOG.error(f"Stacktrace: {traceback.format_exc()}")
+            LOG.info(f"[{ticker}] Continuing with Email #3 generation despite Email #2 failure")
+
         # Step 8: Generate new Email #3 HTML
         email_data = generate_email_html_core(
             ticker=ticker,

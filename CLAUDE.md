@@ -90,7 +90,7 @@ and automatically requeues the job for retry. Runs every 60 seconds, 3-minute th
 - **Single-file monolithic design**: All functionality is contained in `app.py` (~18,700 lines)
 - **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, executive summaries, and beta users
 - **Job queue system**: Background worker for reliable, resumable processing (eliminates HTTP 520 errors)
-- **AI-powered content analysis**: Claude API (primary) with OpenAI fallback, prompt caching enabled (v2024-10-22)
+- **AI-powered content analysis**: Claude API (primary) with OpenAI fallback, prompt caching enabled (v2023-06-01)
 - **Multi-source content scraping**: 2-tier fallback (newspaper3k → Scrapfly) - Playwright commented out for reliability
 - **3-Email QA workflow**: Automated quality assurance pipeline with triage, content review, and user-facing reports
 - **Beta landing page**: Professional signup page with live ticker validation and smart Canadian ticker suggestions
@@ -1387,10 +1387,10 @@ Command: python app.py alerts
 - `cron_digest()` - Line 13335 (Digest generation - called by job queue worker)
 - `safe_incremental_commit()` - Line 14732 (GitHub commit)
 
-## Claude API Prompt Caching (2024-10-22)
+## Claude API Prompt Caching (2023-06-01)
 
 **Enabled:** October 2025
-**API Version:** `2024-10-22` (upgraded from `2023-06-01`)
+**API Version:** `2023-06-01` (supports prompt caching)
 **Impact:** ~13% cost reduction per run (~$572/year savings for 50 tickers/day)
 
 **How It Works:**

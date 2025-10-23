@@ -212,7 +212,7 @@ def generate_executive_summary_phase1(
         # Call Claude API
         headers = {
             "x-api-key": anthropic_api_key,
-            "anthropic-version": "2024-10-22",  # Latest version
+            "anthropic-version": "2023-06-01",  # Prompt caching support
             "content-type": "application/json"
         }
 

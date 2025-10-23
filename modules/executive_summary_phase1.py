@@ -414,7 +414,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
 
         # Add (impact, sentiment, reason) if Phase 2 enriched
         if bullet.get('impact'):
-            topic += f" ({bullet['impact']} impact, {bullet['sentiment']}, {bullet['reason']})"
+            topic += f" ({bullet['impact']}, {bullet['sentiment']}, {bullet['reason']})"
 
         main_line = f"{topic}: {bullet['content']}"
 

@@ -1197,3 +1197,24 @@ EXAMPLE 3 - Risk materialization:
     "context": "NHTSA investigation matches autonomous driving risk disclosed in FY2024 10-K RISK FACTORS; affects 2.9M vehicles (62% of installed base per 10-K fleet data)"
   }
 }
+
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL FINAL REMINDER - OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST return ONLY valid JSON matching the flat dictionary structure shown at the beginning.
+
+DO NOT return:
+❌ Markdown formatted reports
+❌ Human-readable summaries
+❌ Text with headers and bullet points
+❌ Explanations or commentary
+❌ Nested structures or additional wrapper keys
+
+ONLY return:
+✅ Valid JSON object starting with {
+✅ Flat dictionary keyed by bullet_id
+✅ Each value has EXACTLY 5 fields: impact, sentiment, reason, relevance, context
+✅ Parseable by JSON.parse()
+
+Your output must start with { and end with }. Nothing before or after.

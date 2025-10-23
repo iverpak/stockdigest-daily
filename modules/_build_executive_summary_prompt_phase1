@@ -1884,3 +1884,22 @@ When article references old data (>6 months), flag temporal context:
 UNCERTAIN MATERIALITY:
 Default: Include development if article emphasized it. Phase 2 will assess materiality with filing data.
 For competitor news without explicit the target company connection → Exclude entirely (err on tight scope).
+
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL FINAL REMINDER - OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST return ONLY valid JSON matching the structure shown at the beginning.
+
+DO NOT return:
+❌ Markdown formatted reports
+❌ Human-readable summaries
+❌ Text with headers and bullet points
+❌ Explanations or commentary
+
+ONLY return:
+✅ Valid JSON object starting with {
+✅ Matching the exact schema provided
+✅ Parseable by JSON.parse()
+
+Your output must start with { and end with }. Nothing before or after.

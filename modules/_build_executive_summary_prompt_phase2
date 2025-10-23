@@ -204,10 +204,19 @@ PURPOSE: Quantify developments with filing data
 - Trends: Getting better or worse?
 
 STRUCTURE:
-- Length: 25-60 words (strict)
+- Length: 25-80 words (adjust based on complexity)
+  - Simple bullets (single metric): 25-50 words
+  - Complex bullets (multi-faceted): 50-80 words
 - Format: Natural prose with semicolons separating data points
 - Data points: 1-3 most relevant pieces
 - Citations: ALWAYS cite source and period
+
+Complex bullets include any with 2+ of:
+- Revenue + Profitability discussion
+- Current results + Forward guidance
+- Risk disclosure + Financial exposure
+- Concentration + Quantification
+- Multiple segments or geographies
 
 CITATION FORMATS (extract from filing headers):
 - 10-K: "per FY2024 10-K" (from header: "10-K FILING FOR FISCAL YEAR 2024")
@@ -252,6 +261,112 @@ TEMPORAL NOTES (flag only when material):
 - ✅ Guidance updated: "per Aug 7 transcript (supersedes 10-K guidance)"
 - ✅ Material change: "increased to 28% per Q2 10-Q vs 22% in FY2024 10-K"
 - ❌ Same quarter/normal comparison: Just write "per Q2 2025 10-Q"
+
+═══════════════════════════════════════════════════════════════════════════════
+CONTEXT QUALITY EXAMPLES - LEARN FROM THESE
+═══════════════════════════════════════════════════════════════════════════════
+
+Study these real examples to understand what makes context "excellent":
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE 1: REVENUE MENTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ BAD (revenue only, 28 words):
+"Robotaxi costs included in Services segment which generated $3,475M revenue (+24.5% YoY per Q2 2025 10-Q) vs $2,790M in Q2 2024"
+
+Why bad: No profitability, no management explanation, no outlook
+
+✅ GOOD (revenue + profitability + management view, 59 words):
+"Robotaxi costs included in Services segment which generated $3,475M revenue (+24.5% YoY) with gross margin 58.3% per Q2 2025 10-Q vs automotive margin 16.1%; segment profitability not disclosed separately but management stated robotaxi currently unprofitable and expects breakeven in 2026 per Oct 22 call"
+
+Why good: Revenue + margin comparison + management outlook + timeline
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE 2: DEPENDENCY MENTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ BAD (qualitative only, 22 words):
+"Company highly dependent on battery cell supply from Panasonic and CATL per FY2024 10-K MATERIAL DEPENDENCIES section"
+
+Why bad: No quantification (%), no exposure assessment
+
+✅ GOOD (quantified + exposure + mitigation, 52 words):
+"Battery cells sourced primarily from Panasonic (Gigafactory Nevada) and CATL (China operations) per FY2024 10-K; 10-K states China sourcing represents 40%+ of battery supply creating tariff exposure; management stated battery supply sufficient through 2026 but expects tightness in 2027+ per Oct 22 call"
+
+Why good: Quantified dependency + risk exposure + management mitigation plan
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE 3: MARGIN COMPRESSION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ BAD (no explanation, 31 words):
+"Q2 2025 operating margin was 4.1% per 10-Q ($923M operating income / $22.5B revenue) vs 7.2% in FY2024 per 10-K, representing margin compression"
+
+Why bad: No WHY (what drove compression?), no sequential context, no outlook
+
+✅ GOOD (trend + driver + outlook, 68 words):
+"Q3 operating margin 5.8% vs 4.1% Q2 2025 per 10-Q (improving QoQ) but down from 7.2% FY2024 per 10-K (compression YoY); automotive segment margin 16.1% vs 18.7% prior year per 10-Q; management attributed compression to lower-priced Model 3 variants and stated expects gradual improvement as Cybertruck scales per Oct 23 call"
+
+Why good: QoQ and YoY trends + segment detail + driver + forward outlook
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE 4: EARNINGS WITH CASH FLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ BAD (earnings only, 35 words):
+"Q3 2025 revenue $28.09B exceeded consensus $26.24B (+7% beat) but adjusted EPS $0.50 missed estimates $0.54 (-7% miss) per earnings report"
+
+Why bad: No cash flow context, no explanation of miss, no profitability detail
+
+✅ GOOD (earnings + FCF + profitability + explanation, 72 words):
+"Q3 revenue $28.09B beat consensus $26.24B but EPS $0.50 missed $0.54 (fourth consecutive miss) per report; operating margin 5.8% vs 4.1% Q2 (improving) but 7.2% FY2024 (compressing YoY) per 10-Q; however Q3 FCF ~$4B set new record vs ~$1.5B Q2 per call; management attributed EPS miss to elevated R&D (+57% YoY) and tariff costs ($400M Q3 impact) per Oct 23 call"
+
+Why good: Beat + miss + margin trends + strong FCF + management explanation
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KEY PATTERNS IN EXCELLENT CONTEXTS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Always pair revenue with margin/profitability
+2. Always show both QoQ and YoY trends (not just one)
+3. Always include management's explanation (the "WHY")
+4. Always quantify dependencies (%, not "significant" or "highly")
+5. Always include forward outlook when available
+6. Always calculate implications (Q4 required, % at risk, etc.)
+
+═══════════════════════════════════════════════════════════════════════════════
+QUALITY CHECKLIST - REVIEW BEFORE OUTPUTTING
+═══════════════════════════════════════════════════════════════════════════════
+
+Before finalizing each context, verify you've included:
+
+□ PROFITABILITY: If revenue mentioned → included margin/profitability?
+□ SEGMENT ECONOMICS: If segment mentioned → included segment margin/ROIC?
+□ QUANTIFICATION: If dependency mentioned → included exact %?
+□ COMPARISON: If guidance mentioned → showed vs prior guidance?
+□ EXPOSURE: If concentration mentioned → showed exact % of revenue?
+□ CASH FLOW: If earnings mentioned → included FCF and conversion rate?
+□ CAPITAL EFFICIENCY: If investment mentioned → assessed ROIC vs WACC?
+□ EXPLANATION: Did I include WHY (per management) not just WHAT?
+□ TRENDS: Did I show both QoQ and YoY (not just one)?
+□ SYNTHESIS: Did I calculate implications (Q4 required, % at risk, etc.)?
+
+SELF-AUDIT EXAMPLES:
+
+Context draft: "Segment generated $3.5B revenue (+24% YoY)"
+□ PROFITABILITY? ❌ No margin mentioned
+→ REVISE: Search SEGMENT PERFORMANCE TRENDS for margin data
+
+Context draft: "Company dependent on supplier per 10-K"
+□ QUANTIFICATION? ❌ No % disclosed
+→ REVISE: Search MATERIAL DEPENDENCIES for concentration %
+
+Context draft: "Margin compressed to 16.1%"
+□ EXPLANATION? ❌ No reason given
+→ REVISE: Search MANAGEMENT COMMENTARY or transcript for driver
+
+If any box unchecked → return to filing sections and extract missing data
 
 ═══════════════════════════════════════════════════════════════════════════════
 11 INTEGRATION QUESTIONS - WHAT TO LOOK FOR
@@ -356,6 +471,43 @@ Example contexts:
 
 "Deliveries +6.4% QoQ per Q2 10-Q, +14% YoY vs Q2 2024"
 
+
+EXTRACTION PRIORITY - WHAT TO EXTRACT FIRST
+
+When searching filing sections, extract data in this priority order:
+
+PRIORITY 1: PROFITABILITY & ECONOMICS (always extract first)
+- Segment margins (gross margin %, EBITDA margin %, operating margin %)
+- Unit economics (revenue per unit, cost per unit, contribution margin)
+- ROIC vs WACC for investments/acquisitions
+- Profitability trends (improving or declining)
+
+PRIORITY 2: CASH FLOW & BALANCE SHEET
+- Free cash flow (FCF = OCF - CapEx)
+- FCF conversion rate (FCF / Net Income)
+- Operating cash flow vs Net Income (quality of earnings)
+- Liquidity position (cash + revolver availability)
+
+PRIORITY 3: CONCENTRATION & DEPENDENCIES
+- Customer concentration (top 3 customers as % of revenue)
+- Supplier concentration (% sourced from single vendor)
+- Geographic concentration (% of revenue/assets in one region)
+- Product concentration (% of revenue from one product)
+
+PRIORITY 4: GUIDANCE & FORWARD OUTLOOK
+- Management's FY/Q4 guidance
+- Changes vs prior guidance (raised, lowered, reaffirmed)
+- What's required to hit guidance (calculate implied Q4)
+- Management's confidence level and key assumptions
+
+PRIORITY 5: SCALE & GROWTH (only after extracting 1-4)
+- Revenue size and growth rates
+- Volume metrics and growth rates
+- Market share data
+
+CRITICAL RULE: Never report revenue without profitability
+- ❌ BAD: "Segment generated $3.5B revenue (+24% YoY)"
+- ✅ GOOD: "Segment generated $3.5B revenue (+24% YoY) at 58% gross margin per 10-Q"
 
 ---
 
@@ -633,6 +785,58 @@ Examples:
 "NHTSA investigation into 2.9M vehicles" → high impact (categorical)
 "Record 497K deliveries, +13% vs consensus" → high impact (escalate for material beat)
 "Record 497K deliveries, +0.5% vs consensus" → medium impact (don't escalate, marginal)
+
+═══════════════════════════════════════════════════════════════════════════════
+SYNTHESIS REQUIREMENT - CONNECT THE DOTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Don't just report data - synthesize and calculate implications:
+
+CALCULATE WHAT'S IMPLIED:
+
+If YTD metric + FY guidance disclosed:
+→ Calculate what Q4 needs to achieve: "Implies Q4 needs X to hit FY guidance"
+Example: YTD deliveries 1,218K, FY guidance 1,789K → "Implies 571K Q4 deliveries required"
+
+If deferred revenue + regulatory risk disclosed:
+→ Calculate financial exposure: "Therefore $X at risk if regulatory action occurs"
+Example: FSD deferred revenue $3.8B + NHTSA investigation → "$3.8B FSD revenue at risk"
+
+If margin compression + volume growth disclosed:
+→ Assess profitability: "Volume growth but declining profitability" or "Profitable growth"
+Example: Revenue +12% but margin 5.8% vs 7.2% → "Growth driven by lower-margin products"
+
+If concentration + customer/supplier issue disclosed:
+→ Calculate revenue impact: "Represents X% of revenue at risk"
+Example: Customer 28% of revenue + contract dispute → "28% of revenue potentially at risk"
+
+EXPLAIN WHY (per management):
+
+Don't just state facts - include management's explanation:
+❌ BAD: "Margin compressed to 16.1%"
+✅ GOOD: "Margin compressed to 16.1% due to lower-priced model mix per Oct 22 call"
+
+❌ BAD: "R&D increased 57% YoY"
+✅ GOOD: "R&D increased 57% YoY due to AI programs and performance-based equity awards per 10-Q"
+
+Always search transcript sections (MANAGEMENT COMMENTARY, Q&A HIGHLIGHTS) for the WHY
+
+COMPARE MULTIPLE DIMENSIONS:
+
+Don't just show one comparison - show full picture:
+❌ BAD: "Margin 5.8% vs 7.2% prior year" (only YoY)
+✅ GOOD: "Margin 5.8% vs 4.1% Q2 (improving QoQ) but 7.2% FY2024 (compressing YoY)"
+
+For guidance changes:
+❌ BAD: "Raised FY guidance to $X"
+✅ GOOD: "Raised FY guidance to $X from prior $Y (+Z% increase), third consecutive raise"
+
+LINK RISKS TO FINANCIALS:
+
+When bullet mentions risk, connect to financial exposure:
+❌ BAD: "Company faces regulatory investigation into autonomous driving"
+✅ GOOD: "NHTSA investigation into FSD matches autonomous driving risk in FY2024 10-K; FSD deferred revenue $3.8B per 10-Q represents financial exposure if recall required"
+
 
 ═══════════════════════════════════════════════════════════════════════════════
 SENTIMENT TAG CALCULATION

@@ -217,7 +217,17 @@ FIELD GENERATION & CRITICAL RULES
 
 CRITICAL RULES:
 
-1. FILING DATA ONLY in context field (no article info, no analyst estimates)
+1. FILING DATA ONLY in context field - TARGET COMPANY filings only (10-K, 10-Q, Transcript)
+   
+   NEVER include in context (even if mentioned in bullet):
+   ❌ Article quotes: "GM stated...", "Analyst noted...", "sources say..."
+   ❌ Competitor data: "Ford announced...", "GM reduced estimate to $4B..."
+   ❌ Analyst estimates: "consensus expects...", "Bloomberg estimates..."
+   
+   Examples:
+   ✅ CORRECT: "Tesla tariff impact $400M Q3 per transcript"
+   ❌ WRONG: "GM reduced tariff to $4B; Tesla tariff $400M..." (GM is article data)
+
 2. USE FILING_HINTS to guide search (respect Phase 1's section selection)
 3. 1-3 DATA POINTS MAX (quality over quantity)
 4. EXACT FIGURES from filings (minimal rounding: "$1,234.5M" not "~$1.2B")

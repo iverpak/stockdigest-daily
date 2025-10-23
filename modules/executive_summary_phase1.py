@@ -395,14 +395,35 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
     Convert Phase 1 JSON to format expected by build_executive_summary_html().
     Output IDENTICAL to what parse_executive_summary_sections() returns.
 
-    For Email #3 (simple bullets, no metadata).
+    For Email #3 (user-facing format with Phase 2 enrichments if present).
+
+    Format:
+    - topic (impact, sentiment, reason): content
+    - Context: prose paragraph
 
     Args:
-        phase1_json: Phase 1 JSON output
+        phase1_json: Phase 1 JSON output (may include Phase 2 enrichments)
 
     Returns:
         sections dict matching current template format
     """
+    # Helper function to format bullets for Email #3 (user-facing)
+    def format_bullet_for_email3(bullet: Dict) -> str:
+        """Format bullet with (impact, sentiment, reason) and Context for user-facing email"""
+        topic = bullet['topic_label']
+
+        # Add (impact, sentiment, reason) if Phase 2 enriched
+        if bullet.get('impact'):
+            topic += f" ({bullet['impact']} impact, {bullet['sentiment']}, {bullet['reason']})"
+
+        main_line = f"{topic}: {bullet['content']}"
+
+        # Add Context as prose paragraph on separate line
+        if bullet.get('context'):
+            main_line += f"\nContext: {bullet['context']}"
+
+        return main_line
+
     sections = {
         "bottom_line": [],
         "major_developments": [],
@@ -425,37 +446,37 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
     # Major Developments (bullets)
     if "major_developments" in json_sections:
         sections["major_developments"] = [
-            f"{b['topic_label']}: {b['content']}" for b in json_sections["major_developments"]
+            format_bullet_for_email3(b) for b in json_sections["major_developments"]
         ]
 
     # Financial Performance → financial_operational (template expects this key)
     if "financial_performance" in json_sections:
         sections["financial_operational"] = [
-            f"{b['topic_label']}: {b['content']}" for b in json_sections["financial_performance"]
+            format_bullet_for_email3(b) for b in json_sections["financial_performance"]
         ]
 
     # Risk Factors
     if "risk_factors" in json_sections:
         sections["risk_factors"] = [
-            f"{b['topic_label']}: {b['content']}" for b in json_sections["risk_factors"]
+            format_bullet_for_email3(b) for b in json_sections["risk_factors"]
         ]
 
     # Wall Street Sentiment → wall_street (template key)
     if "wall_street_sentiment" in json_sections:
         sections["wall_street"] = [
-            f"{b['topic_label']}: {b['content']}" for b in json_sections["wall_street_sentiment"]
+            format_bullet_for_email3(b) for b in json_sections["wall_street_sentiment"]
         ]
 
     # Competitive/Industry → competitive_industry (template key)
     if "competitive_industry_dynamics" in json_sections:
         sections["competitive_industry"] = [
-            f"{b['topic_label']}: {b['content']}" for b in json_sections["competitive_industry_dynamics"]
+            format_bullet_for_email3(b) for b in json_sections["competitive_industry_dynamics"]
         ]
 
     # Upcoming Catalysts
     if "upcoming_catalysts" in json_sections:
         sections["upcoming_catalysts"] = [
-            f"{b['topic_label']}: {b['content']}" for b in json_sections["upcoming_catalysts"]
+            format_bullet_for_email3(b) for b in json_sections["upcoming_catalysts"]
         ]
 
     # Upside Scenario (paragraph)
@@ -469,7 +490,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
     # Key Variables
     if "key_variables" in json_sections:
         sections["key_variables"] = [
-            f"{b['topic_label']}: {b['content']}" for b in json_sections["key_variables"]
+            format_bullet_for_email3(b) for b in json_sections["key_variables"]
         ]
 
     return sections
@@ -510,12 +531,19 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
     if "bottom_line" in json_sections:
         sections["bottom_line"] = [json_sections["bottom_line"].get("content", "")]
 
-    # Helper function to format bullets with filing hints
+    # Helper function to format bullets with filing hints and Phase 2 metadata
     def format_bullet_with_hints(bullet: Dict) -> str:
-        """Format bullet with topic label, content, filing hints, and ID"""
+        """Format bullet with topic label, content, Phase 2 metadata, filing hints, and ID"""
         main_text = f"{bullet['topic_label']}: {bullet['content']}"
 
-        # Build filing hints display
+        # Phase 2 enrichments (if present)
+        if bullet.get('impact'):
+            main_text += f"<br>  💥 Impact: {bullet['impact']} | 😊 Sentiment: {bullet['sentiment']} | 📝 Reason: {bullet['reason']}"
+
+        if bullet.get('context'):
+            main_text += f"<br>  📄 Context: {bullet['context']}"
+
+        # Phase 1 filing hints
         hints = bullet.get("filing_hints", {})
         hint_parts = []
         for filing_type, sections_list in hints.items():
@@ -525,12 +553,12 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
         if hint_parts:
             hints_text = "; ".join(hint_parts)
             # Use <br> tags for HTML rendering (newlines collapse in HTML)
-            full_text = f"{main_text}<br>  📁 Filing hints: {hints_text}<br>  🔖 ID: {bullet['bullet_id']}"
-        else:
-            # Use <br> tag for HTML rendering
-            full_text = f"{main_text}<br>  🔖 ID: {bullet['bullet_id']}"
+            main_text += f"<br>  📁 Filing hints: {hints_text}"
 
-        return full_text
+        # Bullet ID (always show)
+        main_text += f"<br>  🔖 ID: {bullet['bullet_id']}"
+
+        return main_text
 
     # Major Developments
     if "major_developments" in json_sections:

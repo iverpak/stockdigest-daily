@@ -10,12 +10,37 @@ Extracted from app.py for better modularity.
 import requests
 import logging
 import traceback
+import re
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 import pytz
 from jinja2 import Environment, FileSystemLoader
 
 LOG = logging.getLogger(__name__)
+
+
+def strip_emoji(text: str) -> str:
+    """
+    Remove all emoji characters from text.
+
+    This ensures Phase 2 can search for section headers without emoji interference.
+    Phase 2 references transcript/10-K/10-Q sections, which shouldn't have emoji.
+
+    Args:
+        text: Input text that may contain emoji
+
+    Returns:
+        Text with all emoji removed
+    """
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map symbols
+        u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        u"\U00002702-\U000027B0"
+        u"\U000024C2-\U0001F251"
+        "]+", flags=re.UNICODE)
+    return emoji_pattern.sub(r'', text)
 
 # Initialize Jinja2 template environment
 template_env = Environment(loader=FileSystemLoader('templates'))
@@ -279,6 +304,9 @@ def generate_transcript_summary_with_gemini(
         LOG.info(f"   Words: {word_count}, Time: {generation_time:.1f}s")
         LOG.info(f"   Tokens: in={token_count_input}, out={token_count_output}")
 
+        # Strip emoji from summary (Phase 2 needs clean section headers for searching)
+        summary_text = strip_emoji(summary_text)
+
         return {
             'summary_text': summary_text,
             'generation_time_seconds': int(generation_time),
@@ -369,6 +397,9 @@ def generate_transcript_summary_with_claude(
 
         LOG.info(f"✅ Generated {content_type} summary for {ticker} ({len(summary)} chars)")
         LOG.info(f"💵 Tokens: in={input_tokens}, out={output_tokens}, cached={cache_read}")
+
+        # Strip emoji from summary (Phase 2 needs clean section headers for searching)
+        summary = strip_emoji(summary)
 
         return summary
 

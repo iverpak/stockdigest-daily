@@ -16889,6 +16889,62 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 
                 LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 1 - {model_used}) [{ticker}]: Generated valid JSON ({len(json_string)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
 
+        # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
+        final_json = json_output  # Default to Phase 1 JSON
+        generation_phase = 'phase1'  # Track which phase completed
+        phase2_prompt_tokens = 0
+        phase2_completion_tokens = 0
+        phase2_generation_time_ms = 0
+
+        if ai_analysis_summary and json_output:
+            from modules.executive_summary_phase2 import (
+                _fetch_available_filings,
+                generate_executive_summary_phase2,
+                validate_phase2_json,
+                merge_phase1_phase2
+            )
+
+            # Fetch available filings (1-3)
+            filings = _fetch_available_filings(ticker, db)
+
+            if filings:
+                filing_types = list(filings.keys())
+                LOG.info(f"[{ticker}] Running Phase 2 with {len(filings)} filing source(s): {filing_types}")
+
+                phase2_result = generate_executive_summary_phase2(
+                    ticker=ticker,
+                    phase1_json=json_output,
+                    filings=filings,
+                    config=config,
+                    anthropic_api_key=ANTHROPIC_API_KEY,
+                    db_func=db
+                )
+
+                if phase2_result:
+                    # Validate enrichments structure
+                    is_valid, error_msg = validate_phase2_json(phase2_result.get("enrichments", {}))
+
+                    if is_valid:
+                        # Merge Phase 2 enrichments into Phase 1 JSON
+                        final_json = merge_phase1_phase2(json_output, phase2_result)
+                        generation_phase = 'phase2'
+                        phase2_prompt_tokens = phase2_result.get("prompt_tokens", 0)
+                        phase2_completion_tokens = phase2_result.get("completion_tokens", 0)
+                        phase2_generation_time_ms = phase2_result.get("generation_time_ms", 0)
+
+                        enrichment_count = len(phase2_result.get("enrichments", {}))
+                        LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 2 - {model_used}) [{ticker}]: Enriched {enrichment_count} bullets ({phase2_prompt_tokens} prompt tokens, {phase2_completion_tokens} completion tokens, {phase2_generation_time_ms}ms)")
+                    else:
+                        LOG.error(f"[{ticker}] Phase 2 validation failed: {error_msg}")
+                        LOG.warning(f"[{ticker}] Using Phase 1 output only (Phase 2 validation failed)")
+                else:
+                    LOG.warning(f"[{ticker}] Phase 2 generation failed, using Phase 1 only")
+            else:
+                LOG.info(f"[{ticker}] No filings available, skipping Phase 2")
+
+            # Update ai_analysis_summary with final JSON (Phase 1 or Phase 2)
+            ai_analysis_summary = json.dumps(final_json, indent=2)
+
         if ai_analysis_summary:
             # Save to database with model tracking and JSON
             # CRITICAL: Save ALL flagged article IDs (not just those with ai_summary)
@@ -16902,19 +16958,30 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
             company_count = len([a for a in categories.get("company", []) if a.get("ai_summary")])
             industry_count = len([a for a in categories.get("industry", []) if a.get("ai_summary")])
             competitor_count = len([a for a in categories.get("competitor", []) if a.get("ai_summary")])
+
+            # Save final merged JSON (Phase 1 or Phase 2)
             save_executive_summary(
                 ticker,
-                ai_analysis_summary,  # JSON string
+                ai_analysis_summary,  # JSON string (Phase 1 or Phase 2)
                 model_used.lower(),
                 article_ids,
                 company_count,
                 industry_count,
                 competitor_count,
-                summary_json=json_output,  # Structured JSON
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                generation_time_ms=generation_time_ms
+                summary_json=final_json,  # Structured JSON (Phase 1 or Phase 2)
+                prompt_tokens=prompt_tokens + phase2_prompt_tokens,  # Combined tokens
+                completion_tokens=completion_tokens + phase2_completion_tokens,  # Combined tokens
+                generation_time_ms=generation_time_ms + phase2_generation_time_ms  # Combined time
             )
+
+            # Update generation_phase in database
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE executive_summaries
+                    SET generation_phase = %s
+                    WHERE ticker = %s AND summary_date = CURRENT_DATE
+                """, (generation_phase, ticker))
+                conn.commit()
         else:
             LOG.warning(f"⚠️ EXECUTIVE SUMMARY [{ticker}]: Phase 1 generation failed")
 

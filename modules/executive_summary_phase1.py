@@ -516,9 +516,11 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
 
         if hint_parts:
             hints_text = "; ".join(hint_parts)
-            full_text = f"{main_text}\n  📁 Filing hints: {hints_text}\n  🔖 ID: {bullet['bullet_id']}"
+            # Use <br> tags for HTML rendering (newlines collapse in HTML)
+            full_text = f"{main_text}<br>  📁 Filing hints: {hints_text}<br>  🔖 ID: {bullet['bullet_id']}"
         else:
-            full_text = f"{main_text}\n  🔖 ID: {bullet['bullet_id']}"
+            # Use <br> tag for HTML rendering
+            full_text = f"{main_text}<br>  🔖 ID: {bullet['bullet_id']}"
 
         return full_text
 
@@ -568,7 +570,7 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
     # Key Variables (no filing hints, but show ID)
     if "key_variables" in json_sections:
         sections["key_variables"] = [
-            f"{b['topic_label']}: {b['content']}\n  🔖 ID: {b['bullet_id']}"
+            f"{b['topic_label']}: {b['content']}<br>  🔖 ID: {b['bullet_id']}"
             for b in json_sections["key_variables"]
         ]
 

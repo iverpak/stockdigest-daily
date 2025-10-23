@@ -267,10 +267,12 @@ TIER 0 (Direct statements):
 ✓ Quote management explanations: "management attributed X to Y per call"
 
 TIER 1 (Calculations and comparisons):
-✓ Math: YoY %, QoQ %, basis points, ratios, forecast math
-✓ "Q4 needs 732K to hit 2.08M" (subtraction)
+✓ Math: YoY %, QoQ %, basis points, ratios, dollar changes, trend direction, forecast math
+✓ "Q4 needs 732K to hit 2.08M" (forecast math)
 ✓ "Margin 16.1% vs 18.7% prior year (260 bps compression)" (calculation)
 ✓ "Services margin 58.3% vs automotive margin 16.1% per Q2 10-Q" (comparison)
+✓ "Loss $5.1B vs $1.2B prior year per 10-Q" (dollar change)
+✓ "Margin 5.8% improved QoQ from 4.1% but compressed YoY from 7.2%" (trend direction)
 
 TIER 2 (Combining data from multiple filings - same metric):
 ✓ Combine 10-Q + 10-K + Transcript data about SAME metric/event

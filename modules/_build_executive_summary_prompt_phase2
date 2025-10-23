@@ -93,7 +93,7 @@ Do NOT search filings. Do NOT try to force context. Respect Phase 1's signal.
 
 FINAL JSON OUTPUT FORMAT:
 
-Return a flat dictionary keyed by bullet_id containing ONLY the 4 enrichment fields.
+Return a flat dictionary keyed by bullet_id containing ONLY the 5 enrichment fields.
 
 STRUCTURE:
 {
@@ -101,18 +101,21 @@ STRUCTURE:
     "impact": "high impact",
     "sentiment": "bullish",
     "reason": "delivery outperformance",
+    "relevance": "direct",
     "context": "Customer represents 28% of Q2 revenue per 10-Q; management called relationship 'strategic and expanding' on Aug 7 call"
   },
   "BULLET_ID_2": {
     "impact": "medium impact",
     "sentiment": "neutral",
     "reason": "routine churn",
+    "relevance": "direct",
     "context": "Customer represented 0.3% of Q2 revenue per 10-Q; top 10 customers represent 45% of revenue per 10-K"
   },
   "BULLET_ID_3": {
     "impact": "low impact",
     "sentiment": "neutral",
     "reason": "organizational change",
+    "relevance": "none",
     "context": "No relevant filing context found for this development"
   }
 }
@@ -120,7 +123,7 @@ STRUCTURE:
 CRITICAL RULES:
 1. Flat dictionary structure (NOT nested in "sections" or "enrichments")
 2. Keys are bullet_id values extracted from Phase 1 input
-3. Values are objects with EXACTLY 4 fields: impact, sentiment, reason, context
+3. Values are objects with EXACTLY 5 fields: impact, sentiment, reason, relevance, context
 4. Do NOT include Phase 1 fields (topic_label, content, filing_hints)
 5. Do NOT wrap output in any additional keys
 6. Process bullets from these 6 sections only: major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts
@@ -220,7 +223,19 @@ FIELD GENERATION & CRITICAL RULES
 3. reason: 2-4 words describing impact type
    - Examples: "customer concentration", "margin compression", "delivery outperformance", "regulatory risk"
 
-4. context: 25-60 words synthesizing 1-3 most relevant filing data points
+4. relevance: How relevant is this to the target company?
+   - direct: Directly about target company
+   - indirect: Indirectly relevant through market/competitive/industry connection
+   - none: Not relevant to target company
+
+   Evaluate based on bullet content + context you found.
+
+   Examples:
+   - direct: Target company Q3 deliveries beat consensus; Goldman raised target price; Stock hit all-time high
+   - indirect: Competitor capacity expansion in target market; Industry regulation affecting target segment; Supplier pricing for target inputs
+   - none: Competitor CEO compensation; Unrelated industry development; Competitor internal restructuring
+
+5. context: 25-60 words synthesizing 1-3 most relevant filing data points
    - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q"
    - Show calculations: "Segment $9.0B of total $10.2B (88%)"
 

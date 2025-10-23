@@ -465,6 +465,7 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
             "impact": "high impact|medium impact|low impact",
             "sentiment": "bullish|bearish|neutral",
             "reason": "brief reason string",
+            "relevance": "direct|indirect|none",
             "context": "prose paragraph combining filing excerpts"
         },
         "bullet_id_2": { ... }
@@ -479,7 +480,7 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
     if not isinstance(enrichments, dict):
         return False, "Enrichments must be object/dict"
 
-    required_fields = ["impact", "sentiment", "reason", "context"]
+    required_fields = ["impact", "sentiment", "reason", "relevance", "context"]
 
     for bullet_id, data in enrichments.items():
         if not isinstance(data, dict):
@@ -497,6 +498,10 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
         if data["sentiment"] not in ["bullish", "bearish", "neutral"]:
             return False, f"{bullet_id} sentiment must be bullish|bearish|neutral, got: {data['sentiment']}"
 
+        # Validate relevance values
+        if data["relevance"] not in ["direct", "indirect", "none"]:
+            return False, f"{bullet_id} relevance must be direct|indirect|none, got: {data['relevance']}"
+
     return True, ""
 
 
@@ -504,7 +509,7 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
     """
     Merge Phase 2 enrichments into Phase 1 JSON by bullet_id.
 
-    Takes Phase 1 JSON structure and adds impact, sentiment, reason, context fields
+    Takes Phase 1 JSON structure and adds impact, sentiment, reason, relevance, context fields
     to each bullet that has enrichment data.
 
     Args:
@@ -555,6 +560,7 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
             bullet["impact"] = enrichment.get("impact")
             bullet["sentiment"] = enrichment.get("sentiment")
             bullet["reason"] = enrichment.get("reason")
+            bullet["relevance"] = enrichment.get("relevance")
             bullet["context"] = enrichment.get("context")
 
     return merged

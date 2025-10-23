@@ -416,6 +416,18 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
     Returns:
         sections dict matching current template format
     """
+    # Helper function to filter bullets for Email #3
+    def should_include_in_email3(bullet: Dict, section_name: str) -> bool:
+        """
+        Email #3 filtering:
+        - competitive_industry_dynamics: Remove bullets with relevance = "none"
+        - All other sections: Keep all bullets
+        """
+        if section_name == "competitive_industry_dynamics":
+            return bullet.get('relevance') != 'none'
+        else:
+            return True
+
     # Helper function to format bullets for Email #3 (user-facing)
     def format_bullet_for_email3(bullet: Dict) -> str:
         """Format bullet with (impact, sentiment, reason) and Context for user-facing email"""
@@ -476,10 +488,12 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
             format_bullet_for_email3(b) for b in json_sections["wall_street_sentiment"]
         ]
 
-    # Competitive/Industry → competitive_industry (template key)
+    # Competitive/Industry → competitive_industry (template key) - WITH FILTER
     if "competitive_industry_dynamics" in json_sections:
         sections["competitive_industry"] = [
-            format_bullet_for_email3(b) for b in json_sections["competitive_industry_dynamics"]
+            format_bullet_for_email3(b)
+            for b in json_sections["competitive_industry_dynamics"]
+            if should_include_in_email3(b, "competitive_industry_dynamics")
         ]
 
     # Upcoming Catalysts
@@ -547,10 +561,10 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
 
         # Phase 2 enrichments (if present)
         if bullet.get('impact'):
-            main_text += f"<br>  💥 Impact: {bullet['impact']} | 😊 Sentiment: {bullet['sentiment']} | 📝 Reason: {bullet['reason']}"
+            main_text += f"<br>  Impact: {bullet['impact']} | Sentiment: {bullet['sentiment']} | Reason: {bullet['reason']} | Relevance: {bullet.get('relevance', 'direct')}"
 
         if bullet.get('context'):
-            main_text += f"<br>  📄 Context: {bullet['context']}"
+            main_text += f"<br>  Context: {bullet['context']}"
 
         # Phase 1 filing hints
         hints = bullet.get("filing_hints", {})
@@ -562,10 +576,10 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
         if hint_parts:
             hints_text = "; ".join(hint_parts)
             # Use <br> tags for HTML rendering (newlines collapse in HTML)
-            main_text += f"<br>  📁 Filing hints: {hints_text}"
+            main_text += f"<br>  Filing hints: {hints_text}"
 
         # Bullet ID (always show)
-        main_text += f"<br>  🔖 ID: {bullet['bullet_id']}"
+        main_text += f"<br>  ID: {bullet['bullet_id']}"
 
         return main_text
 

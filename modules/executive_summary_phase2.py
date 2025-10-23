@@ -303,9 +303,36 @@ def generate_executive_summary_phase2(
                 else:
                     json_str = response_text.strip()
 
-                enrichments = json.loads(json_str)
+                parsed_json = json.loads(json_str)
 
-                LOG.info(f"✅ [{ticker}] Phase 2 enrichment generated ({len(json_str)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
+                # Handle different possible structures from Claude
+                # Claude might return:
+                # 1. {"sections": {"major_developments": [...]}} - full structure
+                # 2. {"enrichments": {"FIN_001": {...}}} - wrapped enrichments
+                # 3. {"FIN_001": {...}} - direct enrichments (what we want)
+
+                if "enrichments" in parsed_json and isinstance(parsed_json["enrichments"], dict):
+                    # Case 2: Wrapped in "enrichments" key
+                    enrichments = parsed_json["enrichments"]
+                elif "sections" in parsed_json and isinstance(parsed_json["sections"], dict):
+                    # Case 1: Full section structure - need to flatten to bullet_id dict
+                    enrichments = {}
+                    for section_name, bullets in parsed_json["sections"].items():
+                        if isinstance(bullets, list):
+                            for bullet in bullets:
+                                if isinstance(bullet, dict) and "bullet_id" in bullet:
+                                    bid = bullet["bullet_id"]
+                                    enrichments[bid] = {
+                                        "impact": bullet.get("impact"),
+                                        "sentiment": bullet.get("sentiment"),
+                                        "reason": bullet.get("reason"),
+                                        "context": bullet.get("context")
+                                    }
+                else:
+                    # Case 3: Direct enrichments dict
+                    enrichments = parsed_json
+
+                LOG.info(f"✅ [{ticker}] Phase 2 enrichment generated ({len(json_str)} chars, {len(enrichments)} bullets enriched, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 
                 return {
                     "enrichments": enrichments,
@@ -337,8 +364,8 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
     Expected structure:
     {
         "bullet_id_1": {
-            "impact": "major|medium|minor",
-            "sentiment": "positive|negative|neutral|mixed",
+            "impact": "high impact|medium impact|low impact",
+            "sentiment": "bullish|bearish|neutral",
             "reason": "brief reason string",
             "context": "prose paragraph combining filing excerpts"
         },
@@ -365,12 +392,12 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
                 return False, f"{bullet_id} missing '{field}'"
 
         # Validate impact values
-        if data["impact"] not in ["major", "medium", "minor"]:
-            return False, f"{bullet_id} impact must be major|medium|minor, got: {data['impact']}"
+        if data["impact"] not in ["high impact", "medium impact", "low impact"]:
+            return False, f"{bullet_id} impact must be 'high impact'|'medium impact'|'low impact', got: {data['impact']}"
 
         # Validate sentiment values
-        if data["sentiment"] not in ["positive", "negative", "neutral", "mixed"]:
-            return False, f"{bullet_id} sentiment must be positive|negative|neutral|mixed, got: {data['sentiment']}"
+        if data["sentiment"] not in ["bullish", "bearish", "neutral"]:
+            return False, f"{bullet_id} sentiment must be bullish|bearish|neutral, got: {data['sentiment']}"
 
     return True, ""
 

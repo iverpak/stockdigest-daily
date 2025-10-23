@@ -452,7 +452,9 @@ def log_cost_summary(ticker: str, company_name: str = ""):
         "competitor_summary": ("🏆 Competitor Summaries", 5),
         "industry_summary": ("🌐 Industry Summaries", 6),
         "industry_scoring": ("⚖️ Industry Scoring", 7),
-        "executive_summary": ("📊 Executive Summary", 8)
+        "executive_summary": ("📊 Executive Summary (OLD)", 8),
+        "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 9),
+        "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 10)
     }
 
     # Sort by display order
@@ -16887,6 +16889,13 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 json_string = json.dumps(json_output, indent=2)
                 ai_analysis_summary = json_string
 
+                # Track Phase 1 cost
+                phase1_usage = {
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens
+                }
+                calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+
                 LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 1 - {model_used}) [{ticker}]: Generated valid JSON ({len(json_string)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
 
         # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
@@ -16931,6 +16940,13 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                         phase2_prompt_tokens = phase2_result.get("prompt_tokens", 0)
                         phase2_completion_tokens = phase2_result.get("completion_tokens", 0)
                         phase2_generation_time_ms = phase2_result.get("generation_time_ms", 0)
+
+                        # Track Phase 2 cost
+                        phase2_usage = {
+                            "input_tokens": phase2_prompt_tokens,
+                            "output_tokens": phase2_completion_tokens
+                        }
+                        calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
 
                         enrichment_count = len(phase2_result.get("enrichments", {}))
                         LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 2 - {model_used}) [{ticker}]: Enriched {enrichment_count} bullets ({phase2_prompt_tokens} prompt tokens, {phase2_completion_tokens} completion tokens, {phase2_generation_time_ms}ms)")

@@ -10,15 +10,13 @@ INPUT:
 - 10-Q summary (12 sections)
 - Transcript summary (14 sections)
 
-OUTPUT - 5 NEW FIELDS PER BULLET:
-{
-  "bullet_id": "q3_deliveries_beat",
-  "context": "25-60 word synthesis from filings",
-  "context_source": "10-Q (Q2 2025), 10-K (FY2024), Transcript (Aug 7, 2025)",
-  "impact": "high impact | medium impact | low impact",
-  "sentiment": "bullish | bearish | neutral",
-  "reason": "2-4 words describing impact type"
-}
+YOUR TASK:
+For each bullet in Phase 1, generate 4 enrichment fields:
+
+- impact: "high impact" | "medium impact" | "low impact"
+- sentiment: "bullish" | "bearish" | "neutral"
+- reason: 2-4 words describing impact type
+- context: 25-60 word synthesis from filings
 
 WORKFLOW:
 1. Read Phase 1 bullet + filing_hints
@@ -28,8 +26,9 @@ WORKFLOW:
 5. Calculate sentiment (bullish/bearish/neutral)
 6. Generate reason (2-4 words)
 
-SECTIONS PROCESSED:
-Process these 6 sections (have filing_hints):
+WHICH BULLETS TO PROCESS:
+
+Phase 1 JSON contains 10 sections. Process bullets from these 6 sections ONLY:
 - major_developments
 - financial_performance
 - risk_factors
@@ -37,21 +36,54 @@ Process these 6 sections (have filing_hints):
 - competitive_industry_dynamics
 - upcoming_catalysts
 
-Skip these 4 sections (no filing_hints):
-- bottom_line
-- upside_scenario
-- downside_scenario
-- key_variables
+SKIP bullets from these 4 sections (they have no filing_hints):
+- bottom_line (paragraph, not bullets)
+- upside_scenario (paragraph, not bullets)
+- downside_scenario (paragraph, not bullets)
+- key_variables (no filing context needed)
 
-OUTPUT REQUIREMENTS:
-1. Same structure as Phase 1 input (same section names, array structure)
-2. Match bullet_id from Phase 1 (used for merging)
-3. Output ONLY new fields (context, context_source, impact, sentiment, reason)
-4. Preserve array order (first in Phase 1 → first in Phase 2)
-5. If Phase 1 section empty [] → output empty []
-6. If no filing data found → context: "No relevant filing context found for this development"
+For each bullet in the 6 processable sections:
+1. Extract bullet_id (e.g., "FIN_001")
+2. Extract filing_hints (e.g., {"10-K": ["Revenue Recognition"], "10-Q": ["Segment Performance"]})
+3. Search indicated filing sections
+4. Generate 4 enrichment fields
+5. Add to output dict keyed by bullet_id
 
-Post-processing merges Phase 1 + Phase 2 JSONs using bullet_id as key.
+FINAL JSON OUTPUT FORMAT:
+
+Return a flat dictionary keyed by bullet_id containing ONLY the 4 enrichment fields.
+
+STRUCTURE:
+{
+  "BULLET_ID_1": {
+    "impact": "high impact",
+    "sentiment": "bullish",
+    "reason": "delivery outperformance",
+    "context": "Customer represents 28% of Q2 revenue per 10-Q; management called relationship 'strategic and expanding' on Aug 7 call"
+  },
+  "BULLET_ID_2": {
+    "impact": "medium impact",
+    "sentiment": "neutral",
+    "reason": "routine churn",
+    "context": "Customer represented 0.3% of Q2 revenue per 10-Q; top 10 customers represent 45% of revenue per 10-K"
+  },
+  "BULLET_ID_3": {
+    "impact": "low impact",
+    "sentiment": "neutral",
+    "reason": "organizational change",
+    "context": "No relevant filing context found for this development"
+  }
+}
+
+CRITICAL RULES:
+1. Flat dictionary structure (NOT nested in "sections" or "enrichments")
+2. Keys are bullet_id values extracted from Phase 1 input
+3. Values are objects with EXACTLY 4 fields: impact, sentiment, reason, context
+4. Do NOT include Phase 1 fields (topic_label, content, filing_hints)
+5. Do NOT wrap output in any additional keys
+6. Process bullets from these 6 sections only: major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts
+7. Skip these 4 sections (no filing_hints): bottom_line, upside_scenario, downside_scenario, key_variables
+8. If no filing data found for a bullet: context = "No relevant filing context found for this development"
 
 ═══════════════════════════════════════════════════════════════════════════════
 FILING MARKDOWN FORMAT
@@ -79,10 +111,10 @@ HANDLING MISSING DATA & SOURCE CONFLICTS
 
 MISSING DATA HANDLING:
 
-1. Filing section not found → Try fuzzy match, note in context_source
-2. Entire filing missing → Use available filings, note: "10-K not available (recent IPO)"
+1. Filing section not found → Try fuzzy match across similar section names
+2. Entire filing missing → Use available filings, note in context: "10-K not available (recent IPO)"
 3. No relevant data → context: "No relevant filing context found for this development"
-4. Filing pre-dates event → Note temporal gap: "per Q2 2025 10-Q (pre-dates Q3 event)"
+4. Filing pre-dates event → Note temporal gap in context: "per Q2 2025 10-Q (pre-dates Q3 event)"
 
 SOURCE CONFLICTS:
 
@@ -102,14 +134,14 @@ Most bullets need BOTH:
 2. Get management view from Transcript
 3. Synthesize into single context
 
-Example:
+Example output for this bullet:
 {
-  "bullet_id": "customer_renewal",
-  "context": "Customer represents 28% of Q2 revenue per 10-Q (increased from 22% in FY2024); management called relationship 'strategic' on Aug 7 call",
-  "context_source": "10-Q (Q2 2025), 10-K (FY2024), Transcript (Aug 7, 2025)",
-  "impact": "high impact",
-  "sentiment": "bullish",
-  "reason": "customer concentration"
+  "customer_renewal": {
+    "impact": "high impact",
+    "sentiment": "bullish",
+    "reason": "customer concentration",
+    "context": "Customer represents 28% of Q2 revenue per 10-Q (increased from 22% in FY2024); management called relationship 'strategic' on Aug 7 call"
+  }
 }
 
 If no filing data: Still output bullet with context: "No relevant filing context found" and calculate impact/sentiment from article framing.
@@ -118,25 +150,22 @@ If no filing data: Still output bullet with context: "No relevant filing context
 FIELD GENERATION & CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-5 FIELDS TO GENERATE:
+4 FIELDS TO GENERATE:
 
-1. context: 25-60 words synthesizing 1-3 most relevant filing data points
-   - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q"
-   - Show calculations: "Segment $9.0B of total $10.2B (88%)"
-
-2. context_source: Comma-separated sources
-   - Format: "10-K (FY2024), 10-Q (Q2 2025), Transcript (Aug 7, 2025)"
-
-3. impact: "high impact" | "medium impact" | "low impact"
+1. impact: "high impact" | "medium impact" | "low impact"
    - High: >5% revenue/EBIT/assets OR top 3 customer/supplier OR categorical event
    - Medium: 1-5% OR top 4-10
    - Low: <1%
 
-4. sentiment: "bullish" | "bearish" | "neutral"
+2. sentiment: "bullish" | "bearish" | "neutral"
    - Single-step inference from article + filing economics
 
-5. reason: 2-4 words describing impact type
-   - Examples: "delivery outperformance", "regulatory risk", "capital misallocation"
+3. reason: 2-4 words describing impact type
+   - Examples: "customer concentration", "margin compression", "delivery outperformance", "regulatory risk"
+
+4. context: 25-60 words synthesizing 1-3 most relevant filing data points
+   - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q"
+   - Show calculations: "Segment $9.0B of total $10.2B (88%)"
 
 CRITICAL RULES:
 
@@ -496,11 +525,12 @@ Use "No relevant filing context found for this development" when:
 
 Example (no filing data):
 {
-  "context": "No relevant filing context found for this development",
-  "context_source": "N/A",
-  "impact": "medium impact",
-  "sentiment": "neutral",
-  "reason": "public relations matter"
+  "ceo_controversy": {
+    "impact": "medium impact",
+    "sentiment": "neutral",
+    "reason": "public relations matter",
+    "context": "No relevant filing context found for this development"
+  }
 }
 
 NATURAL PROSE:
@@ -662,55 +692,62 @@ BAD EXAMPLES:
 ❌ "Q3 results" (restates topic)
 
 ═══════════════════════════════════════════════════════════════════════════════
-COMPLETE EXAMPLES (All 5 Fields)
+COMPLETE OUTPUT EXAMPLES
 ═══════════════════════════════════════════════════════════════════════════════
 
-EXAMPLE 1: Customer renewal with high concentration
+EXAMPLE 1 - Ticker with 3 enrichable bullets:
+
+INPUT (Phase 1 excerpt):
 {
-  "bullet_id": "customer_renewal",
-  "context": "Customer represents 28% of Q2 revenue per 10-Q (increased from 22% in FY2024 per 10-K); management called relationship 'strategic and expanding' on Aug 7 call",
-  "context_source": "10-Q (Q2 2025), 10-K (FY2024), Transcript (Aug 7, 2025)",
-  "impact": "high impact",
-  "sentiment": "bullish",
-  "reason": "customer concentration"
+  "sections": {
+    "major_developments": [
+      {"bullet_id": "customer_renewal", "topic_label": "Major customer renewal", "content": "...", "filing_hints": {"10-Q": ["CUSTOMER CONCENTRATION"], "10-K": ["DEPENDENCIES"]}},
+      {"bullet_id": "ev_investment", "topic_label": "EV investment announced", "content": "...", "filing_hints": {"10-Q": ["SEGMENT PERFORMANCE"], "10-K": ["COST STRUCTURE"]}}
+    ],
+    "financial_performance": [
+      {"bullet_id": "q3_results", "topic_label": "Q3 results beat", "content": "...", "filing_hints": {"10-Q": ["QUARTERLY FINANCIAL PERFORMANCE"], "Transcript": ["FINANCIAL RESULTS"]}}
+    ]
+  }
 }
 
-EXAMPLE 2: Investment in unprofitable segment
+YOUR OUTPUT (Phase 2):
 {
-  "bullet_id": "ev_investment",
-  "context": "Investment targets Model e segment (lost $1.2B Q2, -127% margin per Q2 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% EBIT at 13.5% margin per 10-K",
-  "context_source": "10-Q (Q2 2025), 10-K (FY2024)",
-  "impact": "high impact",
-  "sentiment": "bearish",
-  "reason": "capital misallocation"
+  "customer_renewal": {
+    "impact": "high impact",
+    "sentiment": "bullish",
+    "reason": "customer concentration",
+    "context": "Customer represents 28% of Q2 revenue per 10-Q (increased from 22% in FY2024 per 10-K); management called relationship 'strategic and expanding' on Aug 7 call"
+  },
+  "ev_investment": {
+    "impact": "high impact",
+    "sentiment": "bearish",
+    "reason": "capital misallocation",
+    "context": "Investment targets Model e segment (lost $1.2B Q2, -127% margin per Q2 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% EBITDA at 13.5% margin per 10-K"
+  },
+  "q3_results": {
+    "impact": "medium impact",
+    "sentiment": "bullish",
+    "reason": "financial outperformance",
+    "context": "Q2 EBITDA was $2.1B (4.3% margin) per Q2 10-Q vs $1.8B (3.9% margin) in Q1 per Q1 10-Q; FY2025 guidance $6.5B-$7.5B Adjusted EBITDA per Aug 7 call"
+  }
 }
 
-EXAMPLE 3: Immaterial customer loss
+EXAMPLE 2 - Bullet with no filing data:
 {
-  "bullet_id": "customer_loss",
-  "context": "Customer represented 0.3% of Q2 revenue per 10-Q; top 10 customers represent 45% of revenue per 10-K",
-  "context_source": "10-Q (Q2 2025), 10-K (FY2024)",
-  "impact": "low impact",
-  "sentiment": "neutral",
-  "reason": "routine churn"
+  "ceo_controversy": {
+    "impact": "medium impact",
+    "sentiment": "neutral",
+    "reason": "public relations matter",
+    "context": "No relevant filing context found for this development"
+  }
 }
 
-EXAMPLE 4: Risk materialization
+EXAMPLE 3 - Risk materialization:
 {
-  "bullet_id": "nhtsa_investigation",
-  "context": "NHTSA investigation matches autonomous driving risk disclosed in FY2024 10-K RISK FACTORS; affects 2.9M vehicles (62% of installed base per 10-K fleet data)",
-  "context_source": "10-K (FY2024)",
-  "impact": "high impact",
-  "sentiment": "bearish",
-  "reason": "risk materialization"
-}
-
-EXAMPLE 5: No filing data available
-{
-  "bullet_id": "ceo_controversy",
-  "context": "No relevant filing context found for this development",
-  "context_source": "N/A",
-  "impact": "medium impact",
-  "sentiment": "neutral",
-  "reason": "public relations matter"
+  "nhtsa_investigation": {
+    "impact": "high impact",
+    "sentiment": "bearish",
+    "reason": "risk materialization",
+    "context": "NHTSA investigation matches autonomous driving risk disclosed in FY2024 10-K RISK FACTORS; affects 2.9M vehicles (62% of installed base per 10-K fleet data)"
+  }
 }

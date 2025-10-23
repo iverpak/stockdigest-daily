@@ -579,17 +579,25 @@ LOW IMPACT:
 MULTI-FACTOR RULE: Use HIGHEST level when multiple thresholds met
 Example: 2% revenue (medium) + top 3 customer (high) → high impact ✓
 
-AUTO-ESCALATION (escalate one level if present):
-- Article superlatives: "most", "largest", "record", "critical", "essential"
-- Multiple article emphasis: 3+ articles over multiple days
-- Analyst quantifies >10% impact
+ESCALATE ONE LEVEL if:
+- Beat/miss >10% vs expectations (material magnitude)
+- 4+ consecutive quarters same direction (pattern: "4th consecutive miss")
+- Changes market position materially (#4 → #2, loss of #1)
+- 3+ major articles over multiple days emphasizing impact
+- Analyst quantifies >10% EBITDA/EPS impact
+
+DO NOT escalate solely because:
+❌ Article uses "record" (could be immaterial: "record 497K, +0.5% vs 495K consensus")
+❌ Article uses "major/significant" without quantification
+❌ Article uses "critical/essential" without business impact evidence
 
 Examples:
 "Customer 28% of Q2 revenue per 10-Q" → high impact (>5%)
 "Customer 2.8% of revenue per 10-Q" → medium impact (1-5%)
 "Customer 0.3% of revenue per 10-Q" → low impact (<1%)
 "NHTSA investigation into 2.9M vehicles" → high impact (categorical)
-"Segment 3% of revenue but analyst quantified >10% EBITDA impact" → high impact (escalation)
+"Record 497K deliveries, +13% vs consensus" → high impact (escalate for material beat)
+"Record 497K deliveries, +0.5% vs consensus" → medium impact (don't escalate, marginal)
 
 ═══════════════════════════════════════════════════════════════════════════════
 SENTIMENT TAG CALCULATION
@@ -640,19 +648,33 @@ Examples:
 "CEO statement on politics; no stated business impact" → neutral ✓
 "Revenue beat but margins missed" → neutral ✓
 
+MIXED RESULTS: When metrics conflict (sequential up but YoY down, revenue beat but EPS miss):
+→ Follow article emphasis: If 3+ articles lead with negative = bearish; lead with positive = bullish
+→ If truly balanced = neutral
+
+Example: Margin 5.8% vs 7.2% YoY (down) vs 4.1% QoQ (up)
+→ Articles emphasize "margin compression from 7.2%" → BEARISH (follow article)
+→ Context can show both directions if space permits
+
 ECONOMIC REALITY INTEGRATION:
 
-Filing data trumps article framing when they conflict.
+DEFAULT: Article framing determines sentiment
 
-Example 1: "Company announces $2B growth investment" (sounds bullish)
-+ Filing shows segment -127% margin (unprofitable)
-→ Sentiment: bearish (capital misallocation)
+OVERRIDE only when filing reveals:
+1. Immateriality (<1% revenue) → neutral
+2. Economic contradiction (profitable framing, unprofitable reality) → flip sentiment
+3. Factual error (article claims top customer, filing shows #8) → correct impact/sentiment
 
-Example 2: "Company loses major customer" (sounds bearish)
-+ Filing shows customer 0.3% of revenue (immaterial)
-→ Sentiment: neutral (routine churn)
+Examples when TO override:
+- Article: "Major customer lost" | Filing: 0.3% revenue → NEUTRAL (immaterial)
+- Article: "$2B growth investment" | Filing: Segment -127% margin → BEARISH (misallocation)
 
-Process: Read article framing → Read filing context → Combine both → If conflict, filings win
+Examples when NOT to override:
+- Article: "Beat consensus" + "buyers rushed before credit expired" → BULLISH (beat achieved)
+- Article: "Margin compressed YoY" | Filing: Also improved QoQ → BEARISH (follow article emphasis)
+- Article: "EPS beat 5%" | Filing: Driven by one-time benefit → BULLISH (beat is beat)
+
+KEY RULE: Article emphasis = sentiment baseline. Filing quantifies magnitude + context, doesn't override unless immaterial or economically contradictory.
 
 ═══════════════════════════════════════════════════════════════════════════════
 REASON TAG GENERATION
@@ -666,17 +688,19 @@ FORMAT: 2-4 words, lowercase, descriptive
 
 CATEGORY LIBRARY:
 
-Financial: "delivery outperformance", "financial underperformance", "margin expansion", "margin compression", "revenue growth", "revenue decline"
+Financial: "delivery outperformance", "financial underperformance", "earnings underperformance", "margin expansion", "margin compression", "revenue growth", "revenue decline", "cash generation", "balance sheet strength"
 
-Operational: "capacity growth", "capacity reduction", "production efficiency", "operational disruption", "supply chain optimization", "supply chain risk"
+Operational: "capacity growth", "capacity reduction", "production efficiency", "operational disruption", "execution challenge", "supply chain optimization", "supply chain risk"
 
-Strategic: "accretive acquisition", "dilutive acquisition", "capital misallocation", "strategic investment", "market expansion", "market exit"
+Strategic: "accretive acquisition", "dilutive acquisition", "capital misallocation", "strategic investment", "market expansion", "market exit", "strategic milestone", "development stage"
 
-Competitive: "competitive threat", "competitor disadvantage", "market share gain", "market share loss", "pricing power", "pricing pressure"
+Competitive: "competitive threat", "competitor disadvantage", "competitive positioning", "market share gain", "market share loss", "pricing power", "pricing pressure"
 
-Regulatory/Legal: "regulatory risk", "regulatory approval", "litigation risk", "legal resolution", "compliance issue", "safety risk"
+Regulatory/Legal/Policy: "regulatory risk", "regulatory approval", "policy uncertainty", "litigation risk", "legal resolution", "compliance issue", "safety risk"
 
-Routine/Neutral: "organizational change", "leadership transition", "routine churn", "operational update", "strategic review", "routine disclosure"
+Demand: "demand strength", "demand risk", "demand headwind", "policy-driven demand"
+
+Routine/Neutral: "organizational change", "leadership transition", "routine churn", "operational update", "strategic review", "routine disclosure", "governance matter"
 
 Special: "risk materialization" (when article event confirms disclosed filing risk)
 

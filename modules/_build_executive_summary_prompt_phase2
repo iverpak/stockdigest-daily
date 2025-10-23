@@ -409,6 +409,13 @@ Look for in filings:
 - Profitability by division
 - Loss-making vs profit-making segments
 
+SPECIAL RULE: Unprofitable ventures/segments
+When bullet discusses venture currently generating no revenue (robotaxi, AI products):
+- ALWAYS state current profitability status explicitly
+- ALWAYS include timeline to profitability if management provides
+- ❌ BAD: "Robotaxi costs in Services segment ($3.5B revenue)"
+- ✅ GOOD: "Robotaxi costs in Services segment ($3.5B revenue); robotaxi currently unprofitable, expects breakeven 2026 per transcript"
+
 Search sections:
 - 10-K: COST STRUCTURE, FINANCIAL SNAPSHOT (Latest Year), REVENUE STREAMS
 - 10-Q: SEGMENT PERFORMANCE TRENDS (QoQ & YoY), QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)
@@ -458,6 +465,13 @@ Look for in filings:
 - Sequential trends across multiple quarters
 - Management commentary on improvement or deterioration
 
+SPECIAL CASE: New product launches (<18 months old)
+- ALWAYS show sequential (QoQ) trend in addition to or instead of YoY
+- YoY comparisons misleading for ramping products (compares to launch phase)
+- ❌ BAD: "Cybertruck sales declined 63% YoY" (meaningless - product launched Nov 2023)
+- ✅ GOOD: "Cybertruck Q3 sales 5,400 vs Q2 ~6,000 (-10% QoQ) shows ramp slowing"
+- ✅ ALSO GOOD: "Cybertruck Q3 sales 5,400 vs Q2 ~4,500 (+20% QoQ) shows continued ramp"
+
 Search sections:
 - 10-Q: SEGMENT PERFORMANCE TRENDS (QoQ & YoY), QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY), OPERATIONAL METRICS (QoQ & YoY)
 - 10-K: Multi-year data tables for historical comparison
@@ -482,17 +496,27 @@ PRIORITY 1: PROFITABILITY & ECONOMICS (always extract first)
 - ROIC vs WACC for investments/acquisitions
 - Profitability trends (improving or declining)
 
-PRIORITY 2: CASH FLOW & BALANCE SHEET
-- Free cash flow (FCF = OCF - CapEx)
-- FCF conversion rate (FCF / Net Income)
+PRIORITY 2: CASH FLOW & BALANCE SHEET (CRITICAL for earnings bullets)
+- Free cash flow (FCF = OCF - CapEx) - ALWAYS include for earnings-related bullets
+- FCF conversion rate (FCF / Net Income) - shows earnings quality
 - Operating cash flow vs Net Income (quality of earnings)
 - Liquidity position (cash + revolver availability)
 
-PRIORITY 3: CONCENTRATION & DEPENDENCIES
-- Customer concentration (top 3 customers as % of revenue)
-- Supplier concentration (% sourced from single vendor)
-- Geographic concentration (% of revenue/assets in one region)
-- Product concentration (% of revenue from one product)
+SPECIAL RULE: For ANY bullet about earnings/revenue performance, ALWAYS extract FCF if available
+- ❌ BAD: "Q3 revenue beat but EPS missed; margin compressed"
+- ✅ GOOD: "Q3 revenue beat but EPS missed; margin compressed; however FCF $4B set record"
+
+PRIORITY 3: CONCENTRATION & DEPENDENCIES (MUST quantify %)
+- Customer concentration (top 3 customers as % of revenue) - ALWAYS include exact %
+- Supplier concentration (% sourced from single vendor) - NEVER say "highly dependent"
+- Geographic concentration (% of revenue/assets in one region) - ALWAYS quantify
+- Product concentration (% of revenue from one product) - ALWAYS quantify
+
+CRITICAL: Always quantify dependencies with exact % from filings
+- ❌ BAD: "Highly dependent on battery supply from CATL per 10-K"
+- ✅ GOOD: "Battery supply 40%+ from CATL (China) per 10-K creates tariff exposure"
+- ❌ BAD: "Significant customer concentration per 10-Q"
+- ✅ GOOD: "Customer represents 28% of Q2 revenue per 10-Q"
 
 PRIORITY 4: GUIDANCE & FORWARD OUTLOOK
 - Management's FY/Q4 guidance
@@ -505,9 +529,21 @@ PRIORITY 5: SCALE & GROWTH (only after extracting 1-4)
 - Volume metrics and growth rates
 - Market share data
 
-CRITICAL RULE: Never report revenue without profitability
-- ❌ BAD: "Segment generated $3.5B revenue (+24% YoY)"
-- ✅ GOOD: "Segment generated $3.5B revenue (+24% YoY) at 58% gross margin per 10-Q"
+CRITICAL RULES:
+1. Never report revenue without profitability
+   - ❌ BAD: "Segment generated $3.5B revenue (+24% YoY)"
+   - ✅ GOOD: "Segment generated $3.5B revenue (+24% YoY) at 58% gross margin per 10-Q"
+
+2. Always compare same metrics (apples-to-apples)
+   - ❌ BAD: "Q3 2025 operating margin 5.8% vs 18.7% automotive gross margin Q3 2024"
+   - ✅ GOOD: "Q3 2025 operating margin 5.8% vs 7.2% operating margin FY2024"
+   - ❌ BAD: "Q3 2025 gross margin 16.1% vs 5.8% operating margin Q2 2025"
+   - ✅ GOOD: "Q3 2025 gross margin 16.1% vs 18.7% gross margin Q3 2024"
+   
+3. Never calculate backward-looking "implied prior year" metrics
+   - ❌ BAD: "FY2024 EPS $2.04 implies Q4 2024 run rate ~$0.51"
+   - ✅ GOOD: "YTD 2025 deliveries 1,218K implies Q4 2025 needs 732K to hit FY target"
+   - Forward-looking calculations are valuable; backward-looking are not
 
 ---
 
@@ -731,6 +767,15 @@ Connect logically (show cause/effect, comparisons, progression):
 Use active, concise language:
 ❌ "A loss of $5.1B was incurred" → ✅ "Lost $5.1B per 10-K"
 
+CONSISTENCY RULE: Same topic across multiple bullets
+When multiple bullets discuss same underlying business (e.g., 4 analyst bullets about robotaxi/FSD):
+- Use CONSISTENT metrics across all contexts (don't vary FSD figures)
+- Pick ONE standard set and reuse:
+  - FSD deferred revenue: $3.8B
+  - Services segment: $3.5B revenue, 58% margin
+  - Penetration: 12% of fleet
+  - Status: Currently unprofitable, breakeven 2026
+  - Timeline: Austin by year-end, 8-10 metros pending approvals
 
 ═══════════════════════════════════════════════════════════════════════════════
 IMPACT TAG CALCULATION
@@ -797,6 +842,10 @@ CALCULATE WHAT'S IMPLIED:
 If YTD metric + FY guidance disclosed:
 → Calculate what Q4 needs to achieve: "Implies Q4 needs X to hit FY guidance"
 Example: YTD deliveries 1,218K, FY guidance 1,789K → "Implies 571K Q4 deliveries required"
+
+If consensus beat + suspected pull-forward (tax credit, deadline):
+→ Quantify beat magnitude + calculate Q4 requirement to assess sustainability
+Example: Q3 deliveries 497K beat consensus 440K (+13%); YTD 1,218K implies Q4 needs 732K to maintain pace (+47% vs Q3) creating sustainability concerns post-credit expiration
 
 If deferred revenue + regulatory risk disclosed:
 → Calculate financial exposure: "Therefore $X at risk if regulatory action occurs"

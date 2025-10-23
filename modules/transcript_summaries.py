@@ -304,8 +304,8 @@ def generate_transcript_summary_with_gemini(
         LOG.info(f"   Words: {word_count}, Time: {generation_time:.1f}s")
         LOG.info(f"   Tokens: in={token_count_input}, out={token_count_output}")
 
-        # Strip emoji from summary (Phase 2 needs clean section headers for searching)
-        summary_text = strip_emoji(summary_text)
+        # NOTE: Emojis are preserved in database for proper section parsing
+        # They are stripped during HTML rendering by build_transcript_summary_html()
 
         return {
             'summary_text': summary_text,
@@ -398,8 +398,8 @@ def generate_transcript_summary_with_claude(
         LOG.info(f"✅ Generated {content_type} summary for {ticker} ({len(summary)} chars)")
         LOG.info(f"💵 Tokens: in={input_tokens}, out={output_tokens}, cached={cache_read}")
 
-        # Strip emoji from summary (Phase 2 needs clean section headers for searching)
-        summary = strip_emoji(summary)
+        # NOTE: Emojis are preserved in database for proper section parsing
+        # They are stripped during HTML rendering by build_transcript_summary_html()
 
         return summary
 

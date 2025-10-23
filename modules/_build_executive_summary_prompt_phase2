@@ -89,8 +89,23 @@ CRITICAL RULES:
 FILING MARKDOWN FORMAT
 ═══════════════════════════════════════════════════════════════════════════════
 
-You receive 3 markdown filing summaries:
+You receive up to 3 markdown filing summaries with PERIOD HEADERS:
 
+TRANSCRIPT FORMAT:
+[TICKER (Company Name) Q3 2025 Earnings Call (Oct 23, 2025)]
+
+10-Q FORMAT:
+[TICKER (Company Name) Q2 2025 10-Q Filing, Filed: Aug 7, 2025]
+
+10-K FORMAT:
+[TICKER (Company Name) 10-K FILING FOR FISCAL YEAR 2024, Filed: Feb 28, 2025]
+
+CRITICAL: Extract period from headers for accurate citations:
+- Transcript: Use call date for citations ("per Oct 23, 2025 transcript" or "on Oct 23 call")
+- 10-Q: Use quarter and year ("per Q2 2025 10-Q")
+- 10-K: Use fiscal year ("per FY2024 10-K")
+
+FILING SECTIONS:
 10-K: 17 sections (INDUSTRY CLASSIFICATION, BUSINESS MODEL SUMMARY, REVENUE STREAMS, etc.)
 10-Q: 12 sections (QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY), SEGMENT PERFORMANCE TRENDS, etc.)
 Transcript: 14 sections (BOTTOM LINE, FINANCIAL RESULTS, OPERATIONAL METRICS, etc.)
@@ -194,10 +209,10 @@ STRUCTURE:
 - Data points: 1-3 most relevant pieces
 - Citations: ALWAYS cite source and period
 
-CITATION FORMATS:
-- 10-K: "per FY2024 10-K"
-- 10-Q: "per Q2 2025 10-Q"
-- Transcript: "per Aug 7, 2025 transcript" or "on Aug 7 call"
+CITATION FORMATS (extract from filing headers):
+- 10-K: "per FY2024 10-K" (from header: "10-K FILING FOR FISCAL YEAR 2024")
+- 10-Q: "per Q2 2025 10-Q" (from header: "Q2 2025 10-Q Filing")
+- Transcript: "per Oct 23, 2025 transcript" or "on Oct 23 call" (from header: "Q3 2025 Earnings Call (Oct 23, 2025)")
 
 CRITICAL: Transcript citations MUST include date
 ❌ Wrong: "per transcript"
@@ -205,19 +220,24 @@ CRITICAL: Transcript citations MUST include date
 ✅ Correct: "per Oct 23, 2025 transcript"
 ✅ Correct: "on Oct 23 call"
 
+HOW TO EXTRACT PERIODS:
+1. Look at the filing header (first line before markdown sections)
+2. Extract the period information
+3. Use exact period in all citations for that filing
+
 WHEN OVER 60 WORDS - CUT IN THIS ORDER:
 Priority 1 (Keep): Most material metric + citation
 Priority 2 (Keep): One comparison (QoQ or YoY, pick more relevant)
 Priority 3 (Optional): Management quote (one only)
 Priority 4 (Cut first): Multiple quotes, excessive detail, redundant points
 
-EXAMPLES:
+EXAMPLES (note: periods extracted from filing headers):
 
 ✅ Good (42 words, 2 data points):
-"Acquisitions add ~3 GW capacity to 10.3 GW fleet (~29% increase) per FY2024 10-K; management projects ~50% Adj FCF/share accretion per investor presentation on Aug 7 transcript"
+"Acquisitions add ~3 GW capacity to 10.3 GW fleet (~29% increase) per FY2024 10-K; management projects ~50% Adj FCF/share accretion per investor presentation on Aug 7, 2025 transcript"
 
 ✅ Good (56 words, 3 data points):
-"Customer concentration increased to 28% of Q2 revenue per 10-Q vs 22% in FY2024 per 10-K; represents largest customer for third consecutive year; management characterized relationship as 'strategic and expanding' on Aug 7 call"
+"Customer concentration increased to 28% of Q2 2025 revenue per 10-Q vs 22% in FY2024 per 10-K; represents largest customer for third consecutive year; management characterized relationship as 'strategic and expanding' on Aug 7, 2025 call"
 
 ❌ Too long (68 words):
 "Customer 28% of Q2 revenue per 10-Q, up from 22% in Q1 per Q1 10-Q and 20% in FY2024 per 10-K; largest customer for third consecutive year per 10-K tables; management characterized relationship as 'strategic and expanding' on August 7, 2025 earnings call"
@@ -734,6 +754,11 @@ BAD EXAMPLES:
 COMPLETE OUTPUT EXAMPLES
 ═══════════════════════════════════════════════════════════════════════════════
 
+NOTE: All examples assume the following filing headers were provided:
+- [F (Ford Motor Company) Q2 2025 10-Q Filing, Filed: Aug 7, 2025]
+- [F (Ford Motor Company) 10-K FILING FOR FISCAL YEAR 2024, Filed: Feb 28, 2025]
+- [F (Ford Motor Company) Q3 2025 Earnings Call (Aug 7, 2025)]
+
 EXAMPLE 1 - Ticker with 3 enrichable bullets:
 
 INPUT (Phase 1 excerpt):
@@ -755,19 +780,19 @@ YOUR OUTPUT (Phase 2):
     "impact": "high impact",
     "sentiment": "bullish",
     "reason": "customer concentration",
-    "context": "Customer represents 28% of Q2 revenue per 10-Q (increased from 22% in FY2024 per 10-K); management called relationship 'strategic and expanding' on Aug 7 call"
+    "context": "Customer represents 28% of Q2 2025 revenue per 10-Q (increased from 22% in FY2024 per 10-K); management called relationship 'strategic and expanding' on Aug 7, 2025 call"
   },
   "ev_investment": {
     "impact": "high impact",
     "sentiment": "bearish",
     "reason": "capital misallocation",
-    "context": "Investment targets Model e segment (lost $1.2B Q2, -127% margin per Q2 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% EBITDA at 13.5% margin per 10-K"
+    "context": "Investment targets Model e segment (lost $1.2B Q2, -127% margin per Q2 2025 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% EBITDA at 13.5% margin per 10-K"
   },
   "q3_results": {
     "impact": "medium impact",
     "sentiment": "bullish",
     "reason": "financial outperformance",
-    "context": "Q2 EBITDA was $2.1B (4.3% margin) per Q2 10-Q vs $1.8B (3.9% margin) in Q1 per Q1 10-Q; FY2025 guidance $6.5B-$7.5B Adjusted EBITDA per Aug 7 call"
+    "context": "Q2 EBITDA was $2.1B (4.3% margin) per Q2 2025 10-Q vs $1.8B (3.9% margin) in Q1 2025 per Q1 10-Q; FY2025 guidance $6.5B-$7.5B Adjusted EBITDA per Aug 7, 2025 call"
   }
 }
 

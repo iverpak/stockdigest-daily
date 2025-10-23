@@ -20296,6 +20296,10 @@ async def process_transcript_phase(job: dict):
         update_job_status(job_id, progress=80)
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
 
+        # Ensure quarter has Q prefix (defensive check - don't double-prefix)
+        quarter_str = str(quarter)
+        quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
+
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO transcript_summaries (
@@ -20312,7 +20316,7 @@ async def process_transcript_phase(job: dict):
                 ticker,
                 ticker_config.get('company_name'),
                 'transcript',
-                f"Q{quarter}",
+                quarter_formatted,
                 year,
                 data[0].get('date'),
                 summary_text,
@@ -25844,12 +25848,18 @@ async def generate_transcript_summary_api(request: Request):
             token_count_output = 0
 
         # Save to database (using module function)
+        # Ensure quarter has Q prefix (defensive check - don't double-prefix)
+        quarter_formatted = None
+        if quarter:
+            quarter_str = str(quarter)
+            quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
+
         with db() as conn:
             save_transcript_summary_to_database(
                 ticker=ticker,
                 company_name=company_name,
                 report_type=report_type,
-                quarter=f"Q{quarter}" if quarter else None,
+                quarter=quarter_formatted,
                 year=year,
                 report_date=report_date,
                 pr_title=pr_title,
@@ -25888,11 +25898,12 @@ async def generate_transcript_summary_api(request: Request):
                         price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
 
             # Generate and send email (using module function)
+            # Use formatted quarter (already has Q prefix from above)
             email_data = generate_transcript_email(
                 ticker=ticker,
                 company_name=company_name,
                 report_type=report_type,
-                quarter=f"Q{quarter}" if quarter else None,
+                quarter=quarter_formatted,
                 year=year,
                 report_date=report_date,
                 pr_title=pr_title,

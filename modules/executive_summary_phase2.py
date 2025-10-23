@@ -131,6 +131,51 @@ def _fetch_available_filings(ticker: str, db_func) -> Dict[str, Dict]:
     return filings
 
 
+def _convert_emoji_headers_to_markdown(text: str) -> str:
+    """
+    Convert emoji section headers to markdown headers for Phase 2 compatibility.
+
+    Phase 2 expects markdown format (# SECTION NAME), but transcript summaries
+    use emoji format (📌 BOTTOM LINE).
+
+    Args:
+        text: Transcript summary text with emoji headers
+
+    Returns:
+        Text with markdown headers (emojis stripped, # prefix added)
+    """
+    import re
+
+    # Define emoji-to-markdown mappings
+    emoji_headers = [
+        "📌 BOTTOM LINE",
+        "💰 FINANCIAL RESULTS",
+        "📊 OPERATIONAL METRICS",
+        "🏢 MAJOR DEVELOPMENTS",
+        "📈 GUIDANCE",
+        "🎯 STRATEGIC INITIATIVES",
+        "💼 MANAGEMENT SENTIMENT",
+        "⚠️ RISK FACTORS",
+        "🏭 INDUSTRY",
+        "💡 CAPITAL ALLOCATION",
+        "💬 Q&A HIGHLIGHTS",
+        "📈 UPSIDE SCENARIO",
+        "📉 DOWNSIDE SCENARIO",
+        "🔍 KEY VARIABLES"
+    ]
+
+    # Replace each emoji header with markdown format
+    for emoji_header in emoji_headers:
+        # Extract text without emoji
+        text_only = re.sub(r'^[^\w\s]+\s*', '', emoji_header)
+        # Replace in text (must be at start of line)
+        pattern = r'^' + re.escape(emoji_header)
+        replacement = f'# {text_only}'
+        text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+
+    return text
+
+
 def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) -> str:
     """
     Build Phase 2 user content combining Phase 1 JSON and filing sources.
@@ -161,9 +206,12 @@ def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
         company = t['company_name'] or ticker
         date = t['date'].strftime('%b %d, %Y') if t['date'] else 'Unknown Date'
 
+        # Convert emoji headers to markdown for Phase 2 compatibility
+        transcript_text = _convert_emoji_headers_to_markdown(t['text'])
+
         content += f"LATEST EARNINGS CALL (TRANSCRIPT):\n\n"
         content += f"[{ticker} ({company}) {quarter} {year} Earnings Call ({date})]\n\n"
-        content += f"{t['text']}\n\n\n"
+        content += f"{transcript_text}\n\n\n"
 
     # Add 10-Q if available (matches old format)
     if '10q' in filings:

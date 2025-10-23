@@ -624,22 +624,6 @@ Infer reasonable variables from what articles discussed and emphasized
 Only output empty array [] if using quiet day escape hatch
 
 ═══════════════════════════════════════════════════════════════════════════════
-CRITICAL PHASE 1 RULES SUMMARY
-═══════════════════════════════════════════════════════════════════════════════
-
-1. VALID JSON OUTPUT - Must be parseable, all 10 sections present in "sections" object
-2. ARTICLES ONLY - No filing data, only what articles discuss (Article-First Rule)
-3. ATTRIBUTION ALWAYS - Every claim sourced; every implication/connection attributed to author
-4. 95%+ THEME COVERAGE - Capture ALL substantive developments, no theme left behind
-5. FILING HINTS REQUIRED - Every bullet (except Key Variables) must have filing_hints for Phase 2
-6. SECTION LENGTH LIMITS - Respect max bullet counts and word limits
-7. BOTTOM LINE ≤150 WORDS - Strict limit, count words, include word_count in JSON
-8. EDITORIAL DISCIPLINE - Never characterize sentiment, state facts only
-9. BULLET_ID GENERATION - Lowercase topic_label, underscores, no special characters
-10. QUIET DAY ESCAPE - Use minimal output only if 0-1 non-material articles
-11. NEWS FLOW AWARENESS - Don't let weekend/holiday routine coverage trigger false quiet day
-
-═══════════════════════════════════════════════════════════════════════════════
 INTELLIGENCE SYNTHESIS APPROACH
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1732,188 +1716,68 @@ Select broad strategic sections:
 Phase 2 will search broadly and extract relevant transformation context.
 
 ═══════════════════════════════════════════════════════════════════════════════
-VALIDATION CHECKLIST - SELF-CALIBRATION BEFORE FINAL OUTPUT
+VALIDATION CHECKLIST
 ═══════════════════════════════════════════════════════════════════════════════
 
-Before finalizing your JSON output, review these critical checkpoints:
+Before finalizing output, verify these critical requirements:
 
-1. SECTION STRUCTURE CHECK
+1. JSON STRUCTURE
+□ Valid JSON (parseable by json.loads())
+□ All 10 sections present in "sections" object
+□ Empty bullet sections = [] (empty array)
+□ Bottom Line has word_count field
+□ All filing_hints use correct section names (ALL CAPS, exact match)
 
-Major Developments:
-□ Contains only developments where {TICKER} is primary actor or target
-□ Passed bright-line test for each bullet (remove {TICKER} name - still news? → exclude)
-□ No competitor news without explicit stated connection to {TICKER}
-□ No speculative/loose associations
-□ Clear priority ranking (most material first)
-□ 3-6 bullets max
+2. SECTION COMPLETENESS
+□ Bottom Line ≤150 words (count them)
+□ Major Developments: 3-6 bullets, each passes "Remove {TICKER} - still news?" test
+□ Financial Performance: 2-4 bullets, [COMPANY] articles only
+□ Risk Factors: 2-4 bullets, each meets 1 of 3 criteria (author concern, categorical event, or competitive threat)
+□ Wall Street Sentiment: If 1+ analyst actions exist in articles → section must have content
+□ Competitive Dynamics: Each bullet passes 1 of 3 relevance tests
+□ Upcoming Catalysts: 1-3 bullets, concrete/scheduled events only
+□ Key Variables: 3-5 bullets, no filing_hints
 
-Financial/Operational Performance:
-□ Metrics properly contextualized (not bare numbers)
-□ Performance indicators include direction/magnitude/comparisons
-□ No duplicate content from Major Developments
-□ [COMPANY] articles only (no competitor data)
-□ 2-4 bullets max
+3. ATTRIBUTION QUALITY
+□ Every claim traceable to specific source (article + date)
+□ Every implication/connection attributed to author ("CEO stated...", "Analyst noted...")
+□ No phrases like "positions company for X" without attribution
+□ Upside/Downside scenarios cite specific analysts/sources for conclusions
 
-Risk Factors:
-□ Each bullet meets at least ONE criterion:
-  - Author explicitly flagged concern? OR
-  - Categorical risk event (recall, investigation, litigation, etc.)? OR
-  - Competitive threat meeting one of the 4 tests?
-□ No multi-hop speculation or causal chains
-□ No generic industry headwinds without {TICKER}-specific impact
-□ If competitive threat included → also in Competitive Dynamics section
-□ 2-4 bullets max
+4. ARTICLE-FIRST COMPLIANCE
+□ Every bullet triggered by article (no bullets from filing discussion alone)
+□ No context/data from 10-K/10-Q/Transcript in bullet content
+□ Competitor news included only if article explicitly discusses {TICKER} impact
+□ Excluded: technical analysis, retail analysis, generic macro, noise trading, immaterial fund activity
 
-Wall Street Sentiment:
-□ Contains only analyst actions/commentary on {TICKER}
-□ No mixing with company developments
-□ Properly attributed to specific firms/analysts with ratings and targets
-□ No competitor analyst commentary (→ Competitive Dynamics)
-□ If 1+ analyst actions exist → Section MUST have content (non-negotiable)
+5. INFERENCE BOUNDARIES
+□ Tier 0 (bullet content): Only direct statements from articles with attribution
+□ Tier 1 (scenarios): Single-step logical connections only (no multi-hop chains)
+□ Tier 2 (synthesis): Combined only same event/framework articles
+□ No multi-hop causal chains (X → Y → Z forbidden)
 
-Competitive/Industry Dynamics:
-□ Each bullet passes relevance test:
-  - Article explicitly states {TICKER} impact? OR
-  - Direct comparative framing? OR
-  - Material competitive event (Test 3 criteria)?
-□ No competitor routine news without {TICKER} connection
-□ No speculation about competitive positioning articles didn't state
+6. LANGUAGE PRESERVATION
+□ Preserved article confidence levels ("may" stays "may", "exploring" stays "exploring")
+□ No upgrading certainty ("sources say exploring" → "pursuing" = wrong)
+□ Matched article severity ("minor delay" → "minor delay", not "threatens")
+□ No editorial characterization (banned: "positive", "bullish", "growing concerns", "mounting pressure")
 
-Upcoming Catalysts:
-□ Events are concrete and scheduled (not vague possibilities)
-□ Dates/timeframes specified where known
-□ [COMPANY] articles only
-□ 1-3 bullets max
+7. FABRICATION PREVENTION
+□ Every number came from articles (no calculations unless article showed them)
+□ No "undisclosed" claims unless article said "undisclosed"
+□ Article silence = missing information (not "information was not disclosed")
 
-2. ATTRIBUTION QUALITY CHECK
+8. LEGAL COMPLIANCE
+□ No investment advice ("buy", "sell", "we recommend", "you should")
+□ All recommendations attributed to analysts/sources
+□ Scenarios framed as "per [authors]" not personal recommendations
 
-□ Can I point to a specific source for every claim?
-□ Every implication/connection attributed to author/source?
-□ No phrases like "positions company for X" without "CEO stated" or "[Analyst] noted"?
-□ Forward-looking statements have attribution?
-□ No vague attribution ("reportedly", "sources say" without naming source)?
-
-Examples to catch:
-✗ "Could impact Q4 margins" → ✓ "[Analyst] projected could impact Q4 margins"
-✗ "Suggests market share gains" → ✓ "[Source] stated suggests market share gains"
-✗ "Positions company for growth" → ✓ "CEO stated positions company for growth"
-
-3. SCOPE DISCIPLINE CHECK
-
-□ Included only what articles explicitly reported (no invented context)?
-□ No multi-hop causal chains (stopped after one logical step)?
-□ Competitor news meets relevance test (not included just because interesting)?
-□ No data from outside the article timeline?
-□ Used article framing/severity (not inflated or deflated)?
-
-4. SEVERITY MATCHING CHECK
-
-□ Article says "minor delay" → Did I write "minor delay" (not "threatens timeline")?
-□ Article says "exploring options" → Did I write "exploring options" (not "plans to")?
-□ Article says "monitoring costs" → Did I write "monitoring costs" (not "faces pressure")?
-□ Preserved article hedging language (may/could/possible)?
-
-5. DIRECTION CHECK
-
-□ Lower input costs help buyers (not sellers)
-□ Higher prices help sellers (not buyers)
-□ No inverted impact direction based on assumptions
-
-6. FILING HINTS CHECK
-
-□ Every bullet in major_developments has filing_hints?
-□ Every bullet in financial_performance has filing_hints?
-□ Every bullet in risk_factors has filing_hints?
-□ Every bullet in wall_street_sentiment has filing_hints?
-□ Every bullet in competitive_industry_dynamics has filing_hints?
-□ Every bullet in upcoming_catalysts has filing_hints?
-□ Selected 2-3 sections per filing type (not 1, not 4+)?
-□ Sections use correct header names (ALL CAPS, exact match)?
-□ No emojis in section names?
-
-7. EMPTY SECTION LOGIC CHECK
-
-Before finalizing, review each empty section:
-
-If section is empty, ask:
-□ Did I miss any content that belongs here?
-□ Are there developments I assigned elsewhere that should be here?
-□ Am I being too conservative in excluding relevant content?
-
-Specific checks:
-- Risk Factors empty: Did ANY article mention risks, headwinds, investigations, concerns?
-- Competitive Dynamics empty: Did ANY article mention competitors or industry trends?
-- Upcoming Catalysts empty: Did ANY article mention scheduled events or dates?
-- Wall Street Sentiment empty: Did ANY article mention analyst actions (firm + rating/target)?
-
-If you now recall content that belongs there, add it.
-Only leave empty if articles truly didn't discuss that category.
-
-8. BOTTOM LINE CHECK
-
-□ ≤150 words? (COUNT THEM - this is a hard limit)
-□ Included word_count field in JSON?
-□ Started with most material development from recent trading days?
-□ No editorial/sentiment characterization (no "positive", "bullish", "concerns growing")?
-□ Stated facts with attribution only?
-□ Avoided banned phrases (see Legal Compliance section)?
-
-9. UPSIDE/DOWNSIDE SCENARIO CHECK
-
-□ Based on article content (not invented)?
-□ Used attributed statements from analysts/authors?
-□ Preserved article confidence levels (didn't upgrade "may" to "will")?
-□ Avoided banned phrases ("strategic flexibility", "alternative options")?
-□ 80-100 words for Upside, 3-4 sentences for Downside?
-
-10. KEY VARIABLES CHECK
-
-□ Extracted from articles (not invented)?
-□ 3-5 variables max?
-□ Each has bullet_id, topic_label, content (NO filing_hints)?
-□ Timeline included where articles mentioned?
-
-11. SYNTHESIS QUALITY CHECK
-
-□ Combined multiple articles about same event into one bullet (not duplicated)?
-□ Preserved contradictions using "however" structure (didn't resolve)?
-□ Connected temporal sequences with attribution?
-□ Included comparative benchmarks articles provided?
-
-12. BULLET_ID CONSISTENCY CHECK
-
-□ Every bullet_id is lowercase?
-□ Spaces replaced with underscores?
-□ Special characters stripped?
-□ Derived from topic_label text?
-□ No duplicates within same section?
-
-13. FABRICATION PREVENTION CHECK
-
-□ Every specific number came from articles?
-□ No calculated percentages unless article showed calculation?
-□ No "undisclosed" claims unless article said "undisclosed"?
-□ Article silence treated as missing information, not information absence?
-
-14. LEGAL COMPLIANCE CHECK
-
-□ No investment advice language ("buy", "sell", "we recommend", "you should")?
-□ All recommendations attributed to analysts ("Analyst rates Buy", not "Buy this stock")?
-□ Scenarios attributed to article authors?
-
-15. EXCLUSION RULES CHECK
-
-□ Excluded pure technical analysis (RSI, moving averages without catalyst)?
-□ Excluded retail analysis (Zacks ranks, proprietary scores)?
-□ Excluded generic macro without {TICKER} impact?
-□ Excluded daily price action <5% without catalyst?
-□ Excluded immaterial fund activity (<5% ownership, non-activist)?
 
 ═══════════════════════════════════════════════════════════════════════════════
-COMPLETE JSON OUTPUT EXAMPLES
+COMPLETE JSON OUTPUT EXAMPLE
 ═══════════════════════════════════════════════════════════════════════════════
 
-EXAMPLE 1: NORMAL DAY (20+ articles, full brief)
+NORMAL DAY EXAMPLE (20+ articles, full brief):
 
 {
   "sections": {
@@ -1943,349 +1807,31 @@ EXAMPLE 1: NORMAL DAY (20+ articles, full brief)
         }
       }
     ],
-    "financial_performance": [
-      {
-        "bullet_id": "q3_production_metrics",
-        "topic_label": "Q3 production metrics",
-        "content": "Q3 production 469,796 units (+9% QoQ from 430,488 in Q2), deliveries 462,890 units (+6.4% QoQ from 435,059 in Q2) per company report (Oct 22)",
-        "filing_hints": {
-          "10-K": ["KEY OPERATIONAL METRICS (KPIs)", "INFRASTRUCTURE & ASSETS"],
-          "10-Q": ["OPERATIONAL METRICS (QoQ & YoY)", "QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)"],
-          "Transcript": ["OPERATIONAL METRICS", "FINANCIAL RESULTS"]
-        }
-      }
-    ],
-    "risk_factors": [
-      {
-        "bullet_id": "post_tax_credit_demand",
-        "topic_label": "Post-tax-credit demand",
-        "content": "UBS maintained Sell rating with $215 target, raising concerns about sustainably higher future demand following September 30 federal EV tax credit expiration; analyst Stephen anticipated 'a bit of a downtic over next couple of quarters' in US market as cars 'just going to be a bit more expensive near term' per report (Oct 22)",
-        "filing_hints": {
-          "10-K": ["SPECIFIC RISKS & CONCENTRATIONS", "REVENUE STREAMS"],
-          "10-Q": ["NEW RISKS & MATERIAL DEVELOPMENTS", "MANAGEMENT COMMENTARY"],
-          "Transcript": ["RISK FACTORS & HEADWINDS", "Q&A HIGHLIGHTS"]
-        }
-      }
-    ],
-    "wall_street_sentiment": [
-      {
-        "bullet_id": "wedbush_upgrade",
-        "topic_label": "Wedbush upgrade",
-        "content": "Wedbush raised price target to $600 from $550, stating Tesla at forefront of AI-driven transformation and citing leadership in autonomous driving technology per analyst report (Oct 20)",
-        "filing_hints": {
-          "10-K": ["STRATEGIC PRIORITIES & OUTLOOK", "KEY PRODUCTS & SERVICES"],
-          "10-Q": ["GUIDANCE & OUTLOOK UPDATES", "MANAGEMENT COMMENTARY"],
-          "Transcript": ["MANAGEMENT SENTIMENT & TONE", "STRATEGIC INITIATIVES"]
-        }
-      },
-      {
-        "bullet_id": "ubs_maintained_sell",
-        "topic_label": "UBS maintained Sell",
-        "content": "UBS maintained Sell rating with $215 target, citing concerns about sustainably higher demand following tax credit expiration per analyst report (Oct 22)",
-        "filing_hints": {
-          "10-K": ["STRATEGIC PRIORITIES & OUTLOOK", "SPECIFIC RISKS & CONCENTRATIONS"],
-          "10-Q": ["GUIDANCE & OUTLOOK UPDATES", "NEW RISKS & MATERIAL DEVELOPMENTS"],
-          "Transcript": ["RISK FACTORS & HEADWINDS", "MANAGEMENT SENTIMENT & TONE"]
-        }
-      }
-    ],
-    "competitive_industry_dynamics": [
-      {
-        "bullet_id": "gm_affordable_ev_launch",
-        "topic_label": "GM affordable EV launch",
-        "content": "2027 Chevrolet Bolt launching Q1 2026 at $29,990 with 65-kWh battery delivering 255 miles range and native NACS port for Tesla Supercharger access per GM announcement; analyst from unnamed firm stated specs position GM to capture price-sensitive segment and noted competitive pressure on Tesla's entry-level models (Oct 20)",
-        "filing_hints": {
-          "10-K": ["INDUSTRY CLASSIFICATION", "KEY PRODUCTS & SERVICES"],
-          "10-Q": ["COMPETITIVE & INDUSTRY CONTEXT", "MANAGEMENT COMMENTARY"],
-          "Transcript": ["INDUSTRY & COMPETITIVE LANDSCAPE", "Q&A HIGHLIGHTS"]
-        }
-      }
-    ],
-    "upcoming_catalysts": [
-      {
-        "bullet_id": "q3_2025_earnings",
-        "topic_label": "Q3 2025 Earnings",
-        "content": "October 22 (Wednesday) after market close - Q3 results including revenue, EPS, gross margins, Q4 guidance, and robotaxi/FSD progress per multiple sources (Oct 22)",
-        "filing_hints": {
-          "10-K": ["STRATEGIC PRIORITIES & OUTLOOK", "KEY THINGS TO MONITOR"],
-          "10-Q": ["GUIDANCE & OUTLOOK UPDATES", "RECENT EVENTS & SUBSEQUENT EVENTS"],
-          "Transcript": ["GUIDANCE", "MAJOR DEVELOPMENTS"]
-        }
-      }
-    ],
+    "financial_performance": [...],
+    "risk_factors": [...],
+    "wall_street_sentiment": [...],
+    "competitive_industry_dynamics": [...],
+    "upcoming_catalysts": [...],
     "upside_scenario": {
-      "content": "Multiple analysts raised price targets ahead of Q3 earnings, with Wedbush stating Tesla is at forefront of AI-driven transformation supporting $600 target, Melius Research citing disruptive AI potential and autonomy dominance for $520 'must own' rating, and Piper Sandler highlighting leadership in 'real world' AI for $500 target. Canaccord noted positive break in delivery trend after several quarters of weakening momentum and expects new EV models to alleviate post-Q3 'cliff' following tax credit expiration. Analyst Tom Nash projected stock could reach $900 within 6-12 months, stating Tesla is positioning as 'leading gold standard' in AI, FSD, robotaxi, energy, and robotics."
+      "content": "Multiple analysts raised price targets ahead of Q3 earnings, with Wedbush stating Tesla is at forefront of AI-driven transformation..."
     },
     "downside_scenario": {
-      "content": "Bearish analysts warned Q3 delivery strength may represent local peak triggered by temporary tax credit pull-forward. UBS maintained Sell rating with $215 target, raising concerns about sustainably higher future demand following September 30 credit expiration. Wells Fargo maintained Underweight rating with $120 target pointing to continued weakness in sales data despite recent product launches. BNP Paribas Exane initiated Underperform rating with $307 target, noting AI ventures like Robotaxi and Optimus generate no sales currently and consensus 2026 earnings estimates appear too high."
+      "content": "Bearish analysts warned Q3 delivery strength may represent local peak..."
     },
-    "key_variables": [
-      {
-        "bullet_id": "q4_delivery_guidance",
-        "topic_label": "Q4 delivery guidance",
-        "content": "Management outlook for fourth quarter deliveries and full-year 2025 performance following Q3 record; sustainability of demand after September 30 tax credit expiration - Timeline: October 22 earnings call"
-      },
-      {
-        "bullet_id": "robotaxi_expansion_pace",
-        "topic_label": "Robotaxi expansion pace",
-        "content": "Geographic expansion beyond Austin into additional cities including Bay Area, Nevada, Arizona; removal of safety drivers; FSD version 14 rollout progress - Timeline: Q4 2025 per CEO Musk's year-end target"
-      }
-    ]
+    "key_variables": [...]
   }
 }
 
-EXAMPLE 2: QUIET DAY (0-1 non-material articles)
-
-{
-  "sections": {
-    "bottom_line": {
-      "content": "No material developments reported for TSLA this period. Most recent articles covered routine SEC Form 4 filings related to executive stock transactions.",
-      "word_count": 23
-    },
-    "major_developments": [],
-    "financial_performance": [],
-    "risk_factors": [],
-    "wall_street_sentiment": [],
-    "competitive_industry_dynamics": [],
-    "upcoming_catalysts": [],
-    "upside_scenario": {
-      "content": "No new upside catalysts discussed in recent articles."
-    },
-    "downside_scenario": {
-      "content": "No new downside risks discussed in recent articles."
-    },
-    "key_variables": []
-  }
-}
-
-EXAMPLE 3: ANALYST-HEAVY DAY (Multiple analyst actions)
-
-{
-  "sections": {
-    "bottom_line": {
-      "content": "Five analysts updated price targets following Q2 earnings, with Wedbush raising to $275 from $250 citing data center exposure, while Morgan Stanley lowered to $180 from $200 on margin concerns. Company reported Q2 revenue $15.2B (+12% YoY) beating consensus $14.8B, though gross margins compressed to 45.2% from 47.1% prior quarter per company report. Management maintained FY2025 revenue guidance $62-64B but lowered gross margin outlook to 46-47% from prior 48-49% citing competitive pricing pressure.",
-      "word_count": 89
-    },
-    "major_developments": [],
-    "financial_performance": [
-      {
-        "bullet_id": "q2_results",
-        "topic_label": "Q2 results",
-        "content": "Q2 revenue $15.2B (+12% YoY), beat consensus $14.8B; gross margin 45.2% vs 47.1% prior quarter; EPS $1.25 beat consensus $1.18 per company report (Oct 18)",
-        "filing_hints": {
-          "10-K": ["FINANCIAL SNAPSHOT (Latest Year)", "REVENUE STREAMS"],
-          "10-Q": ["QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"],
-          "Transcript": ["FINANCIAL RESULTS"]
-        }
-      }
-    ],
-    "risk_factors": [
-      {
-        "bullet_id": "margin_compression_concern",
-        "topic_label": "Margin compression concern",
-        "content": "Management lowered FY2025 gross margin guidance to 46-47% from prior 48-49%, citing competitive pricing pressure; Morgan Stanley analyst flagged sustained margin pressure as key risk per report (Oct 18)",
-        "filing_hints": {
-          "10-K": ["COST STRUCTURE", "SPECIFIC RISKS & CONCENTRATIONS"],
-          "10-Q": ["NEW RISKS & MATERIAL DEVELOPMENTS", "QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)"],
-          "Transcript": ["RISK FACTORS & HEADWINDS", "GUIDANCE"]
-        }
-      }
-    ],
-    "wall_street_sentiment": [
-      {
-        "bullet_id": "wedbush_raised_target",
-        "topic_label": "Wedbush raised target",
-        "content": "Wedbush raised price target to $275 from $250, maintaining Outperform rating, citing accelerating data center revenue growth and expanding AI opportunity per analyst report (Oct 18)",
-        "filing_hints": {
-          "10-K": ["STRATEGIC PRIORITIES & OUTLOOK", "REVENUE STREAMS"],
-          "10-Q": ["GUIDANCE & OUTLOOK UPDATES", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"],
-          "Transcript": ["MANAGEMENT SENTIMENT & TONE", "STRATEGIC INITIATIVES"]
-        }
-      },
-      {
-        "bullet_id": "morgan_stanley_lowered_target",
-        "topic_label": "Morgan Stanley lowered target",
-        "content": "Morgan Stanley lowered price target to $180 from $200, maintaining Equal Weight rating, citing margin compression concerns from competitive pricing pressure per analyst report (Oct 18)",
-        "filing_hints": {
-          "10-K": ["COST STRUCTURE", "SPECIFIC RISKS & CONCENTRATIONS"],
-          "10-Q": ["QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)", "MANAGEMENT COMMENTARY"],
-          "Transcript": ["RISK FACTORS & HEADWINDS", "FINANCIAL RESULTS"]
-        }
-      },
-      {
-        "bullet_id": "goldman_sachs_maintained_buy",
-        "topic_label": "Goldman Sachs maintained Buy",
-        "content": "Goldman Sachs maintained Buy rating with $290 target, stating Q2 beat demonstrates operating leverage despite margin headwinds per analyst report (Oct 18)",
-        "filing_hints": {
-          "10-K": ["FINANCIAL SNAPSHOT (Latest Year)", "STRATEGIC PRIORITIES & OUTLOOK"],
-          "10-Q": ["QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)", "GUIDANCE & OUTLOOK UPDATES"],
-          "Transcript": ["FINANCIAL RESULTS", "MANAGEMENT SENTIMENT & TONE"]
-        }
-      },
-      {
-        "bullet_id": "jpmorgan_initiated_neutral",
-        "topic_label": "JPMorgan initiated Neutral",
-        "content": "JPMorgan initiated coverage at Neutral with $220 target, noting balanced risk/reward at current valuation with competitive dynamics offsetting AI growth potential per analyst report (Oct 19)",
-        "filing_hints": {
-          "10-K": ["INDUSTRY CLASSIFICATION", "STRATEGIC PRIORITIES & OUTLOOK"],
-          "10-Q": ["COMPETITIVE & INDUSTRY CONTEXT", "QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)"],
-          "Transcript": ["INDUSTRY & COMPETITIVE LANDSCAPE", "MANAGEMENT SENTIMENT & TONE"]
-        }
-      },
-      {
-        "bullet_id": "barclays_downgraded",
-        "topic_label": "Barclays downgraded",
-        "content": "Barclays downgraded to Underweight from Equal Weight with $175 target, stating margin outlook deteriorating faster than expected with limited near-term catalysts per analyst report (Oct 19)",
-        "filing_hints": {
-          "10-K": ["COST STRUCTURE", "SPECIFIC RISKS & CONCENTRATIONS"],
-          "10-Q": ["NEW RISKS & MATERIAL DEVELOPMENTS", "QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)"],
-          "Transcript": ["RISK FACTORS & HEADWINDS", "GUIDANCE"]
-        }
-      }
-    ],
-    "competitive_industry_dynamics": [],
-    "upcoming_catalysts": [],
-    "upside_scenario": {
-      "content": "Wedbush and Goldman Sachs highlighted data center revenue acceleration as key upside driver, with Wedbush stating expanding AI opportunity supports premium valuation. Goldman noted Q2 beat demonstrates operating leverage capability despite margin headwinds. JPMorgan acknowledged AI growth potential offsetting near-term competitive dynamics per analyst reports."
-    },
-    "downside_scenario": {
-      "content": "Morgan Stanley and Barclays flagged margin compression as key risk, with Barclays stating outlook deteriorating faster than expected. Morgan Stanley cited competitive pricing pressure as sustained headwind. Management lowered gross margin guidance by 200 basis points, confirming analyst concerns about pricing environment per reports."
-    },
-    "key_variables": []
-  }
-}
+NOTE: For quiet days (0-1 non-material articles), use minimal output with empty arrays [] for all bullet sections and brief statements in upside_scenario/downside_scenario noting no new catalysts/risks discussed.
 
 ═══════════════════════════════════════════════════════════════════════════════
-EDGE CASE HANDLING
+EDGE CASES
 ═══════════════════════════════════════════════════════════════════════════════
 
-CONTRADICTIONS:
-
-When articles present conflicting information, surface both views:
-
-"Stock rallied 8% on earnings beat; however, three analysts downgraded citing margin sustainability concerns per reports (Oct 22)"
-
-Don't resolve contradictions - let readers see both perspectives.
-
-MULTI-DAY THEMES:
-
-When same theme discussed over multiple days, use date range:
-
-"Analysts raised concerns about demand sustainability across multiple reports (Oct 18-22)"
-
-STALE DATA:
-
+STALE DATA REFERENCES:
 When article references old data (>6 months), flag temporal context:
-
 "Article noted stock traded $45 CAD in March 2024 (historical reference); current trading $52 CAD per Bloomberg (Oct 22)"
 
-MISSING ATTRIBUTION:
-
-If article doesn't name source for a claim, use most specific attribution available:
-
-- Best: "per CEO", "per CFO", "per analyst John Smith from Wedbush"
-- Acceptable: "per company statement", "per analyst report", "per Bloomberg"
-- Avoid: "reportedly", "sources say" (too vague)
-
 UNCERTAIN MATERIALITY:
-
-When unsure if development is material enough to include:
-
-- If article emphasized it → Include it
-- If article mentioned in passing → Consider excluding
-- Default: Include it (Phase 2 will assess materiality with filing data)
-
-COMPETITOR NEWS AMBIGUITY:
-
-When competitor development seems relevant but article doesn't explicitly state {TICKER} impact:
-
-- Does it pass relevance Test 1, 2, or 3? → Include in Competitive Dynamics
-- Doesn't pass any test? → Exclude entirely
-
-When in doubt about competitor news → Exclude (err on side of tight scope).
-
-MULTIPLE ANALYSTS SAME VIEW:
-
-When 3+ analysts express same view, synthesize:
-
-"Multiple analysts raised price targets citing AI opportunity, with Wedbush to $600, Goldman to $550, and Morgan Stanley to $525 per reports (Oct 18-20)"
-
-═══════════════════════════════════════════════════════════════════════════════
-FINAL REMINDERS - CRITICAL SUCCESS FACTORS
-═══════════════════════════════════════════════════════════════════════════════
-
-1. 95%+ THEME COVERAGE
-   No theme left behind. If articles discussed it, capture it somewhere.
-   Better to include borderline content than miss substantive developments.
-
-2. FILING HINTS REQUIRED
-   Every bullet in major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, and upcoming_catalysts MUST have filing_hints.
-   Key Variables do NOT have filing_hints.
-   Use correct section names: ALL CAPS, no emojis, exact match to filing headers.
-
-3. ATTRIBUTION ALWAYS
-   Every claim must be traceable to a source.
-   Every implication must be attributed to an author/analyst/source.
-   Forward-looking statements require attribution.
-
-4. EDITORIAL DISCIPLINE
-   Never characterize sentiment or tone.
-   Never use: "positive", "negative", "bullish", "bearish", "growing concerns", "mounting pressure"
-   State facts only with attribution.
-
-5. BRIGHT-LINE TESTS
-   Major Developments: Remove {TICKER} name - still news? → Exclude
-   Risk Factors: Meets one of 3 criteria? → Include
-   Competitive Dynamics: Passes one of 3 relevance tests? → Include
-
-6. BOTTOM LINE ≤150 WORDS
-   Hard limit. Count words. Include word_count field.
-   If over 150, remove lowest-priority details until ≤150.
-
-7. VALID JSON
-   Must be parseable by json.loads()
-   All 10 sections present in "sections" object
-   Empty sections = [] (empty array)
-   No trailing commas
-
-8. SECTION LENGTH LIMITS
-   Respect max bullet counts:
-   - Major Developments: 3-6 bullets
-   - Financial Performance: 2-4 bullets
-   - Risk Factors: 2-4 bullets
-   - Upcoming Catalysts: 1-3 bullets
-   - Key Variables: 3-5 bullets
-
-9. SINGLE-STEP INFERENCE ONLY
-   Tier 0: Direct statements (always allowed)
-   Tier 1: Single-step logic (allowed for content/scenarios)
-   Tier 2: Multi-article synthesis of compatible sources (allowed with attribution)
-   Multi-hop reasoning: NOT allowed
-
-10. PRESERVE ARTICLE CONFIDENCE
-    Don't upgrade certainty when synthesizing.
-    If article said "may", you write "may".
-    If article said "exploring", you write "exploring".
-    Preserve hedging language always.
-
-11. FABRICATION PREVENTION
-    Every number came from articles.
-    No "undisclosed" unless article said "undisclosed".
-    Article silence = missing information, not information absence.
-
-12. LEGAL COMPLIANCE
-    No investment advice ("buy this stock", "we recommend").
-    All recommendations attributed to analysts.
-    Scenarios attributed to article authors.
-
-13. EXCLUSION RULES
-    Exclude technical analysis, retail analysis, generic macro, noise trading, immaterial fund activity.
-
-14. FILING SECTION NAMES
-    Use exact names from filing headers:
-    - 10-K: 17 sections (INDUSTRY CLASSIFICATION, BUSINESS MODEL SUMMARY, etc.)
-    - 10-Q: 12 sections (QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY), etc.)
-    - Transcript: 14 sections (BOTTOM LINE, FINANCIAL RESULTS, etc.)
-    No emojis, ALL CAPS, exact match.
-
-
+Default: Include development if article emphasized it. Phase 2 will assess materiality with filing data.
+For competitor news without explicit {TICKER} connection → Exclude entirely (err on tight scope).

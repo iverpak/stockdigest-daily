@@ -28479,7 +28479,7 @@ async def regenerate_email_api(request: Request):
         )
 
         # Fetch available filing summaries
-        filings = _fetch_available_filings(ticker, config, db)
+        filings = _fetch_available_filings(ticker, db)
 
         if filings:
             LOG.info(f"[{ticker}] Found filings: {list(filings.keys())} - Running Phase 2 enrichment")

@@ -425,37 +425,37 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
     # Major Developments (bullets)
     if "major_developments" in json_sections:
         sections["major_developments"] = [
-            b["content"] for b in json_sections["major_developments"]
+            f"{b['topic_label']}: {b['content']}" for b in json_sections["major_developments"]
         ]
 
     # Financial Performance → financial_operational (template expects this key)
     if "financial_performance" in json_sections:
         sections["financial_operational"] = [
-            b["content"] for b in json_sections["financial_performance"]
+            f"{b['topic_label']}: {b['content']}" for b in json_sections["financial_performance"]
         ]
 
     # Risk Factors
     if "risk_factors" in json_sections:
         sections["risk_factors"] = [
-            b["content"] for b in json_sections["risk_factors"]
+            f"{b['topic_label']}: {b['content']}" for b in json_sections["risk_factors"]
         ]
 
     # Wall Street Sentiment → wall_street (template key)
     if "wall_street_sentiment" in json_sections:
         sections["wall_street"] = [
-            b["content"] for b in json_sections["wall_street_sentiment"]
+            f"{b['topic_label']}: {b['content']}" for b in json_sections["wall_street_sentiment"]
         ]
 
     # Competitive/Industry → competitive_industry (template key)
     if "competitive_industry_dynamics" in json_sections:
         sections["competitive_industry"] = [
-            b["content"] for b in json_sections["competitive_industry_dynamics"]
+            f"{b['topic_label']}: {b['content']}" for b in json_sections["competitive_industry_dynamics"]
         ]
 
     # Upcoming Catalysts
     if "upcoming_catalysts" in json_sections:
         sections["upcoming_catalysts"] = [
-            b["content"] for b in json_sections["upcoming_catalysts"]
+            f"{b['topic_label']}: {b['content']}" for b in json_sections["upcoming_catalysts"]
         ]
 
     # Upside Scenario (paragraph)
@@ -469,7 +469,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
     # Key Variables
     if "key_variables" in json_sections:
         sections["key_variables"] = [
-            b["content"] for b in json_sections["key_variables"]
+            f"{b['topic_label']}: {b['content']}" for b in json_sections["key_variables"]
         ]
 
     return sections

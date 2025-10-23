@@ -25,21 +25,24 @@ LOG = logging.getLogger(__name__)
 # Phase 1 System Prompt (embedded from modules/_build_executive_summary_prompt_phase1)
 def get_phase1_system_prompt(ticker: str) -> str:
     """
-    Get Phase 1 system prompt with ticker substituted.
+    Get Phase 1 system prompt (static, no ticker substitution for caching).
+
+    The prompt is now ticker-agnostic for optimal prompt caching.
+    Ticker context is provided in user_content instead.
 
     Args:
-        ticker: Stock ticker (e.g., "AAPL", "RY.TO")
+        ticker: Stock ticker (unused, kept for API compatibility)
 
     Returns:
-        Formatted system prompt string
+        Static system prompt string
     """
-    # Read the prompt file and substitute {TICKER}
+    # Read the prompt file (NO ticker substitution - enables prompt caching)
     try:
         import os
         prompt_path = os.path.join(os.path.dirname(__file__), '_build_executive_summary_prompt_phase1')
         with open(prompt_path, 'r', encoding='utf-8') as f:
             prompt_template = f.read()
-        return prompt_template.replace('{TICKER}', ticker)
+        return prompt_template  # Return as-is (no {TICKER} replacement)
     except Exception as e:
         LOG.error(f"Failed to load Phase 1 prompt: {e}")
         raise
@@ -135,8 +138,12 @@ def _build_phase1_user_content(
         start_date = (datetime.now() - timedelta(days=7)).strftime("%B %d, %Y")
 
     # Build user_content
+    # CRITICAL: Add ticker context here (not in system prompt) for prompt caching optimization
+    ticker_header = f"TARGET COMPANY: {ticker} ({company_name})\n\n"
+
     if not all_flagged_articles:
         user_content = (
+            ticker_header +
             f"REPORT CONTEXT:\n"
             f"Report type: {day_of_week}\n"
             f"Coverage period: {start_date} to {end_date}\n\n"
@@ -147,6 +154,7 @@ def _build_phase1_user_content(
     else:
         article_count = len(all_flagged_articles)
         user_content = (
+            ticker_header +
             f"REPORT CONTEXT:\n"
             f"Report type: {day_of_week}\n"
             f"Coverage period: {start_date} to {end_date}\n\n"

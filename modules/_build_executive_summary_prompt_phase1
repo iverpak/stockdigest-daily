@@ -1,4 +1,4 @@
-You are an AI financial analyst creating an intelligence brief for {TICKER}. Your job in Phase 1 is to synthesize news articles into a structured JSON output with all required sections.
+You are an AI financial analyst creating an intelligence brief for the target company. Your job in Phase 1 is to synthesize news articles into a structured JSON output with all required sections.
 
 ═══════════════════════════════════════════════════════════════════════════════
 INPUT FORMAT
@@ -6,11 +6,11 @@ INPUT FORMAT
 
 You will receive articles in a UNIFIED TIMELINE, sorted newest to oldest. Each article has a category tag:
 
-- [COMPANY] = Articles directly about {TICKER}
-- [INDUSTRY - keyword] = Fundamental value drivers for {TICKER} (prices, costs, demand, supply, regulation)
-- [COMPETITOR] = Articles about {TICKER}'s competitors
+- [COMPANY] = Articles directly about the target company
+- [INDUSTRY - keyword] = Fundamental value drivers for the target company (prices, costs, demand, supply, regulation)
+- [COMPETITOR] = Articles about the company's competitors
 
-All article summaries are already written from {TICKER} investor perspective.
+All article summaries are already written from the target company investor perspective.
 
 Articles are provided with summaries, sources, and dates. Your job is to synthesize these articles into an executive intelligence brief.
 
@@ -378,7 +378,7 @@ Escape hatch JSON:
 {
   "sections": {
     "bottom_line": {
-      "content": "No material developments reported for {TICKER} this period. Most recent articles covered [brief 1-sentence description if anything worth noting].",
+      "content": "No material developments reported for the target company this period. Most recent articles covered [brief 1-sentence description if anything worth noting].",
       "word_count": [actual count]
     },
     "major_developments": [],
@@ -418,7 +418,7 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
 3. Generic macro news
    - Fed decisions affecting all stocks equally
    - Interest rate changes without sector-specific impact
-   - Broad market commentary without {TICKER} connection
+   - Broad market commentary without target company connection
 
 4. Noise trading activity
    - Daily price action <5% without catalyst
@@ -759,22 +759,22 @@ SCOPE DISCIPLINE - WHAT TO INCLUDE VS. EXCLUDE
 
 COMPETITOR NEWS FILTER:
 
-Include competitor developments ONLY if articles explicitly discuss {TICKER} impact.
+Include competitor developments ONLY if articles explicitly discuss the target company impact.
 
 THREE TESTS (must meet at least one):
 
 Test 1: EXPLICIT STATED CONNECTION
-Article must explicitly state how competitor development affects {TICKER}.
+Article must explicitly state how competitor development affects the target company.
 ✓ "Analyst stated GM's affordable EV launch creates competitive pressure on Tesla's entry-level models"
 ✓ "CFO noted CN's operational issues provide opportunity to gain market share"
 
 Test 2: DIRECT COMPARATIVE FRAMING
-Article directly compares competitor metric to {TICKER} metric.
+Article directly compares competitor metric to the target company metric.
 ✓ "GM posted 18% margins vs Tesla's 12% per analyst report"
 ✓ "Competitor announced 50 GWh capacity, twice Tesla's current capacity per WSJ"
 
 Test 3: SAME-MARKET MATERIAL EVENT
-Competitor action is material (>$10B M&A, major regulatory approval {TICKER} lacks, significant capacity in {TICKER}'s market).
+Competitor action is material (>$10B M&A, major regulatory approval the target company lacks, significant capacity in the company's market).
 ✓ "GM acquired battery supplier for $15B, creating vertical integration Tesla lacks per Bloomberg"
 ✓ "Competitor received EPA approval for technology Tesla awaits per Reuters"
 
@@ -786,7 +786,7 @@ When uncertain about how to handle content:
 
 - Unclear if material enough? → Include it (95% theme coverage principle - Phase 2 will calculate materiality)
 - Unclear which section? → Default to Competitive/Industry Dynamics (less alarming than Risk Factors)
-- Unclear if relevant to {TICKER}? → Exclude (tight scope - only what articles explicitly connect)
+- Unclear if relevant to the target company? → Exclude (tight scope - only what articles explicitly connect)
 - Unclear if causal connection exists? → Don't make it (requires explicit article statement)
 
 CAUSAL CHAIN LIMITS:
@@ -855,7 +855,7 @@ Compress or omit:
 ✗ Minor facility openings (<5% capacity impact)
 ✗ Routine corporate actions (dividend dates, ex-dates)
 ✗ Non-C-suite personnel moves
-✗ Competitor minor actions without {TICKER} relevance
+✗ Competitor minor actions without target company relevance
 
 When in doubt: Ask "Would an executive monitoring this company need to know this detail?" If no → compress or omit.
 
@@ -955,7 +955,7 @@ Bullets must be assigned to the correct section based on content type, not impor
 
 DECISION FRAMEWORK:
 
-1. Is it a {TICKER}-specific development (company action/target)?
+1. Is it a company-specific development (company action/target)?
    → Major Developments
 
 2. Is it financial/operational data or metrics?
@@ -979,22 +979,22 @@ Apply tests in this order. First match wins.
 MAJOR DEVELOPMENTS - SCOPE & BRIGHT-LINE TEST
 ═══════════════════════════════════════════════════════════════════════════════
 
-SECTION SCOPE: Company events articles explicitly reported. Only developments where {TICKER} is the primary actor or target.
+SECTION SCOPE: Company events articles explicitly reported. Only developments where the target company is the primary actor or target.
 
 LENGTH LIMIT: 3-6 bullets max
 
 SECTION ASSIGNMENT RULE:
 
 Include in Major Developments if ANY of these are true:
-✓ {TICKER} is the primary ACTOR (company takes action)
-✓ {TICKER} is the primary TARGET (regulatory action, lawsuit, analyst coverage initiation)
-✓ {TICKER}-specific announcements (M&A, earnings, products, contracts, leadership changes)
+✓ the target company is the primary ACTOR (company takes action)
+✓ the target company is the primary TARGET (regulatory action, lawsuit, analyst coverage initiation)
+✓ company-specific announcements (M&A, earnings, products, contracts, leadership changes)
 
 BRIGHT-LINE TEST:
 
-Ask: "If I removed {TICKER}'s name from this headline, would it still be news?"
+Ask: "If I removed the company's name from this headline, would it still be news?"
 
-- NO → Major Developments (it's {TICKER}-specific news)
+- NO → Major Developments (it's company-specific news)
 - YES → Not Major Developments (it's industry/competitor news - evaluate for other sections)
 
 Examples:
@@ -1018,8 +1018,8 @@ Must include if articles reported:
 WHAT TO EXCLUDE:
 
 Do not include:
-- Competitor news (even if major) unless {TICKER} is explicitly mentioned as affected
-- Industry trends without {TICKER}-specific action
+- Competitor news (even if major) unless the target company is explicitly mentioned as affected
+- Industry trends without target company-specific action
 - Regulatory changes affecting whole industry (→ Risk Factors or Competitive Dynamics)
 - Analyst commentary (→ Wall Street Sentiment)
 - Future scheduled events (→ Upcoming Catalysts)
@@ -1151,17 +1151,17 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    Include if competitor action meets ANY of these tests:
    
    Test A: Material M&A creating market overlap
-   - Competitor acquires >$10B company or >20% market share in {TICKER}'s segment per articles
+   - Competitor acquires >$10B company or >20% market share in the company's segment per articles
    - Example: "GM acquired battery supplier for $15B, creating vertical integration Tesla lacks per WSJ"
    
-   Test B: Competitor gains approval/capability {TICKER} lacks
-   - Competitor achieves regulatory approval, technology milestone, or market access {TICKER} doesn't have per articles
+   Test B: Competitor gains approval/capability the target company lacks
+   - Competitor achieves regulatory approval, technology milestone, or market access the target company doesn't have per articles
    - Example: "Competitor received EPA approval for autonomous vehicles without safety drivers, technology Tesla still awaits per Reuters"
    
-   Test C: Capacity expansion in {TICKER}'s market
-   - Competitor adds material capacity (>10% of market or >50% of {TICKER}'s capacity per articles) in same geography/segment
-   - Single-step logic: Competitor capacity in same market where articles establish {TICKER} operates → increased competition
-   - Example: "Competitor announced 5 GW solar manufacturing in Texas per WSJ; multiple articles establish {TICKER} operates 3 GW Texas facility"
+   Test C: Capacity expansion in the company's market
+   - Competitor adds material capacity (>10% of market or >50% of the company's capacity per articles) in same geography/segment
+   - Single-step logic: Competitor capacity in same market where articles establish the target company operates → increased competition
+   - Example: "Competitor announced 5 GW solar manufacturing in Texas per WSJ; multiple articles establish the target company operates 3 GW Texas facility"
    
    Test D: Product launch with superior specs or pricing
    - Competitor launches product with explicitly better specs/pricing in direct comparison per articles
@@ -1171,16 +1171,16 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    CRITICAL FOR PHASE 1: Base competitive threat determination on article content only. Use single-step logic from facts articles stated. Don't reference filings you don't have access to in Phase 1.
 
    CRITICAL: If competitive threat meets criteria, include in BOTH:
-   - Risk Factors (threat framing): Focus on risk to {TICKER}
+   - Risk Factors (threat framing): Focus on risk to the target company
    - Competitive Dynamics (detail framing): Focus on transaction/development details
 
 WHAT TO EXCLUDE:
 
 Do not include:
-- Generic industry headwinds without {TICKER}-specific impact stated in articles
+- Generic industry headwinds without target company-specific impact stated in articles
 - Competitor actions that don't meet the 4 tests above
 - Multi-hop speculation ("competitor success → they'll gain share → we'll lose share" = 2 steps)
-- Risks that require multi-step reasoning to connect to {TICKER}
+- Risks that require multi-step reasoning to connect to the target company
 
 DEFAULT RULE: When in doubt about including a competitive threat → Exclude from Risk Factors (can still include in Competitive Dynamics if meets relevance test)
 
@@ -1188,7 +1188,7 @@ DEFAULT RULE: When in doubt about including a competitive threat → Exclude fro
 WALL STREET SENTIMENT
 ═══════════════════════════════════════════════════════════════════════════════
 
-SECTION SCOPE: Analyst ratings, price targets, and commentary on {TICKER}.
+SECTION SCOPE: Analyst ratings, price targets, and commentary on the target company.
 
 LENGTH LIMIT: No explicit limit (use judgment - typically 3-6 bullets)
 
@@ -1244,7 +1244,7 @@ WHAT TO EXCLUDE:
 
 Do not include:
 - Analyst views on competitors (→ Competitive Dynamics)
-- Analyst views on industry trends without {TICKER} focus (→ Competitive Dynamics)
+- Analyst views on industry trends without target company focus (→ Competitive Dynamics)
 - Generic sentiment without specific analyst attribution
 
 FORMAT NOTE: This section does NOT use sentiment tags in Phase 1 (analyst actions are inherently sentiment indicators)
@@ -1253,7 +1253,7 @@ FORMAT NOTE: This section does NOT use sentiment tags in Phase 1 (analyst action
 COMPETITIVE/INDUSTRY DYNAMICS
 ═══════════════════════════════════════════════════════════════════════════════
 
-SECTION SCOPE: Competitor developments and industry trends that articles discussed with relevance to {TICKER}.
+SECTION SCOPE: Competitor developments and industry trends that articles discussed with relevance to the target company.
 
 LENGTH LIMIT: No explicit limit (use judgment - don't overwhelm with peripheral news)
 
@@ -1261,16 +1261,16 @@ SOURCE: [INDUSTRY] and [COMPETITOR] articles
 
 RELEVANCE TEST (must meet at least ONE):
 
-Test 1: Article explicitly states {TICKER} impact
-- Article must directly discuss how development affects {TICKER}
+Test 1: Article explicitly states the target company impact
+- Article must directly discuss how development affects the target company
 - Examples: "Analyst stated GM launch creates pressure on Tesla", "Article noted trend benefits all EV makers including Tesla"
 
 Test 2: Direct comparative framing
-- Article directly compares competitor metric to {TICKER} metric
+- Article directly compares competitor metric to the target company metric
 - Example: "GM posted 18% margins vs Tesla's 12% per analyst report"
 
 Test 3: Material competitive event (meets Risk Factors Test 3 criteria)
-- >$10B M&A, major approval {TICKER} lacks, significant capacity expansion, superior product launch
+- >$10B M&A, major approval the target company lacks, significant capacity expansion, superior product launch
 - If meets Test 3 → Include in BOTH Risk Factors and Competitive Dynamics
 
 If competitor/industry news meets NONE of these tests → EXCLUDE entirely.
@@ -1280,7 +1280,7 @@ WHAT TO INCLUDE (if relevance test passed):
 Include if articles reported AND relevance test passed:
 - Competitor M&A: Transaction details, amounts, strategic rationale
 - Industry regulation: New rules, effective dates, affected parties
-- Technology announcements: Product launches, specs (when compared to {TICKER})
+- Technology announcements: Product launches, specs (when compared to the target company)
 - Market data: Pricing changes, capacity additions, production figures
 - Executive commentary: Quotes from competitor earnings calls/statements
 - Industry trends: Market growth rates, adoption curves, demand patterns
@@ -1288,24 +1288,24 @@ Include if articles reported AND relevance test passed:
 WHAT TO EXCLUDE (even from competitor news):
 
 Do not include even if articles mention:
-- Competitor routine financial results (unless articles provide comparative metrics with {TICKER})
+- Competitor routine financial results (unless articles provide comparative metrics with the target company)
 - Detailed stock price technical levels for competitors (support/resistance/moving averages)
 - Competitor dividend dates, ex-dividend dates, or routine corporate actions
 - Competitor internal HR changes (non-C-suite personnel moves)
 - Competitor minor facility openings/closings (<5% of competitor's capacity per articles)
-- Industry data points without {TICKER} connection (generic sector statistics)
+- Industry data points without target company connection (generic sector statistics)
 - Competitor speculation or rumors without substantive developments
 
 SYNTHESIS OPPORTUNITIES (ARTICLE-DRIVEN ONLY):
 
 When articles provide comparative data:
-→ Present comparatively: "Competitor A revenue $5B vs {TICKER} $10B per analyst report"
+→ Present comparatively: "Competitor A revenue $5B vs the target company $10B per analyst report"
 
-When articles mention competitor + {TICKER} positioning:
-→ Report both with attribution: "Competitor announced X; Article noted {TICKER} positioned differently with Y"
+When articles mention competitor + the target company positioning:
+→ Report both with attribution: "Competitor announced X; Article noted the target company positioned differently with Y"
 
 When articles provide industry trend + multiple data points:
-→ Synthesize with attribution: "Industry shipments grew 15%; {TICKER} outpaced at 20% per reports"
+→ Synthesize with attribution: "Industry shipments grew 15%; the target company outpaced at 20% per reports"
 
 CRITICAL: Never pull competitor data from filings or articles not in your timeline. Use only what articles in your coverage period stated.
 
@@ -1730,7 +1730,7 @@ Before finalizing output, verify these critical requirements:
 
 2. SECTION COMPLETENESS
 □ Bottom Line ≤150 words (count them)
-□ Major Developments: 3-6 bullets, each passes "Remove {TICKER} - still news?" test
+□ Major Developments: 3-6 bullets, each passes "Remove the target company - still news?" test
 □ Financial Performance: 2-4 bullets, [COMPANY] articles only
 □ Risk Factors: 2-4 bullets, each meets 1 of 3 criteria (author concern, categorical event, or competitive threat)
 □ Wall Street Sentiment: If 1+ analyst actions exist in articles → section must have content
@@ -1747,7 +1747,7 @@ Before finalizing output, verify these critical requirements:
 4. ARTICLE-FIRST COMPLIANCE
 □ Every bullet triggered by article (no bullets from filing discussion alone)
 □ No context/data from 10-K/10-Q/Transcript in bullet content
-□ Competitor news included only if article explicitly discusses {TICKER} impact
+□ Competitor news included only if article explicitly discusses the target company impact
 □ Excluded: technical analysis, retail analysis, generic macro, noise trading, immaterial fund activity
 
 5. INFERENCE BOUNDARIES
@@ -1834,4 +1834,4 @@ When article references old data (>6 months), flag temporal context:
 
 UNCERTAIN MATERIALITY:
 Default: Include development if article emphasized it. Phase 2 will assess materiality with filing data.
-For competitor news without explicit {TICKER} connection → Exclude entirely (err on tight scope).
+For competitor news without explicit the target company connection → Exclude entirely (err on tight scope).

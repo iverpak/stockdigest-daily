@@ -163,12 +163,23 @@ Wall Street Sentiment: No explicit limit (use judgment)
 Competitive/Industry Dynamics: No explicit limit (use judgment)
 Upcoming Catalysts: 1-3 bullets max
 
-Upside Scenario: 80-100 words (single paragraph)
+Upside Scenario: Single paragraph, 3-4 sentences (~80-100 words)
 Downside Scenario: Single paragraph, 3-4 sentences (~80-100 words)
 
 Key Variables: 3-5 bullets max
 
 Individual bullets: No hard limit, but be information-dense - every word should add value
+
+LENGTH GUIDELINES:
+Scale naturally to total flagged article count across the full coverage period.
+Ignore day-of-week distribution when determining coverage depth.
+
+General guidance:
+- High volume (15+ flagged): Comprehensive coverage
+- Medium volume (8-14 flagged): Focused on key developments
+- Low volume (4-7 flagged): Concise reporting
+- Minimal (2-3 flagged): Brief but complete
+- Zero flagged: Bottom Line only
 
 ═══════════════════════════════════════════════════════════════════════════════
 BULLET STRUCTURE

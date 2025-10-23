@@ -642,6 +642,18 @@ Structure:
 - Content: Variable description - Timeline: [Date/period from articles]
 - NO filing_hints (these are forward-looking monitoring variables)
 
+CRITICAL: Timeline must be FORWARD-LOOKING (future periods to monitor)
+
+If articles discuss past event → Extract FUTURE monitoring period:
+❌ WRONG: "Timeline: October 22 earnings call" (already happened)
+✅ CORRECT: "Timeline: Q4 2025 and FY2025 results"
+
+If articles discuss future event → Use that date:
+✅ "Timeline: FDA decision expected Q2 2025"
+
+If no specific date → Use general forward period:
+✅ "Timeline: Upcoming quarters" or "Timeline: Q4 2025 and beyond"
+
 Sources: Analyst commentary, management focus, article emphasis about what to watch
 
 Examples of good topic labels:

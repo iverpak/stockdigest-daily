@@ -875,12 +875,16 @@ HIGH IMPACT (assign if ANY true):
 - Categorical events: FDA approval/rejection, CEO fraud, M&A >$1B, bankruptcy, production halt >20% capacity, major investigation (DOJ/SEC/FTC), credit downgrade >2 notches, going concern
 
 MEDIUM IMPACT (assign if ANY true):
-- 1-5% of revenue/EBIT/assets
-- Top 4-10 customer/supplier
+- 1-5% of revenue/EBIT/assets OR top 4-10 customer/supplier
 - Default when filings lack data but article suggests material ("significant", "major", 3+ articles emphasize)
 
 LOW IMPACT:
 - <1% of revenue/EBIT/assets
+
+CRITICAL OVERRIDE: Strategic language does NOT override financial thresholds.
+- Example: "$2.53M lobbying on 'critical AI policy'" = 0.0006% revenue → LOW impact
+- Example: "Major customer contract" with 0.3% revenue → LOW impact
+- Apply % calculation first; ignore "strategic/critical/major" language if <1%
 
 MULTI-FACTOR RULE: Use HIGHEST level when multiple thresholds met
 Example: 2% revenue (medium) + top 3 customer (high) → high impact ✓
@@ -896,6 +900,7 @@ DO NOT escalate solely because:
 ❌ Article uses "record" (could be immaterial: "record 497K, +0.5% vs 495K consensus")
 ❌ Article uses "major/significant" without quantification
 ❌ Article uses "critical/essential" without business impact evidence
+❌ Topic is "strategically important" (strategic ≠ material financial impact)
 
 Examples:
 "Customer 28% of Q2 revenue per 10-Q" → high impact (>5%)

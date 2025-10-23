@@ -472,6 +472,18 @@ SPECIAL CASE: New product launches (<18 months old)
 - ✅ GOOD: "Cybertruck Q3 sales 5,400 vs Q2 ~6,000 (-10% QoQ) shows ramp slowing"
 - ✅ ALSO GOOD: "Cybertruck Q3 sales 5,400 vs Q2 ~4,500 (+20% QoQ) shows continued ramp"
 
+YTD USAGE RULES:
+✅ ALLOWED: Forward calculations only - "YTD 1,218K implies Q4 needs 571K to match FY2024"
+❌ BANNED: YTD as comparison denominator - Never "2.9M = 238% of YTD deliveries"
+
+COMPARISON HIERARCHY (always use in this order):
+1. Quarter-over-quarter (Q/Q): "Q3 16.1% vs Q2 15.2%" - shows recent trend
+2. Year-over-year (Y/Y): "Q3 16.1% vs Q3 2024 18.7%" - shows growth removing seasonality  
+3. Full-year scaling: "2.9M vehicles = 1.6 years of FY2024 deliveries (1,789K)" - shows magnitude
+4. YTD forward implications: "YTD 1,218K implies Q4 needs 571K" - peak analysis ✅
+
+NEVER use YTD for backward comparisons when quarterly or full-year data exists.
+
 Search sections:
 - 10-Q: SEGMENT PERFORMANCE TRENDS (QoQ & YoY), QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY), OPERATIONAL METRICS (QoQ & YoY)
 - 10-K: Multi-year data tables for historical comparison

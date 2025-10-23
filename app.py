@@ -28458,8 +28458,72 @@ async def regenerate_email_api(request: Request):
                 "message": f"Phase 1 JSON validation failed: {error_msg}"
             }
 
-        # Store JSON as string
-        summary_text = json.dumps(json_output, indent=2)
+        LOG.info(f"✅ [{ticker}] Phase 1 validation passed")
+
+        # Track Phase 1 cost
+        phase1_usage = {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens
+        }
+        calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+
+        # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
+        final_json = json_output  # Default to Phase 1 only
+        generation_phase = 'phase1'
+
+        from modules.executive_summary_phase2 import (
+            generate_executive_summary_phase2,
+            validate_phase2_json,
+            merge_phase1_phase2,
+            _fetch_available_filings
+        )
+
+        # Fetch available filing summaries
+        filings = _fetch_available_filings(ticker, config, db)
+
+        if filings:
+            LOG.info(f"[{ticker}] Found filings: {list(filings.keys())} - Running Phase 2 enrichment")
+
+            phase2_result = generate_executive_summary_phase2(
+                ticker=ticker,
+                phase1_json=json_output,
+                filings=filings,
+                config=config,
+                anthropic_api_key=ANTHROPIC_API_KEY,
+                db_func=db
+            )
+
+            if phase2_result:
+                is_valid_p2, error_msg_p2 = validate_phase2_json(phase2_result.get("enrichments", {}))
+
+                if is_valid_p2:
+                    # Merge Phase 2 enrichments into Phase 1 JSON
+                    final_json = merge_phase1_phase2(json_output, phase2_result)
+                    generation_phase = 'phase2'
+
+                    phase2_prompt_tokens = phase2_result.get("prompt_tokens", 0)
+                    phase2_completion_tokens = phase2_result.get("completion_tokens", 0)
+                    phase2_generation_time_ms = phase2_result.get("generation_time_ms", 0)
+
+                    # Track Phase 2 cost
+                    phase2_usage = {
+                        "input_tokens": phase2_prompt_tokens,
+                        "output_tokens": phase2_completion_tokens
+                    }
+                    calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
+
+                    enrichment_count = len(phase2_result.get("enrichments", {}))
+                    LOG.info(f"✅ [{ticker}] Phase 2 enrichment: {enrichment_count} bullets enriched ({phase2_prompt_tokens} prompt tokens, {phase2_completion_tokens} completion tokens, {phase2_generation_time_ms}ms)")
+                else:
+                    LOG.error(f"[{ticker}] Phase 2 validation failed: {error_msg_p2}")
+                    LOG.warning(f"[{ticker}] Using Phase 1 output only (Phase 2 validation failed)")
+            else:
+                LOG.warning(f"[{ticker}] Phase 2 generation failed, using Phase 1 only")
+        else:
+            LOG.info(f"[{ticker}] No filings available, skipping Phase 2")
+
+        # Store final JSON as string (Phase 1 or Phase 2)
+        summary_text = json.dumps(final_json, indent=2)
 
         # Step 6: Save executive summary to database
         company_count = len(categories['company'])
@@ -28468,13 +28532,13 @@ async def regenerate_email_api(request: Request):
 
         save_executive_summary(
             ticker=ticker,
-            summary_text=summary_text,  # JSON string
+            summary_text=summary_text,  # JSON string (Phase 1 or Phase 2)
             ai_provider=model_used.lower(),
             article_ids=flagged_article_ids,
             company_count=company_count,
             industry_count=industry_count,
             competitor_count=competitor_count,
-            summary_json=json_output,  # Structured JSON
+            summary_json=final_json,  # Structured JSON (with Phase 2 enrichments if available)
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             generation_time_ms=generation_time_ms
@@ -28551,11 +28615,12 @@ async def regenerate_email_api(request: Request):
 
         return {
             "status": "success",
-            "message": f"Email #3 regenerated for {ticker}",
+            "message": f"Email #3 regenerated for {ticker} ({generation_phase.upper()})",
             "ticker": ticker,
             "article_count": email_data['article_count'],
             "preview_sent": bool(admin_email),
-            "date": str(target_date)
+            "date": str(target_date),
+            "phase": generation_phase
         }
 
     except Exception as e:

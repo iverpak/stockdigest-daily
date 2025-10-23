@@ -268,7 +268,7 @@ Each bullet in sections (major_developments, financial_performance, risk_factors
 FILING SECTION HEADERS - OPTIONS FOR FILING_HINTS
 ═══════════════════════════════════════════════════════════════════════════════
 
-When generating filing_hints for each bullet, select 2-3 most relevant sections per filing type from these available options:
+When generating filing_hints for each bullet, select 2-5 most relevant sections per filing type from these available options:
 
 10-K SECTIONS (17 available):
 1. INDUSTRY CLASSIFICATION

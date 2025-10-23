@@ -64,12 +64,13 @@ def _fetch_available_filings(ticker: str, db_func) -> Dict[str, Dict]:
 
     try:
         with db_func() as conn, conn.cursor() as cur:
-            # 1. Latest Transcript
+            # 1. Latest Transcript (prefer Claude if multiple exist for same period)
             cur.execute("""
                 SELECT summary_text, quarter, year, report_date, company_name, ai_provider
                 FROM transcript_summaries
                 WHERE ticker = %s AND report_type = 'transcript'
-                ORDER BY year DESC, quarter DESC
+                ORDER BY year DESC, quarter DESC,
+                         CASE WHEN ai_provider = 'claude' THEN 0 ELSE 1 END
                 LIMIT 1
             """, (ticker,))
 

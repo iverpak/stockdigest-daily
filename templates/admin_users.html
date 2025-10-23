@@ -419,7 +419,7 @@
             return `
                 <div class="user-card" data-user-id="${user.id}" data-email="${user.email}">
                     <div class="user-select-wrapper">
-                        ${canSelect ? `<input type="checkbox" class="user-checkbox" data-email="${user.email}" data-tickers="${user.ticker1},${user.ticker2},${user.ticker3}" onchange="updateBulkActions()">` : '<div style="width: 30px;"></div>'}
+                        ${canSelect ? `<input type="checkbox" class="user-checkbox" data-user-id="${user.id}" data-tickers="${user.ticker1},${user.ticker2},${user.ticker3}" onchange="updateBulkActions()">` : '<div style="width: 30px;"></div>'}
                         <div class="user-card-content">
                             <div class="user-header">
                                 <div class="user-info">
@@ -671,9 +671,9 @@
 
         async function generateUserReports() {
             const checkboxes = document.querySelectorAll('.user-checkbox:checked');
-            const selectedEmails = Array.from(checkboxes).map(cb => cb.dataset.email);
+            const selectedUserIds = Array.from(checkboxes).map(cb => parseInt(cb.dataset.userId));
 
-            if (selectedEmails.length === 0) {
+            if (selectedUserIds.length === 0) {
                 alert('No users selected');
                 return;
             }
@@ -685,7 +685,7 @@
                 tickers.forEach(t => uniqueTickers.add(t.trim()));
             });
 
-            const confirmMsg = `Generate Reports for ${selectedEmails.length} User${selectedEmails.length > 1 ? 's' : ''}?\n\n` +
+            const confirmMsg = `Generate Reports for ${selectedUserIds.length} Account${selectedUserIds.length > 1 ? 's' : ''}?\n\n` +
                 `This will process ${uniqueTickers.size} unique ticker${uniqueTickers.size > 1 ? 's' : ''}.\n` +
                 `Tickers: ${Array.from(uniqueTickers).join(', ')}\n\n` +
                 `Processing takes ~${Math.ceil(uniqueTickers.size / 3 * 10)}-${Math.ceil(uniqueTickers.size / 3 * 15)} minutes.\n\n` +
@@ -697,13 +697,13 @@
                 const response = await fetch('/api/generate-user-reports', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, user_emails: selectedEmails})
+                    body: JSON.stringify({token, user_ids: selectedUserIds})
                 });
 
                 const result = await response.json();
 
                 if (result.status === 'success') {
-                    alert(`✅ ${result.message}\n\nProcessing ${result.ticker_count} unique tickers from ${result.user_count} users.\n\nCheck /admin/queue in 10-20 minutes.`);
+                    alert(`✅ ${result.message}\n\nProcessing ${result.ticker_count} unique tickers from ${result.user_count} account(s).\n\nCheck /admin/queue in 10-20 minutes.`);
 
                     // Clear selections
                     checkboxes.forEach(cb => cb.checked = false);

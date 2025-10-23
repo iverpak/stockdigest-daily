@@ -28723,12 +28723,12 @@ async def generate_user_reports_api(request: Request):
     """Generate reports for selected users only (bulk processing) - uses existing job queue"""
     body = await request.json()
     token = body.get('token')
-    user_emails = body.get('user_emails', [])
+    user_ids = body.get('user_ids', [])
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    if not user_emails:
+    if not user_ids:
         return {"status": "error", "message": "No users selected"}
 
     try:
@@ -28742,24 +28742,24 @@ async def generate_user_reports_api(request: Request):
         ticker_recipients = {}
 
         with db() as conn, conn.cursor() as cur:
-            # Use parameterized query to fetch selected users
-            placeholders = ','.join(['%s'] * len(user_emails))
+            # Use parameterized query to fetch selected user accounts by ID
+            placeholders = ','.join(['%s'] * len(user_ids))
             cur.execute(f"""
                 SELECT name, email, ticker1, ticker2, ticker3
                 FROM beta_users
-                WHERE email IN ({placeholders})
+                WHERE id IN ({placeholders})
                 AND status = 'active'
                 ORDER BY created_at
-            """, user_emails)
+            """, user_ids)
             users = cur.fetchall()
 
             if not users:
                 return {
                     "status": "error",
-                    "message": "No active users found with selected emails"
+                    "message": "No active users found with selected account IDs"
                 }
 
-            LOG.info(f"Found {len(users)} selected users")
+            LOG.info(f"Found {len(users)} selected user accounts")
 
             # Deduplicate tickers and build recipient mapping
             for user in users:
@@ -28811,7 +28811,7 @@ async def generate_user_reports_api(request: Request):
 
             conn.commit()
 
-        LOG.info(f"📊 Batch {batch_id} created for {len(users)} users: {len(tickers_list)} unique tickers (mode=daily)")
+        LOG.info(f"📊 Batch {batch_id} created for {len(users)} selected accounts: {len(tickers_list)} unique tickers (mode=daily)")
 
         return {
             "status": "success",
@@ -28819,7 +28819,7 @@ async def generate_user_reports_api(request: Request):
             "user_count": len(users),
             "ticker_count": len(tickers_list),
             "tickers": tickers_list,
-            "message": f"Processing {len(tickers_list)} unique tickers from {len(users)} selected users. Check back in 10-20 minutes."
+            "message": f"Processing {len(tickers_list)} unique tickers from {len(users)} selected account(s). Check back in 10-20 minutes."
         }
 
     except Exception as e:

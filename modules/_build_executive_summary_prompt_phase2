@@ -491,16 +491,24 @@ EXTRACTION PRIORITY - WHAT TO EXTRACT FIRST
 When searching filing sections, extract data in this priority order:
 
 PRIORITY 1: PROFITABILITY & ECONOMICS (always extract first)
+- Adjusted EBITDA / EBITDA ($ and margin %) - MOST IMPORTANT profitability metric
 - Segment margins (gross margin %, EBITDA margin %, operating margin %)
 - Unit economics (revenue per unit, cost per unit, contribution margin)
 - ROIC vs WACC for investments/acquisitions
 - Profitability trends (improving or declining)
 
-PRIORITY 2: CASH FLOW & BALANCE SHEET (CRITICAL for earnings bullets)
-- Free cash flow (FCF = OCF - CapEx) - ALWAYS include for earnings-related bullets
-- FCF conversion rate (FCF / Net Income) - shows earnings quality
-- Operating cash flow vs Net Income (quality of earnings)
+PRIORITY 2: CASH FLOW & BALANCE SHEET
+- Free cash flow (FCF = OCF - CapEx) - include when available for earnings bullets
+- FCF conversion rate (FCF / EBITDA) - shows cash generation quality
+- Operating cash flow vs EBITDA (cash realization)
 - Liquidity position (cash + revolver availability)
+
+EARNINGS BULLET HIERARCHY (extract in this order):
+1. Revenue performance vs expectations
+2. EBITDA / Adjusted EBITDA ($ and margin %)
+3. Segment-level EBITDA margins if relevant
+4. FCF if available (especially if record/unusual)
+5. Management explanation for performance
 
 SPECIAL RULE: For ANY bullet about earnings/revenue performance, ALWAYS extract FCF if available
 - ❌ BAD: "Q3 revenue beat but EPS missed; margin compressed"

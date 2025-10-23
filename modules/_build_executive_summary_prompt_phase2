@@ -199,6 +199,18 @@ CITATION FORMATS:
 - 10-Q: "per Q2 2025 10-Q"
 - Transcript: "per Aug 7, 2025 transcript" or "on Aug 7 call"
 
+CRITICAL: Transcript citations MUST include date
+❌ Wrong: "per transcript"
+❌ Wrong: "per earnings call"
+✅ Correct: "per Oct 23, 2025 transcript"
+✅ Correct: "on Oct 23 call"
+
+WHEN OVER 60 WORDS - CUT IN THIS ORDER:
+Priority 1 (Keep): Most material metric + citation
+Priority 2 (Keep): One comparison (QoQ or YoY, pick more relevant)
+Priority 3 (Optional): Management quote (one only)
+Priority 4 (Cut first): Multiple quotes, excessive detail, redundant points
+
 EXAMPLES:
 
 ✅ Good (42 words, 2 data points):
@@ -207,16 +219,19 @@ EXAMPLES:
 ✅ Good (56 words, 3 data points):
 "Customer concentration increased to 28% of Q2 revenue per 10-Q vs 22% in FY2024 per 10-K; represents largest customer for third consecutive year; management characterized relationship as 'strategic and expanding' on Aug 7 call"
 
-❌ Too short (18 words): "Segment lost money per 10-Q. Company has other profitable segments per 10-K."
+❌ Too long (68 words):
+"Customer 28% of Q2 revenue per 10-Q, up from 22% in Q1 per Q1 10-Q and 20% in FY2024 per 10-K; largest customer for third consecutive year per 10-K tables; management characterized relationship as 'strategic and expanding' on August 7, 2025 earnings call"
+→ Fix: Remove Q1 comparison, shorten citation format → 42 words
 
-❌ Too long (>60 words): Includes too many data points or unnecessary detail
+❌ Too short (18 words): "Segment lost money per 10-Q. Company has other profitable segments per 10-K."
 
 ❌ No citations: "Segment margin was -127% in Q2"
 
-TEMPORAL NOTES:
-- Pre-dates: "per Q2 2025 10-Q (pre-dates Q3 event)"
-- Updated: "per Aug 7 transcript (supersedes 10-K guidance)"
-- Changed: "increased to 28% per Q2 10-Q vs 22% in FY2024 10-K"
+TEMPORAL NOTES (flag only when material):
+- ✅ Filing pre-dates event >1 quarter: "per Q2 10-Q (pre-dates Q3 event)"
+- ✅ Guidance updated: "per Aug 7 transcript (supersedes 10-K guidance)"
+- ✅ Material change: "increased to 28% per Q2 10-Q vs 22% in FY2024 10-K"
+- ❌ Same quarter/normal comparison: Just write "per Q2 2025 10-Q"
 
 ═══════════════════════════════════════════════════════════════════════════════
 11 INTEGRATION QUESTIONS - WHAT TO LOOK FOR

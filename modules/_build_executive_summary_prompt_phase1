@@ -268,7 +268,26 @@ Each bullet in sections (major_developments, financial_performance, risk_factors
 FILING SECTION HEADERS - OPTIONS FOR FILING_HINTS
 ═══════════════════════════════════════════════════════════════════════════════
 
-When generating filing_hints for each bullet, select 2-5 most relevant sections per filing type from these available options:
+When generating filing_hints for each bullet, select 0-4 most relevant sections per filing type from these available options.
+
+Use 0 sections if the bullet cannot be meaningfully enriched from filing data.
+
+Format when no context needed:
+{
+  "filing_hints": {
+    "10-K": [],
+    "10-Q": [],
+    "Transcript": []
+  }
+}
+
+Common scenarios for 0 sections: Analyst opinions (price targets, ratings), external valuations, unconfirmed rumors, events without company disclosure.
+
+When selecting 1-4 sections, prioritize sections most likely to contain:
+- Quantification (%, $ amounts, counts)
+- Trends (QoQ, YoY comparisons)
+- Management explanations (WHY things happened)
+- Forward guidance or outlook
 
 10-K SECTIONS (17 available):
 1. INDUSTRY CLASSIFICATION

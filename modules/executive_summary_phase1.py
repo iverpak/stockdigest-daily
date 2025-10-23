@@ -363,6 +363,15 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
                 if not isinstance(filing_hints, dict):
                     return False, f"{section_name}[{i}] filing_hints must be object"
 
+                # Check all 3 required keys exist and are arrays
+                for filing_type in ["10-K", "10-Q", "Transcript"]:
+                    if filing_type not in filing_hints:
+                        return False, f"{section_name}[{i}] filing_hints missing '{filing_type}'"
+                    if not isinstance(filing_hints[filing_type], list):
+                        return False, f"{section_name}[{i}] filing_hints['{filing_type}'] must be array"
+
+                # Empty arrays are valid (means no filing context needed)
+
         # Validate key_variables (no filing_hints required)
         key_variables = sections["key_variables"]
         if not isinstance(key_variables, list):

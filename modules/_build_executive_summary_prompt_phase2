@@ -49,6 +49,39 @@ For each bullet in the 6 processable sections:
 4. Generate 4 enrichment fields
 5. Add to output dict keyed by bullet_id
 
+═══════════════════════════════════════════════════════════════════════════════
+EMPTY FILING HINTS - WHEN PHASE 1 SIGNALS "NO CONTEXT NEEDED"
+═══════════════════════════════════════════════════════════════════════════════
+
+If a bullet has all empty filing_hints arrays:
+{
+  "filing_hints": {
+    "10-K": [],
+    "10-Q": [],
+    "Transcript": []
+  }
+}
+
+This means Phase 1 determined no filing context is relevant for this bullet.
+
+YOUR TASK:
+1. Calculate impact/sentiment/reason from the article framing (use Phase 1 bullet content)
+2. Set context to escape hatch value
+3. Skip all filing searches for this bullet
+
+OUTPUT FORMAT:
+{
+  "bullet_id": "analyst_price_target",
+  "impact": "medium impact",
+  "sentiment": "bullish",
+  "reason": "analyst confidence",
+  "context": "No relevant filing context found for this development"
+}
+
+Do NOT search filings. Do NOT try to force context. Respect Phase 1's signal.
+
+═══════════════════════════════════════════════════════════════════════════════
+
 FINAL JSON OUTPUT FORMAT:
 
 Return a flat dictionary keyed by bullet_id containing ONLY the 4 enrichment fields.

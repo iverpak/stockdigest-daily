@@ -260,7 +260,11 @@ CRITICAL RULES:
 7. PRESERVE BULLET_ID (this is the merge key with Phase 1)
 8. VALID JSON (parseable, all 6 sections present even if empty)
 
-9. CONTEXT INFERENCE - THREE TIERS
+9. VALUATION MULTIPLES: Format as X.Xx (one decimal: "22.2x" not "22.34x")
+   Specify period if known: "forward P/E 32.5x" or "trailing P/E 28.3x"
+   If period unknown: Use generic "P/E 22.2x" without trailing/forward label
+
+10. CONTEXT INFERENCE - THREE TIERS
 
 TIER 0 (Direct statements):
 ✓ Report what filings explicitly state with citations

@@ -256,6 +256,22 @@ CRITICAL RULES:
    ✅ CORRECT: "Tesla tariff impact $400M Q3 per transcript"
    ❌ WRONG: "GM reduced tariff to $4B; Tesla tariff $400M..." (GM is article data)
 
+   ANTI-REPETITION RULE:
+   ❌ NEVER repeat facts already stated in the bullet content
+
+   The word "Context:" itself provides the bridge to the bullet. Jump DIRECTLY to filing data that adds NEW information.
+
+   Examples:
+   ❌ BAD: Bullet says "develop multiple gigawatt-hours of energy storage capacity"
+           Context says "Partnership targets multiple gigawatt-hours of energy storage across Pennsylvania assets"
+           (This is verbatim repetition from bullet)
+
+   ✅ GOOD: Bullet says "develop multiple gigawatt-hours of energy storage capacity"
+            Context says "Company operates 10.7 GW total fleet per FY2024 10-K; Pennsylvania assets include 3.2 GW capacity"
+            (This adds NEW scale data from filings)
+
+   Before writing context, ask: "Does this sentence repeat what's already in the bullet?" If yes, delete it.
+
 2. USE FILING_HINTS to guide search (respect Phase 1's section selection)
 3. 1-3 DATA POINTS MAX (quality over quantity)
 4. EXACT FIGURES from filings (minimal rounding: "$1,234.5M" not "~$1.2B")
@@ -326,12 +342,19 @@ PURPOSE: Quantify developments with filing data
 - Trends: Getting better or worse?
 
 STRUCTURE:
-- Length: 25-80 words (adjust based on complexity)
-  - Simple bullets (single metric): 25-50 words
-  - Complex bullets (multi-faceted): 50-80 words
+- Length: 25-50 words (HARD CAP: 50 words maximum)
+  - Simple bullets (single metric): 25-40 words
+  - Complex bullets (multi-faceted): 40-50 words
+  - NO EXCEPTIONS: If over 50 words, cut content using priority below
 - Format: Natural prose with semicolons separating data points
 - Data points: 1-3 most relevant pieces
 - Citations: ALWAYS cite source and period
+
+CUTTING PRIORITY (when over 50 words):
+Priority 1 (KEEP): Most material filing metric with citation (revenue, margin, exposure %)
+Priority 2 (KEEP): One comparison (QoQ OR YoY, pick most relevant - don't include both)
+Priority 3 (CUT FIRST): Management quotes (use only if critical to interpretation)
+Priority 4 (CUT FIRST): Secondary metrics, redundant details, excessive precision
 
 Complex bullets include any with 2+ of:
 - Revenue + Profitability discussion
@@ -356,23 +379,17 @@ HOW TO EXTRACT PERIODS:
 2. Extract the period information
 3. Use exact period in all citations for that filing
 
-WHEN OVER 60 WORDS - CUT IN THIS ORDER:
-Priority 1 (Keep): Most material metric + citation
-Priority 2 (Keep): One comparison (QoQ or YoY, pick more relevant)
-Priority 3 (Optional): Management quote (one only)
-Priority 4 (Cut first): Multiple quotes, excessive detail, redundant points
-
 EXAMPLES (note: periods extracted from filing headers):
 
 ✅ Good (42 words, 2 data points):
 "Acquisitions add ~3 GW capacity to 10.3 GW fleet (~29% increase) per FY2024 10-K; management projects ~50% Adj FCF/share accretion per investor presentation on Aug 7, 2025 transcript"
 
-✅ Good (56 words, 3 data points):
-"Customer concentration increased to 28% of Q2 2025 revenue per 10-Q vs 22% in FY2024 per 10-K; represents largest customer for third consecutive year; management characterized relationship as 'strategic and expanding' on Aug 7, 2025 call"
+✅ Good (49 words, 3 data points - at cap):
+"Customer concentration increased to 28% of Q2 2025 revenue per 10-Q vs 22% in FY2024 per 10-K; management characterized relationship as 'strategic and expanding' on Aug 7, 2025 call"
 
-❌ Too long (68 words):
+❌ Too long (68 words - EXCEEDS 50-word cap):
 "Customer 28% of Q2 revenue per 10-Q, up from 22% in Q1 per Q1 10-Q and 20% in FY2024 per 10-K; largest customer for third consecutive year per 10-K tables; management characterized relationship as 'strategic and expanding' on August 7, 2025 earnings call"
-→ Fix: Remove Q1 comparison, shorten citation format → 42 words
+→ Fix: Remove Q1 comparison, remove redundant details → Cut to 49 words ✓
 
 ❌ Too short (18 words): "Segment lost money per 10-Q. Company has other profitable segments per 10-K."
 

@@ -469,8 +469,11 @@ If article discusses these topics, skip them entirely. Do not create bullets for
 
 Examples:
 ❌ EXCLUDE: "ROIC 9.27% per TradingView" (proprietary calculation)
+❌ EXCLUDE: "Company's return on invested capital 9.27% per TradingView" (TradingView calculation, not company disclosure)
+❌ EXCLUDE: "Company's ROIC compared with industry average per TradingView" (TradingView proprietary analysis)
 ❌ EXCLUDE: "Zacks Rank #1 Strong Buy" (retail proprietary score)
 ❌ EXCLUDE: "Stock rallied 142% vs Zacks sector index" (retail stock performance analysis)
+❌ EXCLUDE: "Trading at forward P/E 22.67X compared with industry average 25.07X per TradingView" (TradingView valuation analysis)
 ✅ INCLUDE: "Seaport Global maintained Buy rating with $496 target" (institutional sell-side research)
 ✅ INCLUDE: "Edison Electric Institute reported electricity output rose 2.89% per Barchart" (factual authoritative data)
 ✅ INCLUDE: "Company announced acquisition per Zacks report" (factual business development)

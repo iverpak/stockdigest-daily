@@ -462,6 +462,18 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
 
 If article discusses these topics, skip them entirely. Do not create bullets for noise.
 
+6. Retail investment analysis - exclude ALL investment/financial interpretation
+   - TradingView, Zacks, Simply Wall St, GuruFocus, TipRanks, Seeking Alpha, Motley Fool, Barchart, Sharewise
+   - Exclude: Financial metrics, stock performance, proprietary scores, technical analysis, investment recommendations, their interpretation
+   - Exception: Factual business developments OK (e.g., "Zacks reported company acquired XYZ"), exclude their analysis
+
+Examples:
+❌ EXCLUDE: "ROIC 9.27% per TradingView" (financial metric)
+❌ EXCLUDE: "Stock rallied 8% per Zacks" (stock performance/analysis)
+❌ EXCLUDE: "Zacks Rank #1 Strong Buy" (proprietary score)
+❌ EXCLUDE: "Zacks sees upside potential from margin expansion" (their interpretation)
+✅ INCLUDE: "Company announced $500M acquisition per Zacks report" (factual business development)
+
 ═══════════════════════════════════════════════════════════════════════════════
 BOTTOM LINE - EDITORIAL DISCIPLINE
 ═══════════════════════════════════════════════════════════════════════════════
@@ -801,6 +813,15 @@ NOT allowed synthesis:
 ✗ Article A: "Margins declining" + Article B: "Input costs rising" → "Margin pressure from input costs" (connection not explicit)
 
 CRITICAL RULE: Never create causal chains articles didn't explicitly state.
+
+OPERATIONAL MECHANICS - COST/REVENUE DIRECTION:
+
+Before assigning sentiment or writing scenarios, verify cause-effect relationships:
+- Power generators: Buy fuel (gas/coal) → Higher fuel prices = bearish | Sell electricity → Higher power prices = bullish
+- Oil/gas producers: Sell commodities → Higher commodity prices = bullish
+- Airlines/manufacturers: Buy inputs (fuel/steel) → Higher input costs = bearish
+
+Do not reverse the direction of impact based on assumptions.
 
 ═══════════════════════════════════════════════════════════════════════════════
 SCOPE DISCIPLINE - WHAT TO INCLUDE VS. EXCLUDE

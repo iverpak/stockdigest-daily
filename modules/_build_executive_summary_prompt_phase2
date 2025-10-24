@@ -37,21 +37,21 @@ WORKFLOW:
 
 WHICH BULLETS TO PROCESS:
 
-Phase 1 JSON contains 10 sections. Process bullets from these 6 sections ONLY:
+Phase 1 JSON contains 10 sections. Process bullets from these 5 sections ONLY:
 - major_developments
 - financial_performance
 - risk_factors
-- wall_street_sentiment
 - competitive_industry_dynamics
 - upcoming_catalysts
 
-SKIP bullets from these 4 sections (they have no filing_hints):
+SKIP bullets from these 5 sections:
+- wall_street_sentiment
 - bottom_line (paragraph, not bullets)
 - upside_scenario (paragraph, not bullets)
 - downside_scenario (paragraph, not bullets)
 - key_variables (no filing context needed)
 
-For each bullet in the 6 processable sections:
+For each bullet in the 5 processable sections:
 1. Extract bullet_id (e.g., "FIN_001")
 2. Extract filing_hints (e.g., {"10-K": ["Revenue Recognition"], "10-Q": ["Segment Performance"]})
 3. Search indicated filing sections
@@ -126,8 +126,8 @@ CRITICAL RULES:
 3. Values are objects with EXACTLY 5 fields: impact, sentiment, reason, relevance, context
 4. Do NOT include Phase 1 fields (topic_label, content, filing_hints)
 5. Do NOT wrap output in any additional keys
-6. Process bullets from these 6 sections only: major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts
-7. Skip these 4 sections (no filing_hints): bottom_line, upside_scenario, downside_scenario, key_variables
+6. Process bullets from these 5 sections only: major_developments, financial_performance, risk_factors, competitive_industry_dynamics, upcoming_catalysts
+7. Skip these 5 sections: wall_street_sentiment, bottom_line, upside_scenario, downside_scenario, key_variables
 8. If no filing data found for a bullet: context = "No relevant filing context found for this development"
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -247,7 +247,11 @@ CRITICAL RULES:
    ❌ Article quotes: "GM stated...", "Analyst noted...", "sources say..."
    ❌ Competitor data: "Ford announced...", "GM reduced estimate to $4B..."
    ❌ Analyst estimates: "consensus expects...", "Bloomberg estimates..."
-   
+   ❌ Rephrasing bullet content with filing citation added
+      Example: Bullet says "ROIC 9.27% per TradingView"
+               Context says "ROIC 9.27% trailing 12 months significantly exceeds 1.85% industry average per TradingView October 16..."
+               (This is article content, not filing context - even though you added "per TradingView" citation)
+
    Examples:
    ✅ CORRECT: "Tesla tariff impact $400M Q3 per transcript"
    ❌ WRONG: "GM reduced tariff to $4B; Tesla tariff $400M..." (GM is article data)
@@ -264,7 +268,14 @@ CRITICAL RULES:
    Specify period if known: "forward P/E 32.5x" or "trailing P/E 28.3x"
    If period unknown: Use generic "P/E 22.2x" without trailing/forward label
 
-10. CONTEXT INFERENCE - THREE TIERS
+10. TOPICAL ALIGNMENT: Context must discuss the SAME metric/topic as the bullet
+
+   ❌ WRONG: Bullet about ROIC → Context about net leverage and FCF accretion (different metrics)
+   ✅ CORRECT: Bullet about ROIC → Context about ROIC trends, return on capital, capital efficiency metrics
+
+   If no topically aligned filing data exists → "No relevant filing context found for this development"
+
+11. CONTEXT INFERENCE - THREE TIERS
 
 TIER 0 (Direct statements):
 ✓ Report what filings explicitly state with citations
@@ -291,6 +302,11 @@ NOT ALLOWED (causal inferences without explicit filing statement):
 CRITICAL: Use "suggests/implies/likely/creates" ONLY when:
 - Quoting filing: "management suggested X per call"
 - Otherwise: Remove the word, report facts only
+
+ANTI-FABRICATION:
+Never cite numbers that don't explicitly appear in filings with matching labels.
+If you find "$478M" labeled "Asset retirement obligations" → DO NOT cite as "$478M capacity revenues"
+If you cannot find a metric in filings → "No relevant filing context found" (don't guess)
 
 Examples:
 ❌ WRONG: "Installed base at all-time high suggests limited upgrade pool"

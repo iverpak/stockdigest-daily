@@ -17814,13 +17814,12 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND ta.ticker = ANY(%s)
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
+                    WHERE ta.ticker = ANY(%s)
                         AND a.id = ANY(%s)
+                        AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                     ORDER BY a.url_hash, ta.ticker,
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, tickers, cutoff, flagged_article_ids))
+                """, (tickers, flagged_article_ids))
             else:
                 # No flagged IDs - return empty results (quiet news day)
                 LOG.info(f"ℹ️ [{tickers}] No flagged articles - Email #2 will be empty")
@@ -17840,12 +17839,11 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
-                    WHERE ta.found_at >= %s
-                        AND (a.published_at >= %s OR a.published_at IS NULL)
-                        AND a.id = ANY(%s)
+                    WHERE a.id = ANY(%s)
+                        AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                     ORDER BY a.url_hash, ta.ticker,
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-                """, (cutoff, cutoff, flagged_article_ids))
+                """, (flagged_article_ids,))
             else:
                 # No flagged IDs - return empty results (quiet news day)
                 LOG.info(f"ℹ️ [ALL TICKERS] No flagged articles - Email #2 will be empty")
@@ -18663,10 +18661,9 @@ def generate_email_html_core(
                 JOIN ticker_articles ta ON a.id = ta.article_id
                 WHERE ta.ticker = %s
                 AND a.id = ANY(%s)
-                AND (a.published_at >= %s OR a.published_at IS NULL)
                 AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                 ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, flagged_article_ids, cutoff))
+            """, (ticker, flagged_article_ids))
         else:
             # No flagged articles - quiet news day
             LOG.info(f"[{ticker}] ℹ️ No flagged articles for Email #3 - executive summary will generate 'no material developments' report")
@@ -28536,37 +28533,48 @@ async def regenerate_email_api(request: Request):
         # Store final JSON as string (Phase 1 or Phase 2)
         summary_text = json.dumps(final_json, indent=2)
 
-        # Step 6: Save executive summary to database
+        # Step 6: Update executive summary WITHOUT overwriting article_ids
+        # CRITICAL: Regen must preserve original article_ids from production
         company_count = len(categories['company'])
         industry_count = len(categories['industry'])
         competitor_count = len(categories['competitor'])
 
-        save_executive_summary(
-            ticker=ticker,
-            summary_text=summary_text,  # JSON string (Phase 1 or Phase 2)
-            ai_provider=model_used.lower(),
-            article_ids=flagged_article_ids,
-            company_count=company_count,
-            industry_count=industry_count,
-            competitor_count=competitor_count,
-            summary_json=final_json,  # Structured JSON (with Phase 2 enrichments if available)
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            generation_time_ms=generation_time_ms
-        )
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE executive_summaries
+                SET summary_text = %s,
+                    summary_json = %s,
+                    ai_provider = %s,
+                    company_articles_count = %s,
+                    industry_articles_count = %s,
+                    competitor_articles_count = %s,
+                    generation_phase = %s,
+                    prompt_tokens = %s,
+                    completion_tokens = %s,
+                    generation_time_ms = %s,
+                    generated_at = NOW()
+                WHERE ticker = %s AND summary_date = %s
+            """, (
+                summary_text,
+                json.dumps(final_json) if final_json else None,
+                model_used.lower(),
+                company_count,
+                industry_count,
+                competitor_count,
+                generation_phase,
+                prompt_tokens,
+                completion_tokens,
+                generation_time_ms,
+                ticker,
+                target_date
+            ))
+            conn.commit()
 
-        LOG.info(f"✅ [{ticker}] Executive summary saved")
+        LOG.info(f"✅ [{ticker}] Executive summary updated (article_ids preserved)")
 
-        # Step 7: Calculate lookback hours from actual article date range (for display text only)
-        hours = 168  # Default 7 days
-        if articles:
-            published_dates = [a['published_at'] for a in articles if a['published_at']]
-            if published_dates:
-                oldest = min(published_dates)
-                newest = max(published_dates)
-                hours_range = (newest - oldest).total_seconds() / 3600
-                hours = int(hours_range) + 24  # Add 1-day buffer
-                LOG.info(f"[{ticker}] Calculated hours={hours} from article range ({oldest.date()} to {newest.date()})")
+        # Step 7: Use fixed 7-day window (regen uses same flagged IDs as production, no dynamic calculation)
+        hours = 168  # Always use 7 days for regeneration
+        LOG.info(f"[{ticker}] Using fixed hours={hours} for regeneration (matches production)")
 
         # Step 7.5: Generate and send Email #2 (Content QA) - NEW
         LOG.info(f"[{ticker}] 📧 Generating Email #2 (Content QA) with regenerated executive summary")

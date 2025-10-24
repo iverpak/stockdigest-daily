@@ -462,17 +462,18 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
 
 If article discusses these topics, skip them entirely. Do not create bullets for noise.
 
-6. Retail investment analysis - exclude ALL investment/financial interpretation
+6. Retail investment analysis - exclude proprietary analysis, not factual data
    - TradingView, Zacks, Simply Wall St, GuruFocus, TipRanks, Seeking Alpha, Motley Fool, Barchart, Sharewise
-   - Exclude: Financial metrics, stock performance, proprietary scores, technical analysis, investment recommendations, their interpretation
-   - Exception: Factual business developments OK (e.g., "Zacks reported company acquired XYZ"), exclude their analysis
+   - EXCLUDE: Proprietary calculations (ROIC, P/E ratios), stock performance analysis, proprietary retail scoring systems (Zacks Rank, Motley Fool ratings, TipRanks stars), technical indicators
+   - INCLUDE: Factual data from authoritative sources (EEI electricity statistics, company press releases) even if reported by retail platform
 
 Examples:
-❌ EXCLUDE: "ROIC 9.27% per TradingView" (financial metric)
-❌ EXCLUDE: "Stock rallied 8% per Zacks" (stock performance/analysis)
-❌ EXCLUDE: "Zacks Rank #1 Strong Buy" (proprietary score)
-❌ EXCLUDE: "Zacks sees upside potential from margin expansion" (their interpretation)
-✅ INCLUDE: "Company announced $500M acquisition per Zacks report" (factual business development)
+❌ EXCLUDE: "ROIC 9.27% per TradingView" (proprietary calculation)
+❌ EXCLUDE: "Zacks Rank #1 Strong Buy" (retail proprietary score)
+❌ EXCLUDE: "Stock rallied 142% vs Zacks sector index" (retail stock performance analysis)
+✅ INCLUDE: "Seaport Global maintained Buy rating with $496 target" (institutional sell-side research)
+✅ INCLUDE: "Edison Electric Institute reported electricity output rose 2.89% per Barchart" (factual authoritative data)
+✅ INCLUDE: "Company announced acquisition per Zacks report" (factual business development)
 
 ═══════════════════════════════════════════════════════════════════════════════
 BOTTOM LINE - EDITORIAL DISCIPLINE
@@ -615,6 +616,11 @@ BANNED PHRASES - Do not write:
 ✗ "multiple options available"
 
 If articles don't explicitly discuss scenarios, infer reasonable bull/bear cases from facts presented, but base on what articles emphasize.
+
+EXCLUDE FROM SCENARIOS:
+Do not cite retail investment analysis in scenarios:
+❌ Exclude: TradingView metrics, Zacks scores, proprietary calculations
+✅ Include: Institutional research (Goldman, Seaport, Jefferies) and factual industry data
 
 ═══════════════════════════════════════════════════════════════════════════════
 LEGAL COMPLIANCE - MANDATORY LANGUAGE RESTRICTIONS

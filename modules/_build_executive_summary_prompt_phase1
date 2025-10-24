@@ -1175,6 +1175,8 @@ Do not include:
 - Competitor financial data (→ Competitive Dynamics if relevant)
 - Detailed technical analysis with multiple moving averages (unless exceptional volatility)
 - Metrics articles didn't explicitly report (Phase 2 will pull from filings)
+- Retail platform stock performance (TradingView, Zacks - per exclusion rule #6)
+- Retail platform valuation metrics (ROIC, P/E from TradingView - per exclusion rule #6)
 
 FORMAT NOTE: This section does NOT use sentiment tags in Phase 1 output (Phase 2 may add them)
 

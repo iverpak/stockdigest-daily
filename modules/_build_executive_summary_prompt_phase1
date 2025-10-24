@@ -466,6 +466,22 @@ If article discusses these topics, skip them entirely. Do not create bullets for
 BOTTOM LINE - EDITORIAL DISCIPLINE
 ═══════════════════════════════════════════════════════════════════════════════
 
+CRITICAL - BOTTOM LINE INFERENCE TIER:
+
+This section uses TIER 0 ONLY: Facts + Attribution. No inference, no framing.
+
+Before writing each sentence, ask:
+□ Did article explicitly state this fact? (If NO → delete)
+□ Can I attribute this to a source? (If NO → delete)
+□ Am I using article's exact verbs? (If NO → change to article's verbs)
+
+FORBIDDEN: "strengthened", "support", "pressure", "created", "positioned"
+ALLOWED: "reached", "increased to", "reported", "per [Source]"
+
+Natural gas example:
+❌ "Gas prices strengthened, supporting economics"
+✅ "Gas prices reached $3.45 per EIA; LNG exports 122 Bcf per report"
+
 Structure (≤150 words total):
 - Sentence 1-2: What happened (most material development from recent trading days)
 - Sentence 3-4: Key quantified context with BALANCED PERSPECTIVE
@@ -626,6 +642,20 @@ Before finalizing Upside or Downside scenarios, run these validation checks:
    ✓ "[Author] raised concerns per [Publication]..."
    ✓ "Per [Source], analysts projected..."
 
+CRITICAL - UPSIDE SCENARIO INFERENCE TIER:
+
+This section uses TIER 0 ONLY: Facts + Attribution. No unattributed inference.
+
+Every sentence must answer "WHO SAID THIS?"
+□ Did analyst/CEO state this connection? (If YES → attribute it)
+□ Did article make this causal claim? (If YES → attribute it)
+□ Am I inferring the connection myself? (If YES → delete it)
+
+Natural gas example:
+❌ "Tight gas supplies support generator economics"
+✅ "Analyst stated tight gas supplies per report; [next fact]"
+✅ "Gas prices $3.45 per EIA; [next fact]" (just state the fact, no connection)
+
 UPSIDE SCENARIO (80-100 words, single paragraph):
 - Synthesize bullish narrative from articles
 - Base on: analyst bull cases, management optimism, positive catalysts discussed
@@ -633,6 +663,19 @@ UPSIDE SCENARIO (80-100 words, single paragraph):
 - Format as coherent narrative (not bullet points)
 - Use attributed statements only - preserve article confidence levels
 - Run checks 1-3 above before finalizing
+
+CRITICAL - DOWNSIDE SCENARIO INFERENCE TIER:
+
+This section uses TIER 0 ONLY: Facts + Attribution. No unattributed inference.
+
+Every sentence must answer "WHO SAID THIS?"
+□ Did analyst/CEO state this risk? (If YES → attribute it)
+□ Did article flag this concern? (If YES → attribute it)
+□ Am I inferring the risk myself? (If YES → delete it)
+
+Natural gas example:
+❌ "Higher gas prices pressure margins"
+✅ "Analyst raised margin concerns per Goldman Sachs; gas prices $3.45 per EIA"
 
 DOWNSIDE SCENARIO (single paragraph, 3-4 sentences):
 - Synthesize bearish narrative from articles

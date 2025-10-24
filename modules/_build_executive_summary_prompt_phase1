@@ -1138,6 +1138,23 @@ DECISION FRAMEWORK:
 
 Apply tests in this order. First match wins.
 
+CRITICAL OVERRIDE - ANALYST ACTIONS (CHECK THIS FIRST):
+
+Analyst ratings, price targets, and commentary ALWAYS go to Wall Street Sentiment.
+NEVER put analyst actions in Major Developments, even if they mention the target company.
+
+Test: Is this an analyst/firm stating a view about the company?
+→ Wall Street Sentiment (NOT Major Developments)
+
+Examples:
+❌ WRONG: "J.P. Morgan rates Buy" → Major Developments
+✅ CORRECT: "J.P. Morgan rates Buy" → Wall Street Sentiment
+
+❌ WRONG: "Goldman upgraded to Outperform" → Major Developments
+✅ CORRECT: "Goldman upgraded to Outperform" → Wall Street Sentiment
+
+Check for analyst override BEFORE applying the 6-step framework above.
+
 ═══════════════════════════════════════════════════════════════════════════════
 MAJOR DEVELOPMENTS - SCOPE & BRIGHT-LINE TEST
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1150,8 +1167,10 @@ SECTION ASSIGNMENT RULE:
 
 Include in Major Developments if ANY of these are true:
 ✓ the target company is the primary ACTOR (company takes action)
-✓ the target company is the primary TARGET (regulatory action, lawsuit, analyst coverage initiation)
+✓ the target company is the primary TARGET (regulatory action, lawsuit)
 ✓ company-specific announcements (M&A, earnings, products, contracts, leadership changes)
+
+NOTE: Analyst coverage is NOT Major Developments - always goes to Wall Street Sentiment
 
 BRIGHT-LINE TEST:
 

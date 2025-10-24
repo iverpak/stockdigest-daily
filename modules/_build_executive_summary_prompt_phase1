@@ -590,9 +590,30 @@ Before finalizing Upside or Downside scenarios, run these validation checks:
    ✓ CORRECT: "Excess capacity creates pricing pressure per report" (bearish for suppliers)
    ✗ WRONG: "Capacity additions expand market opportunity" (ignores pricing impact)
 
-   Input Costs:
-   ✓ CORRECT: "Rising input costs pressure margins per analyst" (bearish for buyers)
-   ✗ WRONG: "Higher gas prices support economics" (if company buys gas, this is wrong)
+   Input Costs/Revenue Direction (UNIVERSAL FRAMEWORK):
+
+   CORE PRINCIPLE: Direction depends on whether company BUYS or SELLS the item.
+
+   If company BUYS (input cost):
+   → Supply deficit / rising prices = bearish (cost pressure on company)
+
+   If company SELLS (revenue):
+   → Supply deficit / rising prices = bullish (pricing power for company)
+
+   Universal application:
+   - Power: BUY fuel (gas/coal) → Gas up = bearish | SELL power → Power up = bullish
+   - Airlines: BUY fuel → Fuel up = bearish | SELL tickets → Fares up = bullish
+   - Restaurants: BUY food → Food up = bearish | SELL meals → Prices up = bullish
+   - Tech: BUY chips/cloud → Costs up = bearish | SELL software → SaaS prices up = bullish
+   - Banks: PAY deposit interest → Rates up = bearish | EARN loan interest → Rates up = bullish
+
+   Forbidden patterns:
+   ✗ "Declining [INPUT] production supports economics" (if company buys it, deficit = worse)
+   ✗ "Supply constraints expand opportunity" (if company buys it, constraints = cost pressure)
+
+   Correct patterns:
+   ✓ "Declining [INPUT] production creates cost pressure per analyst" (if company buys it)
+   ✓ "Tight [OUTPUT] markets support pricing power per analyst" (if company sells it)
 
 2. CROSS-SECTION CONSISTENCY CHECK
 
@@ -1437,6 +1458,29 @@ Test 2: Direct comparative framing
 Test 3: Material competitive event (meets Risk Factors Test 3 criteria)
 - >$10B M&A, major approval the target company lacks, significant capacity expansion, superior product launch
 - If meets Test 3 → Include in BOTH Risk Factors and Competitive Dynamics
+
+Test 4: Material sector fundamentals
+
+Include industry-wide developments when articles discuss:
+- Market pricing for the company's products/services
+- Input costs for the company's key materials/resources
+- Regulatory/policy changes affecting the company's sector
+- Demand trends for the company's products/services
+- Technology/infrastructure trends in the company's industry
+
+These developments affect all sector participants by nature. No explicit company mention required.
+
+Apply single-step relevance logic:
+- If company operates in sector → sector fundamentals are relevant
+- If company uses input → input market dynamics are relevant
+- If company subject to regulations → regulatory changes are relevant
+
+Examples showing cross-sector applicability:
+✓ Power: Electricity pricing, fuel costs, FERC rules, demand growth
+✓ Retail: Consumer spending, labor costs, zoning laws, foot traffic
+✓ Tech: Cloud pricing, chip costs, AI regulations, adoption trends
+✓ Airlines: Fare pricing, fuel costs, FAA rules, travel demand
+✓ Banks: Interest rates, deposit costs, banking regs, loan demand
 
 If competitor/industry news meets NONE of these tests → EXCLUDE entirely.
 

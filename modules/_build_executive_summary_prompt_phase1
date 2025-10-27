@@ -65,7 +65,8 @@ You MUST output valid JSON with this EXACT structure:
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
           "Transcript": ["Section Name 1", "Section Name 2"]
-        }
+        },
+        "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
     ],
     "financial_performance": [
@@ -77,7 +78,8 @@ You MUST output valid JSON with this EXACT structure:
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
           "Transcript": ["Section Name 1", "Section Name 2"]
-        }
+        },
+        "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
     ],
     "risk_factors": [...same structure as above...],
@@ -92,7 +94,8 @@ You MUST output valid JSON with this EXACT structure:
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
           "Transcript": ["Section Name 1", "Section Name 2"]
-        }
+        },
+        "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
     ],
     "upside_scenario": {
@@ -115,8 +118,9 @@ SECTION STRUCTURE NOTES:
 
 Bullet sections (major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts):
 - Array of bullet objects
-- Each bullet has: bullet_id, topic_label, content, filing_hints
+- Each bullet has: bullet_id, topic_label, content, filing_hints, filing_keywords
 - filing_hints REQUIRED for all bullet sections
+- filing_keywords OPTIONAL (0-3 keywords, empty array [] if none applicable)
 
 Scenario sections (upside_scenario, downside_scenario):
 - Single object with content field
@@ -263,6 +267,83 @@ Each bullet in sections (major_developments, financial_performance, risk_factors
        "Transcript": ["Section Name 1", "Section Name 2"]
      }
    }
+
+═══════════════════════════════════════════════════════════════════════════════
+FILING KEYWORDS - SEARCH TERMS FOR PHASE 2
+═══════════════════════════════════════════════════════════════════════════════
+
+In addition to filing_hints (which sections to search), you may generate
+1-3 filing_keywords (specific terms to Ctrl+F across all filings).
+
+PURPOSE:
+Filing hints point to sections. Keywords find specific mentions anywhere.
+
+Think like an analyst: "If I had this company's 10-K, 10-Q, and transcript
+open, what 1-3 terms would I Ctrl+F to find relevant context?"
+
+WHEN TO GENERATE KEYWORDS:
+
+Generate 1-3 keywords when bullet discusses:
+✓ Specific products/technologies: "Cybertruck", "FSD", "Megapack"
+✓ Financial metrics needing quantification: ["tariff", "gross profit"]
+✓ Policies/regulations: ["tax credit", "United States"]
+✓ Legal matters: ["FSD", "investigation", "class action"]
+
+Set to [] (empty array) when:
+✗ Competitor data (Phase 2 will search target company filings for comparison)
+✗ Analyst opinions (no filing context exists)
+✗ Market data (stock price, valuations not in filings)
+✗ Qualitative bullets with no quantifiable filing context
+
+KEYWORD SELECTION PRINCIPLES:
+
+1. USE SPECIFIC TERMS (not generic)
+   ❌ "model" → matches "business model", "financial model"
+   ✅ "Cybertruck", "Model 3", "Optimus" → product-specific
+
+2. PAIR METRICS WITH DENOMINATORS (enables quantification)
+   ❌ ["tariff"] alone → finds cost but not materiality
+   ✅ ["tariff", "gross profit"] → finds cost AND scale for % calculation
+
+3. ADD BALANCE FOR UNPROFITABLE PRODUCTS
+   ❌ ["robotaxi"] alone → might only find optimistic outlook
+   ✅ ["robotaxi", "regulatory approval"] → finds vision AND gating factors
+
+4. GEOGRAPHIC CROSS-REFERENCE
+   ❌ ["tax credit"] alone → finds policy but not exposure
+   ✅ ["tax credit", "United States"] → finds policy AND US revenue %
+
+EXAMPLES (HIGH IMPACT):
+
+Bullet: "Company faces $400M tariff headwinds impacting margins"
+Keywords: ["tariff", "China", "gross profit"]
+Why: "tariff" finds the cost; "China" finds sourcing exposure;
+     "gross profit" enables % calculation ($400M / $X gross profit)
+
+Bullet: "Cybertruck recall announced affecting 27,000 vehicles"
+Keywords: ["Cybertruck", "recall"]
+Why: Product name + event type; finds all recall-related disclosures,
+     production figures, prior recall costs
+
+Bullet: "EV tax credit expiration creates demand uncertainty"
+Keywords: ["tax credit", "OBBBA", "United States"]
+Why: Policy name + law name + geography; finds policy details,
+     US revenue exposure (materiality), and historical credit impact
+
+Bullet: "Robotaxi launch timeline updated to year-end"
+Keywords: ["robotaxi", "regulatory approval", "FSD"]
+Why: Product name + gating factor + related tech; finds operational
+     status, timeline, AND regulatory dependencies/challenges
+
+Bullet: "Energy storage revenue grew 44% year-over-year"
+Keywords: ["energy storage", "Megapack", "margin"]
+Why: Segment name + product + profitability metric; finds revenue,
+     product mix, AND margin/profitability data
+
+FORMAT:
+"filing_keywords": ["keyword1", "keyword2", "keyword3"]
+
+Maximum 3 keywords. Use 0-3 based on bullet needs.
 
 ═══════════════════════════════════════════════════════════════════════════════
 FILING SECTION HEADERS - OPTIONS FOR FILING_HINTS
@@ -496,6 +577,18 @@ Target: Reflect proportional sentiment distribution of articles (~60% bullish / 
 
 Lead with developments from most recent trading day, then key context from earlier in coverage period.
 
+ATTRIBUTION FORMAT (PARAGRAPH STYLE):
+
+Bottom Line is a PARAGRAPH, not bullets. Use consolidated date range at END.
+
+✅ CORRECT:
+"Tesla reported Q3 revenue $28.1B with margin compressed to 5.8% as tariffs exceeded $400M per CFO. Analysts raised price targets post-earnings, with Wedbush maintaining $600 citing AI transformation. Company recalled 63,000+ Cybertrucks per NHTSA. Tax credit expired September 30 with Q4 demand concerns noted. Shareholder vote on Musk pay package scheduled November (Oct 22-24)."
+
+❌ WRONG (per-sentence dates):
+"Tesla reported revenue... per CFO (Oct 23). Analysts raised targets... (Oct 24). Cybertruck recall... (Oct 23)."
+
+Rules: Date at paragraph end only. Format: (Oct 22-24) or (Oct 23). Inline attribution: "per CFO", "per NHTSA"
+
 MANDATORY LENGTH CHECK:
 After writing Bottom Line, count words. If >150 words:
 1. Remove lowest-priority detail (usually: granular peer comparisons, secondary metrics)
@@ -664,6 +757,8 @@ UPSIDE SCENARIO (80-100 words, single paragraph):
 - Use attributed statements only - preserve article confidence levels
 - Run checks 1-3 above before finalizing
 
+Attribution: Use paragraph format (consolidated date at end, see Bottom Line section above)
+
 CRITICAL - DOWNSIDE SCENARIO INFERENCE TIER:
 
 This section uses TIER 0 ONLY: Facts + Attribution. No unattributed inference.
@@ -684,6 +779,8 @@ DOWNSIDE SCENARIO (single paragraph, 3-4 sentences):
 - Format as coherent narrative (not bullet points)
 - Use attributed statements only - preserve article confidence levels
 - Run checks 1-3 above before finalizing
+
+Attribution: Use paragraph format (consolidated date at end, see Bottom Line section above)
 
 BANNED PHRASES - Do not write:
 ✗ "alternative strategic options"
@@ -2036,7 +2133,8 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
           "10-K": ["KEY OPERATIONAL METRICS (KPIs)", "INFRASTRUCTURE & ASSETS"],
           "10-Q": ["OPERATIONAL METRICS (QoQ & YoY)", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"],
           "Transcript": ["OPERATIONAL METRICS"]
-        }
+        },
+        "filing_keywords": ["deliveries", "production", "automotive revenue"]
       },
       {
         "bullet_id": "affordable_model_launch",
@@ -2046,7 +2144,8 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
           "10-K": ["KEY PRODUCTS & SERVICES", "STRATEGIC PRIORITIES & OUTLOOK"],
           "10-Q": ["SUMMARY OF KEY CHANGES", "MANAGEMENT COMMENTARY"],
           "Transcript": ["MAJOR DEVELOPMENTS", "STRATEGIC INITIATIVES"]
-        }
+        },
+        "filing_keywords": ["tax credit", "United States", "Model 3"]
       }
     ],
     "financial_performance": [...],

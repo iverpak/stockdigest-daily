@@ -505,6 +505,33 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
     return True, ""
 
 
+def strip_escape_hatch_context(phase2_result: Dict) -> Dict:
+    """
+    Replace escape hatch text with empty string for cleaner display.
+
+    When Phase 2 finds no relevant filing context, it outputs:
+    "No relevant filing context found for this development"
+
+    This function replaces that text with "" so templates can simply check
+    if context exists, without seeing "not found" messages in the UI.
+
+    Args:
+        phase2_result: Phase 2 result dict with 'enrichments' key
+
+    Returns:
+        Modified phase2_result with escape hatch text replaced
+    """
+    ESCAPE_HATCH = "No relevant filing context found for this development"
+
+    enrichments = phase2_result.get("enrichments", {})
+
+    for bullet_id, enrichment in enrichments.items():
+        if enrichment.get("context") == ESCAPE_HATCH:
+            enrichment["context"] = ""
+
+    return phase2_result
+
+
 def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
     """
     Merge Phase 2 enrichments into Phase 1 JSON by bullet_id.

@@ -51,12 +51,27 @@ SKIP bullets from these 5 sections:
 - downside_scenario (paragraph, not bullets)
 - key_variables (no filing context needed)
 
+INPUT FIELDS PER BULLET:
+
+Phase 1 provides:
+- bullet_id: Unique identifier
+- topic_label: Short descriptor
+- content: Full bullet text (article-derived)
+- filing_hints: Section names to prioritize (10-K, 10-Q, Transcript)
+- filing_keywords: 0-3 search terms to Ctrl+F across filings (NEW)
+
+filing_keywords are optional. When present:
+→ Use them to find specific data points across ALL sections
+→ Supplement section hints (not replace)
+→ If empty [], rely on filing_hints only
+
 For each bullet in the 5 processable sections:
 1. Extract bullet_id (e.g., "FIN_001")
 2. Extract filing_hints (e.g., {"10-K": ["Revenue Recognition"], "10-Q": ["Segment Performance"]})
-3. Search indicated filing sections
-4. Generate 4 enrichment fields
-5. Add to output dict keyed by bullet_id
+3. Extract filing_keywords (e.g., ["tariff", "China", "gross profit"])
+4. Search indicated filing sections AND search keywords across all filings
+5. Generate 4 enrichment fields
+6. Add to output dict keyed by bullet_id
 
 ═══════════════════════════════════════════════════════════════════════════════
 EMPTY FILING HINTS - WHEN PHASE 1 SIGNALS "NO CONTEXT NEEDED"
@@ -166,6 +181,46 @@ filing_hints provide exact section names to search:
 - Exact string match required
 
 ═══════════════════════════════════════════════════════════════════════════════
+KEYWORD SEARCH ACROSS FILINGS
+═══════════════════════════════════════════════════════════════════════════════
+
+When bullet has filing_keywords: ["keyword1", "keyword2", "keyword3"]
+
+SEARCH PROCESS:
+
+1. Search each keyword across ALL THREE FILINGS (10-K, 10-Q, Transcript)
+   - Think Ctrl+F: Find every mention of the keyword
+   - Not limited to filing_hints sections
+
+2. Review all matches for relevance:
+   - Does this match discuss the bullet's topic?
+   - Does this contain useful financial data ($, %, units)?
+   - Is this the right meaning of the keyword? (e.g., "Model 3" not "business model")
+
+3. Select best 1-3 data points for context:
+   - Prioritize matches with quantifiable data
+   - Use matches from multiple sources (10-K baseline, 10-Q current, Transcript mgmt view)
+   - Discard matches unrelated to bullet topic
+
+4. Synthesize into context (40-50 words)
+
+RELATIONSHIP TO FILING HINTS:
+
+filing_hints = Where to look first (section-level guidance)
+filing_keywords = What to look for everywhere (term-level search)
+
+Use BOTH:
+- Start with filing_hints sections
+- Supplement with keyword searches across all sections
+- Keywords catch cross-references filing_hints might miss
+
+EMPTY KEYWORDS:
+
+If filing_keywords: [] (empty array):
+→ Rely solely on filing_hints
+→ Proceed with normal section-based search
+
+═══════════════════════════════════════════════════════════════════════════════
 HANDLING MISSING DATA & SOURCE CONFLICTS
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -259,6 +314,23 @@ CRITICAL RULES:
    ANTI-REPETITION RULE:
    ❌ NEVER repeat facts already stated in the bullet content
 
+   CRITICAL: Context is APPENDED to bullet, not standalone.
+
+   User sees:
+   • [topic]: [bullet content from Phase 1]
+     Context: [your output]
+
+   This means:
+   1. User has ALREADY read bullet content before seeing context
+   2. Repeating bullet facts = wasted words
+   3. Jump DIRECTLY to NEW filing data
+
+   TEST: Cover up the bullet. Does your context make sense alone?
+   → If YES = you're repeating (bad)
+   → If NO = you're adding (good)
+
+   Your ONLY job: Add filing data the bullet doesn't have.
+
    The word "Context:" itself provides the bridge to the bullet. Jump DIRECTLY to filing data that adds NEW information.
 
    Examples:
@@ -342,17 +414,26 @@ PURPOSE: Quantify developments with filing data
 - Trends: Getting better or worse?
 
 STRUCTURE:
-- Length: 25-50 words (HARD CAP: 50 words maximum)
-  - Simple bullets (single metric): 25-40 words
-  - Complex bullets (multi-faceted): 40-50 words
-  - NO EXCEPTIONS: If over 50 words, cut content using priority below
+- Length: 40-50 words (STRICT - prioritize no repetition over additional insights)
+  - Simple bullets (single metric): 40-45 words
+  - Complex bullets (multi-faceted): 45-50 words
+  - NEVER EXCEED 50 words
+  - If approaching 50 words, CUT secondary details (never cut quantification %)
 - Format: Natural prose with semicolons separating data points
 - Data points: 1-3 most relevant pieces
 - Citations: ALWAYS cite source and period
 
+CRITICAL PRIORITY: No repetition > quantification > additional insights
+
+If you must choose between:
+- Including quantification (%) → YES, always include
+- Including management quote → ONLY if space permits after quantification
+- Including offsetting factor → ONLY if space permits after quantification
+- Repeating bullet content → NEVER
+
 CUTTING PRIORITY (when over 50 words):
 Priority 1 (KEEP): Most material filing metric with citation (revenue, margin, exposure %)
-Priority 2 (KEEP): One comparison (QoQ OR YoY, pick most relevant - don't include both)
+Priority 2 (KEEP): Quantification (% of revenue, profit, etc.)
 Priority 3 (CUT FIRST): Management quotes (use only if critical to interpretation)
 Priority 4 (CUT FIRST): Secondary metrics, redundant details, excessive precision
 
@@ -436,18 +517,23 @@ Why bad: No quantification (%), no exposure assessment
 Why good: Quantified dependency + risk exposure + management mitigation plan
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EXAMPLE 3: MARGIN COMPRESSION
+EXAMPLE 3: MARGIN COMPRESSION WITH QUANTIFICATION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-❌ BAD (no explanation, 31 words):
-"Q2 2025 operating margin was 4.1% per 10-Q ($923M operating income / $22.5B revenue) vs 7.2% in FY2024 per 10-K, representing margin compression"
+❌ BAD (no quantification, 28 words):
+"Q3 margin compressed due to tariff costs and model mix per management"
 
-Why bad: No WHY (what drove compression?), no sequential context, no outlook
+Why bad: No numbers, no quantification, no temporal comparison
 
-✅ GOOD (trend + driver + outlook, 68 words):
-"Q3 operating margin 5.8% vs 4.1% Q2 2025 per 10-Q (improving QoQ) but down from 7.2% FY2024 per 10-K (compression YoY); automotive segment margin 16.1% vs 18.7% prior year per 10-Q; management attributed compression to lower-priced Model 3 variants and stated expects gradual improvement as Cybertruck scales per Oct 23 call"
+❌ BAD (one-sided, no quantification, 31 words):
+"Q2 operating margin 4.1% vs 7.2% FY2024 per 10-K, representing margin compression"
 
-Why good: QoQ and YoY trends + segment detail + driver + forward outlook
+Why bad: Only YoY (misses QoQ improvement), no driver quantification
+
+✅ GOOD (complete: trend + quantified driver + outlook, 49 words):
+"Margin 5.8% vs 4.1% Q2 (improving QoQ) but 7.2% FY2024 (compressing YoY) per 10-Q; management attributed compression to tariffs $400M (~12% auto gross profit) and lower-priced model mix per Oct call; expects gradual improvement as Cybertruck scales"
+
+Why good: QoQ AND YoY trends + quantified driver ($400M + %) + mgmt outlook
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EXAMPLE 4: EARNINGS WITH CASH FLOW
@@ -490,6 +576,10 @@ Before finalizing each context, verify you've included:
 □ EXPLANATION: Did I include WHY (per management) not just WHAT?
 □ TRENDS: Did I show both QoQ and YoY (not just one)?
 □ SYNTHESIS: Did I calculate implications (Q4 required, % at risk, etc.)?
+□ MATERIALITY CALCULATION: If $ figure found → calculated % of revenue/profit/EBITDA?
+□ GEOGRAPHIC CROSS-REFERENCE: If policy/tax/regulation → included relevant geography revenue %?
+□ DEVELOPMENT BALANCE: If unprofitable product → included timeline + operational challenges?
+□ NO REPETITION: Did I avoid repeating ANY facts from bullet content?
 
 SELF-AUDIT EXAMPLES:
 
@@ -522,6 +612,20 @@ Look for in filings:
 - Geographic exposure as % of revenue
 - Product category as % of sales
 
+MANDATORY: When you find absolute $ figure, CALCULATE relative %
+
+Process:
+1. Find $ amount: "$400M tariff" or "$3.2B segment revenue"
+2. Identify appropriate denominator:
+   - Costs (tariff, R&D, SG&A) → "gross profit" or "revenue"
+   - Revenue (segment, product) → "total revenue" or "segment revenue"
+   - Debt/financing → "EBITDA" or "total debt"
+3. Calculate %: $400M / $3.4B gross profit = ~12%
+4. Include BOTH absolute and relative:
+   "$400M tariff costs (~12% auto gross profit per 10-Q)"
+
+NEVER cite $ without %.
+
 Search sections:
 - 10-K: REVENUE STREAMS, KEY PRODUCTS & SERVICES, FINANCIAL SNAPSHOT (Latest Year)
 - 10-Q: SEGMENT PERFORMANCE TRENDS (QoQ & YoY), QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)
@@ -548,12 +652,28 @@ Look for in filings:
 - Profitability by division
 - Loss-making vs profit-making segments
 
-SPECIAL RULE: Unprofitable ventures/segments
-When bullet discusses venture currently generating no revenue (robotaxi, AI products):
-- ALWAYS state current profitability status explicitly
-- ALWAYS include timeline to profitability if management provides
-- ❌ BAD: "Robotaxi costs in Services segment ($3.5B revenue)"
-- ✅ GOOD: "Robotaxi costs in Services segment ($3.5B revenue); robotaxi currently unprofitable, expects breakeven 2026 per transcript"
+CRITICAL RULE: Unprofitable ventures/segments
+
+When bullet discusses product/initiative generating NO revenue:
+- MUST state current profitability status explicitly
+- MUST include timeline to profitability if disclosed
+- MUST include operational challenges per management
+
+Why: Development projects have optimistic targets AND operational reality.
+Context must show BOTH (not cherry-pick optimism).
+
+Examples:
+❌ BAD: "Robotaxi costs in Services segment ($3.5B revenue)"
+✅ GOOD: "Robotaxi costs in Services segment ($3.5B revenue); robotaxi
+currently unprofitable, expects breakeven 2026 per transcript; management
+noted 'paranoid about deployment' due to regulatory dependencies per call"
+
+❌ BAD: "Optimus production targets 1M units by 2026 per management"
+✅ GOOD: "Optimus targets 1M units by 2026 per management; currently moving
+boxes in lab settings, no supply chain established, 10,000 unique parts
+creating bottleneck per Oct call"
+
+For unprofitable products: Show vision AND current reality.
 
 Search sections:
 - 10-K: COST STRUCTURE, FINANCIAL SNAPSHOT (Latest Year), REVENUE STREAMS
@@ -996,6 +1116,20 @@ Examples:
 "NHTSA investigation into 2.9M vehicles" → high impact (categorical)
 "Record 497K deliveries, +13% vs consensus" → high impact (escalate for material beat)
 "Record 497K deliveries, +0.5% vs consensus" → medium impact (don't escalate, marginal)
+
+MATERIALITY IS RELATIVE TO COMPANY STAGE:
+
+For companies with established revenue:
+- Development projects compete with core business for attention
+- Question: "Is this >5% of CURRENT earnings power?"
+- If project has no revenue disclosed → Likely <1% → LOW
+
+For development-stage companies (check filing for "development stage" disclosure):
+- Development milestones ARE the earnings power
+- Question: "Does this milestone change probability of success?"
+- Binary outcomes (trial results, drill intercepts, first customer) → HIGH
+
+When uncertain: Use filing tone. Does management frame as critical or exploratory?
 
 ═══════════════════════════════════════════════════════════════════════════════
 SYNTHESIS REQUIREMENT - CONNECT THE DOTS

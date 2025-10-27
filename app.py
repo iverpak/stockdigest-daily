@@ -16910,6 +16910,7 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 _fetch_available_filings,
                 generate_executive_summary_phase2,
                 validate_phase2_json,
+                strip_escape_hatch_context,
                 merge_phase1_phase2
             )
 
@@ -16934,6 +16935,9 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                     is_valid, error_msg = validate_phase2_json(phase2_result.get("enrichments", {}))
 
                     if is_valid:
+                        # Strip escape hatch text for cleaner display
+                        phase2_result = strip_escape_hatch_context(phase2_result)
+
                         # Merge Phase 2 enrichments into Phase 1 JSON
                         final_json = merge_phase1_phase2(json_output, phase2_result)
                         generation_phase = 'phase2'
@@ -28482,6 +28486,7 @@ async def regenerate_email_api(request: Request):
         from modules.executive_summary_phase2 import (
             generate_executive_summary_phase2,
             validate_phase2_json,
+            strip_escape_hatch_context,
             merge_phase1_phase2,
             _fetch_available_filings
         )
@@ -28505,6 +28510,9 @@ async def regenerate_email_api(request: Request):
                 is_valid_p2, error_msg_p2 = validate_phase2_json(phase2_result.get("enrichments", {}))
 
                 if is_valid_p2:
+                    # Strip escape hatch text for cleaner display
+                    phase2_result = strip_escape_hatch_context(phase2_result)
+
                     # Merge Phase 2 enrichments into Phase 1 JSON
                     final_json = merge_phase1_phase2(json_output, phase2_result)
                     generation_phase = 'phase2'

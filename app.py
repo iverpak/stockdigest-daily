@@ -6542,6 +6542,36 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
             # System prompt (generic - cacheable, ~3500 tokens - optimized for caching and comprehensive extraction)
             system_prompt = """You are a hedge fund analyst extracting information about a target company for an investment research report.
 
+**SOURCE QUALITY FILTER:**
+SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
+
+Retail investment analysis indicators (check article content):
+❌ Automated stock ratings/scores (e.g., "6 out of 10 score", "Fair Value: $X per share")
+❌ Proprietary valuation models without named analyst (e.g., "DCF model suggests intrinsic value")
+❌ Retail stock picks/recommendations (e.g., "Top 10 Stocks to Buy", "Should You Buy?")
+❌ Aggregated analyst consensus without original analysis (e.g., "Average of 12 analyst ratings")
+❌ AI-generated predictions/forecasts without human analyst attribution
+❌ Technical analysis signals for retail traders (e.g., "RSI indicates overbought")
+❌ Stock screener results/rankings (e.g., "Ranks #3 in momentum score")
+
+Examples of content to SKIP:
+- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
+- "DCF model calculated intrinsic value $1,081.85 per share"
+- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
+- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
+- "GuruFocus gives company a financial strength score of 7/10"
+
+✓ KEEP institutional sell-side research:
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, etc.)
+- Professional financial journalism with byline
+- Company press releases and regulatory filings
+- Industry trade publications
+
+If article content matches retail analysis patterns above, output ONLY:
+{"skip": true, "reason": "Retail investment analysis"}
+
+Do not proceed with summarization.
+
 **YOUR TASK:**
 The user will provide company name, ticker, article title, and content. Extract and summarize all material facts about the company's actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
 
@@ -6823,6 +6853,17 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                             LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (company article summary) - 90% savings!")
 
                         summary = result.get("content", [{}])[0].get("text", "")
+
+                        # Check for skip response (retail investment analysis filter)
+                        if summary and summary.strip().startswith('{"skip"'):
+                            try:
+                                skip_data = json.loads(summary.strip())
+                                if skip_data.get("skip"):
+                                    LOG.info(f"[{ticker}] 🚫 FILTERED (company): {skip_data.get('reason')} - {title[:80]}")
+                                    return None
+                            except json.JSONDecodeError:
+                                pass  # Not valid JSON, continue normal processing
+
                         if summary and len(summary.strip()) > 10:
                             LOG.info(f"Claude company summary: {ticker} ({len(summary)} chars)")
                             return summary.strip()

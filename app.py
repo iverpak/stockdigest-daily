@@ -19768,13 +19768,13 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
             with db() as conn, conn.cursor() as cur:
                 # First, count spam articles to skip
                 cur.execute("""
-                    SELECT COUNT(*)
+                    SELECT COUNT(*) as count
                     FROM ticker_articles ta
                     WHERE ta.article_id = ANY(%s)
                     AND ta.ticker = %s
                     AND ta.ai_model = 'spam'
                 """, (flagged_article_ids, ticker))
-                spam_count = cur.fetchone()[0]
+                spam_count = cur.fetchone()['count']
 
                 # Then get articles that need scraping (excluding spam)
                 cur.execute("""

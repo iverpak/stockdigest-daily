@@ -6029,8 +6029,8 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
         # Paywalled article (flagged + paywalled)
         header_badges.append('<span class="paywall-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e;">📰 Paywall</span>')
     elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'headline_only'):
-        # Successfully analyzed article
-        header_badges.append(f'<span class="ai-model-badge">🤖 Analyzed</span>')
+        # Successfully analyzed article - show which AI model was used
+        header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
     elif scraped_content and not ai_summary:
         # Scraped but skipped (retail investment analysis)
         header_badges.append('<span class="skipped-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f7fafc; color: #718096; border: 1px solid #cbd5e0;">🚫 Skipped</span>')
@@ -6563,16 +6563,30 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
 **SOURCE QUALITY FILTER:**
 SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
 
-Retail investment analysis indicators (check article content):
-❌ Automated stock ratings/scores (e.g., "6 out of 10 score", "Fair Value: $X per share")
-❌ Proprietary valuation models without named analyst (e.g., "DCF model suggests intrinsic value")
-❌ Retail stock picks/recommendations (e.g., "Top 10 Stocks to Buy", "Should You Buy?")
-❌ Aggregated analyst consensus without original analysis (e.g., "Average of 12 analyst ratings")
-❌ AI-generated predictions/forecasts without human analyst attribution
-❌ Technical analysis signals for retail traders (e.g., "RSI indicates overbought")
-❌ Stock screener results/rankings (e.g., "Ranks #3 in momentum score")
+**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
+- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
+- Stock screener sites (Finviz, MarketBeat, StockRover)
+- AI-generated prediction platforms
 
-Examples of content to SKIP:
+**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
+- Forbes: KEEP staff reporting, SKIP contributor stock picks
+- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
+- MSN Money: KEEP original content, SKIP syndicated retail content
+- Benzinga: KEEP news/deals, SKIP stock pick articles
+
+**Retail Analysis Content Patterns (Check Article Content):**
+❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
+❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
+❌ "Should You Buy?" or "Is [Stock] a Buy?"
+❌ "Top X Stocks to Buy Now"
+❌ "Zacks Rank #X" or "TipRanks consensus"
+❌ Unnamed DCF models or valuation formulas
+❌ Technical analysis for retail (RSI, MACD, moving averages)
+❌ Stock screener rankings ("Ranks #3 in momentum")
+❌ Aggregated analyst consensus without original analysis
+❌ AI-generated predictions without human analyst attribution
+
+**Examples to SKIP:**
 - "Stock received 2 out of 6 valuation score on Simply Wall St checks"
 - "DCF model calculated intrinsic value $1,081.85 per share"
 - "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
@@ -6580,15 +6594,19 @@ Examples of content to SKIP:
 - "GuruFocus gives company a financial strength score of 7/10"
 
 ✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, etc.)
-- Professional financial journalism with byline
-- Company press releases and regulatory filings
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+- Business publications (Fortune, Inc, Fast Company, Business Insider)
+- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
+- Company press releases and SEC filings
 - Industry trade publications
+- Academic/research institutions
 
 If article content matches retail analysis patterns above, output ONLY:
 {"skip": true, "reason": "Retail investment analysis"}
 
-Do not proceed with summarization.
+Do NOT add any commentary after this JSON.
+Do NOT say "Wait, let me reconsider" - if unsure whether to skip, proceed with analysis.
 
 **YOUR TASK:**
 The user will provide company name, ticker, article title, and content. Extract and summarize all material facts about the company's actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
@@ -6913,16 +6931,30 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
 **SOURCE QUALITY FILTER:**
 SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
 
-Retail investment analysis indicators (check article content):
-❌ Automated stock ratings/scores (e.g., "6 out of 10 score", "Fair Value: $X per share")
-❌ Proprietary valuation models without named analyst (e.g., "DCF model suggests intrinsic value")
-❌ Retail stock picks/recommendations (e.g., "Top 10 Stocks to Buy", "Should You Buy?")
-❌ Aggregated analyst consensus without original analysis (e.g., "Average of 12 analyst ratings")
-❌ AI-generated predictions/forecasts without human analyst attribution
-❌ Technical analysis signals for retail traders (e.g., "RSI indicates overbought")
-❌ Stock screener results/rankings (e.g., "Ranks #3 in momentum score")
+**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
+- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
+- Stock screener sites (Finviz, MarketBeat, StockRover)
+- AI-generated prediction platforms
 
-Examples of content to SKIP:
+**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
+- Forbes: KEEP staff reporting, SKIP contributor stock picks
+- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
+- MSN Money: KEEP original content, SKIP syndicated retail content
+- Benzinga: KEEP news/deals, SKIP stock pick articles
+
+**Retail Analysis Content Patterns (Check Article Content):**
+❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
+❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
+❌ "Should You Buy?" or "Is [Stock] a Buy?"
+❌ "Top X Stocks to Buy Now"
+❌ "Zacks Rank #X" or "TipRanks consensus"
+❌ Unnamed DCF models or valuation formulas
+❌ Technical analysis for retail (RSI, MACD, moving averages)
+❌ Stock screener rankings ("Ranks #3 in momentum")
+❌ Aggregated analyst consensus without original analysis
+❌ AI-generated predictions without human analyst attribution
+
+**Examples to SKIP:**
 - "Stock received 2 out of 6 valuation score on Simply Wall St checks"
 - "DCF model calculated intrinsic value $1,081.85 per share"
 - "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
@@ -6930,15 +6962,19 @@ Examples of content to SKIP:
 - "GuruFocus gives company a financial strength score of 7/10"
 
 ✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, etc.)
-- Professional financial journalism with byline
-- Company press releases and regulatory filings
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+- Business publications (Fortune, Inc, Fast Company, Business Insider)
+- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
+- Company press releases and SEC filings
 - Industry trade publications
+- Academic/research institutions
 
 If article content matches retail analysis patterns above, output ONLY:
 {"skip": true, "reason": "Retail investment analysis"}
 
-Do not proceed with summarization.
+Do NOT add any commentary after this JSON.
+Do NOT say "Wait, let me reconsider" - if unsure whether to skip, proceed with analysis.
 
 **YOUR TASK:**
 The user will provide target company, competitor name and ticker, article title, and content. Extract and summarize facts from the article about the competitor's actions, performance, or developments. Focus on operational and strategic information that provides competitive context.
@@ -7814,16 +7850,30 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
 **SOURCE QUALITY FILTER:**
 SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
 
-Retail investment analysis indicators (check article content):
-❌ Automated stock ratings/scores (e.g., "6 out of 10 score", "Fair Value: $X per share")
-❌ Proprietary valuation models without named analyst (e.g., "DCF model suggests intrinsic value")
-❌ Retail stock picks/recommendations (e.g., "Top 10 Stocks to Buy", "Should You Buy?")
-❌ Aggregated analyst consensus without original analysis (e.g., "Average of 12 analyst ratings")
-❌ AI-generated predictions/forecasts without human analyst attribution
-❌ Technical analysis signals for retail traders (e.g., "RSI indicates overbought")
-❌ Stock screener results/rankings (e.g., "Ranks #3 in momentum score")
+**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
+- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
+- Stock screener sites (Finviz, MarketBeat, StockRover)
+- AI-generated prediction platforms
 
-Examples of content to SKIP:
+**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
+- Forbes: KEEP staff reporting, SKIP contributor stock picks
+- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
+- MSN Money: KEEP original content, SKIP syndicated retail content
+- Benzinga: KEEP news/deals, SKIP stock pick articles
+
+**Retail Analysis Content Patterns (Check Article Content):**
+❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
+❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
+❌ "Should You Buy?" or "Is [Stock] a Buy?"
+❌ "Top X Stocks to Buy Now"
+❌ "Zacks Rank #X" or "TipRanks consensus"
+❌ Unnamed DCF models or valuation formulas
+❌ Technical analysis for retail (RSI, MACD, moving averages)
+❌ Stock screener rankings ("Ranks #3 in momentum")
+❌ Aggregated analyst consensus without original analysis
+❌ AI-generated predictions without human analyst attribution
+
+**Examples to SKIP:**
 - "Stock received 2 out of 6 valuation score on Simply Wall St checks"
 - "DCF model calculated intrinsic value $1,081.85 per share"
 - "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
@@ -7831,15 +7881,28 @@ Examples of content to SKIP:
 - "GuruFocus gives company a financial strength score of 7/10"
 
 ✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, etc.)
-- Professional financial journalism with byline
-- Company press releases and regulatory filings
-- Industry trade publications
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+- Business publications (Fortune, Inc, Fast Company, Business Insider)
+- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
+- Company press releases and SEC filings
+- Industry trade publications by sector:
+  • Healthcare: AHA, Mobi Health News, Healthcare Dive, FierceHealthcare, Modern Healthcare, Becker's Hospital Review
+  • Financial Services: American Banker, Bank Director, InvestmentNews, Pensions & Investments
+  • Energy: Oil & Gas Journal, Rigzone, Utility Dive, Natural Gas Intelligence
+  • Retail/Consumer: Retail Dive, Chain Store Age, WWD (Women's Wear Daily)
+  • Manufacturing: Industry Week, Supply Chain Dive, Manufacturing.net
+  • Technology: InfoWorld, Network World, CIO, Computerworld
+  • Automotive: Automotive News, WardsAuto, Automotive Dive
+  • Real Estate: CoStar, GlobeSt, Multi-Housing News
+  • Telecommunications: FierceWireless, Light Reading, RCR Wireless News
+- Academic/research institutions
 
 If article content matches retail analysis patterns above, output ONLY:
 {"skip": true, "reason": "Retail investment analysis"}
 
-Do not proceed with summarization.
+Do NOT add any commentary after this JSON.
+Do NOT say "Wait, let me reconsider" - if unsure whether to skip, proceed with analysis.
 
 **YOUR TASK:**
 The user will provide target company, ticker, driver keyword, article title, and content. Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that relate to the fundamental driver keyword provided.
@@ -19541,6 +19604,17 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
             # NOTE: Articles with resolved_url = NULL are included (happens when resolution failed)
             # The scraper will fall back to the original URL, which may fail but won't crash
             with db() as conn, conn.cursor() as cur:
+                # First, count spam articles to skip
+                cur.execute("""
+                    SELECT COUNT(*)
+                    FROM ticker_articles ta
+                    WHERE ta.article_id = ANY(%s)
+                    AND ta.ticker = %s
+                    AND ta.ai_model = 'spam'
+                """, (flagged_article_ids, ticker))
+                spam_count = cur.fetchone()[0]
+
+                # Then get articles that need scraping (excluding spam)
                 cur.execute("""
                     SELECT a.id, a.url, a.url_hash, a.resolved_url, a.title, a.description,
                            a.domain, a.published_at,
@@ -19551,10 +19625,15 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                     AND ta.ticker = %s
                     AND a.scraped_content IS NULL
                     AND a.scraping_failed = FALSE
+                    AND (ta.ai_model IS NULL OR ta.ai_model != 'spam')
                     ORDER BY a.published_at DESC NULLS LAST
                 """, (flagged_article_ids, ticker))
 
                 articles_to_scrape = cur.fetchall()
+
+            # Log spam articles skipped
+            if spam_count > 0:
+                LOG.info(f"[{ticker}] ⏭️ Skipped {spam_count} spam articles from scraping (marked during URL resolution)")
 
             if articles_to_scrape:
                 LOG.info(f"[{ticker}] 🔍 Found {len(articles_to_scrape)} articles needing scraping")

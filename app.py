@@ -27090,23 +27090,70 @@ async def email_research_api(request: Request):
         if not content:
             return {"status": "error", "message": "No content found"}
 
-        # Send email
-        html_body = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
-                h1 {{ color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; }}
-                h2 {{ color: #1e3a8a; margin-top: 24px; }}
-                pre {{ background: #f3f4f6; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }}
-            </style>
-        </head>
-        <body>
-            <h1>{subject}</h1>
-            <pre>{content}</pre>
-        </body>
-        </html>
-        """
+        # Get stock price data
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+
+        stock_context = get_stock_context(ticker, config)
+        stock_price = stock_context.get("financial_last_price", "$0.00")
+        price_change_pct = stock_context.get("financial_price_change_pct")
+        price_change_color = "#22c55e" if price_change_pct and float(price_change_pct.strip('%')) > 0 else "#ef4444"
+
+        # Generate formatted email using proper template
+        if research_type == 'presentation':
+            # Use company profile email template for presentations
+            email_data = generate_company_profile_email(
+                ticker=ticker,
+                company_name=doc['company_name'],
+                industry=None,  # Presentations don't have industry field
+                fiscal_year=None,  # Presentations use date not fiscal year
+                filing_date=doc['presentation_date'],
+                profile_markdown=content,
+                stock_price=stock_price,
+                price_change_pct=price_change_pct,
+                price_change_color=price_change_color,
+                filing_type="PRESENTATION"
+            )
+            html_body = email_data['html']
+            subject = email_data['subject']
+
+        elif research_type == 'transcript':
+            # Use transcript email template
+            email_data = generate_transcript_email(
+                ticker=ticker,
+                company_name=company_name,
+                report_type='transcript',
+                quarter=doc['quarter'],
+                year=doc['year'],
+                report_date=None,
+                pr_title=None,
+                summary_text=content,
+                fmp_url=f"https://financialmodelingprep.com/financial-summary/{ticker}",
+                stock_price=stock_price,
+                price_change_pct=price_change_pct,
+                price_change_color=price_change_color
+            )
+            html_body = email_data['html']
+            subject = email_data['subject']
+
+        elif research_type == 'press_release':
+            # Use transcript email template for press releases
+            email_data = generate_transcript_email(
+                ticker=ticker,
+                company_name=company_name,
+                report_type='press_release',
+                quarter=None,
+                year=None,
+                report_date=doc['report_date'],
+                pr_title=f"Press Release - {doc['report_date']}",
+                summary_text=content,
+                fmp_url=f"https://financialmodelingprep.com/press-releases/{ticker}",
+                stock_price=stock_price,
+                price_change_pct=price_change_pct,
+                price_change_color=price_change_color
+            )
+            html_body = email_data['html']
+            subject = email_data['subject']
 
         send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
 

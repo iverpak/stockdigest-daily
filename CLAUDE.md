@@ -658,15 +658,21 @@ url_to_scrape = article.get("resolved_url") or article.get("url")
 
 ### Email Template System
 
-Uses Jinja2 templating with multiple templates:
-- **`email_intelligence_report.html`** - Email #3 (Premium Intelligence Report)
+Uses Jinja2 templating and inline HTML generation:
+- **`email_research_report.html`** - Research documents (10-K, 10-Q, transcripts, presentations, press releases)
+  - Modern gradient header with stock price card
+  - Professional layout with styled sections
+  - Comprehensive footer with legal disclaimers
+  - Full URLs for Terms, Privacy, Contact
+- **Email #3 (Premium Intelligence Report)** - Inline HTML generation (no template)
+  - Generated via `generate_email_html_core()` in app.py (line 18601)
   - Modern gradient header with stock price card
   - Top disclaimer banner: "For informational purposes only"
   - Executive summary sections (6 visual cards)
   - Article links with ★, 🆕, PAYWALL badges
   - Comprehensive footer legal disclaimer
   - Full URLs for Terms, Privacy, Contact, Unsubscribe
-- **`email_template.html`** - Email #2 (Content QA)
+- **`email_hourly_alert.html`** - Hourly alert emails
 - Responsive design for email clients
 - Toronto timezone standardization (America/Toronto)
 
@@ -705,16 +711,17 @@ StockDigest generates 3 distinct emails per ticker during the digest phase, form
 **Timing:** Sent at ~95% progress (end of digest phase)
 **Key Behavior:** Generates and SAVES executive summary to database via `save_executive_summary()` (Line 1050)
 
-#### Email #3: Premium Stock Intelligence Report (Line 11873)
-**Function:** `send_user_intelligence_report(hours, tickers, flagged_article_ids, recipient_email)`
-**Template:** `email_intelligence_report.html` (Jinja2)
+#### Email #3: Premium Stock Intelligence Report (Line 18601)
+**Function:** `generate_email_html_core(ticker, hours, flagged_article_ids, recipient_email)` (inline HTML generation)
+**Template:** Inline HTML (no Jinja2 template file)
 **Subject:** `📊 Stock Intelligence: [Company Name] ([Ticker]) - [X] articles analyzed`
 **Purpose:** Premium user-facing intelligence report with legal disclaimers
 
-**NEW (Oct 2025): Full Jinja2 Refactor**
-- Replaced 100+ lines of inline HTML with clean Jinja2 template rendering
+**Architecture:**
+- Core generation: `generate_email_html_core()` at line 18601
+- Test wrapper: `send_user_intelligence_report()` at line 18961
+- Production: Called via job queue for daily workflow
 - Helper functions: `build_executive_summary_html()`, `build_articles_html()`
-- Maintainable, testable, professional code
 
 **Content:**
 - **Top disclaimer banner:** "For informational purposes only. Not investment advice."

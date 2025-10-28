@@ -739,6 +739,7 @@ SPAM_DOMAINS = {
     "marketsmojo.com", "www.marketsmojo.com",
     "stocktitan.net", "www.stocktitan.net",
     "insidermonkey.com", "www.insidermonkey.com",
+    "247wallst.com", "www.247wallst.com",  # 24/7 Wall St (retail stock picks)
     "zacks.com", "www.zacks.com",
     "markets.financialcontent.com", "www.markets.financialcontent.com",  # Added Oct 2025
     # Retail analysis sites - automated ratings, stock screeners, AI predictions (Oct 2025)
@@ -7904,23 +7905,19 @@ SKIP articles that are retail investment analysis - return only: {"skip": true, 
 - "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
 - "GuruFocus gives company a financial strength score of 7/10"
 
-✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+✓ KEEP ALL other sources (focus on CONTENT, not domain reputation):
+- Named analyst from recognized firm (Goldman, Morgan Stanley, JPMorgan, Barclays, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, MarketWatch, etc.)
 - Business publications (Fortune, Inc, Fast Company, Business Insider)
 - Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
 - Company press releases and SEC filings
-- Industry trade publications by sector:
-  • Healthcare: AHA, Mobi Health News, Healthcare Dive, FierceHealthcare, Modern Healthcare, Becker's Hospital Review
-  • Financial Services: American Banker, Bank Director, InvestmentNews, Pensions & Investments
-  • Energy: Oil & Gas Journal, Rigzone, Utility Dive, Natural Gas Intelligence
-  • Retail/Consumer: Retail Dive, Chain Store Age, WWD (Women's Wear Daily)
-  • Manufacturing: Industry Week, Supply Chain Dive, Manufacturing.net
-  • Technology: InfoWorld, Network World, CIO, Computerworld
-  • Automotive: Automotive News, WardsAuto, Automotive Dive
-  • Real Estate: CoStar, GlobeSt, Multi-Housing News
-  • Telecommunications: FierceWireless, Light Reading, RCR Wireless News
+- **Any industry trade publication** (known or unknown - most are niche publications)
 - Academic/research institutions
+
+**CRITICAL: Unknown industry publications are ALLOWED**
+Industry articles have very little retail investment analysis compared to company/competitor articles.
+Only skip if retail analysis content patterns (listed above) appear in article text.
+Focus on WHAT is said, not WHO said it - domain reputation doesn't matter for industry articles.
 
 If article content matches retail analysis patterns above, output ONLY:
 {"skip": true, "reason": "Retail investment analysis"}
@@ -8903,23 +8900,19 @@ SKIP_RETAIL_ANALYSIS
 - "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
 - "GuruFocus gives company a financial strength score of 7/10"
 
-✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+✓ KEEP ALL other sources (focus on CONTENT, not domain reputation):
+- Named analyst from recognized firm (Goldman, Morgan Stanley, JPMorgan, Barclays, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, MarketWatch, etc.)
 - Business publications (Fortune, Inc, Fast Company, Business Insider)
 - Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
 - Company press releases and SEC filings
-- Industry trade publications by sector:
-  • Healthcare: AHA, Mobi Health News, Healthcare Dive, FierceHealthcare, Modern Healthcare, Becker's Hospital Review
-  • Financial Services: American Banker, Bank Director, InvestmentNews, Pensions & Investments
-  • Energy: Oil & Gas Journal, Rigzone, Utility Dive, Natural Gas Intelligence
-  • Retail/Consumer: Retail Dive, Chain Store Age, WWD (Women's Wear Daily)
-  • Manufacturing: Industry Week, Supply Chain Dive, Manufacturing.net
-  • Technology: InfoWorld, Network World, CIO, Computerworld
-  • Automotive: Automotive News, WardsAuto, Automotive Dive
-  • Real Estate: CoStar, GlobeSt, Multi-Housing News
-  • Telecommunications: FierceWireless, Light Reading, RCR Wireless News
+- **Any industry trade publication** (known or unknown - most are niche publications)
 - Academic/research institutions
+
+**CRITICAL: Unknown industry publications are ALLOWED**
+Industry articles have very little retail investment analysis compared to company/competitor articles.
+Only skip if retail analysis content patterns (listed above) appear in article text.
+Focus on WHAT is said, not WHO said it - domain reputation doesn't matter for industry articles.
 
 Do NOT add commentary. If unsure whether to skip, proceed with analysis.
 
@@ -19615,31 +19608,19 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
                 final_resolved_url = resolved_url
                 final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
 
-            # SPAM CHECK: Mark spam domains after full resolution chain (keep in flagged list for Email #2)
+            # SPAM CHECK: Block spam domains after full resolution chain
             if final_domain in SPAM_DOMAINS:
                 LOG.info(f"[{ticker}] 🚫 SPAM BLOCKED (post-resolution): {final_domain} - {title[:60]}")
                 spam_blocked_count += 1
                 spam_blocked_ids.append(article_id)
 
-                # Mark as spam in database (don't delete - keep for Email #2 transparency)
+                # Delete spam article from database
                 with db() as conn2, conn2.cursor() as cur2:
-                    # Update article with resolved spam URL
-                    cur2.execute("""
-                        UPDATE articles
-                        SET resolved_url = %s, domain = %s
-                        WHERE id = %s
-                    """, (final_resolved_url, final_domain, article_id))
+                    cur2.execute("DELETE FROM ticker_articles WHERE article_id = %s", (article_id,))
+                    cur2.execute("DELETE FROM articles WHERE id = %s", (article_id,))
+                    LOG.info(f"[{ticker}] 🗑️ Deleted spam article ID {article_id} from database")
 
-                    # Mark ticker_article with spam status
-                    cur2.execute("""
-                        UPDATE ticker_articles
-                        SET ai_model = %s
-                        WHERE article_id = %s AND ticker = %s
-                    """, ('spam', article_id, ticker))
-
-                    LOG.info(f"[{ticker}] 🗑️ Marked spam article ID {article_id} (kept in flagged list for QA)")
-
-                # Continue to next article (spam article stays in flagged_article_ids)
+                # Skip database UPDATE and move to next article
                 continue
 
             # Update database (no source_url)
@@ -19680,10 +19661,6 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     LOG.info(f"[{ticker}]    🚫 Spam blocked: {spam_blocked_count}")
     LOG.info(f"[{ticker}]    🔗 Google→Yahoo→Final chains: {yahoo_chain_count}")
     LOG.info(f"[{ticker}] {'='*60}")
-
-    # Spam articles are now kept in flagged list (marked with ai_model='spam' for Email #2 transparency)
-    if spam_blocked_ids:
-        LOG.info(f"[{ticker}] 🗑️ Kept {len(spam_blocked_ids)} spam articles in flagged list (marked for QA)")
 
     # ============================================================================
     # POST-RESOLUTION DEDUPLICATION
@@ -19766,17 +19743,6 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
             # NOTE: Articles with resolved_url = NULL are included (happens when resolution failed)
             # The scraper will fall back to the original URL, which may fail but won't crash
             with db() as conn, conn.cursor() as cur:
-                # First, count spam articles to skip
-                cur.execute("""
-                    SELECT COUNT(*) as count
-                    FROM ticker_articles ta
-                    WHERE ta.article_id = ANY(%s)
-                    AND ta.ticker = %s
-                    AND ta.ai_model = 'spam'
-                """, (flagged_article_ids, ticker))
-                spam_count = cur.fetchone()['count']
-
-                # Then get articles that need scraping (excluding spam)
                 cur.execute("""
                     SELECT a.id, a.url, a.url_hash, a.resolved_url, a.title, a.description,
                            a.domain, a.published_at,
@@ -19787,15 +19753,10 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                     AND ta.ticker = %s
                     AND a.scraped_content IS NULL
                     AND a.scraping_failed = FALSE
-                    AND (ta.ai_model IS NULL OR ta.ai_model != 'spam')
                     ORDER BY a.published_at DESC NULLS LAST
                 """, (flagged_article_ids, ticker))
 
                 articles_to_scrape = cur.fetchall()
-
-            # Log spam articles skipped
-            if spam_count > 0:
-                LOG.info(f"[{ticker}] ⏭️ Skipped {spam_count} spam articles from scraping (marked during URL resolution)")
 
             if articles_to_scrape:
                 LOG.info(f"[{ticker}] 🔍 Found {len(articles_to_scrape)} articles needing scraping")

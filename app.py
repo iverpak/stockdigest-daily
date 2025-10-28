@@ -6893,10 +6893,22 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                         # Check for skip response (retail investment analysis filter)
                         if summary and summary.strip().startswith('{"skip"'):
                             try:
-                                skip_data = json.loads(summary.strip())
-                                if skip_data.get("skip"):
-                                    LOG.info(f"[{ticker}] 🚫 FILTERED (company): {skip_data.get('reason')} - {title[:80]}")
-                                    return None, "filtered"
+                                # Extract just the JSON part (before any "Wait" or other text)
+                                json_end = summary.find('}')
+                                if json_end != -1:
+                                    json_part = summary[:json_end+1].strip()
+                                    skip_data = json.loads(json_part)
+
+                                    # Check if AI is reconsidering (backtracking after skip signal)
+                                    has_reconsideration = ("Wait" in summary[json_end:] or
+                                                           "reconsider" in summary[json_end:].lower())
+
+                                    if skip_data.get("skip") and not has_reconsideration:
+                                        LOG.info(f"[{ticker}] 🚫 FILTERED (company): {skip_data.get('reason')} - {title[:80]}")
+                                        return None, "filtered"
+                                    elif has_reconsideration:
+                                        LOG.info(f"[{ticker}] ✅ AI reconsidered skip signal - proceeding with analysis")
+                                        # Continue to full analysis (fall through to normal processing)
                             except json.JSONDecodeError:
                                 pass  # Not valid JSON, continue normal processing
 
@@ -7240,10 +7252,22 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 # Check for skip response
                 if content.strip().startswith('{"skip"'):
                     try:
-                        skip_data = json.loads(content.strip())
-                        if skip_data.get("skip"):
-                            LOG.info(f"[{target_ticker}] 🚫 FILTERED (competitor): {skip_data.get('reason')} - {title[:80]}")
-                            return None, "filtered"
+                        # Extract just the JSON part (before any "Wait" or other text)
+                        json_end = content.find('}')
+                        if json_end != -1:
+                            json_part = content[:json_end+1].strip()
+                            skip_data = json.loads(json_part)
+
+                            # Check if AI is reconsidering (backtracking after skip signal)
+                            has_reconsideration = ("Wait" in content[json_end:] or
+                                                   "reconsider" in content[json_end:].lower())
+
+                            if skip_data.get("skip") and not has_reconsideration:
+                                LOG.info(f"[{target_ticker}] 🚫 FILTERED (competitor): {skip_data.get('reason')} - {title[:80]}")
+                                return None, "filtered"
+                            elif has_reconsideration:
+                                LOG.info(f"[{target_ticker}] ✅ AI reconsidered skip signal - proceeding with analysis")
+                                # Continue to full analysis (fall through to normal processing)
                     except json.JSONDecodeError:
                         pass  # Not valid JSON, continue normal processing
 
@@ -8193,10 +8217,22 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 # Check for skip response
                 if content.strip().startswith('{"skip"'):
                     try:
-                        skip_data = json.loads(content.strip())
-                        if skip_data.get("skip"):
-                            LOG.info(f"[{target_ticker}] 🚫 FILTERED (industry): {skip_data.get('reason')} - {title[:80]}")
-                            return None, "filtered"
+                        # Extract just the JSON part (before any "Wait" or other text)
+                        json_end = content.find('}')
+                        if json_end != -1:
+                            json_part = content[:json_end+1].strip()
+                            skip_data = json.loads(json_part)
+
+                            # Check if AI is reconsidering (backtracking after skip signal)
+                            has_reconsideration = ("Wait" in content[json_end:] or
+                                                   "reconsider" in content[json_end:].lower())
+
+                            if skip_data.get("skip") and not has_reconsideration:
+                                LOG.info(f"[{target_ticker}] 🚫 FILTERED (industry): {skip_data.get('reason')} - {title[:80]}")
+                                return None, "filtered"
+                            elif has_reconsideration:
+                                LOG.info(f"[{target_ticker}] ✅ AI reconsidered skip signal - proceeding with analysis")
+                                # Continue to full analysis (fall through to normal processing)
                     except json.JSONDecodeError:
                         pass  # Not valid JSON, continue normal processing
 
@@ -8228,10 +8264,49 @@ async def generate_openai_article_summary(company_name: str, ticker: str, title:
             prompt = f"""You are a hedge fund analyst extracting information about {company_name} ({ticker}) for an investment research report.
 
 **CRITICAL - Retail Analysis Detection:**
-If article is primarily retail investment analysis (Simply Wall St scores, GuruFocus ratings, Zacks ranks, TipRanks consensus, unnamed DCF models, stock screener results), return ONLY the text:
+If article matches retail investment analysis patterns below, return ONLY the text:
 SKIP_RETAIL_ANALYSIS
 
-Do not proceed with summarization.
+**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
+- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
+- Stock screener sites (Finviz, MarketBeat, StockRover)
+- AI-generated prediction platforms
+
+**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
+- Forbes: KEEP staff reporting, SKIP contributor stock picks
+- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
+- MSN Money: KEEP original content, SKIP syndicated retail content
+- Benzinga: KEEP news/deals, SKIP stock pick articles
+
+**Retail Analysis Content Patterns (Check Article Content):**
+❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
+❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
+❌ "Should You Buy?" or "Is [Stock] a Buy?"
+❌ "Top X Stocks to Buy Now"
+❌ "Zacks Rank #X" or "TipRanks consensus"
+❌ Unnamed DCF models or valuation formulas
+❌ Technical analysis for retail (RSI, MACD, moving averages)
+❌ Stock screener rankings ("Ranks #3 in momentum")
+❌ Aggregated analyst consensus without original analysis
+❌ AI-generated predictions without human analyst attribution
+
+**Examples to SKIP:**
+- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
+- "DCF model calculated intrinsic value $1,081.85 per share"
+- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
+- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
+- "GuruFocus gives company a financial strength score of 7/10"
+
+✓ KEEP institutional sell-side research:
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+- Business publications (Fortune, Inc, Fast Company, Business Insider)
+- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
+- Company press releases and SEC filings
+- Industry trade publications
+- Academic/research institutions
+
+Do NOT add commentary. If unsure whether to skip, proceed with analysis.
 
 **YOUR TASK:**
 Extract and summarize all material facts about {company_name}'s actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
@@ -8506,10 +8581,49 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
             prompt = f"""You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
 **CRITICAL - Retail Analysis Detection:**
-If article is primarily retail investment analysis (Simply Wall St scores, GuruFocus ratings, Zacks ranks, TipRanks consensus, unnamed DCF models, stock screener results), return ONLY the text:
+If article matches retail investment analysis patterns below, return ONLY the text:
 SKIP_RETAIL_ANALYSIS
 
-Do not proceed with summarization.
+**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
+- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
+- Stock screener sites (Finviz, MarketBeat, StockRover)
+- AI-generated prediction platforms
+
+**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
+- Forbes: KEEP staff reporting, SKIP contributor stock picks
+- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
+- MSN Money: KEEP original content, SKIP syndicated retail content
+- Benzinga: KEEP news/deals, SKIP stock pick articles
+
+**Retail Analysis Content Patterns (Check Article Content):**
+❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
+❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
+❌ "Should You Buy?" or "Is [Stock] a Buy?"
+❌ "Top X Stocks to Buy Now"
+❌ "Zacks Rank #X" or "TipRanks consensus"
+❌ Unnamed DCF models or valuation formulas
+❌ Technical analysis for retail (RSI, MACD, moving averages)
+❌ Stock screener rankings ("Ranks #3 in momentum")
+❌ Aggregated analyst consensus without original analysis
+❌ AI-generated predictions without human analyst attribution
+
+**Examples to SKIP:**
+- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
+- "DCF model calculated intrinsic value $1,081.85 per share"
+- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
+- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
+- "GuruFocus gives company a financial strength score of 7/10"
+
+✓ KEEP institutional sell-side research:
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+- Business publications (Fortune, Inc, Fast Company, Business Insider)
+- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
+- Company press releases and SEC filings
+- Industry trade publications
+- Academic/research institutions
+
+Do NOT add commentary. If unsure whether to skip, proceed with analysis.
 
 **YOUR TASK:**
 Extract and summarize facts from the article about {competitor_name} ({competitor_ticker})'s actions, performance, or developments. Focus on operational and strategic information that provides competitive context for {target_company} ({target_ticker}).
@@ -8756,10 +8870,58 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
             prompt = f"""You are a research analyst extracting fundamental driver facts relevant to a target company's financial performance.
 
 **CRITICAL - Retail Analysis Detection:**
-If article is primarily retail investment analysis (Simply Wall St scores, GuruFocus ratings, Zacks ranks, TipRanks consensus, unnamed DCF models, stock screener results), return ONLY the text:
+If article matches retail investment analysis patterns below, return ONLY the text:
 SKIP_RETAIL_ANALYSIS
 
-Do not proceed with summarization.
+**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
+- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
+- Stock screener sites (Finviz, MarketBeat, StockRover)
+- AI-generated prediction platforms
+
+**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
+- Forbes: KEEP staff reporting, SKIP contributor stock picks
+- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
+- MSN Money: KEEP original content, SKIP syndicated retail content
+- Benzinga: KEEP news/deals, SKIP stock pick articles
+
+**Retail Analysis Content Patterns (Check Article Content):**
+❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
+❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
+❌ "Should You Buy?" or "Is [Stock] a Buy?"
+❌ "Top X Stocks to Buy Now"
+❌ "Zacks Rank #X" or "TipRanks consensus"
+❌ Unnamed DCF models or valuation formulas
+❌ Technical analysis for retail (RSI, MACD, moving averages)
+❌ Stock screener rankings ("Ranks #3 in momentum")
+❌ Aggregated analyst consensus without original analysis
+❌ AI-generated predictions without human analyst attribution
+
+**Examples to SKIP:**
+- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
+- "DCF model calculated intrinsic value $1,081.85 per share"
+- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
+- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
+- "GuruFocus gives company a financial strength score of 7/10"
+
+✓ KEEP institutional sell-side research:
+- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
+- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
+- Business publications (Fortune, Inc, Fast Company, Business Insider)
+- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
+- Company press releases and SEC filings
+- Industry trade publications by sector:
+  • Healthcare: AHA, Mobi Health News, Healthcare Dive, FierceHealthcare, Modern Healthcare, Becker's Hospital Review
+  • Financial Services: American Banker, Bank Director, InvestmentNews, Pensions & Investments
+  • Energy: Oil & Gas Journal, Rigzone, Utility Dive, Natural Gas Intelligence
+  • Retail/Consumer: Retail Dive, Chain Store Age, WWD (Women's Wear Daily)
+  • Manufacturing: Industry Week, Supply Chain Dive, Manufacturing.net
+  • Technology: InfoWorld, Network World, CIO, Computerworld
+  • Automotive: Automotive News, WardsAuto, Automotive Dive
+  • Real Estate: CoStar, GlobeSt, Multi-Housing News
+  • Telecommunications: FierceWireless, Light Reading, RCR Wireless News
+- Academic/research institutions
+
+Do NOT add commentary. If unsure whether to skip, proceed with analysis.
 
 **YOUR TASK:**
 Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact target company's revenue, costs, or margins.

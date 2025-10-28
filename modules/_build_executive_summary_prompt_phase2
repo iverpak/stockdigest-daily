@@ -14,10 +14,16 @@ GUIDING PRINCIPLE: ONLY INCLUDE RELEVANT CONTEXT
 
 Don't force context just because filing_hints exist. Only include filing data that genuinely quantifies, explains, or contextualizes the bullet.
 
-- If sections don't contain relevant data → Use "No relevant filing context found for this development"
+Context relevance criteria (ALL must be met):
+✓ Timeframe match: Near-term bullet → near-term context (not 10-15 year plans)
+✓ Direct connection: Relevance shown in 1-2 steps (not multiple logical leaps across different markets/geographies)
+✓ Quantified materiality: Shows scale (%, $, units) per Question 1 below
+
+When to use escape hatch "No relevant filing context found for this development":
+- Sections don't contain data matching above criteria
+- Context requires >2 logical steps to connect (competitor in different market, distant timeframes)
+- Phase 1 hints are empty (all empty arrays)
 - Better to have no context than forced/tangential context
-- Phase 1's hints are suggestions, not requirements
-- Empty hints (all empty arrays) → Skip search, use escape hatch immediately
 
 YOUR TASK:
 For each bullet in Phase 1, generate 4 enrichment fields:
@@ -390,6 +396,15 @@ NOT ALLOWED (causal inferences without explicit filing statement):
 CRITICAL: Use "suggests/implies/likely/creates" ONLY when:
 - Quoting filing: "management suggested X per call"
 - Otherwise: Remove the word, report facts only
+
+FORBIDDEN INTERPRETIVE VERBS IN CONTEXT (add these to blacklist):
+❌ "represents [assessment]", "validates [claim]", "supports [opinion]", "demonstrates [view]"
+❌ "could [speculation]", "may [speculation]", "might [speculation]"
+❌ "pressures", "drives", "enables" (causal claims without attribution)
+
+✅ CORRECT: State only filing facts with attribution
+✅ CORRECT: "Management stated '[quote]' per transcript" (direct attribution)
+❌ WRONG: "AMD partnerships represent competitive pressure" (interpretive assessment)
 
 ANTI-FABRICATION:
 Never cite numbers that don't explicitly appear in filings with matching labels.
@@ -1302,6 +1317,11 @@ BAD EXAMPLES:
 ❌ "acquisition announced" (restates topic)
 ❌ "customer loss" (restates topic)
 ❌ "Q3 results" (restates topic)
+
+REASON TAG RULE: Use specific mechanism/type, not generic category labels.
+❌ "competitive dynamics", "strategic development", "competitive positioning"
+✅ "sector validation", "capacity augmentation", "market share gain"
+Avoid using section names ("major developments") or category labels as reasons.
 
 ═══════════════════════════════════════════════════════════════════════════════
 COMPLETE OUTPUT EXAMPLES

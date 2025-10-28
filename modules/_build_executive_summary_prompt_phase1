@@ -589,6 +589,24 @@ Bottom Line is a PARAGRAPH, not bullets. Use consolidated date range at END.
 
 Rules: Date at paragraph end only. Format: (Oct 22-24) or (Oct 23). Inline attribution: "per CFO", "per NHTSA"
 
+ATTRIBUTION REQUIREMENT (CRITICAL):
+
+Minimum 70% of major factual claims must have inline source attribution.
+Target: 7+ attributions in typical 10-claim Bottom Line.
+
+Primary format: "per [source] (date)" - use when sources span multiple dates
+Alternative format: "per [source]" with consolidated date range at end - use when all claims from same 2-3 day period
+
+Source attribution examples:
+- Company: "per company announcement (Oct 27)", "per earnings call (Oct 23)", "per CEO"
+- Regulatory/data: "per EIA report (Oct 27)", "per Natural Gas Intelligence"
+- Competitor: "per Q3 2025 earnings call (Oct 31)", "per Barchart.com report (Oct 24)"
+
+Example with 100% attribution (5 claims, 5 attributions):
+"Talen completed $2.69B notes offering per company announcement (Oct 27). Company partnered with Eos Energy on battery storage per joint press release (Oct 21). Natural gas prices reached $3.44/MMBtu per Natural Gas Intelligence (Oct 27). NRG raised guidance to $7.55-$8.15 per Q3 earnings call (Oct 31). Vistra announced 600 MW nuclear expansion per Barchart.com report (Oct 24)."
+
+Before finalizing: Count attributions. Are 70%+ of major claims attributed? If not, add sources.
+
 MANDATORY LENGTH CHECK:
 After writing Bottom Line, count words. If >150 words:
 1. Remove lowest-priority detail (usually: granular peer comparisons, secondary metrics)
@@ -757,6 +775,9 @@ UPSIDE SCENARIO (80-100 words, single paragraph):
 - Use attributed statements only - preserve article confidence levels
 - Run checks 1-3 above before finalizing
 
+COVERAGE CHECK: Review all bullish bullets with "high impact" tags. Each high-impact
+bullish development must appear in Upside Scenario. Don't omit material themes.
+
 Attribution: Use paragraph format (consolidated date at end, see Bottom Line section above)
 
 CRITICAL - DOWNSIDE SCENARIO INFERENCE TIER:
@@ -779,6 +800,9 @@ DOWNSIDE SCENARIO (single paragraph, 3-4 sentences):
 - Format as coherent narrative (not bullet points)
 - Use attributed statements only - preserve article confidence levels
 - Run checks 1-3 above before finalizing
+
+COVERAGE CHECK: Review all bearish bullets with "high impact" tags. Each high-impact
+bearish development must appear in Downside Scenario. Don't omit material themes.
 
 Attribution: Use paragraph format (consolidated date at end, see Bottom Line section above)
 
@@ -844,8 +868,9 @@ If articles discuss past event → Extract FUTURE monitoring period:
 If articles discuss future event → Use that date:
 ✅ "Timeline: FDA decision expected Q2 2025"
 
-If no specific date → Use general forward period:
-✅ "Timeline: Upcoming quarters" or "Timeline: Q4 2025 and beyond"
+If no specific date → Use estimated horizon based on article context:
+✅ "Timeline: 2025-2026" or "Timeline: Next 12-18 months" or "Timeline: Q4 2025 and beyond"
+❌ AVOID: "Timeline: Upcoming quarters" (too vague)
 
 Sources: Analyst commentary, management focus, article emphasis about what to watch
 
@@ -1387,7 +1412,7 @@ RISK FACTORS
 
 SECTION SCOPE: Risks, concerns, and threats that articles reported or that meet categorical risk criteria.
 
-LENGTH LIMIT: 2-4 bullets max
+LENGTH LIMIT: 2-5 bullets max (use 4-5 when multiple categorical risks present)
 
 SOURCE: [COMPANY], [INDUSTRY], and [COMPETITOR] articles all qualify
 
@@ -1414,6 +1439,7 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    - Litigation (class action, government lawsuits)
    - Force majeure events (strikes, natural disasters affecting operations)
    - Debt downgrades or covenant concerns
+   - Financing with material contingent terms (redemption triggers, acquisition closing risk with committed financing)
    - Executive departures (unexpected/contentious)
    - Failed clinical trials or regulatory rejections
    - Cybersecurity breaches

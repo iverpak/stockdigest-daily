@@ -578,6 +578,14 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
             # Use <br> tags for HTML rendering (newlines collapse in HTML)
             main_text += f"<br>  Filing hints: {hints_text}"
 
+        # Phase 1 filing keywords (if present)
+        keywords = bullet.get("filing_keywords", [])
+        if keywords:
+            # Format as JSON array for readability
+            import json
+            keywords_text = json.dumps(keywords)
+            main_text += f"<br>  Filing keywords: {keywords_text}"
+
         # Bullet ID (always show)
         main_text += f"<br>  ID: {bullet['bullet_id']}"
 

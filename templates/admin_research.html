@@ -1281,7 +1281,7 @@
                     } else if (docInfo.type === 'presentations') {
                         title = `${doc.company_name || doc.ticker} - ${doc.presentation_title || 'Presentation'} (${doc.presentation_date})`;
                     } else if (docInfo.type === 'transcripts') {
-                        title = `${doc.ticker} Earnings Transcript - Q${doc.quarter} ${doc.year}`;
+                        title = `${doc.ticker} Earnings Transcript - ${doc.quarter} ${doc.year}`;
                     } else if (docInfo.type === 'press_releases') {
                         title = `${doc.ticker} Press Release - ${doc.report_date}`;
                     }

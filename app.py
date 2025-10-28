@@ -6541,10 +6541,17 @@ Full Content: {scraped_content[:10000]}
 # Content character limit for AI summarization
 CONTENT_CHAR_LIMIT = 10000
 
-async def generate_claude_article_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """Generate Claude summary for company article - POV agnostic"""
+async def generate_claude_article_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate Claude summary for company article - POV agnostic
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
-        return None
+        return None, "failed"
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with CLAUDE_SEM:
@@ -6871,23 +6878,30 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                                 skip_data = json.loads(summary.strip())
                                 if skip_data.get("skip"):
                                     LOG.info(f"[{ticker}] 🚫 FILTERED (company): {skip_data.get('reason')} - {title[:80]}")
-                                    return None
+                                    return None, "filtered"
                             except json.JSONDecodeError:
                                 pass  # Not valid JSON, continue normal processing
 
                         if summary and len(summary.strip()) > 10:
                             LOG.info(f"Claude company summary: {ticker} ({len(summary)} chars)")
-                            return summary.strip()
+                            return summary.strip(), "success"
                     else:
                         LOG.error(f"Claude company API error {response.status}")
         except Exception as e:
             LOG.error(f"Claude company summary failed for {ticker}: {e}")
-    return None
+    return None, "failed"
 
-async def generate_claude_competitor_article_summary(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """Generate Claude summary for competitor article with target company POV"""
+async def generate_claude_competitor_article_summary(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate Claude summary for competitor article with target company POV
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
-        return None
+        return None, "failed"
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with CLAUDE_SEM:
@@ -7165,7 +7179,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 if response.status != 200:
                     error_text = await response.text()
                     LOG.error(f"Claude competitor summary error {response.status} for {target_ticker}: {error_text[:500]}")
-                    return None
+                    return None, "failed"
 
                 result = await response.json()
 
@@ -7185,7 +7199,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                 if not content or len(content.strip()) < 50:
                     LOG.warning(f"Claude returned insufficient competitor summary for {target_ticker}")
-                    return None
+                    return None, "failed"
 
                 # Check for skip response
                 if content.strip().startswith('{"skip"'):
@@ -7193,17 +7207,17 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                         skip_data = json.loads(content.strip())
                         if skip_data.get("skip"):
                             LOG.info(f"[{target_ticker}] 🚫 FILTERED (competitor): {skip_data.get('reason')} - {title[:80]}")
-                            return None
+                            return None, "filtered"
                     except json.JSONDecodeError:
                         pass  # Not valid JSON, continue normal processing
 
-                return content.strip()
+                return content.strip(), "success"
 
         except Exception as e:
             LOG.error(f"Claude competitor summary generation failed for {target_ticker}: {str(e)}")
-            return None
+            return None, "failed"
 
-    return None
+    return None, "failed"
 
 
 async def score_industry_article_relevance_claude(
@@ -7774,10 +7788,17 @@ async def score_industry_article_relevance(
     }
 
 
-async def generate_claude_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """Generate Claude summary for fundamental driver article with target company POV"""
+async def generate_claude_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate Claude summary for fundamental driver article with target company POV
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
-        return None
+        return None, "failed"
 
     # Get ticker config for geographic metadata
     config = get_ticker_config(target_ticker) or {}
@@ -8084,7 +8105,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 if response.status != 200:
                     error_text = await response.text()
                     LOG.error(f"Claude fundamental driver summary error {response.status} for {target_ticker}: {error_text[:500]}")
-                    return None
+                    return None, "failed"
 
                 result = await response.json()
 
@@ -8104,7 +8125,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                 if not content or len(content.strip()) < 50:
                     LOG.warning(f"Claude returned insufficient summary for {target_ticker}")
-                    return None
+                    return None, "failed"
 
                 # Check for skip response
                 if content.strip().startswith('{"skip"'):
@@ -8112,23 +8133,30 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                         skip_data = json.loads(content.strip())
                         if skip_data.get("skip"):
                             LOG.info(f"[{target_ticker}] 🚫 FILTERED (industry): {skip_data.get('reason')} - {title[:80]}")
-                            return None
+                            return None, "filtered"
                     except json.JSONDecodeError:
                         pass  # Not valid JSON, continue normal processing
 
-                return content.strip()
+                return content.strip(), "success"
 
         except Exception as e:
             LOG.error(f"Claude fundamental driver summary generation failed for {target_ticker}: {str(e)}")
-            return None
+            return None, "failed"
 
-    return None
+    return None, "failed"
 
 
-async def generate_openai_article_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """OpenAI fallback for company article"""
+async def generate_openai_article_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """OpenAI fallback for company article
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
-        return None
+        return None, "failed"
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with OPENAI_SEM:
@@ -8386,20 +8414,27 @@ Extract all material facts about {company_name}'s actions, performance, and deve
                             # Check for skip signal
                             if "SKIP_RETAIL_ANALYSIS" in summary:
                                 LOG.info(f"[{ticker}] 🚫 FILTERED (OpenAI): Retail investment analysis - {title[:80]}")
-                                return None
+                                return None, "filtered"
                             LOG.info(f"OpenAI company summary: {ticker} ({len(summary)} chars)")
-                            return summary.strip()
+                            return summary.strip(), "success"
                     else:
                         LOG.error(f"OpenAI company API error {response.status}")
         except Exception as e:
             LOG.error(f"OpenAI company summary failed for {ticker}: {e}")
-    return None
+    return None, "failed"
 
 
-async def generate_openai_competitor_article_summary(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """OpenAI fallback for competitor article with target company POV"""
+async def generate_openai_competitor_article_summary(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """OpenAI fallback for competitor article with target company POV
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
-        return None
+        return None, "failed"
 
     # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
     # with OPENAI_SEM:
@@ -8625,20 +8660,27 @@ Extract facts about {competitor_name}'s actions and performance. Do not speculat
                             # Check for skip signal
                             if "SKIP_RETAIL_ANALYSIS" in summary:
                                 LOG.info(f"[{target_ticker}] 🚫 FILTERED (OpenAI competitor): Retail investment analysis - {title[:80]}")
-                                return None
+                                return None, "filtered"
                             LOG.info(f"OpenAI competitor summary: {competitor_ticker} ({len(summary)} chars)")
-                            return summary.strip()
+                            return summary.strip(), "success"
                     else:
                         LOG.error(f"OpenAI competitor API error {response.status}")
         except Exception as e:
             LOG.error(f"OpenAI competitor summary failed for {competitor_ticker}: {e}")
-    return None
+    return None, "failed"
 
 
-async def generate_openai_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Optional[str]:
-    """OpenAI fallback for industry article with target company POV"""
+async def generate_openai_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """OpenAI fallback for industry article with target company POV
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if not OPENAI_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
-        return None
+        return None, "failed"
 
     # Get ticker config for geographic metadata
     config = get_ticker_config(target_ticker) or {}
@@ -8885,86 +8927,120 @@ Extract fundamental driver facts (commodity prices, volume metrics, policy chang
                             # Check for skip signal
                             if "SKIP_RETAIL_ANALYSIS" in summary:
                                 LOG.info(f"[{target_ticker}] 🚫 FILTERED (OpenAI industry): Retail investment analysis - {title[:80]}")
-                                return None
+                                return None, "filtered"
                             LOG.info(f"OpenAI industry summary: {industry_keyword} ({len(summary)} chars)")
-                            return summary.strip()
+                            return summary.strip(), "success"
                     else:
                         LOG.error(f"OpenAI industry API error {response.status}")
         except Exception as e:
             LOG.error(f"OpenAI industry summary failed for {industry_keyword}: {e}")
-    return None
+    return None, "failed"
 
 
 async def generate_claude_summary(scraped_content: str, title: str, ticker: str, category: str,
                                   article_metadata: dict, target_company_name: str,
-                                  competitor_name_cache: dict) -> Optional[str]:
-    """Route to appropriate Claude function based on category"""
+                                  competitor_name_cache: dict) -> Tuple[Optional[str], str]:
+    """Route to appropriate Claude function based on category
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if category == "company":
         return await generate_claude_article_summary(target_company_name, ticker, title, scraped_content)
     elif category == "competitor":
         competitor_ticker = article_metadata.get("competitor_ticker")
         if not competitor_ticker:
-            return None
+            return None, "failed"
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
         return await generate_claude_competitor_article_summary(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
         return await generate_claude_industry_article_summary(industry_keyword, target_company_name, ticker, title, scraped_content)
-    return None
+    return None, "failed"
 
 
 async def generate_openai_summary(scraped_content: str, title: str, ticker: str, category: str,
                                   article_metadata: dict, target_company_name: str,
-                                  competitor_name_cache: dict) -> Optional[str]:
-    """Route to appropriate OpenAI function based on category"""
+                                  competitor_name_cache: dict) -> Tuple[Optional[str], str]:
+    """Route to appropriate OpenAI function based on category
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
     if category == "company":
         return await generate_openai_article_summary(target_company_name, ticker, title, scraped_content)
     elif category == "competitor":
         competitor_ticker = article_metadata.get("competitor_ticker")
         if not competitor_ticker:
-            return None
+            return None, "failed"
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
         return await generate_openai_competitor_article_summary(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
         return await generate_openai_industry_article_summary(industry_keyword, target_company_name, ticker, title, scraped_content)
-    return None
+    return None, "failed"
 
 
 async def generate_ai_summary_with_fallback(scraped_content: str, title: str, ticker: str, description: str,
                                            category: str, article_metadata: dict, target_company_name: str,
                                            competitor_name_cache: dict) -> tuple[Optional[str], str]:
-    """Main entry point: Try Claude first, fallback to OpenAI. Returns (summary, model_used)"""
+    """Main entry point: Try Claude first, fallback to OpenAI on failure (NOT on filter)
+
+    Returns (summary, model_used) where model_used is:
+        - "Claude": Successfully generated by Claude
+        - "OpenAI": Successfully generated by OpenAI (after Claude failed)
+        - "filtered": Article intentionally skipped by AI (retail analysis)
+        - "none": Both APIs failed or unavailable
+    """
     model_used = "none"
     summary = None
 
     # Try Claude first (if enabled and API key available)
     if USE_CLAUDE_FOR_SUMMARIES and ANTHROPIC_API_KEY:
         try:
-            summary = await generate_claude_summary(
+            summary, status = await generate_claude_summary(
                 scraped_content, title, ticker, category,
                 article_metadata, target_company_name, competitor_name_cache
             )
-            if summary:
-                model_used = "Claude"
-                return summary, model_used
-            else:
-                LOG.warning(f"Claude returned no summary for {ticker}, falling back to OpenAI")
-        except Exception as e:
-            LOG.warning(f"Claude summarization failed for {ticker}, falling back to OpenAI: {e}")
 
-    # Fallback to OpenAI
+            if status == "success":
+                # Claude succeeded - return immediately
+                LOG.info(f"[{ticker}] ✅ Claude generated summary successfully")
+                return summary, "Claude"
+            elif status == "filtered":
+                # Claude intentionally skipped (retail analysis) - DO NOT fallback to OpenAI
+                LOG.info(f"[{ticker}] 🚫 Article filtered by Claude, skipping OpenAI fallback")
+                return None, "filtered"
+            else:  # status == "failed"
+                # Claude failed - try OpenAI fallback
+                LOG.warning(f"[{ticker}] ⚠️ Claude failed, falling back to OpenAI")
+        except Exception as e:
+            LOG.warning(f"[{ticker}] ⚠️ Claude exception, falling back to OpenAI: {e}")
+
+    # Fallback to OpenAI (only if Claude failed, not if Claude filtered)
     if OPENAI_API_KEY:
         try:
-            summary = await generate_openai_summary(
+            summary, status = await generate_openai_summary(
                 scraped_content, title, ticker, category,
                 article_metadata, target_company_name, competitor_name_cache
             )
-            if summary:
-                model_used = "OpenAI"
-                return summary, model_used
+
+            if status == "success":
+                LOG.info(f"[{ticker}] ✅ OpenAI generated summary successfully")
+                return summary, "OpenAI"
+            elif status == "filtered":
+                LOG.info(f"[{ticker}] 🚫 Article filtered by OpenAI")
+                return None, "filtered"
+            else:  # status == "failed"
+                LOG.error(f"[{ticker}] ❌ OpenAI also failed")
         except Exception as e:
-            LOG.error(f"OpenAI summarization also failed for {ticker}: {e}")
+            LOG.error(f"[{ticker}] ❌ OpenAI exception: {e}")
 
     return None, "none"
 

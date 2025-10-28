@@ -6015,21 +6015,32 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # 2. SECOND BADGE: Source name
     header_badges.append(f'<span class="source-badge">📰 {display_source}</span>')
 
-    # 3. AI Model badge (if AI summary exists and model is not "none")
+    # 3. STATUS BADGES - 5 mutually exclusive statuses (Analyzed, Paywall, Spam, Skipped, Failed)
     ai_model = article.get('ai_model') or ''
-    ai_model_clean = ai_model.strip().lower() if ai_model else ''
-    if ai_model_clean and ai_model_clean != 'none':
-        header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
+    ai_summary = article.get('ai_summary')
+    scraped_content = article.get('scraped_content')
+    scraping_failed = article.get('scraping_failed', False)
+
+    # Determine status and render appropriate badge
+    if ai_model == 'spam':
+        # Spam article (resolved to spam domain)
+        header_badges.append('<span class="spam-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">🗑️ Spam</span>')
+    elif ai_model == 'headline_only':
+        # Paywalled article (flagged + paywalled)
+        header_badges.append('<span class="paywall-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e;">📰 Paywall</span>')
+    elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'headline_only'):
+        # Successfully analyzed article
+        header_badges.append(f'<span class="ai-model-badge">🤖 Analyzed</span>')
+    elif scraped_content and not ai_summary:
+        # Scraped but skipped (retail investment analysis)
+        header_badges.append('<span class="skipped-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f7fafc; color: #718096; border: 1px solid #cbd5e0;">🚫 Skipped</span>')
+    elif scraping_failed:
+        # Scraping failed
+        header_badges.append('<span class="failed-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed</span>')
 
     # 4. Quality badge for quality domains
     if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
         header_badges.append('<span class="quality-badge">⭐ Quality</span>')
-
-    # 5. Analysis badge if both content and summary exist
-    analyzed_html = ""
-    if article.get('scraped_content') and article.get('ai_summary'):
-        analyzed_html = f'<span class="analyzed-badge">Analyzed</span>'
-        header_badges.append(analyzed_html)
 
     # 6. Relevance score badge for industry articles (NEW - Oct 2025)
     relevance_badge_html = ""
@@ -18554,15 +18565,14 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
             # Check if article is new (< 24 hours)
-            # NEW badge removed per user request (Oct 2025)
-            # is_new = False
-            # if article.get('published_at'):
-            #     published_at = article['published_at']
-            #     if published_at.tzinfo is None:
-            #         published_at = published_at.replace(tzinfo=timezone.utc)
-            #     age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-            #     is_new = age_hours < 24
-            # new_badge = '🆕 ' if is_new else ''
+            is_new = False
+            if article.get('published_at'):
+                published_at = article['published_at']
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+                is_new = age_hours < 24
+            new_badge = '🆕 ' if is_new else ''
 
             # Star for FLAGGED + QUALITY articles
             domain = article.get('domain', '')
@@ -18578,7 +18588,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
             article_links += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''
@@ -18697,7 +18707,8 @@ def generate_email_html_core(
 
     with db() as conn, conn.cursor() as cur:
         if flagged_article_ids is not None and len(flagged_article_ids) > 0:
-            # Use flagged list (normal case)
+            # Use flagged list (normal case) - FILTER: Only quality articles (analyzed + paywalled)
+            # Excludes: spam, skipped retail, failed scrapes
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
                        ta.category, ta.search_keyword, ta.competitor_ticker,
@@ -18707,6 +18718,8 @@ def generate_email_html_core(
                 WHERE ta.ticker = %s
                 AND a.id = ANY(%s)
                 AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+                AND ta.ai_summary IS NOT NULL
+                AND (ta.ai_model IS NULL OR ta.ai_model != 'spam')
                 ORDER BY a.published_at DESC NULLS LAST
             """, (ticker, flagged_article_ids))
         else:
@@ -19301,19 +19314,31 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
                 final_resolved_url = resolved_url
                 final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
 
-            # SPAM CHECK: Block spam domains after full resolution chain
+            # SPAM CHECK: Mark spam domains after full resolution chain (keep in flagged list for Email #2)
             if final_domain in SPAM_DOMAINS:
                 LOG.info(f"[{ticker}] 🚫 SPAM BLOCKED (post-resolution): {final_domain} - {title[:60]}")
                 spam_blocked_count += 1
                 spam_blocked_ids.append(article_id)
 
-                # Delete spam article from database
+                # Mark as spam in database (don't delete - keep for Email #2 transparency)
                 with db() as conn2, conn2.cursor() as cur2:
-                    cur2.execute("DELETE FROM ticker_articles WHERE article_id = %s", (article_id,))
-                    cur2.execute("DELETE FROM articles WHERE id = %s", (article_id,))
-                    LOG.info(f"[{ticker}] 🗑️ Deleted spam article ID {article_id} from database")
+                    # Update article with resolved spam URL
+                    cur2.execute("""
+                        UPDATE articles
+                        SET resolved_url = %s, domain = %s
+                        WHERE id = %s
+                    """, (final_resolved_url, final_domain, article_id))
 
-                # Skip database UPDATE and move to next article
+                    # Mark ticker_article with spam status
+                    cur2.execute("""
+                        UPDATE ticker_articles
+                        SET ai_model = %s
+                        WHERE article_id = %s AND ticker = %s
+                    """, ('spam', article_id, ticker))
+
+                    LOG.info(f"[{ticker}] 🗑️ Marked spam article ID {article_id} (kept in flagged list for QA)")
+
+                # Continue to next article (spam article stays in flagged_article_ids)
                 continue
 
             # Update database (no source_url)
@@ -19355,10 +19380,9 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
     LOG.info(f"[{ticker}]    🔗 Google→Yahoo→Final chains: {yahoo_chain_count}")
     LOG.info(f"[{ticker}] {'='*60}")
 
-    # Remove spam articles from flagged list
+    # Spam articles are now kept in flagged list (marked with ai_model='spam' for Email #2 transparency)
     if spam_blocked_ids:
-        flagged_article_ids = [aid for aid in flagged_article_ids if aid not in spam_blocked_ids]
-        LOG.info(f"[{ticker}] 🗑️ Removed {len(spam_blocked_ids)} spam articles from flagged list")
+        LOG.info(f"[{ticker}] 🗑️ Kept {len(spam_blocked_ids)} spam articles in flagged list (marked for QA)")
 
     # ============================================================================
     # POST-RESOLUTION DEDUPLICATION

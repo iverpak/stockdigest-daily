@@ -455,9 +455,12 @@ def generate_executive_summary_phase2(
         return None
 
 
-def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
+def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
     """
-    Validate Phase 2 enrichments structure.
+    Validate Phase 2 enrichments structure with partial acceptance.
+
+    This function filters out incomplete/invalid bullets but accepts the rest,
+    preventing one bad bullet from destroying all Phase 2 enrichment work.
 
     Expected structure:
     {
@@ -475,34 +478,67 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str]:
         enrichments: Dict keyed by bullet_id
 
     Returns:
-        Tuple of (is_valid: bool, error_message: str)
+        Tuple of (is_valid: bool, error_message: str, valid_enrichments: Dict)
+        - is_valid: True if ANY bullets are valid
+        - error_message: Description of what was accepted/rejected
+        - valid_enrichments: Dict containing only complete, valid bullets
     """
     if not isinstance(enrichments, dict):
-        return False, "Enrichments must be object/dict"
+        return False, "Enrichments must be object/dict", {}
+
+    if not enrichments:
+        return False, "Enrichments dict is empty", {}
 
     required_fields = ["impact", "sentiment", "reason", "relevance", "context"]
+    valid_enrichments = {}
+    invalid_bullets = []
 
     for bullet_id, data in enrichments.items():
+        # Check if data is a dict
         if not isinstance(data, dict):
-            return False, f"{bullet_id} must be object"
+            invalid_bullets.append(f"{bullet_id} (not a dict)")
+            continue
 
-        for field in required_fields:
-            if field not in data:
-                return False, f"{bullet_id} missing '{field}'"
+        # Check for missing fields
+        missing_fields = [f for f in required_fields if f not in data or not data.get(f)]
+        if missing_fields:
+            invalid_bullets.append(f"{bullet_id} (missing: {', '.join(missing_fields)})")
+            continue
 
         # Validate impact values
         if data["impact"] not in ["high impact", "medium impact", "low impact"]:
-            return False, f"{bullet_id} impact must be 'high impact'|'medium impact'|'low impact', got: {data['impact']}"
+            invalid_bullets.append(f"{bullet_id} (invalid impact: {data['impact']})")
+            continue
 
         # Validate sentiment values
         if data["sentiment"] not in ["bullish", "bearish", "neutral"]:
-            return False, f"{bullet_id} sentiment must be bullish|bearish|neutral, got: {data['sentiment']}"
+            invalid_bullets.append(f"{bullet_id} (invalid sentiment: {data['sentiment']})")
+            continue
 
         # Validate relevance values
         if data["relevance"] not in ["direct", "indirect", "none"]:
-            return False, f"{bullet_id} relevance must be direct|indirect|none, got: {data['relevance']}"
+            invalid_bullets.append(f"{bullet_id} (invalid relevance: {data['relevance']})")
+            continue
 
-    return True, ""
+        # Bullet passed all validation checks!
+        valid_enrichments[bullet_id] = data
+
+    # If no valid enrichments, Phase 2 completely failed
+    if not valid_enrichments:
+        error_detail = '; '.join(invalid_bullets) if invalid_bullets else "No enrichments provided"
+        return False, f"No valid enrichments found. Issues: {error_detail}", {}
+
+    # At least some enrichments are valid - accept them
+    if invalid_bullets:
+        # Partial success - some bullets filtered out
+        error_msg = f"Accepted {len(valid_enrichments)}/{len(enrichments)} bullets. Filtered out: {'; '.join(invalid_bullets[:3])}"
+        if len(invalid_bullets) > 3:
+            error_msg += f" (+{len(invalid_bullets) - 3} more)"
+    else:
+        # Complete success - all bullets valid
+        error_msg = f"All {len(valid_enrichments)} bullets validated successfully"
+
+    return True, error_msg, valid_enrichments
 
 
 def strip_escape_hatch_context(phase2_result: Dict) -> Dict:

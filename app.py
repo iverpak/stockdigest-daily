@@ -17566,10 +17566,16 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 )
 
                 if phase2_result:
-                    # Validate enrichments structure
-                    is_valid, error_msg = validate_phase2_json(phase2_result.get("enrichments", {}))
+                    # Validate enrichments structure (with partial acceptance)
+                    is_valid, error_msg, valid_enrichments = validate_phase2_json(phase2_result.get("enrichments", {}))
 
                     if is_valid:
+                        # Replace enrichments with filtered valid ones
+                        phase2_result["enrichments"] = valid_enrichments
+
+                        # Log validation results
+                        LOG.info(f"[{ticker}] Phase 2 validation: {error_msg}")
+
                         # Strip escape hatch text for cleaner display
                         phase2_result = strip_escape_hatch_context(phase2_result)
 
@@ -17587,10 +17593,10 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                         }
                         calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
 
-                        enrichment_count = len(phase2_result.get("enrichments", {}))
+                        enrichment_count = len(valid_enrichments)
                         LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 2 - {model_used}) [{ticker}]: Enriched {enrichment_count} bullets ({phase2_prompt_tokens} prompt tokens, {phase2_completion_tokens} completion tokens, {phase2_generation_time_ms}ms)")
                     else:
-                        LOG.error(f"[{ticker}] Phase 2 validation failed: {error_msg}")
+                        LOG.error(f"[{ticker}] Phase 2 validation failed completely: {error_msg}")
                         LOG.warning(f"[{ticker}] Using Phase 1 output only (Phase 2 validation failed)")
                 else:
                     LOG.warning(f"[{ticker}] Phase 2 generation failed, using Phase 1 only")
@@ -27512,14 +27518,31 @@ async def email_research_api(request: Request):
         if not content:
             return {"status": "error", "message": "No content found"}
 
-        # Get stock price data
+        # Get stock price data (real-time for transcripts with fallback to cached)
         config = get_ticker_config(ticker)
         company_name = config.get("company_name", ticker) if config else ticker
 
-        stock_context = get_stock_context(ticker, config)
+        # Attempt real-time fetch (has built-in retry logic: 3 attempts, Polygon.io fallback)
+        stock_context = get_stock_context(ticker)
+
+        # If real-time fetch fails, fall back to cached data from database
+        if not stock_context:
+            LOG.warning(f"Real-time price fetch failed for {ticker}, using cached data from database")
+            stock_context = config if config else {}
+
+        # Extract price data (works with both fresh and cached data)
         stock_price = stock_context.get("financial_last_price", "$0.00")
         price_change_pct = stock_context.get("financial_price_change_pct")
-        price_change_color = "#22c55e" if price_change_pct and float(price_change_pct.strip('%')) > 0 else "#ef4444"
+
+        # Format price change color
+        if price_change_pct:
+            try:
+                change_value = float(str(price_change_pct).strip('%'))
+                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
+            except (ValueError, AttributeError):
+                price_change_color = "#6b7280"  # Gray if invalid
+        else:
+            price_change_color = "#6b7280"  # Gray if no data
 
         # Generate formatted email using proper template
         if research_type == 'presentation':
@@ -29017,9 +29040,16 @@ async def regenerate_email_api(request: Request):
             )
 
             if phase2_result:
-                is_valid_p2, error_msg_p2 = validate_phase2_json(phase2_result.get("enrichments", {}))
+                # Validate enrichments structure (with partial acceptance)
+                is_valid_p2, error_msg_p2, valid_enrichments_p2 = validate_phase2_json(phase2_result.get("enrichments", {}))
 
                 if is_valid_p2:
+                    # Replace enrichments with filtered valid ones
+                    phase2_result["enrichments"] = valid_enrichments_p2
+
+                    # Log validation results
+                    LOG.info(f"[{ticker}] Phase 2 validation: {error_msg_p2}")
+
                     # Strip escape hatch text for cleaner display
                     phase2_result = strip_escape_hatch_context(phase2_result)
 
@@ -29038,10 +29068,10 @@ async def regenerate_email_api(request: Request):
                     }
                     calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
 
-                    enrichment_count = len(phase2_result.get("enrichments", {}))
+                    enrichment_count = len(valid_enrichments_p2)
                     LOG.info(f"✅ [{ticker}] Phase 2 enrichment: {enrichment_count} bullets enriched ({phase2_prompt_tokens} prompt tokens, {phase2_completion_tokens} completion tokens, {phase2_generation_time_ms}ms)")
                 else:
-                    LOG.error(f"[{ticker}] Phase 2 validation failed: {error_msg_p2}")
+                    LOG.error(f"[{ticker}] Phase 2 validation failed completely: {error_msg_p2}")
                     LOG.warning(f"[{ticker}] Using Phase 1 output only (Phase 2 validation failed)")
             else:
                 LOG.warning(f"[{ticker}] Phase 2 generation failed, using Phase 1 only")

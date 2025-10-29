@@ -758,6 +758,11 @@ SPAM_DOMAINS = {
     "timothysykes.com", "www.timothysykes.com",  # Penny stock promoter, trading courses, pure retail picks
     # Low-quality international aggregators (Oct 2025)
     "beritasriwijaya.co.id", "www.beritasriwijaya.co.id",  # Indonesian news aggregator, syndicated content
+    # Retail investment screeners - content filtering update (Oct 2025)
+    "finviz.com", "www.finviz.com",  # Stock screener, technical analysis charts
+    # General spam/low-quality aggregators (Oct 2025)
+    "barchart.com", "www.barchart.com",  # Anti-bot issues, promoted from ANTIBOT_DOMAINS
+    "aol.com", "www.aol.com",  # Low-quality news aggregator
 }
 
 QUALITY_DOMAINS = {
@@ -6693,53 +6698,81 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
             # System prompt (generic - cacheable, ~3500 tokens - optimized for caching and comprehensive extraction)
             system_prompt = """You are a hedge fund analyst extracting information about a target company for an investment research report.
 
-**SOURCE QUALITY FILTER:**
-SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
+**STEP 1: SOURCE VERIFICATION**
 
-**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
-- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
-- Stock screener sites (Finviz, MarketBeat, StockRover)
-- AI-generated prediction platforms
+Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
 
-**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
-- Forbes: KEEP staff reporting, SKIP contributor stock picks
-- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
-- MSN Money: KEEP original content, SKIP syndicated retail content
-- Benzinga: KEEP news/deals, SKIP stock pick articles
+**Simply Wall St:**
+- States "Simply Wall St" as source/publisher
+- Contains snowflake score graphics, 6-category scoring system
+- Disclaimer: "This article by Simply Wall St is general in nature..."
 
-**Retail Analysis Content Patterns (Check Article Content):**
-❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
-❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
-❌ "Should You Buy?" or "Is [Stock] a Buy?"
-❌ "Top X Stocks to Buy Now"
-❌ "Zacks Rank #X" or "TipRanks consensus"
-❌ Unnamed DCF models or valuation formulas
-❌ Technical analysis for retail (RSI, MACD, moving averages)
-❌ Stock screener rankings ("Ranks #3 in momentum")
-❌ Aggregated analyst consensus without original analysis
-❌ AI-generated predictions without human analyst attribution
+**GuruFocus:**
+- States "GuruFocus" as source/publisher
+- Contains GuruFocus ratings (financial strength, profitability rank)
+- References Peter Lynch fair value, GF Value, GuruFocus scores
 
-**Examples to SKIP:**
-- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
-- "DCF model calculated intrinsic value $1,081.85 per share"
-- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
-- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
-- "GuruFocus gives company a financial strength score of 7/10"
+**Zacks:**
+- States "Zacks Investment Research" as source/author
+- Contains "Zacks Rank #1, #2, #3" ranking system
+- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
 
-✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
-- Business publications (Fortune, Inc, Fast Company, Business Insider)
-- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
-- Company press releases and SEC filings
-- Industry trade publications
-- Academic/research institutions
+**TipRanks:**
+- States "TipRanks" as source/publisher
+- Contains "TipRanks Smart Score" (1-10 rating system)
+- References TipRanks analyst consensus aggregation
 
-If article content matches retail analysis patterns above, output ONLY:
-{"skip": true, "reason": "Retail investment analysis"}
+**Motley Fool:**
+- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
+- Contains disclaimer: "The Motley Fool has a disclosure policy..."
+- References Stock Advisor, Rule Breakers services
 
-Do NOT add any commentary after this JSON.
-Do NOT say "Wait, let me reconsider" - if unsure whether to skip, proceed with analysis.
+**Finviz / MarketBeat / StockRover:**
+- States any of these as source/publisher
+- Contains their proprietary screener rankings or scores
+- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
+
+**If article is FROM any retail stock screener above** (check article content, not just domain):
+→ Return ONLY: {"skip": true, "reason": "Retail stock screener content"}
+→ Do NOT add any commentary after this JSON
+
+**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+   - Exception: Keep if attributed to named analyst from recognized firm (e.g., "Morgan Stanley analyst John Smith estimates fair value...")
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+   - Unnamed mathematical valuation models
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns (head and shoulders, cup and handle, etc.)
+   - Support/resistance levels, day trading signals
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+   - Proprietary rating numbers without human analyst attribution
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+   - Keep if presented as factual observation, exclude if retail investment recommendation
+
+**Professional Analyst Exception:**
+If price target, rating, or valuation is attributed to NAMED analyst from RECOGNIZED SELL-SIDE FIRM:
+✓ Keep the full commentary with complete attribution
+✓ Example: "Morgan Stanley analyst John Smith raised price target to $450, citing margin expansion and market share gains..."
+
+**Extract Everything Else:**
+If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts about the company.
 
 **YOUR TASK:**
 The user will provide company name, ticker, article title, and content. Extract and summarize all material facts about the company's actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
@@ -7073,53 +7106,79 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
             # System prompt (generic - cacheable, ~1100 tokens to meet threshold)
             system_prompt = """You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
-**SOURCE QUALITY FILTER:**
-SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
+**STEP 1: SOURCE VERIFICATION**
 
-**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
-- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
-- Stock screener sites (Finviz, MarketBeat, StockRover)
-- AI-generated prediction platforms
+Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
 
-**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
-- Forbes: KEEP staff reporting, SKIP contributor stock picks
-- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
-- MSN Money: KEEP original content, SKIP syndicated retail content
-- Benzinga: KEEP news/deals, SKIP stock pick articles
+**Simply Wall St:**
+- States "Simply Wall St" as source/publisher
+- Contains snowflake score graphics, 6-category scoring system
+- Disclaimer: "This article by Simply Wall St is general in nature..."
 
-**Retail Analysis Content Patterns (Check Article Content):**
-❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
-❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
-❌ "Should You Buy?" or "Is [Stock] a Buy?"
-❌ "Top X Stocks to Buy Now"
-❌ "Zacks Rank #X" or "TipRanks consensus"
-❌ Unnamed DCF models or valuation formulas
-❌ Technical analysis for retail (RSI, MACD, moving averages)
-❌ Stock screener rankings ("Ranks #3 in momentum")
-❌ Aggregated analyst consensus without original analysis
-❌ AI-generated predictions without human analyst attribution
+**GuruFocus:**
+- States "GuruFocus" as source/publisher
+- Contains GuruFocus ratings (financial strength, profitability rank)
+- References Peter Lynch fair value, GF Value, GuruFocus scores
 
-**Examples to SKIP:**
-- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
-- "DCF model calculated intrinsic value $1,081.85 per share"
-- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
-- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
-- "GuruFocus gives company a financial strength score of 7/10"
+**Zacks:**
+- States "Zacks Investment Research" as source/author
+- Contains "Zacks Rank #1, #2, #3" ranking system
+- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
 
-✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
-- Business publications (Fortune, Inc, Fast Company, Business Insider)
-- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
-- Company press releases and SEC filings
-- Industry trade publications
-- Academic/research institutions
+**TipRanks:**
+- States "TipRanks" as source/publisher
+- Contains "TipRanks Smart Score" (1-10 rating system)
+- References TipRanks analyst consensus aggregation
 
-If article content matches retail analysis patterns above, output ONLY:
-{"skip": true, "reason": "Retail investment analysis"}
+**Motley Fool:**
+- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
+- Contains disclaimer: "The Motley Fool has a disclosure policy..."
+- References Stock Advisor, Rule Breakers services
 
-Do NOT add any commentary after this JSON.
-Do NOT say "Wait, let me reconsider" - if unsure whether to skip, proceed with analysis.
+**Finviz / MarketBeat / StockRover:**
+- States any of these as source/publisher
+- Contains their proprietary screener rankings or scores
+- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
+
+**If article is FROM any retail stock screener above** (check article content, not just domain):
+→ Return ONLY: {"skip": true, "reason": "Retail stock screener content"}
+→ Do NOT add any commentary after this JSON
+
+**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+   - Exception: Keep if attributed to named analyst from recognized firm
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+   - Unnamed mathematical valuation models
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns, support/resistance levels, day trading signals
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+   - Proprietary rating numbers without human analyst attribution
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+   - Keep if presented as factual observation, exclude if retail investment recommendation
+
+**Professional Analyst Exception:**
+If price target, rating, or valuation is attributed to NAMED analyst from RECOGNIZED SELL-SIDE FIRM:
+✓ Keep the full commentary with complete attribution
+
+**Extract Everything Else:**
+If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts about the competitor.
 
 **YOUR TASK:**
 The user will provide target company, competitor name and ticker, article title, and content. Extract and summarize facts from the article about the competitor's actions, performance, or developments. Focus on operational and strategic information that provides competitive context.
@@ -8004,58 +8063,77 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
             # System prompt (generic - cacheable)
             system_prompt = """You are a research analyst extracting fundamental driver facts for a competitive intelligence report.
 
-**SOURCE QUALITY FILTER:**
-SKIP articles that are retail investment analysis - return only: {"skip": true, "reason": "Retail investment analysis"}
+**STEP 1: SOURCE VERIFICATION**
 
-**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
-- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
-- Stock screener sites (Finviz, MarketBeat, StockRover)
-- AI-generated prediction platforms
+Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
 
-**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
-- Forbes: KEEP staff reporting, SKIP contributor stock picks
-- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
-- MSN Money: KEEP original content, SKIP syndicated retail content
-- Benzinga: KEEP news/deals, SKIP stock pick articles
+**Simply Wall St:**
+- States "Simply Wall St" as source/publisher
+- Contains snowflake score graphics, 6-category scoring system
+- Disclaimer: "This article by Simply Wall St is general in nature..."
 
-**Retail Analysis Content Patterns (Check Article Content):**
-❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
-❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
-❌ "Should You Buy?" or "Is [Stock] a Buy?"
-❌ "Top X Stocks to Buy Now"
-❌ "Zacks Rank #X" or "TipRanks consensus"
-❌ Unnamed DCF models or valuation formulas
-❌ Technical analysis for retail (RSI, MACD, moving averages)
-❌ Stock screener rankings ("Ranks #3 in momentum")
-❌ Aggregated analyst consensus without original analysis
-❌ AI-generated predictions without human analyst attribution
+**GuruFocus:**
+- States "GuruFocus" as source/publisher
+- Contains GuruFocus ratings (financial strength, profitability rank)
+- References Peter Lynch fair value, GF Value, GuruFocus scores
 
-**Examples to SKIP:**
-- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
-- "DCF model calculated intrinsic value $1,081.85 per share"
-- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
-- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
-- "GuruFocus gives company a financial strength score of 7/10"
+**Zacks:**
+- States "Zacks Investment Research" as source/author
+- Contains "Zacks Rank #1, #2, #3" ranking system
+- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
 
-✓ KEEP ALL other sources (focus on CONTENT, not domain reputation):
-- Named analyst from recognized firm (Goldman, Morgan Stanley, JPMorgan, Barclays, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, MarketWatch, etc.)
-- Business publications (Fortune, Inc, Fast Company, Business Insider)
-- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
-- Company press releases and SEC filings
-- **Any industry trade publication** (known or unknown - most are niche publications)
-- Academic/research institutions
+**TipRanks:**
+- States "TipRanks" as source/publisher
+- Contains "TipRanks Smart Score" (1-10 rating system)
+- References TipRanks analyst consensus aggregation
 
-**CRITICAL: Unknown industry publications are ALLOWED**
-Industry articles have very little retail investment analysis compared to company/competitor articles.
-Only skip if retail analysis content patterns (listed above) appear in article text.
-Focus on WHAT is said, not WHO said it - domain reputation doesn't matter for industry articles.
+**Motley Fool:**
+- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
+- Contains disclaimer: "The Motley Fool has a disclosure policy..."
+- References Stock Advisor, Rule Breakers services
 
-If article content matches retail analysis patterns above, output ONLY:
-{"skip": true, "reason": "Retail investment analysis"}
+**Finviz / MarketBeat / StockRover:**
+- States any of these as source/publisher
+- Contains their proprietary screener rankings or scores
+- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
 
-Do NOT add any commentary after this JSON.
-Do NOT say "Wait, let me reconsider" - if unsure whether to skip, proceed with analysis.
+**If article is FROM any retail stock screener above** (check article content, not just domain):
+→ Return ONLY: {"skip": true, "reason": "Retail stock screener content"}
+→ Do NOT add any commentary after this JSON
+
+**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns, support/resistance levels
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+
+**CRITICAL - Industry Articles:**
+- Unknown industry trade publications are ALLOWED (most are niche publications)
+- Focus on WHAT is said, not WHO said it
+- Extract company-specific operational data when relevant to the driver keyword
+- Industry publications often cover specific companies with valuable primary source data
+
+**Extract Everything Else:**
+If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts related to the fundamental driver keyword.
 
 **YOUR TASK:**
 The user will provide target company, ticker, driver keyword, article title, and content. Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that relate to the fundamental driver keyword provided.
@@ -8107,25 +8185,22 @@ The user will provide target company, ticker, driver keyword, article title, and
 - Only include: Government agencies, international bodies, major industry associations
 - Exclude: Sell-side analyst price targets, individual firm projections
 
-**8. Competitor/Industry Operational Data (only if article frames as sector trend)**
+**8. Company-Specific Operational Data (when relevant to driver keyword)**
 
-Include operational metrics ONLY if article explicitly frames data as sector-wide or industry trend.
+Industry trade publications often cover specific companies with detailed operational data. Include this information when it relates to the fundamental driver keyword.
 
-Must have sector framing language:
-- "across the industry"
-- "sector-wide"
-- "industry participants"
-- "peers reported similar"
-- "market-wide trend"
-- "[Industry] operators saw..."
+✓ INCLUDE company-specific data from industry publications:
+- "UnitedHealth CEO stated 2026 represents margin trough for Medicaid, driven by home health costs"
+- "Apple announced 18% iPhone volume growth in China market"
+- "Exxon reported 12% production increase in Permian basin"
 
-DO NOT include if:
-- Article discusses single company's results without sector framing
-- Must infer that trend applies broadly
-- Article provides company-specific data without market context
+These are valuable primary sources even though they discuss one company specifically.
 
-❌ WRONG: "Competitor A reports 18% volume growth" → skip (company-specific)
-✅ CORRECT: "Industry analysts noted sector-wide volume growth of 18% with multiple operators reporting similar gains" → include (explicit sector trend)
+Also include sector-wide trends when explicitly framed:
+- "Industry analysts noted sector-wide volume growth of 18%"
+- "Healthcare operators across the market reported similar margin pressure"
+
+Focus on extracting facts relevant to the driver keyword, regardless of whether framed as company-specific or sector-wide.
 
 **Geographic Scope:**
 
@@ -8392,50 +8467,81 @@ async def generate_openai_article_summary(company_name: str, ticker: str, title:
         try:
             prompt = f"""You are a hedge fund analyst extracting information about {company_name} ({ticker}) for an investment research report.
 
-**CRITICAL - Retail Analysis Detection:**
-If article matches retail investment analysis patterns below, return ONLY the text:
-SKIP_RETAIL_ANALYSIS
+**STEP 1: SOURCE VERIFICATION**
 
-**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
-- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
-- Stock screener sites (Finviz, MarketBeat, StockRover)
-- AI-generated prediction platforms
+Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
 
-**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
-- Forbes: KEEP staff reporting, SKIP contributor stock picks
-- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
-- MSN Money: KEEP original content, SKIP syndicated retail content
-- Benzinga: KEEP news/deals, SKIP stock pick articles
+**Simply Wall St:**
+- States "Simply Wall St" as source/publisher
+- Contains snowflake score graphics, 6-category scoring system
+- Disclaimer: "This article by Simply Wall St is general in nature..."
 
-**Retail Analysis Content Patterns (Check Article Content):**
-❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
-❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
-❌ "Should You Buy?" or "Is [Stock] a Buy?"
-❌ "Top X Stocks to Buy Now"
-❌ "Zacks Rank #X" or "TipRanks consensus"
-❌ Unnamed DCF models or valuation formulas
-❌ Technical analysis for retail (RSI, MACD, moving averages)
-❌ Stock screener rankings ("Ranks #3 in momentum")
-❌ Aggregated analyst consensus without original analysis
-❌ AI-generated predictions without human analyst attribution
+**GuruFocus:**
+- States "GuruFocus" as source/publisher
+- Contains GuruFocus ratings (financial strength, profitability rank)
+- References Peter Lynch fair value, GF Value, GuruFocus scores
 
-**Examples to SKIP:**
-- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
-- "DCF model calculated intrinsic value $1,081.85 per share"
-- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
-- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
-- "GuruFocus gives company a financial strength score of 7/10"
+**Zacks:**
+- States "Zacks Investment Research" as source/author
+- Contains "Zacks Rank #1, #2, #3" ranking system
+- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
 
-✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
-- Business publications (Fortune, Inc, Fast Company, Business Insider)
-- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
-- Company press releases and SEC filings
-- Industry trade publications
-- Academic/research institutions
+**TipRanks:**
+- States "TipRanks" as source/publisher
+- Contains "TipRanks Smart Score" (1-10 rating system)
+- References TipRanks analyst consensus aggregation
 
-Do NOT add commentary. If unsure whether to skip, proceed with analysis.
+**Motley Fool:**
+- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
+- Contains disclaimer: "The Motley Fool has a disclosure policy..."
+- References Stock Advisor, Rule Breakers services
+
+**Finviz / MarketBeat / StockRover:**
+- States any of these as source/publisher
+- Contains their proprietary screener rankings or scores
+- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
+
+**If article is FROM any retail stock screener above** (check article content, not just domain):
+→ Return ONLY the text: SKIP_RETAIL_ANALYSIS
+→ Do NOT add any commentary
+
+**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+   - Exception: Keep if attributed to named analyst from recognized firm (e.g., "Morgan Stanley analyst John Smith estimates fair value...")
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+   - Unnamed mathematical valuation models
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns (head and shoulders, cup and handle, etc.)
+   - Support/resistance levels, day trading signals
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+   - Proprietary rating numbers without human analyst attribution
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+   - Keep if presented as factual observation, exclude if retail investment recommendation
+
+**Professional Analyst Exception:**
+If price target, rating, or valuation is attributed to NAMED analyst from RECOGNIZED SELL-SIDE FIRM:
+✓ Keep the full commentary with complete attribution
+✓ Example: "Morgan Stanley analyst John Smith raised price target to $450, citing margin expansion and market share gains..."
+
+**Extract Everything Else:**
+If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts about the company.
 
 **YOUR TASK:**
 Extract and summarize all material facts about {company_name}'s actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
@@ -8709,50 +8815,79 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
         try:
             prompt = f"""You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
-**CRITICAL - Retail Analysis Detection:**
-If article matches retail investment analysis patterns below, return ONLY the text:
-SKIP_RETAIL_ANALYSIS
+**STEP 1: SOURCE VERIFICATION**
 
-**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
-- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
-- Stock screener sites (Finviz, MarketBeat, StockRover)
-- AI-generated prediction platforms
+Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
 
-**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
-- Forbes: KEEP staff reporting, SKIP contributor stock picks
-- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
-- MSN Money: KEEP original content, SKIP syndicated retail content
-- Benzinga: KEEP news/deals, SKIP stock pick articles
+**Simply Wall St:**
+- States "Simply Wall St" as source/publisher
+- Contains snowflake score graphics, 6-category scoring system
+- Disclaimer: "This article by Simply Wall St is general in nature..."
 
-**Retail Analysis Content Patterns (Check Article Content):**
-❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
-❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
-❌ "Should You Buy?" or "Is [Stock] a Buy?"
-❌ "Top X Stocks to Buy Now"
-❌ "Zacks Rank #X" or "TipRanks consensus"
-❌ Unnamed DCF models or valuation formulas
-❌ Technical analysis for retail (RSI, MACD, moving averages)
-❌ Stock screener rankings ("Ranks #3 in momentum")
-❌ Aggregated analyst consensus without original analysis
-❌ AI-generated predictions without human analyst attribution
+**GuruFocus:**
+- States "GuruFocus" as source/publisher
+- Contains GuruFocus ratings (financial strength, profitability rank)
+- References Peter Lynch fair value, GF Value, GuruFocus scores
 
-**Examples to SKIP:**
-- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
-- "DCF model calculated intrinsic value $1,081.85 per share"
-- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
-- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
-- "GuruFocus gives company a financial strength score of 7/10"
+**Zacks:**
+- States "Zacks Investment Research" as source/author
+- Contains "Zacks Rank #1, #2, #3" ranking system
+- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
 
-✓ KEEP institutional sell-side research:
-- Named analyst from recognized firm (Goldman Sachs, Morgan Stanley, Barclays, Jefferies, UBS, JPMorgan, Citi, BofA, Wells Fargo, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, AP, Dow Jones, MarketWatch, Barron's)
-- Business publications (Fortune, Inc, Fast Company, Business Insider)
-- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
-- Company press releases and SEC filings
-- Industry trade publications
-- Academic/research institutions
+**TipRanks:**
+- States "TipRanks" as source/publisher
+- Contains "TipRanks Smart Score" (1-10 rating system)
+- References TipRanks analyst consensus aggregation
 
-Do NOT add commentary. If unsure whether to skip, proceed with analysis.
+**Motley Fool:**
+- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
+- Contains disclaimer: "The Motley Fool has a disclosure policy..."
+- References Stock Advisor, Rule Breakers services
+
+**Finviz / MarketBeat / StockRover:**
+- States any of these as source/publisher
+- Contains their proprietary screener rankings or scores
+- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
+
+**If article is FROM any retail stock screener above** (check article content, not just domain):
+→ Return ONLY the text: SKIP_RETAIL_ANALYSIS
+→ Do NOT add any commentary
+
+**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+   - Exception: Keep if attributed to named analyst from recognized firm
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+   - Unnamed mathematical valuation models
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns, support/resistance levels, day trading signals
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+   - Proprietary rating numbers without human analyst attribution
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+   - Keep if presented as factual observation, exclude if retail investment recommendation
+
+**Professional Analyst Exception:**
+If price target, rating, or valuation is attributed to NAMED analyst from RECOGNIZED SELL-SIDE FIRM:
+✓ Keep the full commentary with complete attribution
+
+**Extract Everything Else:**
+If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts about the competitor.
 
 **YOUR TASK:**
 Extract and summarize facts from the article about {competitor_name} ({competitor_ticker})'s actions, performance, or developments. Focus on operational and strategic information that provides competitive context for {target_company} ({target_ticker}).
@@ -8998,55 +9133,77 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
         try:
             prompt = f"""You are a research analyst extracting fundamental driver facts relevant to a target company's financial performance.
 
-**CRITICAL - Retail Analysis Detection:**
-If article matches retail investment analysis patterns below, return ONLY the text:
-SKIP_RETAIL_ANALYSIS
+**STEP 1: SOURCE VERIFICATION**
 
-**RETAIL INVESTMENT ANALYSIS PLATFORMS (Always Skip):**
-- Simply Wall St, GuruFocus, Zacks, TipRanks, Motley Fool
-- Stock screener sites (Finviz, MarketBeat, StockRover)
-- AI-generated prediction platforms
+Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
 
-**MIXED SOURCES (Filter by Content Pattern - Not Domain):**
-- Forbes: KEEP staff reporting, SKIP contributor stock picks
-- Yahoo Finance: KEEP original reporting, SKIP syndicated retail content
-- MSN Money: KEEP original content, SKIP syndicated retail content
-- Benzinga: KEEP news/deals, SKIP stock pick articles
+**Simply Wall St:**
+- States "Simply Wall St" as source/publisher
+- Contains snowflake score graphics, 6-category scoring system
+- Disclaimer: "This article by Simply Wall St is general in nature..."
 
-**Retail Analysis Content Patterns (Check Article Content):**
-❌ "X out of Y score" (e.g., "6 out of 10 valuation score")
-❌ "Fair Value: $X per share" or "Intrinsic Value: $X"
-❌ "Should You Buy?" or "Is [Stock] a Buy?"
-❌ "Top X Stocks to Buy Now"
-❌ "Zacks Rank #X" or "TipRanks consensus"
-❌ Unnamed DCF models or valuation formulas
-❌ Technical analysis for retail (RSI, MACD, moving averages)
-❌ Stock screener rankings ("Ranks #3 in momentum")
-❌ Aggregated analyst consensus without original analysis
-❌ AI-generated predictions without human analyst attribution
+**GuruFocus:**
+- States "GuruFocus" as source/publisher
+- Contains GuruFocus ratings (financial strength, profitability rank)
+- References Peter Lynch fair value, GF Value, GuruFocus scores
 
-**Examples to SKIP:**
-- "Stock received 2 out of 6 valuation score on Simply Wall St checks"
-- "DCF model calculated intrinsic value $1,081.85 per share"
-- "Zacks Rank #1 (Strong Buy) with earnings surprise potential"
-- "TipRanks consensus: 8 Buy, 3 Hold, 1 Sell ratings"
-- "GuruFocus gives company a financial strength score of 7/10"
+**Zacks:**
+- States "Zacks Investment Research" as source/author
+- Contains "Zacks Rank #1, #2, #3" ranking system
+- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
 
-✓ KEEP ALL other sources (focus on CONTENT, not domain reputation):
-- Named analyst from recognized firm (Goldman, Morgan Stanley, JPMorgan, Barclays, etc.)
-- Professional financial journalism (WSJ, Bloomberg, Reuters, FT, CNBC, MarketWatch, etc.)
-- Business publications (Fortune, Inc, Fast Company, Business Insider)
-- Technology media (TechCrunch, The Information, Ars Technica, VentureBeat)
-- Company press releases and SEC filings
-- **Any industry trade publication** (known or unknown - most are niche publications)
-- Academic/research institutions
+**TipRanks:**
+- States "TipRanks" as source/publisher
+- Contains "TipRanks Smart Score" (1-10 rating system)
+- References TipRanks analyst consensus aggregation
 
-**CRITICAL: Unknown industry publications are ALLOWED**
-Industry articles have very little retail investment analysis compared to company/competitor articles.
-Only skip if retail analysis content patterns (listed above) appear in article text.
-Focus on WHAT is said, not WHO said it - domain reputation doesn't matter for industry articles.
+**Motley Fool:**
+- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
+- Contains disclaimer: "The Motley Fool has a disclosure policy..."
+- References Stock Advisor, Rule Breakers services
 
-Do NOT add commentary. If unsure whether to skip, proceed with analysis.
+**Finviz / MarketBeat / StockRover:**
+- States any of these as source/publisher
+- Contains their proprietary screener rankings or scores
+- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
+
+**If article is FROM any retail stock screener above** (check article content, not just domain):
+→ Return ONLY the text: SKIP_RETAIL_ANALYSIS
+→ Do NOT add any commentary
+
+**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns, support/resistance levels
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+
+**CRITICAL - Industry Articles:**
+- Unknown industry trade publications are ALLOWED (most are niche publications)
+- Focus on WHAT is said, not WHO said it
+- Extract company-specific operational data when relevant to the driver keyword
+- Industry publications often cover specific companies with valuable primary source data
+
+**Extract Everything Else:**
+If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts related to the fundamental driver keyword.
 
 **YOUR TASK:**
 Extract facts about EXTERNAL market forces (commodity prices, demand indicators, input costs, policy changes, supply/demand dynamics) that directly impact target company's revenue, costs, or margins.

@@ -1332,7 +1332,7 @@ Check for analyst override BEFORE applying the 6-step framework above.
 MAJOR DEVELOPMENTS - SCOPE & BRIGHT-LINE TEST
 ═══════════════════════════════════════════════════════════════════════════════
 
-SECTION SCOPE: Company events articles explicitly reported. Only developments where the target company is the primary actor or target.
+SECTION SCOPE: Company events articles explicitly reported. Primary emphasis on what happened (events, announcements, changes). Only developments where the target company is the primary actor or target.
 
 LENGTH LIMIT: 3-6 bullets max
 
@@ -1461,7 +1461,7 @@ FORMAT NOTE: This section does NOT use sentiment tags in Phase 1 output (Phase 2
 RISK FACTORS
 ═══════════════════════════════════════════════════════════════════════════════
 
-SECTION SCOPE: Risks, concerns, and threats that articles reported or that meet categorical risk criteria.
+SECTION SCOPE: Risks, concerns, and threats that articles reported or that meet categorical risk criteria. Primary emphasis on forward-looking exposures, magnitude, and probability. Report only what articles discussed - no additional inference.
 
 LENGTH LIMIT: 2-5 bullets max (use 4-5 when multiple categorical risks present)
 
@@ -1500,6 +1500,29 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    ✓ "NHTSA opened investigation into FSD technology fitted in 2.9M vehicles"
    ✓ "Class action lawsuit filed alleging securities fraud"
    ✓ "Moody's downgraded debt to Ba1 from Baa3"
+
+   NOTE ON CATEGORICAL EVENTS:
+   Many categorical risk events (investigations, litigation, recalls, executive departures)
+   also appear in Major Developments. Use complementary emphasis when covering both:
+
+   → Major Dev: PRIMARY EMPHASIS on what happened (timeline, announcement, procedural status,
+     management response). Can include forward-looking elements if articles discussed.
+
+   → Risk Factors: PRIMARY EMPHASIS on forward-looking impact (financial exposure, magnitude,
+     probability, operational risks). Can include current status if articles discussed.
+
+   Important: Risk Factors reports what articles discussed - no additional inference beyond
+   what articles state. If article mentioned the risk, include it even if some overlap with
+   Major Dev exists.
+
+   Example - DOJ Investigation:
+   Major Dev: "DOJ investigation acknowledged July 2025, motion to dismiss pending per company
+     statement (Oct 23)"
+   Risk Factors: "DOJ investigation for alleged criminal fraud with potential False Claims Act
+     penalties typically 3x damages; affects Medicare billing representing 40% revenue per
+     articles and 10-K (Oct 23-28)"
+
+   Overlap is acceptable - don't omit risks to avoid duplication.
 
 3. COMPETITIVE THREATS (ARTICLE-FRAMING REQUIRED)
    Competitor developments that articles explicitly frame as threats to the target company.

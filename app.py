@@ -5581,6 +5581,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
 
                 else:
                     # ❌ RESOLUTION FAILED - Fall back to current workflow (title extraction)
+                    LOG.warning(f"⚠️ ADVANCED API FAILED: {title[:60]} (falling back to title extraction)")
                     clean_title, source_name = extract_source_from_title_smart(title)
 
                     if source_name and not domain_resolver._is_spam_source(source_name):
@@ -5885,28 +5886,29 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                             if yahoo_original and yahoo_original != resolved_url:
                                 final_resolved_url = yahoo_original
                                 final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
-                                LOG.info(f"HOURLY: GOOGLE→YAHOO→DIRECT: {title[:60]} → {final_domain}")
+                                LOG.info(f"GOOGLE→YAHOO→DIRECT: {title[:60]} → {final_domain}")
                             else:
                                 final_resolved_url = resolved_url
                                 final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
                                 if yahoo_original == resolved_url:
-                                    LOG.warning(f"HOURLY: Yahoo extraction failed (no providerContentUrl): {resolved_url[:80]}")
-                                LOG.info(f"HOURLY: GOOGLE→YAHOO: {title[:60]} → {final_domain}")
+                                    LOG.warning(f"Yahoo extraction failed (no providerContentUrl): {resolved_url[:80]}")
+                                LOG.info(f"GOOGLE→YAHOO: {title[:60]} → {final_domain}")
                         else:
                             final_resolved_url = resolved_url
                             final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
-                            LOG.info(f"HOURLY: GOOGLE RESOLVED (Tier 1): {title[:60]} → {final_domain}")
+                            LOG.info(f"GOOGLE RESOLVED (Tier 1): {title[:60]} → {final_domain}")
 
                         # SPAM CHECK (same as Yahoo feeds - block article entirely)
                         if domain_resolver._is_spam_domain(final_domain):
                             stats["blocked_spam"] += 1
-                            LOG.info(f"HOURLY: SPAM REJECTED: Google News → {final_domain} (from resolution)")
+                            LOG.info(f"SPAM REJECTED: Google News → {final_domain} (from resolution)")
                             continue
 
                         final_source_url = None
 
                     else:
                         # ❌ RESOLUTION FAILED - Fall back to current workflow (title extraction)
+                        LOG.warning(f"⚠️ ADVANCED API FAILED: {title[:60]} (falling back to title extraction)")
                         clean_title, source_name = extract_source_from_title_smart(title)
 
                         if source_name and not domain_resolver._is_spam_source(source_name):

@@ -64,7 +64,7 @@ Phase 1 provides:
 - topic_label: Short descriptor
 - content: Full bullet text (article-derived)
 - filing_hints: Section names to prioritize (10-K, 10-Q, Transcript)
-- filing_keywords: 0-3 search terms to Ctrl+F across filings (NEW)
+- filing_keywords: 0-4 search terms to Ctrl+F across filings
 
 filing_keywords are optional. When present:
 → Use them to find specific data points across ALL sections
@@ -349,6 +349,50 @@ CRITICAL RULES:
             (This adds NEW scale data from filings)
 
    Before writing context, ask: "Does this sentence repeat what's already in the bullet?" If yes, delete it.
+
+═══ ONE CONTINUOUS PARAGRAPH - CRITICAL UNDERSTANDING ═══
+
+When enrichments merge with Phase 1 bullets, the output reads as ONE CONTINUOUS PARAGRAPH in the user's email:
+
+• [topic_label (impact, sentiment, reason)]: [Phase 1 bullet content]. Context: [Your Phase 2 output].
+
+This is ONE FLOWING PARAGRAPH, not two separate statements.
+The reader's eye flows continuously from bullet → "Context:" → your enrichment.
+
+CRITICAL IMPLICATION:
+✓ Your context CONTINUES the narrative (like adding a second sentence)
+✓ Do NOT repeat ANY facts from bullet (reader just read them 5 words ago)
+✓ Jump DIRECTLY to NEW filing data
+
+Example of final user experience:
+• Major customer renewal (high impact, bullish, customer concentration): Amazon renewed
+  multi-year contract as company's largest customer. Context: Represents 28% of Q2 revenue
+  per 10-Q (increased from 22% in FY2024); management called relationship 'strategic and
+  expanding' on Aug 7 call.
+
+Reader experiences ONE paragraph about Amazon renewal, not "bullet + separate fact box."
+
+❌ COMMON REDUNDANCY PATTERNS - DELETE THESE:
+
+1. Unit conversion of same data:
+   Bullet: "470 basis points increase" | Context: "4.7pp increase" ❌ (identical fact)
+
+2. Arithmetic on bullet data:
+   Bullet: "MCR 85.1% vs 84.0% prior year" | Context: "MCR increased 110 bps YoY" ❌ (math on same numbers)
+
+3. Restating management quotes:
+   Bullet: "Management called costs 'within expected ranges'" | Context: "Costs within ranges per management" ❌ (verbatim)
+
+4. Echoing strategic framing:
+   Bullet: "Acquisition expands home health capabilities" | Context: "Expands home health capabilities per transcript" ❌ (echo)
+
+✅ CORRECT RESPONSE TO AVOID REDUNDANCY:
+
+When bullet has consolidated metric → Context shows segment breakdown
+When bullet has YoY comparison → Context adds QoQ trend or multi-year baseline
+When bullet has qualitative statement → Context adds quantification from filings
+When bullet has event narrative → Context adds financial magnitude/exposure
+When bullet has margin data → Context adds revenue/volume data (complementary metric)
 
 2. USE FILING_HINTS to guide search (respect Phase 1's section selection)
 3. 1-3 DATA POINTS MAX (quality over quantity)
@@ -1012,6 +1056,43 @@ Example contexts:
 "Steel costs 18% of COGS per 10-K; management noted 8% steel price increase on Aug 7 call"
 
 
+---
+
+QUESTION 12: ENTITY DEFINITION - What is this entity?
+
+When bullet references unfamiliar entities mentioned in filings, define in context.
+
+ENTITIES REQUIRING DEFINITION:
+✓ Acquisition targets (private companies, foreign companies)
+✓ Internal divisions not in company name (Optum at Home, Model e, business units)
+✓ Material product lines (if >5% revenue or strategic focus per filings)
+✓ Proprietary technologies (company-specific acronyms, branded tech)
+✓ Joint ventures and partnerships
+
+SKIP DEFINITION:
+✗ Major public companies (Fortune 500, household names)
+✗ Well-known products (Model 3, iPhone - mainstream awareness)
+✗ Generic categories (electric vehicles, cloud computing)
+✗ Already defined in bullet content
+
+FILING SOURCES:
+→ 10-K: BUSINESS MODEL SUMMARY (segments), REVENUE STREAMS (products)
+→ 10-Q: RECENT EVENTS & SUBSEQUENT EVENTS (acquisitions)
+→ Transcript: MAJOR DEVELOPMENTS (partnerships)
+
+Format: "[Entity] is [description from filings] [scale if available] per [filing citation]"
+
+Example contexts:
+
+"Amedisys is home health provider with 300K patients across 38 states per Oct 28 transcript"
+
+"Optum at Home generated $X revenue (Y% of Optum Health) per Q3 10-Q"
+
+"Megapack energy storage system represented 15% of energy segment revenue per FY2024 10-K"
+
+If filings don't describe entity → Use escape hatch: "Details on [Entity] not disclosed in available filings"
+
+
 ═══════════════════════════════════════════════════════════════════════════════
 CALCULATION GUIDELINES & CONTEXT SYNTHESIS
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1241,10 +1322,15 @@ Examples:
 "Invested $2B in segment with -127% margin per 10-Q" → bearish ✓
 
 NEUTRAL (use when):
-- Routine updates: Organizational changes, non-material customer wins/losses, executive changes (non-CEO)
+- Routine updates: Organizational changes, non-material customer wins/losses
+- Planned transitions: Executive changes with notice period, orderly CEO succession
 - Unclear direction: Could be positive or negative, insufficient information, requires multi-step reasoning
 - Offsetting factors: Positive and negative elements both present
 - DEFAULT: When uncertain → neutral
+
+NOT NEUTRAL - CEO departures:
+- Abrupt CEO departure + negative consequences (guidance suspension, stock decline) = bearish
+- Planned CEO succession with transition period = neutral
 
 Examples:
 "Appointed VP of Operations" → neutral ✓
@@ -1322,6 +1408,16 @@ REASON TAG RULE: Use specific mechanism/type, not generic category labels.
 ❌ "competitive dynamics", "strategic development", "competitive positioning"
 ✅ "sector validation", "capacity augmentation", "market share gain"
 Avoid using section names ("major developments") or category labels as reasons.
+
+MORE BAD/GOOD EXAMPLES:
+
+❌ GENERIC (describes WHAT happened):
+"leadership transition", "membership loss", "portfolio expansion", "revenue growth", "margin change"
+
+✅ SPECIFIC (explains WHY or TYPE):
+Leadership: "leadership disruption" (unplanned), "executive succession" (planned)
+Membership: "strategic optimization", "pricing-driven attrition", "risk-adjusted contraction"
+Acquisitions: "vertical integration", "care delivery expansion", "market consolidation"
 
 ═══════════════════════════════════════════════════════════════════════════════
 COMPLETE OUTPUT EXAMPLES

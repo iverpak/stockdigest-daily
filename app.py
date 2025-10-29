@@ -5800,7 +5800,8 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
     
     # Track processed URLs within this feed run to avoid counting duplicates
     processed_hashes = set()
-    
+    processed_content_hashes = set()  # Domain + title deduplication
+
     try:
         parsed = feedparser.parse(feed["url"])
         
@@ -5955,34 +5956,49 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
 
                 # Generate hash for deduplication (supports both resolved URLs and Google News)
                 url_hash = get_url_hash(url, final_resolved_url, final_domain, title)
-                
-                # CHECK FOR DUPLICATES WITHIN THIS RUN FIRST
+
+                # Generate content hash for domain + title deduplication (safety net)
+                content_hash = None
+                if final_domain and title:
+                    content_key = f"{final_domain}||{title.lower().strip()}"
+                    content_hash = hashlib.md5(content_key.encode()).hexdigest()
+
+                # CHECK FOR DUPLICATES WITHIN THIS RUN FIRST (URL or Content)
                 if url_hash in processed_hashes:
                     stats["duplicates"] += 1
                     # Enhanced logging to show deduplication strategy
                     is_google_news = 'news.google.com' in url
                     dedup_method = "domain+title" if is_google_news and final_domain else "URL"
-                    LOG.info(f"✓ DUPLICATE BLOCKED ({dedup_method}): {final_domain or 'unknown'} - {title[:50]}...")
+                    LOG.info(f"✓ DUPLICATE BLOCKED (URL): {final_domain or 'unknown'} - {title[:50]}...")
                     continue
 
-                # Add to processed set
+                if content_hash and content_hash in processed_content_hashes:
+                    stats["duplicates"] += 1
+                    LOG.info(f"✓ DUPLICATE BLOCKED (Content): {final_domain or 'unknown'} - {title[:50]}...")
+                    continue
+
+                # Add to processed sets
                 processed_hashes.add(url_hash)
+                if content_hash:
+                    processed_content_hashes.add(content_hash)
 
                 # NOW check ingestion limits with FIXED count logic
                 with db() as conn, conn.cursor() as cur:
                     try:
-                        # Check if article already exists
+                        # Check if article already exists (URL hash OR domain+title)
                         cur.execute("""
                             SELECT a.id FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
-                            WHERE a.url_hash = %s AND ta.ticker = %s
-                        """, (url_hash, feed["ticker"]))
+                            WHERE ta.ticker = %s
+                            AND (
+                                a.url_hash = %s
+                                OR (a.domain = %s AND LOWER(TRIM(a.title)) = %s)
+                            )
+                            LIMIT 1
+                        """, (feed["ticker"], url_hash, final_domain, title.lower().strip()))
                         if cur.fetchone():
                             stats["duplicates"] += 1
-                            # Enhanced logging to show deduplication strategy
-                            is_google_news = 'news.google.com' in url
-                            dedup_method = "domain+title" if is_google_news and final_domain else "URL"
-                            LOG.info(f"✓ DUPLICATE BLOCKED ({dedup_method}): {final_domain or 'unknown'} - {title[:50]}...")
+                            LOG.info(f"✓ DUPLICATE BLOCKED (DB): {final_domain or 'unknown'} - {title[:50]}...")
                             continue
                         
                         # HOURLY ALERTS: No ingestion limits (lightweight, no scraping/AI)
@@ -12486,7 +12502,8 @@ def get_url_hash(url: str, resolved_url: str = None, domain: str = None, title: 
     """
     # Strategy 1: Use resolved URL if available (Yahoo Finance URLs, Direct URLs)
     if resolved_url:
-        url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', resolved_url.lower())
+        # Strip tracking/analytics parameters (gaa_=Google Analytics Auth, fbclid=Facebook, etc.)
+        url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=|gaa_|fbclid|msclkid|mc_|_ga).*', '', resolved_url.lower())
         url_clean = url_clean.rstrip('/')
         return hashlib.md5(url_clean.encode()).hexdigest()
 
@@ -12506,7 +12523,8 @@ def get_url_hash(url: str, resolved_url: str = None, domain: str = None, title: 
         return hashlib.md5(dedup_key.encode()).hexdigest()
 
     # Strategy 3: Fallback - Use original URL (should rarely hit this for Google News)
-    url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=).*', '', url.lower())
+    # Strip tracking/analytics parameters (same as Strategy 1)
+    url_clean = re.sub(r'[?&](utm_|ref=|source=|siteid=|cid=|\.tsrc=|gaa_|fbclid|msclkid|mc_|_ga).*', '', url.lower())
     url_clean = url_clean.rstrip('/')
     return hashlib.md5(url_clean.encode()).hexdigest()
 

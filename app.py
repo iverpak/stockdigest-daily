@@ -2001,6 +2001,53 @@ def save_executive_summary(
 
         LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, Phase 1, {len(article_ids)} articles, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
 
+# ------------------------------------------------------------------------------
+# Feed Name Utilities
+# ------------------------------------------------------------------------------
+
+def strip_legal_suffixes(name: str) -> str:
+    """
+    Strip common legal entity suffixes from company names for news feed queries.
+
+    Used when creating Google News RSS feeds to match journalist usage patterns.
+    Journalists rarely use legal suffixes (Inc., Corp., etc.) in articles.
+
+    Examples:
+        "Apple Inc." → "Apple"
+        "UnitedHealth Group Incorporated" → "UnitedHealth Group"
+        "NVIDIA Corporation" → "NVIDIA"
+        "JPMorgan Chase & Co." → "JPMorgan Chase"
+
+    Args:
+        name: Company name (legal or brand name)
+
+    Returns:
+        Company name with legal suffix removed
+    """
+    if not name:
+        return name
+
+    # Common legal entity suffixes (order matters - check longer suffixes first)
+    suffixes = [
+        ', Incorporated', ' Incorporated',
+        ', Inc.', ' Inc.', ' Inc',
+        ', Corporation', ' Corporation',
+        ', Corp.', ' Corp.', ' Corp',
+        ', Limited', ' Limited',
+        ', Ltd.', ' Ltd.', ' Ltd',
+        ', LLC', ' LLC',
+        ' & Co.', ' Company',
+        ', Co.', ' Co.'
+    ]
+
+    result = name
+    for suffix in suffixes:
+        if result.endswith(suffix):
+            result = result[:-len(suffix)]
+            break  # Only remove first matching suffix
+
+    return result.strip()
+
 # NEW FEED ARCHITECTURE V2 - Category per Relationship Functions
 def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None,
                                 competitor_ticker: str = None, company_name: str = None, retain_days: int = 90) -> int:
@@ -2079,11 +2126,14 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
         LOG.info(f"🔄 Creating feeds for {ticker} using NEW ARCHITECTURE (Google News + Yahoo Finance)")
 
     # 1. Company feeds - ALWAYS create Google News, optionally create Yahoo Finance
+    # Strip legal suffixes for Google News query (journalists rarely use Inc., Corp., etc.)
+    feed_query_name = strip_legal_suffixes(company_name)
+
     company_feeds = [
         {
-            "url": f"https://news.google.com/rss/search?q=\"{company_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-            "name": f"Google News: {company_name}",
-            "search_keyword": company_name,
+            "url": f"https://news.google.com/rss/search?q=\"{feed_query_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+            "name": f"Google News: {company_name}",  # Display name uses legal name
+            "search_keyword": feed_query_name,  # Query uses stripped name
             "source": "google"
         }
     ]
@@ -2145,12 +2195,15 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
             comp_name = comp['name']
             comp_ticker = comp.get('ticker')  # May be None for private companies
 
+            # Strip legal suffixes for Google News query
+            comp_feed_query_name = strip_legal_suffixes(comp_name)
+
             try:
                 # ALWAYS create Google News feed (works for any company name)
                 feed_id = upsert_feed_new_architecture(
-                    url=f"https://news.google.com/rss/search?q=\"{comp_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    name=f"Google News: {comp_name}",  # Neutral name (no "Competitor:" prefix)
-                    search_keyword=comp_name,
+                    url=f"https://news.google.com/rss/search?q=\"{comp_feed_query_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    name=f"Google News: {comp_name}",  # Display name uses legal name (no "Competitor:" prefix)
+                    search_keyword=comp_feed_query_name,  # Query uses stripped name
                     competitor_ticker=comp_ticker,  # Can be None
                     company_name=comp_name  # Full company name for display
                 )
@@ -5486,28 +5539,64 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
                 LOG.info(f"YAHOO FEED RESOLVED: {url[:60]} → {final_domain}")
 
             elif is_google_feed:
-                # GOOGLE FEED: Defer resolution until after triage
-                # Extract domain from title for spam check and deduplication
-                clean_title, source_name = extract_source_from_title_smart(title)
+                # GOOGLE FEED: Try FREE resolution first (Tier 1: Advanced API only)
+                resolved_url = domain_resolver._resolve_google_news_url_advanced(url)
 
-                if source_name and not domain_resolver._is_spam_source(source_name):
-                    domain = domain_resolver._resolve_publication_to_domain(source_name)
+                if resolved_url:
+                    # ✅ RESOLUTION SUCCEEDED
 
-                    if domain and domain_resolver._is_spam_domain(domain):
+                    # YAHOO CHAIN DETECTION (exact same logic as Phase 1.5)
+                    is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
+                        "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
+                    ])
+
+                    if is_yahoo_finance:
+                        yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
+                        if yahoo_original and yahoo_original != resolved_url:
+                            final_resolved_url = yahoo_original
+                            final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
+                            LOG.info(f"GOOGLE→YAHOO→DIRECT: {title[:60]} → {final_domain}")
+                        else:
+                            final_resolved_url = resolved_url
+                            final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+                            if yahoo_original == resolved_url:
+                                LOG.warning(f"Yahoo extraction failed (no providerContentUrl): {resolved_url[:80]}")
+                            LOG.info(f"GOOGLE→YAHOO: {title[:60]} → {final_domain}")
+                    else:
+                        final_resolved_url = resolved_url
+                        final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+                        LOG.info(f"GOOGLE RESOLVED (Tier 1): {title[:60]} → {final_domain}")
+
+                    # SPAM CHECK (same as Yahoo feeds - block article entirely)
+                    if domain_resolver._is_spam_domain(final_domain):
                         stats["blocked_spam"] += 1
-                        LOG.info(f"SPAM REJECTED: Google News → {domain} (from title: {title[:40]})")
+                        LOG.info(f"SPAM REJECTED: Google News → {final_domain} (from resolution)")
                         continue
-                else:
-                    # Could not extract valid domain from title - skip this article
-                    stats["blocked_spam"] += 1
-                    LOG.warning(f"GOOGLE NEWS: Could not extract domain from title: {title[:60]}")
-                    continue
 
-                # Store with NULL resolved_url (will resolve after triage)
-                final_resolved_url = None  # Deferred resolution
-                final_domain = domain
-                final_source_url = None
-                LOG.info(f"GOOGLE FEED DEFERRED: {title[:60]} → {domain}")
+                    final_source_url = None
+
+                else:
+                    # ❌ RESOLUTION FAILED - Fall back to current workflow (title extraction)
+                    clean_title, source_name = extract_source_from_title_smart(title)
+
+                    if source_name and not domain_resolver._is_spam_source(source_name):
+                        domain = domain_resolver._resolve_publication_to_domain(source_name)
+
+                        if domain and domain_resolver._is_spam_domain(domain):
+                            stats["blocked_spam"] += 1
+                            LOG.info(f"SPAM REJECTED: Google News → {domain} (from title: {title[:40]})")
+                            continue
+                    else:
+                        # Could not extract valid domain from title - skip this article
+                        stats["blocked_spam"] += 1
+                        LOG.warning(f"GOOGLE NEWS: Could not extract domain from title: {title[:60]}")
+                        continue
+
+                    # Store with NULL resolved_url (will resolve in Phase 1.5)
+                    final_resolved_url = None  # Deferred resolution
+                    final_domain = domain
+                    final_source_url = None
+                    LOG.info(f"GOOGLE FEED DEFERRED: {title[:60]} → {domain}")
 
             else:
                 # Direct URL or unknown feed type - use standard resolution
@@ -5776,22 +5865,59 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         continue
 
                 elif is_google_feed:
-                    # GOOGLE FEED: Defer resolution
-                    clean_title, source_name = extract_source_from_title_smart(title)
+                    # GOOGLE FEED: Try FREE resolution first (Tier 1: Advanced API only)
+                    resolved_url = domain_resolver._resolve_google_news_url_advanced(url)
 
-                    if source_name and not domain_resolver._is_spam_source(source_name):
-                        domain = domain_resolver._resolve_publication_to_domain(source_name)
+                    if resolved_url:
+                        # ✅ RESOLUTION SUCCEEDED
 
-                        if domain and domain_resolver._is_spam_domain(domain):
+                        # YAHOO CHAIN DETECTION (exact same logic as Phase 1.5)
+                        is_yahoo_finance = any(yahoo_domain in resolved_url for yahoo_domain in [
+                            "finance.yahoo.com", "ca.finance.yahoo.com", "uk.finance.yahoo.com"
+                        ])
+
+                        if is_yahoo_finance:
+                            yahoo_original = extract_yahoo_finance_source_optimized(resolved_url)
+                            if yahoo_original and yahoo_original != resolved_url:
+                                final_resolved_url = yahoo_original
+                                final_domain = normalize_domain(urlparse(yahoo_original).netloc.lower())
+                                LOG.info(f"HOURLY: GOOGLE→YAHOO→DIRECT: {title[:60]} → {final_domain}")
+                            else:
+                                final_resolved_url = resolved_url
+                                final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+                                if yahoo_original == resolved_url:
+                                    LOG.warning(f"HOURLY: Yahoo extraction failed (no providerContentUrl): {resolved_url[:80]}")
+                                LOG.info(f"HOURLY: GOOGLE→YAHOO: {title[:60]} → {final_domain}")
+                        else:
+                            final_resolved_url = resolved_url
+                            final_domain = normalize_domain(urlparse(resolved_url).netloc.lower())
+                            LOG.info(f"HOURLY: GOOGLE RESOLVED (Tier 1): {title[:60]} → {final_domain}")
+
+                        # SPAM CHECK (same as Yahoo feeds - block article entirely)
+                        if domain_resolver._is_spam_domain(final_domain):
+                            stats["blocked_spam"] += 1
+                            LOG.info(f"HOURLY: SPAM REJECTED: Google News → {final_domain} (from resolution)")
+                            continue
+
+                        final_source_url = None
+
+                    else:
+                        # ❌ RESOLUTION FAILED - Fall back to current workflow (title extraction)
+                        clean_title, source_name = extract_source_from_title_smart(title)
+
+                        if source_name and not domain_resolver._is_spam_source(source_name):
+                            domain = domain_resolver._resolve_publication_to_domain(source_name)
+
+                            if domain and domain_resolver._is_spam_domain(domain):
+                                stats["blocked_spam"] += 1
+                                continue
+                        else:
                             stats["blocked_spam"] += 1
                             continue
-                    else:
-                        stats["blocked_spam"] += 1
-                        continue
 
-                    final_resolved_url = None  # Deferred
-                    final_domain = domain
-                    final_source_url = None
+                        final_resolved_url = None  # Deferred
+                        final_domain = domain
+                        final_source_url = None
 
                 else:
                     # Direct URL

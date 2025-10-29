@@ -6714,43 +6714,36 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
             # System prompt (generic - cacheable, ~3500 tokens - optimized for caching and comprehensive extraction)
             system_prompt = """You are a hedge fund analyst extracting information about a target company for an investment research report.
 
-**STEP 1: SOURCE VERIFICATION**
+**STEP 1: PLATFORM VERIFICATION**
 
-Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
+Check if this article is published BY a retail stock screener platform.
 
-**Simply Wall St:**
-- States "Simply Wall St" as source/publisher
-- Contains snowflake score graphics, 6-category scoring system
-- Disclaimer: "This article by Simply Wall St is general in nature..."
+**Look inside article content for platform identification:**
+• Byline/author states platform name (Zacks Investment Research, Simply Wall St contributor, Motley Fool contributor)
+• Platform disclaimers in article text ("This article by Simply Wall St...", "The Motley Fool has a disclosure policy...")
+• Proprietary scoring systems (Zacks Rank #1-5, TipRanks Smart Score 1-10, Simply Wall St snowflakes, GuruFocus ratings)
 
-**GuruFocus:**
-- States "GuruFocus" as source/publisher
-- Contains GuruFocus ratings (financial strength, profitability rank)
-- References Peter Lynch fair value, GF Value, GuruFocus scores
+**CRITICAL - Syndication Check:**
+Even if domain is Yahoo Finance, MarketWatch, or other news site, check article TEXT for retail platform content:
+✓ Yahoo Finance syndicates Zacks articles → Check for "Zacks Investment Research" in article
+✓ MSN syndicates Motley Fool → Check for "Motley Fool" disclaimer in article
+✓ Platform branding in content → Skip regardless of domain
 
-**Zacks:**
-- States "Zacks Investment Research" as source/author
-- Contains "Zacks Rank #1, #2, #3" ranking system
-- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
+**Only skip if article content identifies as FROM a retail platform.**
 
-**TipRanks:**
-- States "TipRanks" as source/publisher
-- Contains "TipRanks Smart Score" (1-10 rating system)
-- References TipRanks analyst consensus aggregation
+Do NOT skip based on:
+❌ Article discusses valuation or investment outlook (legitimate news coverage)
+❌ Article quotes analysts about fair value (professional commentary)
+❌ M&A deal analysis with margins/premiums (transaction reporting)
 
-**Motley Fool:**
-- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
-- Contains disclaimer: "The Motley Fool has a disclosure policy..."
-- References Stock Advisor, Rule Breakers services
+Examples:
+✅ ANALYZE: Yahoo Finance article about PE deal with "analyst stated fair value" (news coverage)
+✅ ANALYZE: Reuters article discussing "deal valued at 15x EBITDA" (M&A reporting)
+❌ SKIP: Yahoo Finance article with byline "Zacks Investment Research" + Zacks Rank (syndicated retail)
+❌ SKIP: MarketWatch article containing "This article by Simply Wall St..." disclaimer (syndicated retail)
 
-**Finviz / MarketBeat / StockRover:**
-- States any of these as source/publisher
-- Contains their proprietary screener rankings or scores
-- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
-
-**If article is FROM any retail stock screener above** (check article content, not just domain):
-→ Return ONLY: {"skip": true, "reason": "Retail stock screener content"}
-→ Do NOT add any commentary after this JSON
+**If article is FROM retail platform (check content, not domain):**
+Return {"skip": true, "reason": "Retail stock screener content"}
 
 **STEP 2: CONTENT FILTERING (If source verified as non-retail)**
 
@@ -7122,43 +7115,36 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
             # System prompt (generic - cacheable, ~1100 tokens to meet threshold)
             system_prompt = """You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
-**STEP 1: SOURCE VERIFICATION**
+**STEP 1: PLATFORM VERIFICATION**
 
-Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
+Check if this article is published BY a retail stock screener platform.
 
-**Simply Wall St:**
-- States "Simply Wall St" as source/publisher
-- Contains snowflake score graphics, 6-category scoring system
-- Disclaimer: "This article by Simply Wall St is general in nature..."
+**Look inside article content for platform identification:**
+• Byline/author states platform name (Zacks Investment Research, Simply Wall St contributor, Motley Fool contributor)
+• Platform disclaimers in article text ("This article by Simply Wall St...", "The Motley Fool has a disclosure policy...")
+• Proprietary scoring systems (Zacks Rank #1-5, TipRanks Smart Score 1-10, Simply Wall St snowflakes, GuruFocus ratings)
 
-**GuruFocus:**
-- States "GuruFocus" as source/publisher
-- Contains GuruFocus ratings (financial strength, profitability rank)
-- References Peter Lynch fair value, GF Value, GuruFocus scores
+**CRITICAL - Syndication Check:**
+Even if domain is Yahoo Finance, MarketWatch, or other news site, check article TEXT for retail platform content:
+✓ Yahoo Finance syndicates Zacks articles → Check for "Zacks Investment Research" in article
+✓ MSN syndicates Motley Fool → Check for "Motley Fool" disclaimer in article
+✓ Platform branding in content → Skip regardless of domain
 
-**Zacks:**
-- States "Zacks Investment Research" as source/author
-- Contains "Zacks Rank #1, #2, #3" ranking system
-- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
+**Only skip if article content identifies as FROM a retail platform.**
 
-**TipRanks:**
-- States "TipRanks" as source/publisher
-- Contains "TipRanks Smart Score" (1-10 rating system)
-- References TipRanks analyst consensus aggregation
+Do NOT skip based on:
+❌ Article discusses valuation or investment outlook (legitimate news coverage)
+❌ Article quotes analysts about fair value (professional commentary)
+❌ M&A deal analysis with margins/premiums (transaction reporting)
 
-**Motley Fool:**
-- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
-- Contains disclaimer: "The Motley Fool has a disclosure policy..."
-- References Stock Advisor, Rule Breakers services
+Examples:
+✅ ANALYZE: Yahoo Finance article about PE deal with "analyst stated fair value" (news coverage)
+✅ ANALYZE: Reuters article discussing "deal valued at 15x EBITDA" (M&A reporting)
+❌ SKIP: Yahoo Finance article with byline "Zacks Investment Research" + Zacks Rank (syndicated retail)
+❌ SKIP: MarketWatch article containing "This article by Simply Wall St..." disclaimer (syndicated retail)
 
-**Finviz / MarketBeat / StockRover:**
-- States any of these as source/publisher
-- Contains their proprietary screener rankings or scores
-- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
-
-**If article is FROM any retail stock screener above** (check article content, not just domain):
-→ Return ONLY: {"skip": true, "reason": "Retail stock screener content"}
-→ Do NOT add any commentary after this JSON
+**If article is FROM retail platform (check content, not domain):**
+Return {"skip": true, "reason": "Retail stock screener content"}
 
 **STEP 2: CONTENT FILTERING (If source verified as non-retail)**
 

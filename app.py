@@ -927,7 +927,7 @@ def get_ticker_scraping_stats(ticker: str) -> dict:
             "failed_scrapes": 0,
             "limits": {
                 "company": 20,
-                "industry_per_keyword": 5,
+                "industry_per_keyword": 8,
                 "competitor_per_keyword": 5
             }
         }
@@ -942,7 +942,7 @@ scraping_stats = {
     "failed_scrapes": 0,
     "limits": {
         "company": 20,
-        "industry_per_keyword": 5,
+        "industry_per_keyword": 8,
         "competitor_per_keyword": 5
     }
 }
@@ -997,7 +997,7 @@ def reset_scraping_stats():
         "failed_scrapes": 0,
         "limits": {
             "company": 20,
-            "industry_per_keyword": 5,
+            "industry_per_keyword": 8,
             "competitor_per_keyword": 5
         }
     }
@@ -5383,13 +5383,13 @@ def calculate_dynamic_scraping_limits(ticker: str) -> Dict[str, int]:
     LOG.info(f"   Industry Keywords: {industry_keywords}")
     LOG.info(f"   Competitors: {competitors}")
 
-    # Calculate totals: 5 articles per keyword/competitor
-    industry_total = len(industry_keywords) * 5
+    # Calculate totals: 8 articles per industry keyword, 5 per competitor
+    industry_total = len(industry_keywords) * 8
     competitor_total = len(competitors) * 5
 
     LOG.info(f"DYNAMIC SCRAPING LIMITS for {ticker}:")
     LOG.info(f"  Company: 20")
-    LOG.info(f"  Industry: {len(industry_keywords)} keywords × 5 = {industry_total}")
+    LOG.info(f"  Industry: {len(industry_keywords)} keywords × 8 = {industry_total}")
     LOG.info(f"  Competitor: {len(competitors)} competitors × 5 = {competitor_total}")
     LOG.info(f"  TOTAL: {20 + industry_total + competitor_total} articles max")
     
@@ -10017,7 +10017,7 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
                     LOG.error(f"Industry triage failed for keyword '{keyword}': {e}")
             
             industry_selected.extend(keyword_selected)
-            LOG.info(f"    TOTAL: {len(keyword_selected)}/5 selected for '{keyword}'")
+            LOG.info(f"    TOTAL: {len(keyword_selected)}/8 selected for '{keyword}'")
         
         selected_results["industry"] = industry_selected
         LOG.info(f"INDUSTRY TOTAL: {len(industry_selected)} articles selected across all keywords")
@@ -10389,7 +10389,7 @@ async def triage_industry_articles_full(articles: List[Dict], ticker: str, compa
             item["description"] = article.get('description')
         items.append(item)
 
-    target_cap = min(5, len(articles))
+    target_cap = min(8, len(articles))
 
     payload = {
         "bucket": "industry",
@@ -11110,7 +11110,7 @@ async def triage_industry_articles_claude(articles: List[Dict], ticker: str, com
             item["description"] = article.get('description')
         items.append(item)
 
-    target_cap = min(5, len(articles))
+    target_cap = min(8, len(articles))
     peers_display = ', '.join(peers[:5]) if peers else 'None'
 
     # Generic system prompt (cacheable across all tickers)
@@ -11693,7 +11693,7 @@ async def perform_ai_triage_with_fallback_async(
                 "type": "industry",
                 "key": keyword,
                 "articles": triage_articles,
-                "target_cap": min(5, len(triage_articles)),
+                "target_cap": min(8, len(triage_articles)),
                 "openai_func": triage_industry_articles_full,
                 "openai_args": (triage_articles, ticker, company_name, sector, peers),
                 "claude_func": triage_industry_articles_claude,

@@ -754,6 +754,10 @@ SPAM_DOMAINS = {
     # Vietnamese news sites - not material for US/Canadian market analysis (Oct 2025)
     "nchmf.gov.vn", "www.nchmf.gov.vn",  # Vietnamese weather/climate center
     "baovietnamnet.vn", "www.baovietnamnet.vn", "baovietnamnet",  # Vietnamese news portal
+    # Stock guru / trading course sites (Oct 2025)
+    "timothysykes.com", "www.timothysykes.com",  # Penny stock promoter, trading courses, pure retail picks
+    # Low-quality international aggregators (Oct 2025)
+    "beritasriwijaya.co.id", "www.beritasriwijaya.co.id",  # Indonesian news aggregator, syndicated content
 }
 
 QUALITY_DOMAINS = {

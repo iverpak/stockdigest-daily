@@ -20617,24 +20617,46 @@ async def process_transcript_phase(job: dict):
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
             try:
-                subject = f"Earnings Transcript: {ticker} Q{quarter} FY{year} ({ANTHROPIC_MODEL})"
-                html_body = f"""
-                <html>
-                <head>
-                    <style>
-                        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
-                        h1 {{ color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; }}
-                        h2 {{ color: #1e3a8a; margin-top: 24px; }}
-                        pre {{ background: #f3f4f6; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }}
-                    </style>
-                </head>
-                <body>
-                    <h1>{subject}</h1>
-                    <pre>{summary_text}</pre>
-                </body>
-                </html>
-                """
-                send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
+                # Import email generation function
+                from modules.transcript_summaries import generate_transcript_email
+
+                # Get stock price data for email header
+                stock_price = "$0.00"
+                price_change_pct = None
+                price_change_color = "#4ade80"
+
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT financial_last_price, financial_price_change_pct
+                        FROM ticker_reference
+                        WHERE ticker = %s
+                    """, (ticker,))
+                    price_data = cur.fetchone()
+
+                    if price_data and price_data['financial_last_price']:
+                        stock_price = f"${price_data['financial_last_price']:.2f}"
+                        if price_data['financial_price_change_pct'] is not None:
+                            pct = price_data['financial_price_change_pct']
+                            price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+                            price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+
+                # Generate email using unified Jinja2 template
+                email_data = generate_transcript_email(
+                    ticker=ticker,
+                    company_name=ticker_config.get('company_name', ticker),
+                    report_type='transcript',
+                    quarter=quarter_formatted,
+                    year=year,
+                    report_date=data[0].get('date'),
+                    pr_title=None,
+                    summary_text=summary_text,
+                    fmp_url=fmp_url,
+                    stock_price=stock_price,
+                    price_change_pct=price_change_pct,
+                    price_change_color=price_change_color
+                )
+
+                send_email(subject=email_data['subject'], html_body=email_data['html'], to=DIGEST_TO)
                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
 
             except Exception as email_error:

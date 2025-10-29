@@ -26952,25 +26952,47 @@ async def email_sec_filing_api(request: Request):
         # Import the email generation function from company_profiles module
         from modules.company_profiles import generate_company_profile_email
 
-        # Get stock price for email header
-        stock_price = "$0.00"
-        price_change_pct = None
-        price_change_color = "#4ade80"
+        # Get real-time stock price (with retry logic and fallback to cached)
+        stock_context = get_stock_context(ticker)
 
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT financial_last_price, financial_price_change_pct
-                FROM ticker_reference
-                WHERE ticker = %s
-            """, (ticker,))
-            price_data = cur.fetchone()
+        # Fallback to cached data if real-time fetch fails
+        if not stock_context:
+            LOG.warning(f"Real-time price fetch failed for {ticker}, using cached data from database")
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT financial_last_price, financial_price_change_pct
+                    FROM ticker_reference
+                    WHERE ticker = %s
+                """, (ticker,))
+                price_data = cur.fetchone()
+                if price_data:
+                    stock_context = {
+                        'financial_last_price': price_data.get('financial_last_price'),
+                        'financial_price_change_pct': price_data.get('financial_price_change_pct')
+                    }
+                else:
+                    stock_context = {}
 
-            if price_data and price_data['financial_last_price']:
-                stock_price = f"${price_data['financial_last_price']:.2f}"
-                if price_data['financial_price_change_pct'] is not None:
-                    pct = price_data['financial_price_change_pct']
-                    price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                    price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+        # Format price data
+        raw_price = stock_context.get("financial_last_price")
+        raw_price_change = stock_context.get("financial_price_change_pct")
+
+        if raw_price:
+            stock_price = f"${float(raw_price):.2f}"
+        else:
+            stock_price = "$0.00"
+
+        if raw_price_change is not None:
+            try:
+                change_value = float(raw_price_change)
+                price_change_pct = f"{'+' if change_value >= 0 else ''}{change_value:.2f}%"
+                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
+            except (ValueError, TypeError):
+                price_change_pct = None
+                price_change_color = "#6b7280"
+        else:
+            price_change_pct = None
+            price_change_color = "#6b7280"
 
         # Generate email HTML
         email_data = generate_company_profile_email(
@@ -27089,25 +27111,47 @@ async def email_company_profile_api(request: Request):
         # Import the email generation function from company_profiles module
         from modules.company_profiles import generate_company_profile_email
 
-        # Get stock price for email header
-        stock_price = "$0.00"
-        price_change_pct = None
-        price_change_color = "#4ade80"
+        # Get real-time stock price (with retry logic and fallback to cached)
+        stock_context = get_stock_context(ticker)
 
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT financial_last_price, financial_price_change_pct
-                FROM ticker_reference
-                WHERE ticker = %s
-            """, (ticker,))
-            price_data = cur.fetchone()
+        # Fallback to cached data if real-time fetch fails
+        if not stock_context:
+            LOG.warning(f"Real-time price fetch failed for {ticker}, using cached data from database")
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT financial_last_price, financial_price_change_pct
+                    FROM ticker_reference
+                    WHERE ticker = %s
+                """, (ticker,))
+                price_data = cur.fetchone()
+                if price_data:
+                    stock_context = {
+                        'financial_last_price': price_data.get('financial_last_price'),
+                        'financial_price_change_pct': price_data.get('financial_price_change_pct')
+                    }
+                else:
+                    stock_context = {}
 
-            if price_data and price_data['financial_last_price']:
-                stock_price = f"${price_data['financial_last_price']:.2f}"
-                if price_data['financial_price_change_pct'] is not None:
-                    pct = price_data['financial_price_change_pct']
-                    price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                    price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+        # Format price data
+        raw_price = stock_context.get("financial_last_price")
+        raw_price_change = stock_context.get("financial_price_change_pct")
+
+        if raw_price:
+            stock_price = f"${float(raw_price):.2f}"
+        else:
+            stock_price = "$0.00"
+
+        if raw_price_change is not None:
+            try:
+                change_value = float(raw_price_change)
+                price_change_pct = f"{'+' if change_value >= 0 else ''}{change_value:.2f}%"
+                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
+            except (ValueError, TypeError):
+                price_change_pct = None
+                price_change_color = "#6b7280"
+        else:
+            price_change_pct = None
+            price_change_color = "#6b7280"
 
         # Generate email HTML
         email_data = generate_company_profile_email(
@@ -27464,7 +27508,7 @@ async def email_research_api(request: Request):
                 # Include ai_provider to fetch the specific version (Gemini or Sonnet)
                 if ai_provider:
                     cur.execute("""
-                        SELECT ticker, quarter, year, summary_text, ai_provider, ai_model
+                        SELECT ticker, quarter, year, report_date, summary_text, ai_provider, ai_model
                         FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
@@ -27476,7 +27520,7 @@ async def email_research_api(request: Request):
                 else:
                     # Fallback: fetch any version if ai_provider not specified
                     cur.execute("""
-                        SELECT ticker, quarter, year, summary_text, ai_provider, ai_model
+                        SELECT ticker, quarter, year, report_date, summary_text, ai_provider, ai_model
                         FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
@@ -27530,19 +27574,28 @@ async def email_research_api(request: Request):
             LOG.warning(f"Real-time price fetch failed for {ticker}, using cached data from database")
             stock_context = config if config else {}
 
-        # Extract price data (works with both fresh and cached data)
-        stock_price = stock_context.get("financial_last_price", "$0.00")
-        price_change_pct = stock_context.get("financial_price_change_pct")
+        # Extract and format price data (works with both fresh and cached data)
+        raw_price = stock_context.get("financial_last_price")
+        raw_price_change = stock_context.get("financial_price_change_pct")
 
-        # Format price change color
-        if price_change_pct:
-            try:
-                change_value = float(str(price_change_pct).strip('%'))
-                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
-            except (ValueError, AttributeError):
-                price_change_color = "#6b7280"  # Gray if invalid
+        # Format stock price with $
+        if raw_price:
+            stock_price = f"${float(raw_price):.2f}"
         else:
-            price_change_color = "#6b7280"  # Gray if no data
+            stock_price = "$0.00"
+
+        # Format price change as percentage with color
+        if raw_price_change is not None:
+            try:
+                change_value = float(raw_price_change)
+                price_change_pct = f"{'+' if change_value >= 0 else ''}{change_value:.2f}%"
+                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
+            except (ValueError, TypeError):
+                price_change_pct = None
+                price_change_color = "#6b7280"
+        else:
+            price_change_pct = None
+            price_change_color = "#6b7280"
 
         # Generate formatted email using proper template
         if research_type == 'presentation':
@@ -27570,7 +27623,7 @@ async def email_research_api(request: Request):
                 report_type='transcript',
                 quarter=doc['quarter'],
                 year=doc['year'],
-                report_date=None,
+                report_date=doc.get('report_date'),  # Pass actual call date from database
                 pr_title=None,
                 summary_text=content,
                 fmp_url=f"https://financialmodelingprep.com/financial-summary/{ticker}",

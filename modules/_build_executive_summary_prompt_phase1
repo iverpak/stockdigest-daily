@@ -569,6 +569,15 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
    - Routine rebalancing without activist agenda
    - Non-activist institutional buying/selling
 
+6. Stale developments (retrospective reporting of old events)
+   - Articles with retrospective framing of past events as primary content
+   - Past-tense patterns: "updated in [past month]", "announced last year", "back in [date]"
+   - Exception: Historical context supporting current development
+
+   ✗ "CDC updated IUD guidelines in August 2024" [retrospective, no current news]
+   ✗ "Company announced earlier this year" [retrospective framing]
+   ✓ "Device launches using previously-approved technology" [current + context]
+
 If article discusses these topics, skip them entirely. Do not create bullets for noise.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -632,6 +641,14 @@ Source attribution examples:
 
 Example with 100% attribution (5 claims, 5 attributions):
 "Talen completed $2.69B notes offering per company announcement (Oct 27). Company partnered with Eos Energy on battery storage per joint press release (Oct 21). Natural gas prices reached $3.44/MMBtu per Natural Gas Intelligence (Oct 27). NRG raised guidance to $7.55-$8.15 per Q3 earnings call (Oct 31). Vistra announced 600 MW nuclear expansion per Barchart.com report (Oct 24)."
+
+ATTRIBUTION SPECIFICITY CHECK:
+
+For each attribution, verify it names the specific source (not generic):
+□ Company statements: "per Q3 earnings call", "per CFO", "per Oct 23 press release" (NOT "per company reports")
+□ News sources: "per Bloomberg", "per WSJ and Reuters" (NOT "per reports" or "per multiple sources")
+□ Analysts: "per Goldman Sachs analyst John Smith", "per Wedbush" (NOT "per analyst")
+□ Data sources: "per EIA report", "per Natural Gas Intelligence" (NOT "per data")
 
 Before finalizing: Count attributions. Are 70%+ of major claims attributed? If not, add sources.
 
@@ -800,10 +817,16 @@ UPSIDE SCENARIO (80-100 words, single paragraph):
 - Base on: analyst bull cases, management optimism, positive catalysts discussed
 - Include analyst price targets if mentioned
 - Format as coherent narrative (not bullet points)
-- Use attributed statements only - preserve article confidence levels
 - Run checks 1-3 above before finalizing
 - Include quantification when articles provide: price targets, percentage changes, dollar amounts, margins, quantities
-- Numbers make scenarios concrete and actionable (don't leave them out if articles mention them)
+
+LOCAL VALIDATION (check before finalizing):
+□ Every sentence has attribution (100% requirement)
+□ Attribution SPECIFICITY:
+  - Named analyst + firm: "Wedbush analyst John Doe stated..." (NOT "analyst stated")
+  - Named publication: "per Bloomberg and WSJ" (NOT "per reports")
+  - Named executives: "per CEO Jane Smith" (NOT "per management")
+□ Singular/plural match: If 2+ named individuals → "analysts" OR separate attributions
 
 COVERAGE CHECK: Review all bullish bullets with "high impact" tags. Each high-impact
 bullish development must appear in Upside Scenario. Don't omit material themes.
@@ -828,10 +851,16 @@ DOWNSIDE SCENARIO (single paragraph, 3-4 sentences):
 - Base on: analyst concerns, risks flagged, negative developments discussed
 - Include analyst bear targets if mentioned
 - Format as coherent narrative (not bullet points)
-- Use attributed statements only - preserve article confidence levels
 - Run checks 1-3 above before finalizing
 - Include quantification when articles provide: price targets, percentage changes, dollar amounts, margins, quantities
-- Numbers make scenarios concrete and actionable (don't leave them out if articles mention them)
+
+LOCAL VALIDATION (check before finalizing):
+□ Every sentence has attribution (100% requirement)
+□ Attribution SPECIFICITY (same as Upside):
+  - Named analyst + firm: "Goldman Sachs analyst stated..." (NOT "analyst stated")
+  - Named publication: "per Bloomberg and WSJ" (NOT "per reports")
+  - Named executives: "per CEO Jane Smith" (NOT "per management")
+□ Singular/plural match: If 2+ named individuals → "analysts" OR separate attributions
 
 COVERAGE CHECK: Review all bearish bullets with "high impact" tags. Each high-impact
 bearish development must appear in Downside Scenario. Don't omit material themes.
@@ -1617,6 +1646,14 @@ SOURCE REQUIREMENT: INSTITUTIONAL SELL-SIDE analysts ONLY
 ✗ EXCLUDE: Generic "analysts say" without named firm
 
 This section is for professional institutional research only.
+
+RESEARCH FIRM CLARIFICATION:
+- Analyst/research firms (Signify Research, Gartner, IDC, etc.) = Wall Street Sentiment
+- Even if titled "CEO" or "founder", research firm personnel = analysts (NOT competitors)
+- If research firm discusses target company strategy → Wall Street Sentiment (NOT Competitive Dynamics)
+
+Example: "Signify Research CEO suggested Hologic may divest skeletal health"
+→ Wall Street Sentiment (analyst view), NOT Competitive Dynamics
 
 SECTION CREATION RULE (CRITICAL):
 

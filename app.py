@@ -7619,6 +7619,21 @@ TIER 4 (Score: 2.0):
   "reason": "Opinion piece speculating on industry future without specific driver data, quantified trends, or actionable intelligence."
 }}
 
+**STALE CONTENT DETECTION:**
+
+Scan for AGE INDICATORS suggesting article reports OLD news as primary content:
+- Time phrases: "back in [month/year]", "earlier this year", "last year", "in [year]"
+- Retrospective framing: "had announced", "previously updated", "announced months ago"
+- If PRIMARY content uses past-tense framing about EARLIER PERIODS → Likely stale
+
+FRESH vs STALE:
+✓ "Gas prices reach $3.45" (present tense, current)
+✓ "Device launches this week; uses 2024-approved tech" (current + historical context)
+✗ "CDC updated guidelines in August 2024" (past tense, no current development)
+✗ "Pakistan announced infrastructure plan earlier this year" (retrospective)
+
+If article reads like RETROSPECTIVE SUMMARY of old events (not current news + context) → Score 0-4
+
 **Edge Case Examples:**
 
 Company-specific event with sector-wide implications (Score: 7.5):

@@ -285,16 +285,23 @@ FIELD GENERATION & CRITICAL RULES
    - Examples: "customer concentration", "margin compression", "delivery outperformance", "regulatory risk"
 
 4. relevance: How relevant is this to the target company?
-   - direct: Directly about target company
-   - indirect: Indirectly relevant through market/competitive/industry connection
-   - none: Not relevant to target company
 
-   Evaluate based on bullet content + context you found.
+   - direct: Target company explicitly named in bullet OR direct operational/financial impact stated
+   - indirect: Article explicitly compares target to competitor OR discusses shared customer/supplier with stated target connection
+   - none: No target company mention, generic industry news, competitor in different market/geography
+
+   STRICT TEST for "indirect" (if bullet fails ANY test → mark "none"):
+   □ Does article name target company? If NO → Check next test
+   □ Does article mention target product/brand? If NO → Check next test
+   □ Does article explicitly compare competitor to target? If NO → Mark "none"
 
    Examples:
-   - direct: Target company Q3 deliveries beat consensus; Goldman raised target price; Stock hit all-time high
-   - indirect: Competitor capacity expansion in target market; Industry regulation affecting target segment; Supplier pricing for target inputs
-   - none: Competitor CEO compensation; Unrelated industry development; Competitor internal restructuring
+   ✓ direct: "Hologic announced acquisition", "Goldman raised HOLX target"
+   ✓ indirect: "GE HealthCare margins 18% vs Hologic's 12% per analyst"
+   ✗ none: "Siemens HK distribution deal" (no Hologic mention, different geography)
+   ✗ none: "IUD device launches" (no Hologic mention, generic industry)
+
+   CRITICAL: relevance=none → Context MUST use escape hatch (line 100-112)
 
 5. context: 25-60 words synthesizing 1-3 most relevant filing data points
    - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q"
@@ -639,6 +646,7 @@ Before finalizing each context, verify you've included:
 □ GEOGRAPHIC CROSS-REFERENCE: If policy/tax/regulation → included relevant geography revenue %?
 □ DEVELOPMENT BALANCE: If unprofitable product → included timeline + operational challenges?
 □ NO REPETITION: Did I avoid repeating ANY facts from bullet content?
+□ CITATION ACCURACY: Every filing citation matches ACTUAL source used (not assumed source)
 
 SELF-AUDIT EXAMPLES:
 
@@ -1284,10 +1292,31 @@ When bullet mentions risk, connect to financial exposure:
 
 
 ═══════════════════════════════════════════════════════════════════════════════
+SENTIMENT + REASON TAG PHILOSOPHY
+═══════════════════════════════════════════════════════════════════════════════
+
+CRITICAL PRINCIPLE: Both tags extract how articles frame the development.
+Minimal inference - report article emphasis, not independent analysis.
+
+- SENTIMENT: How articles frame direction (bullish/bearish/neutral)
+  → Extract from: Article language, comparisons, expert views
+
+- REASON: What articles emphasize as WHY it matters (value driver)
+  → Extract from: What article highlights as significant aspect
+  → NOT generic event category ("acquisition" ≠ reason, "valuation premium" = reason)
+
+Example: "Hologic acquired for $76/share, 46% premium"
+→ Articles emphasize the premium paid (not just acquisition announcement)
+→ sentiment: bullish (premium framing)
+→ reason: "shareholder premium" (article's emphasis)
+
+═══════════════════════════════════════════════════════════════════════════════
 SENTIMENT TAG CALCULATION
 ═══════════════════════════════════════════════════════════════════════════════
 
 Sentiment answers: "Is this good, bad, or neutral for the company?"
+
+EXTRACT from article language/tone/comparisons (not independent inference).
 
 THREE OPTIONS:
 - bullish: Improves company position/performance
@@ -1403,6 +1432,17 @@ BAD EXAMPLES:
 ❌ "acquisition announced" (restates topic)
 ❌ "customer loss" (restates topic)
 ❌ "Q3 results" (restates topic)
+
+VALIDATION (before finalizing each reason):
+□ Does reason describe VALUE IMPACT from article? (margin, premium, risk, advantage)
+□ OR just restate event category? (acquisition, transaction, announcement)
+
+If reason restates event category → Find what article emphasizes as significant:
+- Articles emphasize premium paid? → "shareholder premium" or "valuation premium"
+- Articles emphasize margin improvement? → "margin expansion"
+- Articles emphasize concentration risk? → "customer concentration"
+
+BANNED: "strategic transaction", "acquisition announced", "partnership formed", "guidance update"
 
 REASON TAG RULE: Use specific mechanism/type, not generic category labels.
 ❌ "competitive dynamics", "strategic development", "competitive positioning"

@@ -585,7 +585,7 @@ DATE FORMAT BY SECTION:
 - Upside/Downside: Consolidated at end "(Oct 28-29)" - NO per-sentence dates
 
 ATTRIBUTION DENSITY:
-- Bottom Line: 70%+ of claims attributed
+- Bottom Line: 100% (every claim attributed)
 - Bullets: Every claim attributed
 - Upside/Downside: 100% (every sentence attributed)
 
@@ -598,7 +598,7 @@ PRE-SUBMISSION CHECK:
 □ Every implication attributed to who said it
 □ No vague attribution ("reportedly", "per analyst" without firm)
 □ Split attribution when different claims from different sources
-□ Section density requirements met (70% Bottom Line, 100% Upside/Downside)
+□ Section density requirements met (100% Bottom Line, Bullets, and Upside/Downside)
 □ If you cannot verify source for a claim → Remove the claim or find the source in articles.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -687,10 +687,10 @@ ATTRIBUTION FORMAT:
 See ATTRIBUTION REQUIREMENTS section (top of prompt) for complete rules.
 
 Bottom Line requirements:
-- Minimum 70% of major factual claims attributed
+- 100% attribution requirement (every claim attributed)
 - Use consolidated date at paragraph end: "(Oct 22-24)"
 - Inline format: "per [source]" throughout paragraph
-- Check: Count attributions before finalizing - target 7+ in typical Bottom Line
+- Check: Count attributions before finalizing - must equal claim count
 
 Example format:
 "Company reported Q3 revenue per Oct 28 earnings call; analysts raised targets per Wedbush; recall announced per NHTSA (Oct 22-24)"
@@ -698,10 +698,10 @@ Example format:
 MANDATORY ATTRIBUTION CHECK:
 Before finalizing Bottom Line:
 1. Count major factual claims (typically 8-12 claims in 150-word Bottom Line)
-2. Count attributions (target: 70%+ of claims)
-3. If below 70%: Add specific sources ("per Bloomberg" not "per reports")
+2. Count attributions (must be 100% of claims)
+3. If below 100%: Add specific sources ("per Bloomberg" not "per reports")
 4. Verify no vague attribution ("per analyst" → "per Wedbush analyst")
-5. Recount - must hit 70% threshold
+5. Recount - must hit 100% threshold
 
 MANDATORY LENGTH CHECK:
 After writing Bottom Line, count words. If >150 words:

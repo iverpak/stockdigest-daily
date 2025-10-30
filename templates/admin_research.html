@@ -1189,7 +1189,7 @@
                     // Model badge with generation time
                     const modelBadge = doc.ai_provider === 'gemini'
                         ? `<span style="background: #10b981; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟩 Gemini</span>`
-                        : `<span style="background: #1e40af; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟦 Sonnet</span>`;
+                        : `<span style="background: #1e40af; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟦 Claude</span>`;
 
                     const genTime = doc.processing_duration_seconds
                         ? `<div style="font-size: 11px; color: #6b7280; margin-top: 4px;">${doc.processing_duration_seconds}s</div>`
@@ -1210,18 +1210,18 @@
                     // Model badge with generation time (matching transcripts style)
                     const prModelBadge = doc.ai_provider === 'gemini'
                         ? `<span style="background: #10b981; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟩 Gemini</span>`
-                        : `<span style="background: #1e40af; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟦 Sonnet</span>`;
+                        : `<span style="background: #1e40af; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟦 Claude</span>`;
 
                     const prGenTime = doc.processing_duration_seconds
                         ? `<div style="font-size: 11px; color: #6b7280; margin-top: 4px;">${doc.processing_duration_seconds}s</div>`
                         : '';
 
-                    // Title truncation (like transcripts show quarter)
-                    const prTitle = doc.title ? (doc.title.length > 60 ? doc.title.substring(0, 60) + '...' : doc.title) : 'Press Release';
+                    // Title truncation - show more of the title (80 chars instead of 60)
+                    const prTitle = doc.title ? (doc.title.length > 80 ? doc.title.substring(0, 80) + '...' : doc.title) : 'Press Release';
 
                     return `
                         <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
-                        <td style="padding: 12px; font-size: 13px;">${prTitle}</td>
+                        <td style="padding: 12px; font-size: 13px; max-width: 400px;">${prTitle}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
                         <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
                         <td style="padding: 12px; text-align: center;">${prModelBadge}${prGenTime}</td>

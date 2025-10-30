@@ -28814,8 +28814,8 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                 if is_first_check:
                     LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB silently (no email)")
 
-                # First check: Only process LATEST 1 | Subsequent checks: Process all new ones
-                releases_to_check = releases[:1] if is_first_check else releases
+                # First check: Only process LATEST 1 | Subsequent checks: Check last 4 (recent releases only)
+                releases_to_check = releases[:1] if is_first_check else releases[:4]
 
                 for pr in releases_to_check:
                     pr_date = pr.get('date', '').split()[0]  # Extract YYYY-MM-DD

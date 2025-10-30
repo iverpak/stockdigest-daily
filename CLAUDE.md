@@ -43,12 +43,13 @@ The job queue system decouples long-running processing from HTTP requests, elimi
 
 ```bash
 # Cron job functions (run via: python app.py <function>)
-python app.py cleanup   # 6:00 AM - Delete old queue entries
-python app.py commit    # 6:30 AM - Daily GitHub CSV commit (triggers deployment)
-python app.py process   # 7:00 AM - Process all active beta users
-python app.py send      # 8:30 AM - Auto-send emails to users
-python app.py export    # 11:59 PM - Backup beta users to CSV
-python app.py alerts    # Hourly (9 AM - 10 PM EST) - Real-time article alerts (NEW - Oct 2025)
+python app.py cleanup         # 6:00 AM - Delete old queue entries
+python app.py check_filings   # 6:30 AM + Hourly (8:30 AM - 9:30 PM EST) - Check for new filings (NEW - Oct 30, 2025)
+python app.py commit          # 6:30 AM - Daily GitHub CSV commit (triggers deployment)
+python app.py process         # 7:00 AM - Process all active beta users
+python app.py send            # 8:30 AM - Auto-send emails to users
+python app.py export          # 11:59 PM - Backup beta users to CSV (dual-file strategy with legal audit trail)
+python app.py alerts          # Hourly (9 AM - 10 PM EST) - Real-time article alerts (NEW - Oct 2025)
 ```
 
 **Key Features:**
@@ -360,6 +361,14 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Synchronous processing (30-60 seconds)
   - Stores in `transcript_summaries` table
 
+**Press Release Worker (NEW - Oct 30, 2025):**
+- **Background Processing:** Press releases now processed via job queue (like transcripts)
+- **Worker Function:** `process_press_release_phase()` - handles `press_release_generation` jobs
+- **Phase Routing:** Integrated into main job worker with phase detection
+- **Processing Flow:** Fetch from FMP → Claude summary → Email to admin → Save to DB
+- **Email Subject:** Uses actual FMP press release title (e.g., "📰 Press Release: AAPL - Q3 2024 Earnings Results")
+- **Fixed:** 18 stuck press release jobs in production queue (worker was missing)
+
 **Key Functions (modules/company_profiles.py):**
 - **`generate_sec_filing_profile_with_gemini()`**: NEW unified function for 10-K and 10-Q generation
   - Parameters: `ticker`, `content`, `config`, `filing_type` ('10-K' or '10-Q'), `fiscal_year`, `fiscal_quarter`, `gemini_api_key`
@@ -379,7 +388,18 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - BeautifulSoup HTML parsing with script/style removal
   - Returns cleaned plain text for AI processing
 
-- `generate_company_profile_email()`: Create HTML email with profile preview and legal disclaimers
+- `generate_company_profile_email()`: Create HTML email with profile preview and legal disclaimers **(UPDATED - Oct 30, 2025)**
+  - **New parameters for dynamic pricing:** `ytd_return_pct`, `ytd_return_color`, `market_status`, `return_label`
+  - Supports 3-row price card with real-time data
+
+- `generate_transcript_email()`: Create HTML email for transcripts and press releases **(UPDATED - Oct 30, 2025)**
+  - **New parameters for dynamic pricing:** `ytd_return_pct`, `ytd_return_color`, `market_status`, `return_label`
+  - Same pricing system as 10-K/10-Q emails
+
+- `get_filing_stock_data(ticker)`: **NEW (Oct 30, 2025)** - Unified stock pricing helper for ALL filing types
+  - Returns: `stock_price`, `daily_return_pct`, `ytd_return_pct`, `price_change_color`, `ytd_return_color`, `market_status`, `return_label`
+  - 3-tier fallback: yfinance → Polygon.io → ticker_reference cache → None
+  - Shared by all 4 workers: 10-K, 10-Q, transcripts, press releases
 
 **Comprehensive Prompts (modules/company_profiles.py):**
 - **GEMINI_10K_PROMPT**: 16-section analysis (Sections 0-15)
@@ -510,7 +530,15 @@ Key tables managed through schema initialization:
     - `privacy_accepted_at` TIMESTAMPTZ - When user accepted Privacy
   - UNIQUE constraint on email
   - Status field: 'active' | 'paused' | 'cancelled'
-  - Exported daily to `data/user_tickers.csv` for morning processing
+  - **Dual-file export strategy** (NEW - Oct 30, 2025):
+    - **File 1:** `data/users/user_tickers.csv` - ACTIVE users only (5 fields) for 7 AM processing
+      - Overwrites daily (stable filename)
+      - Fields: name, email, ticker1, ticker2, ticker3
+    - **File 2:** `data/users/beta_users_YYYYMMDD.csv` - ALL users (9 fields) for legal audit trail
+      - New timestamped file daily (never deleted)
+      - Fields: + status, created_at, terms_accepted_at, privacy_accepted_at
+      - Automatic GitHub commits for immutable audit trail (CASL/PIPEDA compliance)
+    - Replaces legacy `/tmp/backups/` export (was ephemeral, lost on deploy)
 
 **Unsubscribe System (NEW - October 2025):**
 - `unsubscribe_tokens`: Token-based unsubscribe for CASL/CAN-SPAM compliance
@@ -659,8 +687,20 @@ url_to_scrape = article.get("resolved_url") or article.get("url")
 ### Email Template System
 
 Uses Jinja2 templating and inline HTML generation:
-- **`email_research_report.html`** - Research documents (10-K, 10-Q, transcripts, presentations, press releases)
-  - Modern gradient header with stock price card
+- **`email_research_report.html`** - Research documents (10-K, 10-Q, transcripts, presentations, press releases) **(UPDATED - Oct 30, 2025)**
+  - **3-row price card** in gradient header (upgraded from 2-row):
+    - Row 1: Last price with dynamic label (INTRADAY or LAST CLOSE)
+    - Row 2: Daily return with dynamic label (TODAY or 1D)
+    - Row 3: YTD return (newly added)
+  - **Real-time pricing system** for all filing types:
+    - yfinance (primary, 3 retries, 10s timeout)
+    - Polygon.io (fallback, 5 calls/min)
+    - ticker_reference cache (last resort for 7 AM closed market)
+    - Helper function: `get_filing_stock_data(ticker)` - unified pricing logic
+  - **Dynamic market detection:**
+    - `is_market_open()` checks current time vs market hours
+    - Labels adjust automatically: "INTRADAY" + "TODAY" vs "LAST CLOSE" + "1D"
+  - **Graceful degradation:** If price unavailable, entire card hidden
   - Professional layout with styled sections
   - Comprehensive footer with legal disclaimers
   - Full URLs for Terms, Privacy, Contact
@@ -822,6 +862,11 @@ PowerShell → /jobs/batch/{id} (<1s) → Real-time status (poll every 20s)
 - Processes jobs sequentially using `TICKER_PROCESSING_LOCK` (ensures ticker isolation)
 - Updates progress in real-time (phase, progress %, memory, duration)
 - Survives server restarts (state persists in PostgreSQL)
+- **Supported job phases:**
+  - `ingest_and_digest` - Standard ticker processing (articles, emails)
+  - `company_profile_generation` - 10-K profile generation (Gemini)
+  - `transcript_generation` - Transcript summary generation (Claude)
+  - `press_release_generation` - Press release summary generation (Claude) **(NEW - Oct 30, 2025)**
 
 **2. Circuit Breaker**
 - Detects 3+ consecutive **system failures** (DB crashes, memory exhaustion)
@@ -1349,6 +1394,129 @@ Command: python app.py alerts
 ✅ **Fast Processing** - No AI = ~2-5 min per hourly run
 ✅ **Same Unsubscribe** - Reuses existing token system
 ✅ **Quality/Paywall Badges** - Visual indicators preserved
+
+## Automated Filings Check System (NEW - October 30, 2025)
+
+**Purpose:** Real-time hedge fund research platform - catch new SEC filings, earnings transcripts, and press releases within hours of publication.
+
+### Overview
+
+Automated monitoring system that checks for new financial documents and queues them for AI analysis. Ensures latest filings are always available for the 7 AM daily workflow.
+
+**Key Characteristics:**
+- ✅ Monitors all active user tickers from `beta_users` table
+- ✅ Checks 4 document types: 10-K, 10-Q, earnings transcripts, press releases
+- ✅ Compares latest from FMP API vs database records
+- ✅ Queues jobs for missing/new documents (uses existing job queue system)
+- ✅ Generated summaries emailed to admin automatically
+- ✅ Guarantees latest filings available for 7 AM processing
+
+### Schedule
+
+**Cron Setup (Render):**
+```
+Name: Check Filings
+Schedule: 30 6,8-21 * * *  # 6:30 AM, then hourly 8:30 AM - 9:30 PM EST
+Command: python app.py check_filings
+```
+
+**Timing Strategy:**
+- **6:30 AM:** Pre-processing check (catches overnight filings for 7 AM workflow)
+- **Hourly 8:30 AM - 9:30 PM:** Real-time monitoring during market hours
+
+### Document Type Logic
+
+**10-K Filings:**
+- Compare: Latest fiscal year from FMP vs latest in `sec_filings` table
+- Queue if: FMP has newer fiscal year
+- Example: FMP shows 2024, DB has 2023 → Queue 2024
+
+**10-Q Filings:**
+- Compare: Latest fiscal year + quarter from FMP vs `sec_filings`
+- Queue if: FMP has newer quarter/year combination
+- Example: FMP shows Q3 2024, DB has Q2 2024 → Queue Q3 2024
+
+**Earnings Transcripts:**
+- Compare: Latest quarter + year from FMP vs `transcript_summaries`
+- Queue if: FMP has newer quarter/year combination
+- Filter: `report_type = 'transcript'`
+
+**Press Releases:**
+- Check: Last 4 press releases from FMP
+- Queue if: `report_date` not found in `transcript_summaries`
+- Deduplication: By exact date match
+- Efficient: Only checks recent PRs (covers 99% of cases)
+
+### Database Helper Functions
+
+**New Functions (app.py):**
+- `db_get_latest_10k(ticker)` → Returns latest 10-K fiscal year from DB
+- `db_get_latest_10q(ticker)` → Returns latest 10-Q year + quarter from DB
+- `db_get_latest_transcript(ticker)` → Returns latest transcript year + quarter
+- `db_check_press_release_exists(ticker, date)` → Boolean check if PR exists
+- `check_filings_for_ticker(ticker)` → Main checking logic for one ticker
+- `check_all_filings_cron()` → Wrapper that processes all active user tickers
+
+### Processing Flow
+
+```
+1. Query all active user tickers from beta_users table
+2. Deduplicate ticker list
+3. For EACH ticker:
+   a. Fetch latest 10-K from FMP → Compare with DB → Queue if newer
+   b. Fetch latest 10-Q from FMP → Compare with DB → Queue if newer
+   c. Fetch latest transcript from FMP → Compare with DB → Queue if newer
+   d. Fetch last 4 PRs from FMP → Check each against DB → Queue if missing
+4. Queued jobs processed by existing worker:
+   - 10-K/10-Q: Gemini 2.5 Flash generation (5-10 min)
+   - Transcripts: Claude generation (30-60 sec)
+   - Press Releases: Claude generation (30-60 sec)
+5. Summaries emailed to admin automatically
+6. Database updated (prevents duplicate processing on next check)
+```
+
+### Deduplication & Safety
+
+**10-K/10-Q/Transcripts:**
+- Primary key: `UNIQUE(ticker, filing_type, fiscal_year, fiscal_quarter)`
+- Database prevents duplicates automatically
+- Safe to run cron multiple times
+
+**Press Releases:**
+- Primary key: `UNIQUE(ticker, report_type, quarter, year)`
+- Report date stored in `report_date` field
+- Exact date matching for deduplication
+
+**Silent Initialization (Press Releases Only):**
+- **Problem:** New ticker would send 4 old PR emails (bad optics)
+- **Solution:** First check backfills last 4 PRs silently (`send_email=False`)
+- **Benefit:** Subsequent checks only email truly NEW releases
+- User Flow:
+  - Day 1 (new ticker): 4 summaries saved, 0 emails sent ✅
+  - Day 2 (new PR): 1 summary saved, 1 email sent ✅
+
+### Benefits
+
+✅ **Information Edge** - Summaries generated within 1-2 hours of publication
+✅ **Zero Manual Work** - Fully automated monitoring
+✅ **7 AM Guarantee** - Latest filings always available for morning workflow
+✅ **Scalable** - Handles 100+ tickers easily (async FMP API calls)
+✅ **Efficient** - Only generates new/missing documents
+✅ **Database-Safe** - UNIQUE constraints prevent duplicates
+
+### CLI Usage
+
+```bash
+# Run manually (useful for testing)
+python app.py check_filings
+
+# Expected output:
+# 🔍 Checking filings for 15 active user tickers...
+# ✅ AAPL: 10-K 2024 queued for generation
+# ✅ MSFT: Transcript Q3 2024 queued for generation
+# ⏭️ GOOGL: All filings up to date
+# 📊 Summary: 3 jobs queued across 15 tickers
+```
 
 ## Key Function Locations
 

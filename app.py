@@ -21098,25 +21098,8 @@ Generate the complete page-by-page deck analysis now.
             update_job_status(job_id, progress=95)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
-            # Get stock price
-            stock_price = "$0.00"
-            price_change_pct = None
-            price_change_color = "#4ade80"
-
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT financial_last_price, financial_price_change_pct
-                    FROM ticker_reference
-                    WHERE ticker = %s
-                """, (ticker,))
-                price_data = cur.fetchone()
-
-                if price_data and price_data['financial_last_price']:
-                    stock_price = f"${price_data['financial_last_price']:.2f}"
-                    if price_data['financial_price_change_pct'] is not None:
-                        pct = price_data['financial_price_change_pct']
-                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+            # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
+            stock_data = get_filing_stock_data(ticker)
 
             # Generate email (reuse company profile email function)
             email_data = generate_company_profile_email(
@@ -21126,9 +21109,14 @@ Generate the complete page-by-page deck analysis now.
                 fiscal_year=None,  # Not applicable for presentations
                 filing_date=presentation_date,
                 profile_markdown=profile_markdown,
-                stock_price=stock_price,
-                price_change_pct=price_change_pct,
-                price_change_color=price_change_color
+                stock_price=stock_data['stock_price'],
+                price_change_pct=stock_data['price_change_pct'],
+                price_change_color=stock_data['price_change_color'],
+                ytd_return_pct=stock_data['ytd_return_pct'],
+                ytd_return_color=stock_data['ytd_return_color'],
+                market_status=stock_data['market_status'],
+                return_label=stock_data['return_label'],
+                filing_type='PRESENTATION'
             )
 
             # Modify subject for presentation
@@ -26433,25 +26421,8 @@ async def generate_transcript_summary_api(request: Request):
 
         # Only send emails for Claude summaries (Gemini is view-only for A/B testing)
         if ai_provider == 'claude':
-            # Get stock price for email
-            stock_price = "$0.00"
-            price_change_pct = None
-            price_change_color = "#4ade80"
-
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT financial_last_price, financial_price_change_pct
-                    FROM ticker_reference
-                    WHERE ticker = %s
-                """, (ticker,))
-                price_data = cur.fetchone()
-
-                if price_data and price_data['financial_last_price']:
-                    stock_price = f"${price_data['financial_last_price']:.2f}"
-                    if price_data['financial_price_change_pct'] is not None:
-                        pct = price_data['financial_price_change_pct']
-                        price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                        price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+            # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
+            stock_data = get_filing_stock_data(ticker)
 
             # Generate and send email (using module function)
             # Use formatted quarter (already has Q prefix from above)
@@ -26465,9 +26436,13 @@ async def generate_transcript_summary_api(request: Request):
                 pr_title=pr_title,
                 summary_text=summary_text,
                 fmp_url=fmp_url,
-                stock_price=stock_price,
-                price_change_pct=price_change_pct,
-                price_change_color=price_change_color
+                stock_price=stock_data['stock_price'],
+                price_change_pct=stock_data['price_change_pct'],
+                price_change_color=stock_data['price_change_color'],
+                ytd_return_pct=stock_data['ytd_return_pct'],
+                ytd_return_color=stock_data['ytd_return_color'],
+                market_status=stock_data['market_status'],
+                return_label=stock_data['return_label']
             )
 
             # Send to admin email
@@ -27038,47 +27013,8 @@ async def email_sec_filing_api(request: Request):
         # Import the email generation function from company_profiles module
         from modules.company_profiles import generate_company_profile_email
 
-        # Get real-time stock price (with retry logic and fallback to cached)
-        stock_context = get_stock_context(ticker)
-
-        # Fallback to cached data if real-time fetch fails
-        if not stock_context:
-            LOG.warning(f"Real-time price fetch failed for {ticker}, using cached data from database")
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT financial_last_price, financial_price_change_pct
-                    FROM ticker_reference
-                    WHERE ticker = %s
-                """, (ticker,))
-                price_data = cur.fetchone()
-                if price_data:
-                    stock_context = {
-                        'financial_last_price': price_data.get('financial_last_price'),
-                        'financial_price_change_pct': price_data.get('financial_price_change_pct')
-                    }
-                else:
-                    stock_context = {}
-
-        # Format price data
-        raw_price = stock_context.get("financial_last_price")
-        raw_price_change = stock_context.get("financial_price_change_pct")
-
-        if raw_price:
-            stock_price = f"${float(raw_price):.2f}"
-        else:
-            stock_price = "$0.00"
-
-        if raw_price_change is not None:
-            try:
-                change_value = float(raw_price_change)
-                price_change_pct = f"{'+' if change_value >= 0 else ''}{change_value:.2f}%"
-                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
-            except (ValueError, TypeError):
-                price_change_pct = None
-                price_change_color = "#6b7280"
-        else:
-            price_change_pct = None
-            price_change_color = "#6b7280"
+        # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
+        stock_data = get_filing_stock_data(profile['ticker'])
 
         # Generate email HTML
         email_data = generate_company_profile_email(
@@ -27088,9 +27024,13 @@ async def email_sec_filing_api(request: Request):
             fiscal_year=profile['fiscal_year'],
             filing_date=str(profile['filing_date']) if profile['filing_date'] else None,
             profile_markdown=profile['profile_markdown'],
-            stock_price=stock_price,
-            price_change_pct=price_change_pct,
-            price_change_color=price_change_color,
+            stock_price=stock_data['stock_price'],
+            price_change_pct=stock_data['price_change_pct'],
+            price_change_color=stock_data['price_change_color'],
+            ytd_return_pct=stock_data['ytd_return_pct'],
+            ytd_return_color=stock_data['ytd_return_color'],
+            market_status=stock_data['market_status'],
+            return_label=stock_data['return_label'],
             filing_type=filing_type,
             fiscal_quarter=profile.get('fiscal_quarter')  # Include quarter for 10-Q
         )
@@ -27197,47 +27137,8 @@ async def email_company_profile_api(request: Request):
         # Import the email generation function from company_profiles module
         from modules.company_profiles import generate_company_profile_email
 
-        # Get real-time stock price (with retry logic and fallback to cached)
-        stock_context = get_stock_context(ticker)
-
-        # Fallback to cached data if real-time fetch fails
-        if not stock_context:
-            LOG.warning(f"Real-time price fetch failed for {ticker}, using cached data from database")
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT financial_last_price, financial_price_change_pct
-                    FROM ticker_reference
-                    WHERE ticker = %s
-                """, (ticker,))
-                price_data = cur.fetchone()
-                if price_data:
-                    stock_context = {
-                        'financial_last_price': price_data.get('financial_last_price'),
-                        'financial_price_change_pct': price_data.get('financial_price_change_pct')
-                    }
-                else:
-                    stock_context = {}
-
-        # Format price data
-        raw_price = stock_context.get("financial_last_price")
-        raw_price_change = stock_context.get("financial_price_change_pct")
-
-        if raw_price:
-            stock_price = f"${float(raw_price):.2f}"
-        else:
-            stock_price = "$0.00"
-
-        if raw_price_change is not None:
-            try:
-                change_value = float(raw_price_change)
-                price_change_pct = f"{'+' if change_value >= 0 else ''}{change_value:.2f}%"
-                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
-            except (ValueError, TypeError):
-                price_change_pct = None
-                price_change_color = "#6b7280"
-        else:
-            price_change_pct = None
-            price_change_color = "#6b7280"
+        # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
+        stock_data = get_filing_stock_data(profile['ticker'])
 
         # Generate email HTML
         email_data = generate_company_profile_email(
@@ -27247,9 +27148,13 @@ async def email_company_profile_api(request: Request):
             fiscal_year=profile['fiscal_year'],
             filing_date=str(profile['filing_date']) if profile['filing_date'] else None,
             profile_markdown=profile['profile_markdown'],
-            stock_price=stock_price,
-            price_change_pct=price_change_pct,
-            price_change_color=price_change_color
+            stock_price=stock_data['stock_price'],
+            price_change_pct=stock_data['price_change_pct'],
+            price_change_color=stock_data['price_change_color'],
+            ytd_return_pct=stock_data['ytd_return_pct'],
+            ytd_return_color=stock_data['ytd_return_color'],
+            market_status=stock_data['market_status'],
+            return_label=stock_data['return_label']
         )
 
         # Send email
@@ -27648,40 +27553,10 @@ async def email_research_api(request: Request):
         if not content:
             return {"status": "error", "message": "No content found"}
 
-        # Get stock price data (real-time for transcripts with fallback to cached)
+        # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
         config = get_ticker_config(ticker)
         company_name = config.get("company_name", ticker) if config else ticker
-
-        # Attempt real-time fetch (has built-in retry logic: 3 attempts, Polygon.io fallback)
-        stock_context = get_stock_context(ticker)
-
-        # If real-time fetch fails, fall back to cached data from database
-        if not stock_context:
-            LOG.warning(f"Real-time price fetch failed for {ticker}, using cached data from database")
-            stock_context = config if config else {}
-
-        # Extract and format price data (works with both fresh and cached data)
-        raw_price = stock_context.get("financial_last_price")
-        raw_price_change = stock_context.get("financial_price_change_pct")
-
-        # Format stock price with $
-        if raw_price:
-            stock_price = f"${float(raw_price):.2f}"
-        else:
-            stock_price = "$0.00"
-
-        # Format price change as percentage with color
-        if raw_price_change is not None:
-            try:
-                change_value = float(raw_price_change)
-                price_change_pct = f"{'+' if change_value >= 0 else ''}{change_value:.2f}%"
-                price_change_color = "#22c55e" if change_value > 0 else "#ef4444"
-            except (ValueError, TypeError):
-                price_change_pct = None
-                price_change_color = "#6b7280"
-        else:
-            price_change_pct = None
-            price_change_color = "#6b7280"
+        stock_data = get_filing_stock_data(ticker)
 
         # Generate formatted email using proper template
         if research_type == 'presentation':
@@ -27693,9 +27568,13 @@ async def email_research_api(request: Request):
                 fiscal_year=None,  # Presentations use date not fiscal year
                 filing_date=doc['presentation_date'],
                 profile_markdown=content,
-                stock_price=stock_price,
-                price_change_pct=price_change_pct,
-                price_change_color=price_change_color,
+                stock_price=stock_data['stock_price'],
+                price_change_pct=stock_data['price_change_pct'],
+                price_change_color=stock_data['price_change_color'],
+                ytd_return_pct=stock_data['ytd_return_pct'],
+                ytd_return_color=stock_data['ytd_return_color'],
+                market_status=stock_data['market_status'],
+                return_label=stock_data['return_label'],
                 filing_type="PRESENTATION"
             )
             html_body = email_data['html']
@@ -27713,9 +27592,13 @@ async def email_research_api(request: Request):
                 pr_title=None,
                 summary_text=content,
                 fmp_url=f"https://financialmodelingprep.com/financial-summary/{ticker}",
-                stock_price=stock_price,
-                price_change_pct=price_change_pct,
-                price_change_color=price_change_color
+                stock_price=stock_data['stock_price'],
+                price_change_pct=stock_data['price_change_pct'],
+                price_change_color=stock_data['price_change_color'],
+                ytd_return_pct=stock_data['ytd_return_pct'],
+                ytd_return_color=stock_data['ytd_return_color'],
+                market_status=stock_data['market_status'],
+                return_label=stock_data['return_label']
             )
             html_body = email_data['html']
             subject = email_data['subject']
@@ -27732,9 +27615,13 @@ async def email_research_api(request: Request):
                 pr_title=f"Press Release - {doc['report_date']}",
                 summary_text=content,
                 fmp_url=f"https://financialmodelingprep.com/press-releases/{ticker}",
-                stock_price=stock_price,
-                price_change_pct=price_change_pct,
-                price_change_color=price_change_color
+                stock_price=stock_data['stock_price'],
+                price_change_pct=stock_data['price_change_pct'],
+                price_change_color=stock_data['price_change_color'],
+                ytd_return_pct=stock_data['ytd_return_pct'],
+                ytd_return_color=stock_data['ytd_return_color'],
+                market_status=stock_data['market_status'],
+                return_label=stock_data['return_label']
             )
             html_body = email_data['html']
             subject = email_data['subject']

@@ -661,7 +661,46 @@ def generate_company_profile_email(
         extensions=['tables', 'fenced_code', 'nl2br']
     )
 
-    # Wrap content with original styling (grey wrapper, default headers, 40% column width)
+    # Apply dynamic column widths based on number of columns per table
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(profile_html, 'html.parser')
+
+        for table in soup.find_all('table'):
+            # Count columns by examining first row
+            first_row = table.find('tr')
+            if first_row:
+                num_columns = len(first_row.find_all(['th', 'td']))
+
+                # Determine first column width based on total columns
+                if num_columns <= 3:
+                    first_col_width = "40%"  # Plenty of room for labels
+                elif num_columns <= 5:
+                    first_col_width = "35%"  # Balanced
+                elif num_columns <= 7:
+                    first_col_width = "30%"  # More room for data
+                elif num_columns <= 10:
+                    first_col_width = "25%"  # Maximum room for data
+                else:
+                    first_col_width = "20%"  # Extreme case (11+ columns)
+
+                # Apply width to first cell in every row
+                for row in table.find_all('tr'):
+                    cells = row.find_all(['td', 'th'])
+                    if cells:
+                        # Get existing style or create new
+                        existing_style = cells[0].get('style', '')
+                        # Add width to style (will override CSS)
+                        cells[0]['style'] = f"width: {first_col_width}; padding: 8px; border: 1px solid #ddd;"
+
+        # Convert back to HTML string
+        profile_html = str(soup)
+        LOG.info(f"Applied dynamic column widths to tables in {ticker} profile")
+    except Exception as e:
+        LOG.warning(f"Failed to apply dynamic column widths for {ticker}: {e}. Using default 40% width.")
+        # Fallback: Use original HTML with CSS-based 40% width
+
+    # Wrap content with original styling (grey wrapper, default headers, dynamic column width)
     content_html = f'''
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.6; color: #374151; background-color: #f9fafb; padding: 20px; border-radius: 4px; overflow-x: auto;">
     <style>
@@ -687,9 +726,7 @@ def generate_company_profile_email(
         tr:nth-child(even) {{
             background-color: #f3f4f6;
         }}
-        td:first-child, th:first-child {{
-            width: 40%;
-        }}
+        /* First column width now applied inline per table based on column count */
         h1 {{
             color: #1e40af;
             font-size: 20px;

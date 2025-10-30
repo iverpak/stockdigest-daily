@@ -539,6 +539,69 @@ Escape hatch JSON:
 If 2+ articles with ANY substantive content, proceed with full brief generation.
 
 ═══════════════════════════════════════════════════════════════════════════════
+ATTRIBUTION REQUIREMENTS - APPLIES TO ALL SECTIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+CORE PRINCIPLE: Every claim must be traceable to a source. Every implication must be attributed to who said it.
+
+ATTRIBUTION HIERARCHY (use strongest available):
+1. Company: "per CEO", "per CFO Stephen Hemsley", "per earnings call", "per Oct 28 press release"
+2. Named analyst + firm: "per Goldman Sachs analyst", "per Wedbush", "per John Smith from Morgan Stanley"
+3. Named publication: "per Bloomberg", "per WSJ", "per The Globe and Mail"
+4. Multiple named sources: "per Bloomberg and WSJ"
+5. NEVER: "reportedly", "sources say", "per reports" (without naming), "per analyst" (without firm)
+
+SOURCE NAME FORMAT:
+Always use formal names, never URLs: "per The Globe and Mail" NOT "per theglobeandmail.com"
+
+FORWARD-LOOKING STATEMENTS & IMPLICATIONS:
+Attribute interpretation/causation to who made it:
+❌ "Acquisition positions company for growth" (who says?)
+✅ "CEO stated acquisition positions company for growth"
+❌ "Could impact margins" (who concluded?)
+✅ "Goldman Sachs analyst projected margin impact of 200-300 bps"
+
+BANNED CAUSATION WORDS (without attribution):
+✗ "amid", "following", "driven by", "due to", "supporting", "positioning"
+
+Examples:
+❌ "Stock rallied amid strong earnings" (implies causation)
+✅ "Stock rallied 8% per Bloomberg; company reported earnings beat per Q3 call"
+
+❌ "Margins compressed following tariff increases"
+✅ "Margins compressed to 5.8% per Q3 results; CFO cited tariff impact $400M per earnings call"
+
+SPLIT ATTRIBUTION (different claims = different sources):
+❌ "Medical costs stabilized with drivers identified per Home Health Care News"
+   (stabilization from The Hill, drivers from HHCN - only one attribution shown)
+✅ "Medical costs stabilized per The Hill, with drivers identified per Home Health Care News"
+
+Exception: Same fact from multiple sources is fine:
+✓ "Revenue beat consensus per Bloomberg and Reuters"
+
+DATE FORMAT BY SECTION:
+- Bottom Line: Consolidated at end "(Oct 22-24)" - NO per-sentence dates
+- Bullets: Inline with attribution "per Bloomberg (Oct 22)"
+- Upside/Downside: Consolidated at end "(Oct 28-29)" - NO per-sentence dates
+
+ATTRIBUTION DENSITY:
+- Bottom Line: 70%+ of claims attributed
+- Bullets: Every claim attributed
+- Upside/Downside: 100% (every sentence attributed)
+
+ATTRIBUTION SPECIFICITY:
+✓ "per Q3 earnings call", "per Wedbush", "per Bloomberg"
+✗ "per company", "per analyst", "per reports"
+
+PRE-SUBMISSION CHECK:
+□ Every claim has source
+□ Every implication attributed to who said it
+□ No vague attribution ("reportedly", "per analyst" without firm)
+□ Split attribution when different claims from different sources
+□ Section density requirements met (70% Bottom Line, 100% Upside/Downside)
+□ If you cannot verify source for a claim → Remove the claim or find the source in articles.
+
+═══════════════════════════════════════════════════════════════════════════════
 EXCLUSION RULES - WHAT NEVER TO INCLUDE
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -584,6 +647,8 @@ If article discusses these topics, skip them entirely. Do not create bullets for
 BOTTOM LINE - EDITORIAL DISCIPLINE
 ═══════════════════════════════════════════════════════════════════════════════
 
+Bottom Line is a PARAGRAPH, not bullets. Use consolidated date range at END.
+
 CRITICAL - BOTTOM LINE INFERENCE TIER:
 
 This section uses TIER 0 ONLY: Facts + Attribution. No inference, no framing.
@@ -600,6 +665,9 @@ Natural gas example:
 ❌ "Gas prices strengthened, supporting economics"
 ✅ "Gas prices reached $3.45 per EIA; LNG exports 122 Bcf per report"
 
+If analyst made the connection:
+✅ "Gas prices reached $3.45 per EIA; ClearView Energy analyst stated prices support generator economics per Oct 27 report"
+
 Structure (≤150 words total):
 - Sentence 1-2: What happened (most material development from recent trading days)
 - Sentence 3-4: Key quantified context with BALANCED PERSPECTIVE
@@ -614,43 +682,26 @@ Target: Reflect proportional sentiment distribution of articles (~60% bullish / 
 
 Lead with developments from most recent trading day, then key context from earlier in coverage period.
 
-ATTRIBUTION FORMAT (PARAGRAPH STYLE):
+ATTRIBUTION FORMAT:
 
-Bottom Line is a PARAGRAPH, not bullets. Use consolidated date range at END.
+See ATTRIBUTION REQUIREMENTS section (top of prompt) for complete rules.
 
-✅ CORRECT:
-"Tesla reported Q3 revenue $28.1B with margin compressed to 5.8% as tariffs exceeded $400M per CFO. Analysts raised price targets post-earnings, with Wedbush maintaining $600 citing AI transformation. Company recalled 63,000+ Cybertrucks per NHTSA. Tax credit expired September 30 with Q4 demand concerns noted. Shareholder vote on Musk pay package scheduled November (Oct 22-24)."
+Bottom Line requirements:
+- Minimum 70% of major factual claims attributed
+- Use consolidated date at paragraph end: "(Oct 22-24)"
+- Inline format: "per [source]" throughout paragraph
+- Check: Count attributions before finalizing - target 7+ in typical Bottom Line
 
-❌ WRONG (per-sentence dates):
-"Tesla reported revenue... per CFO (Oct 23). Analysts raised targets... (Oct 24). Cybertruck recall... (Oct 23)."
+Example format:
+"Company reported Q3 revenue per Oct 28 earnings call; analysts raised targets per Wedbush; recall announced per NHTSA (Oct 22-24)"
 
-Rules: Date at paragraph end only. Format: (Oct 22-24) or (Oct 23). Inline attribution: "per CFO", "per NHTSA"
-
-ATTRIBUTION REQUIREMENT (CRITICAL):
-
-Minimum 70% of major factual claims must have inline source attribution.
-Target: 7+ attributions in typical 10-claim Bottom Line.
-
-Primary format: "per [source] (date)" - use when sources span multiple dates
-Alternative format: "per [source]" with consolidated date range at end - use when all claims from same 2-3 day period
-
-Source attribution examples:
-- Company: "per company announcement (Oct 27)", "per earnings call (Oct 23)", "per CEO"
-- Regulatory/data: "per EIA report (Oct 27)", "per Natural Gas Intelligence"
-- Competitor: "per Q3 2025 earnings call (Oct 31)", "per Barchart.com report (Oct 24)"
-
-Example with 100% attribution (5 claims, 5 attributions):
-"Talen completed $2.69B notes offering per company announcement (Oct 27). Company partnered with Eos Energy on battery storage per joint press release (Oct 21). Natural gas prices reached $3.44/MMBtu per Natural Gas Intelligence (Oct 27). NRG raised guidance to $7.55-$8.15 per Q3 earnings call (Oct 31). Vistra announced 600 MW nuclear expansion per Barchart.com report (Oct 24)."
-
-ATTRIBUTION SPECIFICITY CHECK:
-
-For each attribution, verify it names the specific source (not generic):
-□ Company statements: "per Q3 earnings call", "per CFO", "per Oct 23 press release" (NOT "per company reports")
-□ News sources: "per Bloomberg", "per WSJ and Reuters" (NOT "per reports" or "per multiple sources")
-□ Analysts: "per Goldman Sachs analyst John Smith", "per Wedbush" (NOT "per analyst")
-□ Data sources: "per EIA report", "per Natural Gas Intelligence" (NOT "per data")
-
-Before finalizing: Count attributions. Are 70%+ of major claims attributed? If not, add sources.
+MANDATORY ATTRIBUTION CHECK:
+Before finalizing Bottom Line:
+1. Count major factual claims (typically 8-12 claims in 150-word Bottom Line)
+2. Count attributions (target: 70%+ of claims)
+3. If below 70%: Add specific sources ("per Bloomberg" not "per reports")
+4. Verify no vague attribution ("per analyst" → "per Wedbush analyst")
+5. Recount - must hit 70% threshold
 
 MANDATORY LENGTH CHECK:
 After writing Bottom Line, count words. If >150 words:
@@ -676,6 +727,10 @@ BANNED PHRASES (never use these):
 ✗ "indicating weakness"
 ✗ "suggesting momentum"
 ✗ "showing concern"
+✗ "amid [development]" (implies causation)
+✗ "following [event]" (implies causation without attribution)
+✗ "driven by [factor]" (who says it's driven by this?)
+✗ "due to [reason]" (who concluded this causation?)
 
 CORRECT APPROACH - State facts with attribution:
 ✓ "Company reported Q3 revenue of $10.5B, beating consensus estimates of $10.2B per Bloomberg"
@@ -748,6 +803,8 @@ Examples of what to exclude:
 UPSIDE/DOWNSIDE SCENARIOS - LOGIC & CONSISTENCY CHECKS
 ═══════════════════════════════════════════════════════════════════════════════
 
+This section uses TIER 0 ONLY: Facts + Attribution. No unattributed inference.
+
 Before finalizing Upside or Downside scenarios, run these validation checks:
 
 1. IMPLICATION DIRECTION CHECK
@@ -787,93 +844,65 @@ Before finalizing Upside or Downside scenarios, run these validation checks:
 
    Every sentence must cite source - no unattributed conclusions:
 
-   ✗ WRONG: "Could impact margins" (who says?)
-   ✓ CORRECT: "Analyst projected could impact margins per report"
+  ✗ WRONG: "Analyst raised concerns about demand"
+  ✓ CORRECT: "UBS analyst Lloyd Walmsley raised concerns about post-tax-credit demand sustainability per Oct 24 report"
 
-   ✗ WRONG: "Positions company for growth" (who concluded this?)
-   ✓ CORRECT: "CEO stated partnership positions company for growth"
+  ✗ WRONG: "Positions company for growth" (who concluded this?)
+  ✓ CORRECT: "CEO Stephen Hemsley stated acquisition positions company for Medicare Advantage growth per Oct 28 earnings call"
+
+  ✗ WRONG: "Could impact margins" (who says? how much?)
+  ✓ CORRECT: "Goldman Sachs analyst projected margin impact of 200-300 bps per research note"
 
    Required formats:
-   ✓ "[Analyst name] from [Firm] stated..."
-   ✓ "[Author] raised concerns per [Publication]..."
-   ✓ "Per [Source], analysts projected..."
+   ✓ "[Analyst name] from [Firm] stated..." - "Dan Ives from Wedbush stated..."
+   ✓ "[Author name] raised concerns per [Publication]..." - "Liam Denning raised concerns per Bloomberg Opinion..."
+   ✓ "Per [Named Source], analysts projected..." - "Per Morgan Stanley research, analysts projected..."
+   ✓ "[Executive name with title] stated..." - "CFO Vaibhav Taneja stated..."
 
-CRITICAL - UPSIDE SCENARIO INFERENCE TIER:
+   BANNED VAGUE PHRASES:
+   ✗ "per analyst" (which analyst? which firm?)
+   ✗ "per management" (which executive? which call/release?)
+   ✗ "per report" (which publication? which author?)
+   ✗ "per sources" (name the sources)
+   ✗ "per articles" (which specific articles?)
 
-This section uses TIER 0 ONLY: Facts + Attribution. No unattributed inference.
+UPSIDE SCENARIO: Single paragraph, 3-6 sentences (~80-160 words)
 
-Every sentence must answer "WHO SAID THIS?"
-□ Did analyst/CEO state this connection? (If YES → attribute it)
-□ Did article make this causal claim? (If YES → attribute it)
-□ Am I inferring the connection myself? (If YES → delete it)
+See ATTRIBUTION REQUIREMENTS section (top of prompt) for complete rules.
 
-Natural gas example:
-❌ "Tight gas supplies support generator economics"
-✅ "Analyst stated tight gas supplies per report; [next fact]"
-✅ "Gas prices $3.45 per EIA; [next fact]" (just state the fact, no connection)
-
-UPSIDE SCENARIO (80-100 words, single paragraph):
 - Synthesize bullish narrative from articles
 - Base on: analyst bull cases, management optimism, positive catalysts discussed
 - Include analyst price targets if mentioned
 - Format as coherent narrative (not bullet points)
-- Run checks 1-3 above before finalizing
 - Include quantification when articles provide: price targets, percentage changes, dollar amounts, margins, quantities
 
-LOCAL VALIDATION (check before finalizing):
+Requirements:
 □ Every sentence has attribution (100% requirement)
-□ Attribution SPECIFICITY:
-  - Named analyst + firm: "Wedbush analyst John Doe stated..." (NOT "analyst stated")
-  - Named publication: "per Bloomberg and WSJ" (NOT "per reports")
-  - Named executives: "per CEO Jane Smith" (NOT "per management")
-□ Singular/plural match: If 2+ named individuals → "analysts" OR separate attributions
+□ Named analyst + firm OR named publication (not "analyst stated" or "per reports")
+□ Split attribution: Different claims = different sources (see ATTRIBUTION REQUIREMENTS)
+□ Coverage check: Include all high-impact bullish developments
 
-COVERAGE CHECK: Review all bullish bullets with "high impact" tags. Each high-impact
-bullish development must appear in Upside Scenario. Don't omit material themes.
+Format: Paragraph with consolidated date at end
 
-Attribution: Use paragraph format (consolidated date at end, see Bottom Line section above)
+DOWNSIDE SCENARIO: Single paragraph, 3-6 sentences (~80-160 words)
 
-CRITICAL - DOWNSIDE SCENARIO INFERENCE TIER:
+See ATTRIBUTION REQUIREMENTS section (top of prompt) for complete rules.
 
-This section uses TIER 0 ONLY: Facts + Attribution. No unattributed inference.
-
-Every sentence must answer "WHO SAID THIS?"
-□ Did analyst/CEO state this risk? (If YES → attribute it)
-□ Did article flag this concern? (If YES → attribute it)
-□ Am I inferring the risk myself? (If YES → delete it)
-
-Natural gas example:
-❌ "Higher gas prices pressure margins"
-✅ "Analyst raised margin concerns per Goldman Sachs; gas prices $3.45 per EIA"
-
-DOWNSIDE SCENARIO (single paragraph, 3-4 sentences):
 - Synthesize bearish narrative from articles
 - Base on: analyst concerns, risks flagged, negative developments discussed
 - Include analyst bear targets if mentioned
 - Format as coherent narrative (not bullet points)
-- Run checks 1-3 above before finalizing
 - Include quantification when articles provide: price targets, percentage changes, dollar amounts, margins, quantities
 
-LOCAL VALIDATION (check before finalizing):
+Requirements:
 □ Every sentence has attribution (100% requirement)
-□ Attribution SPECIFICITY (same as Upside):
-  - Named analyst + firm: "Goldman Sachs analyst stated..." (NOT "analyst stated")
-  - Named publication: "per Bloomberg and WSJ" (NOT "per reports")
-  - Named executives: "per CEO Jane Smith" (NOT "per management")
-□ Singular/plural match: If 2+ named individuals → "analysts" OR separate attributions
+□ Named analyst + firm OR named publication (not "analyst stated" or "per reports")
+□ Split attribution: Different claims = different sources (see ATTRIBUTION REQUIREMENTS)
+□ Coverage check: Include all high-impact bearish developments
 
-COVERAGE CHECK: Review all bearish bullets with "high impact" tags. Each high-impact
-bearish development must appear in Downside Scenario. Don't omit material themes.
+Format: Paragraph with consolidated date at end
 
-Attribution: Use paragraph format (consolidated date at end, see Bottom Line section above)
-
-BANNED PHRASES - Do not write:
-✗ "alternative strategic options"
-✗ "could pursue alternatives"
-✗ "strategic flexibility"
-✗ "multiple options available"
-
-If articles don't explicitly discuss scenarios, infer reasonable bull/bear cases from facts presented, but base on what articles emphasize.
+If articles don't explicitly frame bull/bear scenarios, synthesize from facts and views articles presented, maintaining strict attribution to sources for all claims.
 
 ═══════════════════════════════════════════════════════════════════════════════
 LEGAL COMPLIANCE - MANDATORY LANGUAGE RESTRICTIONS
@@ -1148,51 +1177,6 @@ Single-step logic only. No multi-hop reasoning chains.
 Stop after ONE logical step. Let facts speak for themselves.
 
 ═══════════════════════════════════════════════════════════════════════════════
-ATTRIBUTION REQUIREMENTS
-═══════════════════════════════════════════════════════════════════════════════
-
-EVERY claim must be traceable to a source. EVERY implication must be attributed.
-
-ATTRIBUTION HIERARCHY (from strongest to weakest):
-
-1. Company official statements:
-   ✓ "per CEO" / "per CFO" / "per company press release" / "per earnings call"
-
-2. Named analyst/expert:
-   ✓ "per [Analyst Name] from [Firm]" / "per [Expert] from [Organization]"
-
-3. News organization:
-   ✓ "per Bloomberg" / "per WSJ" / "per Reuters"
-
-4. Generic but specific:
-   ✓ "per analyst reports" / "per multiple sources"
-
-5. Avoid vague attribution:
-   ✗ "reportedly" / "sources say" / "it is believed" (too vague - name the source)
-
-CRITICAL: Forward-looking statements and implications MUST be attributed:
-
-✗ WRONG: "Acquisition positions company for growth in Asian markets"
-✓ CORRECT: "CEO stated acquisition positions company for growth in Asian markets"
-
-✗ WRONG: "Could impact Q4 margins"
-✓ CORRECT: "Analyst projected could impact Q4 margins per report"
-
-✗ WRONG: "Suggests market share gains ahead"
-✓ CORRECT: "Jefferies stated suggests market share gains ahead"
-
-If you cannot attribute an implication to a specific source, DO NOT include it.
-
-SOURCE NAME FORMAT (applies to ALL 10 sections):
-
-ALWAYS use formal publication names, NEVER domain URLs:
-❌ "per theglobeandmail.com" → ✅ "per The Globe and Mail"
-❌ "per yahoo.com" → ✅ "per Yahoo Finance"
-
-Rule: If source has formal brand name, use it. Never use raw URLs.
-Applies to: Bottom Line, all bullet sections, Upside/Downside scenarios.
-
-═══════════════════════════════════════════════════════════════════════════════
 EXECUTIVE-LEVEL DETAIL PRIORITY
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1238,11 +1222,13 @@ When 2+ articles cover same topic, use this decision tree:
 
 6. **If synthesizing DIFFERENT CLAIMS from DIFFERENT SOURCES in ONE sentence** → Attribute each claim separately
 
-❌ WRONG: "Medical costs stabilized after faster growth, with drivers identified per Home Health Care News"
-   (Cost stabilization from The Hill, drivers from HHCN - only one attribution)
+See ATTRIBUTION REQUIREMENTS section for split attribution rules and examples.
 
+Quick rule: Different claims = different attributions
 ✅ CORRECT: "Medical costs stabilized per The Hill, with drivers identified per Home Health Care News"
-   (Each claim attributed to its source)
+
+Exception: Same fact from multiple sources
+✅ CORRECT: "Revenue beat per Bloomberg and Reuters"
 
 When SAME FACT from MULTIPLE SOURCES: "Revenue beat per Bloomberg and Reuters" ✓
 
@@ -2201,7 +2187,7 @@ Before finalizing output, verify these critical requirements:
 
 3. ATTRIBUTION QUALITY
 □ Every claim traceable to specific source (article + date)
-□ Every implication/connection attributed to author ("CEO stated...", "Analyst noted...")
+□ Every implication/connection attributed to author ("CEO stated...", "Wedbush analyst noted...")
 □ No phrases like "positions company for X" without attribution
 □ Upside/Downside scenarios cite specific analysts/sources for conclusions
 

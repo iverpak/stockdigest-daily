@@ -5077,6 +5077,18 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
             article = articles_batch[i]
             industry_keyword = article.get("search_keyword", "unknown industry")
 
+            # ✅ NEW: Check for retail platform content BEFORE relevance gate
+            is_retail, keyword = is_retail_platform_content(result["scraped_content"])
+            if is_retail:
+                LOG.info(f"[{analysis_ticker}] 🚫 SKIP (Retail): '{keyword}' found in industry article - {article.get('title', 'No title')[:60]}...")
+                relevance_scores[i] = {
+                    "score": 0.0,
+                    "reason": f"Retail platform content: {keyword}",
+                    "is_rejected": True,
+                    "provider": "retail_filter"
+                }
+                continue  # Skip relevance gate and move to next article
+
             try:
                 LOG.info(f"[{analysis_ticker}] 📊 Scoring relevance for industry article {i}: {article.get('title', 'No title')[:60]}...")
 
@@ -5158,7 +5170,27 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                     "scraping_error": None
                 })
             else:
-                successful_scrapes.append((i, result))
+                # ✅ NEW: Check for retail platform content BEFORE adding to AI queue
+                # (Industry articles already filtered in relevance gate above)
+                article_category = categories[i] if i < len(categories) else categories[0]
+                is_retail, keyword = is_retail_platform_content(result["scraped_content"])
+
+                if is_retail:
+                    LOG.info(f"[{analysis_ticker}] 🚫 SKIP (Retail): '{keyword}' found in {article_category} article - {articles_batch[i].get('title', 'No title')[:60]}...")
+                    # Add to results as filtered (no AI summary)
+                    results.append({
+                        "article_id": articles_batch[i]["id"],
+                        "article_idx": i,
+                        "success": True,
+                        "scraped_content": result["scraped_content"],
+                        "ai_summary": None,  # Filtered - no AI analysis
+                        "ai_model": "filtered",  # Mark as filtered by Python
+                        "content_scraped_at": result["content_scraped_at"],
+                        "scraping_error": None
+                    })
+                else:
+                    # Pass to AI queue for analysis
+                    successful_scrapes.append((i, result))
 
     if successful_scrapes:
         LOG.info(f"BATCH PHASE 2: AI summarization of {len(successful_scrapes)} successful scrapes with category-specific prompts")
@@ -6601,6 +6633,70 @@ def _is_spam_content(title: str, domain: str, description: str = "") -> bool:
     combined_text = f"{title} {description}".lower()
     return any(phrase in combined_text for phrase in spam_phrases)
 
+# Retail platform keywords for content filtering
+RETAIL_PLATFORM_KEYWORDS = [
+    # Platform names
+    "zacks investment research", "zacks.com", "zacks rank",
+    "tipranks", "tipranks.com", "smart score",
+    "simply wall st", "simplywall", "snowflake rating", "snowflake score",
+    "gurufocus", "gurufocus.com", "gf value", "peter lynch fair value",
+    "motley fool", "fool.com", "stock advisor", "rule breakers",
+    "marketbeat", "marketbeat.com",
+    "finviz", "finviz.com", "finviz screener",
+    "insider monkey", "insidermonkey",
+    "24/7 wall st", "247wallst",
+    "stockanalysis.com", "stockrover", "stockcharts.com",
+    "stockinvest.us", "wallstreetzen", "stockopedia",
+    "sharewise", "stockstory.org",
+
+    # Disclaimers (high confidence smoking guns)
+    "this article by simply wall st",
+    "the motley fool has a disclosure policy",
+    "zacks investment research disclaimer",
+    "gurufocus disclaimer",
+
+    # Service/product references
+    "zacks premium", "zacks elite",
+    "tipranks premium", "tipranks gold",
+    "stock advisor subscription", "rule breakers subscription",
+]
+
+def is_retail_platform_content(content: str) -> Tuple[bool, Optional[str]]:
+    """
+    Detect retail stock screener platform content via keyword search.
+
+    This function performs Python-based filtering BEFORE AI analysis to:
+    - Eliminate AI interpretation variability
+    - Save API costs (skip expensive Claude/OpenAI calls)
+    - Provide deterministic, debuggable filtering
+
+    Args:
+        content: Article scraped content (full text)
+
+    Returns:
+        Tuple of (is_retail: bool, keyword: str | None)
+        - (True, "keyword") if retail content detected
+        - (False, None) if legitimate article
+
+    Examples:
+        >>> is_retail_platform_content("...Zacks Rank #2...")
+        (True, "zacks rank")
+
+        >>> is_retail_platform_content("Reuters reports earnings beat")
+        (False, None)
+    """
+    if not content:
+        return False, None
+
+    content_lower = content.lower()
+
+    # Simple substring search - fast and catches variations
+    for keyword in RETAIL_PLATFORM_KEYWORDS:
+        if keyword in content_lower:
+            return True, keyword
+
+    return False, None
+
 def calculate_quality_score(
     title: str, 
     domain: str, 
@@ -6714,38 +6810,7 @@ async def generate_claude_article_summary(company_name: str, ticker: str, title:
             # System prompt (generic - cacheable, ~3500 tokens - optimized for caching and comprehensive extraction)
             system_prompt = """You are a hedge fund analyst extracting information about a target company for an investment research report.
 
-**STEP 1: PLATFORM VERIFICATION**
-
-Check if this article is published BY a retail stock screener platform.
-
-**Look inside article content for platform identification:**
-• Byline/author states platform name (Zacks Investment Research, Simply Wall St contributor, Motley Fool contributor)
-• Platform disclaimers in article text ("This article by Simply Wall St...", "The Motley Fool has a disclosure policy...")
-• Proprietary scoring systems (Zacks Rank #1-5, TipRanks Smart Score 1-10, Simply Wall St snowflakes, GuruFocus ratings)
-
-**CRITICAL - Syndication Check:**
-Even if domain is Yahoo Finance, MarketWatch, or other news site, check article TEXT for retail platform content:
-✓ Yahoo Finance syndicates Zacks articles → Check for "Zacks Investment Research" in article
-✓ MSN syndicates Motley Fool → Check for "Motley Fool" disclaimer in article
-✓ Platform branding in content → Skip regardless of domain
-
-**Only skip if article content identifies as FROM a retail platform.**
-
-Do NOT skip based on:
-❌ Article discusses valuation or investment outlook (legitimate news coverage)
-❌ Article quotes analysts about fair value (professional commentary)
-❌ M&A deal analysis with margins/premiums (transaction reporting)
-
-Examples:
-✅ ANALYZE: Yahoo Finance article about PE deal with "analyst stated fair value" (news coverage)
-✅ ANALYZE: Reuters article discussing "deal valued at 15x EBITDA" (M&A reporting)
-❌ SKIP: Yahoo Finance article with byline "Zacks Investment Research" + Zacks Rank (syndicated retail)
-❌ SKIP: MarketWatch article containing "This article by Simply Wall St..." disclaimer (syndicated retail)
-
-**If article is FROM retail platform (check content, not domain):**
-Return {"skip": true, "reason": "Retail stock screener content"}
-
-**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+**CONTENT FILTERING**
 
 This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
 
@@ -7115,38 +7180,7 @@ async def generate_claude_competitor_article_summary(competitor_name: str, compe
             # System prompt (generic - cacheable, ~1100 tokens to meet threshold)
             system_prompt = """You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
-**STEP 1: PLATFORM VERIFICATION**
-
-Check if this article is published BY a retail stock screener platform.
-
-**Look inside article content for platform identification:**
-• Byline/author states platform name (Zacks Investment Research, Simply Wall St contributor, Motley Fool contributor)
-• Platform disclaimers in article text ("This article by Simply Wall St...", "The Motley Fool has a disclosure policy...")
-• Proprietary scoring systems (Zacks Rank #1-5, TipRanks Smart Score 1-10, Simply Wall St snowflakes, GuruFocus ratings)
-
-**CRITICAL - Syndication Check:**
-Even if domain is Yahoo Finance, MarketWatch, or other news site, check article TEXT for retail platform content:
-✓ Yahoo Finance syndicates Zacks articles → Check for "Zacks Investment Research" in article
-✓ MSN syndicates Motley Fool → Check for "Motley Fool" disclaimer in article
-✓ Platform branding in content → Skip regardless of domain
-
-**Only skip if article content identifies as FROM a retail platform.**
-
-Do NOT skip based on:
-❌ Article discusses valuation or investment outlook (legitimate news coverage)
-❌ Article quotes analysts about fair value (professional commentary)
-❌ M&A deal analysis with margins/premiums (transaction reporting)
-
-Examples:
-✅ ANALYZE: Yahoo Finance article about PE deal with "analyst stated fair value" (news coverage)
-✅ ANALYZE: Reuters article discussing "deal valued at 15x EBITDA" (M&A reporting)
-❌ SKIP: Yahoo Finance article with byline "Zacks Investment Research" + Zacks Rank (syndicated retail)
-❌ SKIP: MarketWatch article containing "This article by Simply Wall St..." disclaimer (syndicated retail)
-
-**If article is FROM retail platform (check content, not domain):**
-Return {"skip": true, "reason": "Retail stock screener content"}
-
-**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+**CONTENT FILTERING**
 
 This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
 
@@ -8080,45 +8114,7 @@ async def generate_claude_industry_article_summary(industry_keyword: str, target
             # System prompt (generic - cacheable)
             system_prompt = """You are a research analyst extracting fundamental driver facts for a competitive intelligence report.
 
-**STEP 1: SOURCE VERIFICATION**
-
-Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
-
-**Simply Wall St:**
-- States "Simply Wall St" as source/publisher
-- Contains snowflake score graphics, 6-category scoring system
-- Disclaimer: "This article by Simply Wall St is general in nature..."
-
-**GuruFocus:**
-- States "GuruFocus" as source/publisher
-- Contains GuruFocus ratings (financial strength, profitability rank)
-- References Peter Lynch fair value, GF Value, GuruFocus scores
-
-**Zacks:**
-- States "Zacks Investment Research" as source/author
-- Contains "Zacks Rank #1, #2, #3" ranking system
-- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
-
-**TipRanks:**
-- States "TipRanks" as source/publisher
-- Contains "TipRanks Smart Score" (1-10 rating system)
-- References TipRanks analyst consensus aggregation
-
-**Motley Fool:**
-- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
-- Contains disclaimer: "The Motley Fool has a disclosure policy..."
-- References Stock Advisor, Rule Breakers services
-
-**Finviz / MarketBeat / StockRover:**
-- States any of these as source/publisher
-- Contains their proprietary screener rankings or scores
-- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
-
-**If article is FROM any retail stock screener above** (check article content, not just domain):
-→ Return ONLY: {"skip": true, "reason": "Retail stock screener content"}
-→ Do NOT add any commentary after this JSON
-
-**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+**CONTENT FILTERING**
 
 This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
 
@@ -8484,45 +8480,7 @@ async def generate_openai_article_summary(company_name: str, ticker: str, title:
         try:
             prompt = f"""You are a hedge fund analyst extracting information about {company_name} ({ticker}) for an investment research report.
 
-**STEP 1: SOURCE VERIFICATION**
-
-Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
-
-**Simply Wall St:**
-- States "Simply Wall St" as source/publisher
-- Contains snowflake score graphics, 6-category scoring system
-- Disclaimer: "This article by Simply Wall St is general in nature..."
-
-**GuruFocus:**
-- States "GuruFocus" as source/publisher
-- Contains GuruFocus ratings (financial strength, profitability rank)
-- References Peter Lynch fair value, GF Value, GuruFocus scores
-
-**Zacks:**
-- States "Zacks Investment Research" as source/author
-- Contains "Zacks Rank #1, #2, #3" ranking system
-- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
-
-**TipRanks:**
-- States "TipRanks" as source/publisher
-- Contains "TipRanks Smart Score" (1-10 rating system)
-- References TipRanks analyst consensus aggregation
-
-**Motley Fool:**
-- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
-- Contains disclaimer: "The Motley Fool has a disclosure policy..."
-- References Stock Advisor, Rule Breakers services
-
-**Finviz / MarketBeat / StockRover:**
-- States any of these as source/publisher
-- Contains their proprietary screener rankings or scores
-- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
-
-**If article is FROM any retail stock screener above** (check article content, not just domain):
-→ Return ONLY the text: SKIP_RETAIL_ANALYSIS
-→ Do NOT add any commentary
-
-**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+**CONTENT FILTERING**
 
 This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
 
@@ -8832,45 +8790,7 @@ async def generate_openai_competitor_article_summary(competitor_name: str, compe
         try:
             prompt = f"""You are a research analyst extracting information about a competitor for a competitive intelligence report.
 
-**STEP 1: SOURCE VERIFICATION**
-
-Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
-
-**Simply Wall St:**
-- States "Simply Wall St" as source/publisher
-- Contains snowflake score graphics, 6-category scoring system
-- Disclaimer: "This article by Simply Wall St is general in nature..."
-
-**GuruFocus:**
-- States "GuruFocus" as source/publisher
-- Contains GuruFocus ratings (financial strength, profitability rank)
-- References Peter Lynch fair value, GF Value, GuruFocus scores
-
-**Zacks:**
-- States "Zacks Investment Research" as source/author
-- Contains "Zacks Rank #1, #2, #3" ranking system
-- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
-
-**TipRanks:**
-- States "TipRanks" as source/publisher
-- Contains "TipRanks Smart Score" (1-10 rating system)
-- References TipRanks analyst consensus aggregation
-
-**Motley Fool:**
-- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
-- Contains disclaimer: "The Motley Fool has a disclosure policy..."
-- References Stock Advisor, Rule Breakers services
-
-**Finviz / MarketBeat / StockRover:**
-- States any of these as source/publisher
-- Contains their proprietary screener rankings or scores
-- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
-
-**If article is FROM any retail stock screener above** (check article content, not just domain):
-→ Return ONLY the text: SKIP_RETAIL_ANALYSIS
-→ Do NOT add any commentary
-
-**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+**CONTENT FILTERING**
 
 This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
 
@@ -9150,45 +9070,7 @@ async def generate_openai_industry_article_summary(industry_keyword: str, target
         try:
             prompt = f"""You are a research analyst extracting fundamental driver facts relevant to a target company's financial performance.
 
-**STEP 1: SOURCE VERIFICATION**
-
-Before extracting content, determine if this article is FROM a retail stock screener platform by checking for these indicators in the article text:
-
-**Simply Wall St:**
-- States "Simply Wall St" as source/publisher
-- Contains snowflake score graphics, 6-category scoring system
-- Disclaimer: "This article by Simply Wall St is general in nature..."
-
-**GuruFocus:**
-- States "GuruFocus" as source/publisher
-- Contains GuruFocus ratings (financial strength, profitability rank)
-- References Peter Lynch fair value, GF Value, GuruFocus scores
-
-**Zacks:**
-- States "Zacks Investment Research" as source/author
-- Contains "Zacks Rank #1, #2, #3" ranking system
-- References "Zacks earnings surprise predictions" or "Zacks consensus estimates"
-
-**TipRanks:**
-- States "TipRanks" as source/publisher
-- Contains "TipRanks Smart Score" (1-10 rating system)
-- References TipRanks analyst consensus aggregation
-
-**Motley Fool:**
-- Author byline indicates "The Motley Fool" or "Motley Fool contributor"
-- Contains disclaimer: "The Motley Fool has a disclosure policy..."
-- References Stock Advisor, Rule Breakers services
-
-**Finviz / MarketBeat / StockRover:**
-- States any of these as source/publisher
-- Contains their proprietary screener rankings or scores
-- References their specific tools (Finviz heat maps, MarketBeat rankings, StockRover ratings)
-
-**If article is FROM any retail stock screener above** (check article content, not just domain):
-→ Return ONLY the text: SKIP_RETAIL_ANALYSIS
-→ Do NOT add any commentary
-
-**STEP 2: CONTENT FILTERING (If source verified as non-retail)**
+**CONTENT FILTERING**
 
 This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
 

@@ -655,11 +655,27 @@ def generate_company_profile_email(
     # Filing date display (optional in template)
     filing_date_display = f"Form {filing_type} Filed: {filing_date}"
 
-    # Convert markdown to HTML with table support (clean, like transcripts)
-    content_html = markdown.markdown(
+    # Convert markdown to HTML with table support
+    profile_html = markdown.markdown(
         profile_markdown,
         extensions=['tables', 'fenced_code', 'nl2br']
     )
+
+    # Wrap content with table formatting CSS (40% label column, auto-distribute remaining)
+    content_html = f'''
+<style>
+    table {{
+        table-layout: fixed;
+        width: 100%;
+        border-collapse: collapse;
+        margin: 16px 0;
+    }}
+    td:first-child, th:first-child {{
+        width: 40%;
+    }}
+</style>
+{profile_html}
+'''
 
     # Render template with variables
     html = research_template.render(

@@ -31,12 +31,12 @@ For each bullet in Phase 1, generate 4 enrichment fields:
 - impact: "high impact" | "medium impact" | "low impact"
 - sentiment: "bullish" | "bearish" | "neutral" | "mixed"
 - reason: 2-4 words describing impact type
-- context: 25-60 word synthesis from filings
+- context: 40-50 word synthesis from filings
 
 WORKFLOW:
 1. Read Phase 1 bullet + filing_hints
 2. Search indicated filing sections
-3. Generate context (25-60 words)
+3. Generate context (40-50 words)
 4. Calculate impact (high/medium/low)
 5. Calculate sentiment (bullish/bearish/neutral)
 6. Generate reason (2-4 words)
@@ -308,14 +308,8 @@ FIELD GENERATION & CRITICAL RULES
    - See detailed rules below
 
 ADDITIONAL REQUIREMENTS:
-
-- VALUATION MULTIPLES: Format as X.Xx (one decimal: "22.2x" not "22.34x")
-  Specify period if known: "forward P/E 32.5x" or "trailing P/E 28.3x"
-  If period unknown: Use generic "P/E 22.2x"
-
 - PRESERVE BULLET_ID: This is the merge key with Phase 1 (critical for output)
-
-- VALID JSON OUTPUT: All 6 sections must be present even if empty
+- VALID JSON OUTPUT: All 5 sections must be present even if empty
 
 ═══════════════════════════════════════════════════════════════════════════════
 CONTEXT GENERATION RULES

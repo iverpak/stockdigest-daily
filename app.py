@@ -6666,6 +6666,7 @@ RETAIL_PLATFORM_KEYWORDS = [
 
     # Disclaimers (high confidence smoking guns)
     "this article by simply wall st",
+    "see our full analysis for",  # Simply Wall St signature call-to-action
     "the motley fool has a disclosure policy",
     "zacks investment research disclaimer",
     "gurufocus disclaimer",

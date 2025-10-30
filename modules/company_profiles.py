@@ -649,8 +649,8 @@ def generate_company_profile_email(
     else:
         fiscal_period = filing_date
 
-    # Date label for header (include market status)
-    date_label = f"Generated: {current_date} • {market_status} | {fiscal_period}"
+    # Date label for header (simplified - just show fiscal period)
+    date_label = fiscal_period
 
     # Filing date display (optional in template)
     filing_date_display = f"Form {filing_type} Filed: {filing_date}"

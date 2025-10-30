@@ -732,14 +732,14 @@ def generate_transcript_email(
     if report_type == 'transcript':
         report_type_label = "EARNINGS CALL TRANSCRIPT"
         fiscal_period = f"{quarter} {year}"
-        date_label = f"Generated: {current_date} • {market_status} | Call Date: {report_date}"
+        date_label = f"Call Date: {report_date}"
         filing_date_display = f"Call Date: {report_date}"
         transition_text = f"Summary generated from {company_name} {quarter} {year} earnings call transcript."
         fmp_link_text = "View full transcript on FMP"
     else:  # press_release
         report_type_label = "PRESS RELEASE"
         fiscal_period = report_date
-        date_label = f"Generated: {current_date} • {market_status} | Release Date: {report_date}"
+        date_label = f"Release Date: {report_date}"
         filing_date_display = f"Release Date: {report_date}"
         transition_text = f"Summary generated from {company_name} press release dated {report_date}."
         fmp_link_text = "View original release on FMP"

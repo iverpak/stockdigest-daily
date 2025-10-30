@@ -27309,8 +27309,10 @@ async def get_press_releases_api(token: str = None):
                 SELECT
                     ticker,
                     report_date,
+                    pr_title,
                     summary_text,
                     ai_provider,
+                    processing_duration_seconds,
                     generated_at
                 FROM transcript_summaries
                 WHERE report_type = 'press_release'
@@ -27324,8 +27326,10 @@ async def get_press_releases_api(token: str = None):
                 result.append({
                     "ticker": pr['ticker'],
                     "report_date": str(pr['report_date']) if pr['report_date'] else None,
+                    "title": pr['pr_title'],  # Add title field
                     "summary_text": pr['summary_text'],
                     "ai_provider": pr['ai_provider'],
+                    "processing_duration_seconds": pr['processing_duration_seconds'],
                     "generated_at": str(pr['generated_at']),
                     "char_count": len(pr['summary_text']) if pr['summary_text'] else 0,
                     "word_count": len(pr['summary_text'].split()) if pr['summary_text'] else 0

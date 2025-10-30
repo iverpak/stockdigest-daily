@@ -666,12 +666,16 @@
             }
 
             container.innerHTML = items.map(item => {
+                // Truncate title if too long
+                const displayTitle = item.title.length > 80 ? item.title.substring(0, 80) + '...' : item.title;
+
                 if (item.generated) {
                     const genDate = new Date(item.generated).toLocaleDateString();
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <strong>${item.date}</strong>: ${item.title.substring(0, 60)}...
+                                <strong>${displayTitle}</strong>
+                                ${item.date ? `<span style="color: #6b7280; font-size: 12px; margin-left: 8px;">Date: ${formatShortDate(item.date)}</span>` : ''}
                                 <span style="color: #059669; font-size: 13px; margin-left: 12px;">✓ Generated on ${genDate}</span>
                             </div>
                             <div>
@@ -690,7 +694,8 @@
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <strong>${item.date}</strong>: ${item.title.substring(0, 60)}...
+                                <strong>${displayTitle}</strong>
+                                ${item.date ? `<span style="color: #6b7280; font-size: 12px; margin-left: 8px;">Date: ${formatShortDate(item.date)}</span>` : ''}
                             </div>
                             <button onclick="generatePressRelease('${ticker}', '${item.date}')"
                                     style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
@@ -1104,9 +1109,10 @@
                     `;
                 case 'press_releases':
                     return common + `
+                        <th style="padding: 12px; text-align: left;">Title</th>
                         <th onclick="sortTable('report_date')" style="padding: 12px; text-align: left; cursor: pointer;">Date</th>
                         <th style="padding: 12px; text-align: center;">Words</th>
-                        <th style="padding: 12px; text-align: left;">AI Provider</th>
+                        <th style="padding: 12px; text-align: center;">Model</th>
                         <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
                         <th style="padding: 12px; text-align: center;">Actions</th>
                     `;
@@ -1200,11 +1206,24 @@
                         </td>
                     `;
                 case 'press_releases':
+                    // Model badge with generation time (matching transcripts style)
+                    const prModelBadge = doc.ai_provider === 'gemini'
+                        ? `<span style="background: #10b981; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟩 Gemini</span>`
+                        : `<span style="background: #1e40af; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">🟦 Sonnet</span>`;
+
+                    const prGenTime = doc.processing_duration_seconds
+                        ? `<div style="font-size: 11px; color: #6b7280; margin-top: 4px;">${doc.processing_duration_seconds}s</div>`
+                        : '';
+
+                    // Title truncation (like transcripts show quarter)
+                    const prTitle = doc.title ? (doc.title.length > 60 ? doc.title.substring(0, 60) + '...' : doc.title) : 'Press Release';
+
                     return `
                         <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px; font-size: 13px;">${prTitle}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
                         <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.ai_provider || 'N/A'}</td>
+                        <td style="padding: 12px; text-align: center;">${prModelBadge}${prGenTime}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
                         <td style="padding: 12px; text-align: center;">
                             ${getActionButtons(doc, type)}

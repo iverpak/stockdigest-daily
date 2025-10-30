@@ -661,8 +661,9 @@ def generate_company_profile_email(
         extensions=['tables', 'fenced_code', 'nl2br']
     )
 
-    # Add comprehensive styling (NO grey wrapper, smaller headers, 40% column width)
+    # Add comprehensive styling (NO grey wrapper, smaller headers, more spacing, 40% column width)
     content_html = f'''
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.6; color: #374151; overflow-x: auto;">
 <style>
     /* Table styling with 40% label column */
     table {{
@@ -691,26 +692,42 @@ def generate_company_profile_email(
         width: 40%;
     }}
 
-    /* Headers (smaller, cleaner than original) */
+    /* Headers (smaller, more spacing for breathing room) */
     h1 {{
         color: #1e40af;
         font-size: 18px;
-        margin-top: 24px;
-        margin-bottom: 12px;
+        margin-top: 32px;
+        margin-bottom: 16px;
         border-bottom: 2px solid #1e40af;
         padding-bottom: 6px;
     }}
     h2 {{
         color: #1e3a8a;
         font-size: 16px;
-        margin-top: 20px;
-        margin-bottom: 10px;
+        margin-top: 28px;
+        margin-bottom: 14px;
     }}
     h3 {{
         color: #1e40af;
         font-size: 14px;
-        margin-top: 16px;
+        margin-top: 20px;
+        margin-bottom: 12px;
+    }}
+
+    /* Paragraphs (more spacing) */
+    p {{
+        margin-bottom: 16px;
+        line-height: 1.6;
+    }}
+
+    /* Lists with proper indentation and spacing */
+    ul, ol {{
+        margin: 16px 0;
+        padding-left: 24px;
+    }}
+    li {{
         margin-bottom: 8px;
+        margin-left: 20px;
     }}
 
     /* Code blocks */
@@ -735,6 +752,7 @@ def generate_company_profile_email(
     }}
 </style>
 {profile_html}
+</div>
 '''
 
     # Render template with variables

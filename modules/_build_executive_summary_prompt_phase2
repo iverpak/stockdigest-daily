@@ -271,391 +271,264 @@ If no filing data: Still output bullet with context: "No relevant filing context
 FIELD GENERATION & CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-4 FIELDS TO GENERATE:
+5 FIELDS TO GENERATE FOR EACH BULLET:
 
 1. impact: "high impact" | "medium impact" | "low impact"
    - High: >5% revenue/EBIT/assets OR top 3 customer/supplier OR categorical event
    - Medium: 1-5% OR top 4-10
    - Low: <1%
 
-2. sentiment: "bullish" | "bearish" | "neutral"
+2. sentiment: "bullish" | "bearish" | "neutral" | "mixed"
+   - bullish: Positive for company prospects/financials
+   - bearish: Negative for company prospects/financials
+   - neutral: No clear directional impact
+   - mixed: Has both positive and negative elements (e.g., margin improvement but revenue decline)
    - Single-step inference from article + filing economics
 
 3. reason: 2-4 words describing impact type
-   - Examples: "customer concentration", "margin compression", "delivery outperformance", "regulatory risk"
+   - Describe impact type, not just topic
+   - Examples: "customer concentration", "margin compression", "delivery outperformance", "regulatory risk", "strategic optimization"
+   - ❌ Bad: "acquisition announced", "customer contract", "membership loss"
+   - ✅ Good: "care delivery expansion", "revenue dependency", "strategic contraction"
 
-4. relevance: How relevant is this to the target company?
+4. relevance: "direct" | "indirect" | "none"
    - direct: Directly about target company
    - indirect: Indirectly relevant through market/competitive/industry connection
    - none: Not relevant to target company
-
-   Evaluate based on bullet content + context you found.
-
-   Examples:
-   - direct: Target company Q3 deliveries beat consensus; Goldman raised target price; Stock hit all-time high
-   - indirect: Competitor capacity expansion in target market; Industry regulation affecting target segment; Supplier pricing for target inputs
-   - none: Competitor CEO compensation; Unrelated industry development; Competitor internal restructuring
-
-5. context: 25-60 words synthesizing 1-3 most relevant filing data points
-   - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q"
-   - Show calculations: "Segment $9.0B of total $10.2B (88%)"
-
-CRITICAL RULES:
-
-1. FILING DATA ONLY in context field - TARGET COMPANY filings only (10-K, 10-Q, Transcript)
    
-   NEVER include in context (even if mentioned in bullet):
-   ❌ Article quotes: "GM stated...", "Analyst noted...", "sources say..."
-   ❌ Competitor data: "Ford announced...", "GM reduced estimate to $4B..."
-   ❌ Analyst estimates: "consensus expects...", "Bloomberg estimates..."
-   ❌ Rephrasing bullet content with filing citation added
-      Example: Bullet says "ROIC 9.27% per TradingView"
-               Context says "ROIC 9.27% trailing 12 months significantly exceeds 1.85% industry average per TradingView October 16..."
-               (This is article content, not filing context - even though you added "per TradingView" citation)
-
    Examples:
-   ✅ CORRECT: "Tesla tariff impact $400M Q3 per transcript"
-   ❌ WRONG: "GM reduced tariff to $4B; Tesla tariff $400M..." (GM is article data)
+   - direct: Target company Q3 deliveries beat consensus; Goldman raised target price
+   - indirect: Competitor capacity expansion in target market; Industry regulation affecting target segment
+   - none: Competitor CEO compensation; Unrelated industry development
 
-   ANTI-REPETITION RULE:
-   ❌ NEVER repeat facts already stated in the bullet content
+5. context: 40-50 words synthesizing 1-3 most relevant filing data points
+   - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q" or "per Oct 23 call"
+   - Target company filings ONLY (10-K, 10-Q, Transcript)
+   - Add NEW data not already in bullet
+   - See detailed rules below
 
-   CRITICAL: Context is APPENDED to bullet, not standalone.
+ADDITIONAL REQUIREMENTS:
 
-   User sees:
-   • [topic]: [bullet content from Phase 1]
-     Context: [your output]
+- VALUATION MULTIPLES: Format as X.Xx (one decimal: "22.2x" not "22.34x")
+  Specify period if known: "forward P/E 32.5x" or "trailing P/E 28.3x"
+  If period unknown: Use generic "P/E 22.2x"
 
-   This means:
-   1. User has ALREADY read bullet content before seeing context
-   2. Repeating bullet facts = wasted words
-   3. Jump DIRECTLY to NEW filing data
+- PRESERVE BULLET_ID: This is the merge key with Phase 1 (critical for output)
 
-   TEST: Cover up the bullet. Does your context make sense alone?
-   → If YES = you're repeating (bad)
-   → If NO = you're adding (good)
-
-   Your ONLY job: Add filing data the bullet doesn't have.
-
-   The word "Context:" itself provides the bridge to the bullet. Jump DIRECTLY to filing data that adds NEW information.
-
-   Examples:
-   ❌ BAD: Bullet says "develop multiple gigawatt-hours of energy storage capacity"
-           Context says "Partnership targets multiple gigawatt-hours of energy storage across Pennsylvania assets"
-           (This is verbatim repetition from bullet)
-
-   ✅ GOOD: Bullet says "develop multiple gigawatt-hours of energy storage capacity"
-            Context says "Company operates 10.7 GW total fleet per FY2024 10-K; Pennsylvania assets include 3.2 GW capacity"
-            (This adds NEW scale data from filings)
-
-   Before writing context, ask: "Does this sentence repeat what's already in the bullet?" If yes, delete it.
-
-═══ ONE CONTINUOUS PARAGRAPH - CRITICAL UNDERSTANDING ═══
-
-When enrichments merge with Phase 1 bullets, the output reads as ONE CONTINUOUS PARAGRAPH in the user's email:
-
-• [topic_label (impact, sentiment, reason)]: [Phase 1 bullet content]. Context: [Your Phase 2 output].
-
-This is ONE FLOWING PARAGRAPH, not two separate statements.
-The reader's eye flows continuously from bullet → "Context:" → your enrichment.
-
-CRITICAL IMPLICATION:
-✓ Your context CONTINUES the narrative (like adding a second sentence)
-✓ Do NOT repeat ANY facts from bullet (reader just read them 5 words ago)
-✓ Jump DIRECTLY to NEW filing data
-
-Example of final user experience:
-• Major customer renewal (high impact, bullish, customer concentration): Amazon renewed
-  multi-year contract as company's largest customer. Context: Represents 28% of Q2 revenue
-  per 10-Q (increased from 22% in FY2024); management called relationship 'strategic and
-  expanding' on Aug 7 call.
-
-Reader experiences ONE paragraph about Amazon renewal, not "bullet + separate fact box."
-
-❌ COMMON REDUNDANCY PATTERNS - DELETE THESE:
-
-1. Unit conversion of same data:
-   Bullet: "470 basis points increase" | Context: "4.7pp increase" ❌ (identical fact)
-
-2. Arithmetic on bullet data:
-   Bullet: "MCR 85.1% vs 84.0% prior year" | Context: "MCR increased 110 bps YoY" ❌ (math on same numbers)
-
-3. Restating management quotes:
-   Bullet: "Management called costs 'within expected ranges'" | Context: "Costs within ranges per management" ❌ (verbatim)
-
-4. Echoing strategic framing:
-   Bullet: "Acquisition expands home health capabilities" | Context: "Expands home health capabilities per transcript" ❌ (echo)
-
-✅ CORRECT RESPONSE TO AVOID REDUNDANCY:
-
-When bullet has consolidated metric → Context shows segment breakdown
-When bullet has YoY comparison → Context adds QoQ trend or multi-year baseline
-When bullet has qualitative statement → Context adds quantification from filings
-When bullet has event narrative → Context adds financial magnitude/exposure
-When bullet has margin data → Context adds revenue/volume data (complementary metric)
-
-2. USE FILING_HINTS to guide search (respect Phase 1's section selection)
-3. 1-3 DATA POINTS MAX (quality over quantity)
-4. EXACT FIGURES from filings (minimal rounding: "$1,234.5M" not "~$1.2B")
-5. TEMPORAL AWARENESS: Always note period ("per FY2024 10-K", "per Q2 10-Q (pre-dates Q3 event)")
-6. NATURAL PROSE: Use semicolons to separate points naturally
-7. PRESERVE BULLET_ID (this is the merge key with Phase 1)
-8. VALID JSON (parseable, all 6 sections present even if empty)
-
-9. VALUATION MULTIPLES: Format as X.Xx (one decimal: "22.2x" not "22.34x")
-   Specify period if known: "forward P/E 32.5x" or "trailing P/E 28.3x"
-   If period unknown: Use generic "P/E 22.2x" without trailing/forward label
-
-10. TOPICAL ALIGNMENT: Context must discuss the SAME metric/topic as the bullet
-
-   ❌ WRONG: Bullet about ROIC → Context about net leverage and FCF accretion (different metrics)
-   ✅ CORRECT: Bullet about ROIC → Context about ROIC trends, return on capital, capital efficiency metrics
-
-   If no topically aligned filing data exists → "No relevant filing context found for this development"
-
-11. CONTEXT INFERENCE - THREE TIERS
-
-TIER 0 (Direct statements):
-✓ Report what filings explicitly state with citations
-✓ Quote management explanations: "management attributed X to Y per call"
-
-TIER 1 (Calculations and comparisons):
-✓ Math: YoY %, QoQ %, basis points, ratios, dollar changes, trend direction, forecast math
-✓ "Q4 needs 732K to hit 2.08M" (forecast math)
-✓ "Margin 16.1% vs 18.7% prior year (260 bps compression)" (calculation)
-✓ "Services margin 58.3% vs automotive margin 16.1% per Q2 10-Q" (comparison)
-✓ "Loss $5.1B vs $1.2B prior year per 10-Q" (dollar change)
-✓ "Margin 5.8% improved QoQ from 4.1% but compressed YoY from 7.2%" (trend direction)
-
-TIER 2 (Combining data from multiple filings - same metric):
-✓ Combine 10-Q + 10-K + Transcript data about SAME metric/event
-✓ "Customer 28% Q2 revenue per 10-Q vs 22% FY2024 per 10-K; management called relationship 'strategic' per call"
-
-NOT ALLOWED (causal inferences without explicit filing statement):
-❌ "High installed base suggests limited upgrade pool" (your logic, not stated)
-❌ "Margin pressure likely from input costs" (unless management said "likely")
-❌ "Trails competitors' AI spending" (competitor data not in target company filings)
-❌ "Creating sustainability concerns" (unless management/analyst stated this)
-
-CRITICAL: Use "suggests/implies/likely/creates" ONLY when:
-- Quoting filing: "management suggested X per call"
-- Otherwise: Remove the word, report facts only
-
-FORBIDDEN INTERPRETIVE VERBS IN CONTEXT (add these to blacklist):
-❌ "represents [assessment]", "validates [claim]", "supports [opinion]", "demonstrates [view]"
-❌ "could [speculation]", "may [speculation]", "might [speculation]"
-❌ "pressures", "drives", "enables" (causal claims without attribution)
-
-✅ CORRECT: State only filing facts with attribution
-✅ CORRECT: "Management stated '[quote]' per transcript" (direct attribution)
-❌ WRONG: "AMD partnerships represent competitive pressure" (interpretive assessment)
-
-ANTI-FABRICATION:
-Never cite numbers that don't explicitly appear in filings with matching labels.
-If you find "$478M" labeled "Asset retirement obligations" → DO NOT cite as "$478M capacity revenues"
-If you cannot find a metric in filings → "No relevant filing context found" (don't guess)
-
-Examples:
-❌ WRONG: "Installed base at all-time high suggests limited upgrade pool"
-✅ CORRECT: "Installed base reached all-time high per Q3 call (Jul 31)"
-
-❌ WRONG: "R&D 6.2% of revenue trails competitors' AI spending intensity"
-✅ CORRECT: "R&D 6.2% of quarterly revenue per Q3 10-Q"
+- VALID JSON OUTPUT: All 6 sections must be present even if empty
 
 ═══════════════════════════════════════════════════════════════════════════════
-CONTEXT GENERATION - 25-60 WORD FORMAT
+CONTEXT GENERATION RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-PURPOSE: Quantify developments with filing data
-- Materiality: How big is this?
-- Comparison: How does this compare?
-- Economics: Is this profitable?
-- Trends: Getting better or worse?
+PURPOSE: Add filing-based context that quantifies and enriches the bullet.
 
-STRUCTURE:
-- Length: 40-50 words (STRICT - prioritize no repetition over additional insights)
-  - Simple bullets (single metric): 40-45 words
-  - Complex bullets (multi-faceted): 45-50 words
-  - NEVER EXCEED 50 words
-  - If approaching 50 words, CUT secondary details (never cut quantification %)
-- Format: Natural prose with semicolons separating data points
-- Data points: 1-3 most relevant pieces
+Your context appears immediately after the bullet as one continuous paragraph:
+[Bullet content]. Context: [Your enrichment].
+
+═══════════════════════════════════════════════════════════════════════════════
+RULE #1: TARGET COMPANY FILINGS ONLY
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ USE ONLY:
+- Target company 10-K data
+- Target company 10-Q data
+- Target company earnings transcript data
+
+❌ NEVER INCLUDE:
+- Article quotes or analyst commentary
+- Competitor data (even if mentioned in bullet)
+- Industry data not from target company filings
+- Consensus estimates or Bloomberg data
+
+Example:
+✅ CORRECT: "Tesla tariff impact $400M Q3 per Oct 23 transcript"
+❌ WRONG: "GM reduced tariff estimate to $4B; Tesla tariff $400M..." (GM data not allowed)
+
+═══════════════════════════════════════════════════════════════════════════════
+RULE #2: ADD NEW DATA NOT IN BULLET
+═══════════════════════════════════════════════════════════════════════════════
+
+If bullet has...                    → Context should add from filings...
+─────────────────────────────────────────────────────────────────────────────
+Consolidated metric                 → Segment/product/geographic breakdown
+YoY comparison only                 → QoQ sequential trend OR 3-5 year baseline
+Qualitative statement               → Quantified metrics
+Event announcement                  → Financial magnitude (% of revenue/assets)
+Margin/ratio data                   → Complementary volume/revenue data
+Current period only                 → Historical comparison or forward guidance
+Headline number                     → Components, drivers, or related metrics
+Single metric                       → Dependencies, concentrations, constraints
+
+QUICK TEST FOR REDUNDANCY:
+Does your context contain ANY numbers, percentages, or statements from the bullet?
+→ If YES: You're repeating. Find different filing data.
+→ If NO: Good, you're adding value.
+
+EXAMPLES:
+
+✅ GOOD:
+Bullet: "Medicare Advantage membership declining 1M"
+Context: "MA represents 40% of consolidated revenue per FY2024 10-K; current base 8.4M members as of Sep 30 2025 per Q3 10-Q; management expects margin improvement in 2026 despite volume loss per Oct 28 transcript"
+(Adds revenue exposure + baseline count + forward guidance not in bullet)
+
+❌ BAD:
+Bullet: "Medicare Advantage membership declining 1M from 8.4M"
+Context: "MA membership 8.4M declining by 1M per Q3 10-Q"
+(Repeats "1M" and "8.4M" from bullet)
+
+✅ GOOD:
+Bullet: "Q3 MCR 89.9% up from 85.2% prior year"
+Context: "By segment: UHC MCR 87.2% vs Optum 94.5% per Q3 10-Q; sequential Q1 88.1%→Q2 88.9%→Q3 89.9% shows stabilization; management expects 88-89% range in 2026 per Oct 28 transcript"
+(Adds segment breakdown + QoQ trend + forward guidance not in bullet)
+
+❌ BAD:
+Bullet: "Q3 MCR 89.9% up from 85.2%"
+Context: "MCR increased 4.7pp YoY to 89.9% per Q3 10-Q"
+(4.7pp is just arithmetic on 89.9-85.2 already in bullet; "89.9%" repeated)
+
+✅ GOOD:
+Bullet: "Company completed acquisition of Amedisys for $3.4 billion in Q3"
+Context: "Amedisys operates home health with 300K patients across 38 states per Oct 28 transcript; represents 7.2% of company market cap; debt-to-capital ratio stable 44.1% post-close with target 40% by H2 2026 per Q3 10-Q"
+(Adds what Amedisys does + deal size context + balance sheet impact not in bullet)
+
+❌ BAD:
+Bullet: "Company completed acquisition of Amedisys for $3.4 billion in Q3"
+Context: "Completed Amedisys acquisition for $3.4B net cash disbursement in Q3 per transcript"
+(Repeats "$3.4B" and "Q3" verbatim from bullet)
+
+═══════════════════════════════════════════════════════════════════════════════
+RULE #3: WHAT TO INCLUDE IN CONTEXT
+═══════════════════════════════════════════════════════════════════════════════
+
+ALWAYS PAIR (when applicable):
+✓ Revenue → with margin/profitability
+✓ Margin → with QoQ AND YoY trends (not just one)
+✓ Dependency → with exact % quantification
+✓ Event → with financial magnitude (% of revenue/assets)
+✓ Guidance → with comparison to prior guidance
+✓ Earnings → with operating cash flow
+✓ Investment → with ROIC context
+
+ALWAYS INCLUDE (when filing provides it):
+✓ Management's explanation (the "WHY" not just "WHAT")
+✓ Forward outlook or timeline
+✓ Segment breakdown for consolidated metrics
+✓ Quantification (% of revenue, profit, exposure)
+
+EXAMPLE OF COMPLETE CONTEXT (49 words):
+"Margin 5.8% vs 4.1% Q2 (improving QoQ) but 7.2% FY2024 (compressing YoY) per Q3 10-Q; management attributed compression to tariffs $400M (~12% of auto gross profit) and lower-priced model mix per Oct 23 call; expects gradual improvement as Cybertruck scales"
+
+Why complete: QoQ + YoY trends + quantified driver + management explanation + outlook
+
+═══════════════════════════════════════════════════════════════════════════════
+RULE #4: LENGTH & FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+LENGTH: 40-50 words (STRICT)
+- Simple bullets: 40-45 words
+- Complex bullets: 45-50 words
+- NEVER exceed 50 words
+
+FORMAT:
+- Natural prose with semicolons separating data points
+- 1-3 most relevant filing data points
 - Citations: ALWAYS cite source and period
 
-CRITICAL PRIORITY: No repetition > quantification > additional insights
+CUTTING PRIORITY (when approaching 50 words):
+Priority 1 (KEEP): Material filing metric + quantification (% of revenue, etc.)
+Priority 2 (KEEP): Trend data (QoQ, YoY, multi-year)
+Priority 3 (CUT): Secondary metrics or redundant details
+Priority 4 (CUT): Management quotes (unless critical to interpretation)
 
-If you must choose between:
-- Including quantification (%) → YES, always include
-- Including management quote → ONLY if space permits after quantification
-- Including offsetting factor → ONLY if space permits after quantification
-- Repeating bullet content → NEVER
+CRITICAL: No repetition > quantification > additional insights
 
-CUTTING PRIORITY (when over 50 words):
-Priority 1 (KEEP): Most material filing metric with citation (revenue, margin, exposure %)
-Priority 2 (KEEP): Quantification (% of revenue, profit, etc.)
-Priority 3 (CUT FIRST): Management quotes (use only if critical to interpretation)
-Priority 4 (CUT FIRST): Secondary metrics, redundant details, excessive precision
+═══════════════════════════════════════════════════════════════════════════════
+RULE #5: CITATION FORMAT
+═══════════════════════════════════════════════════════════════════════════════
 
-Complex bullets include any with 2+ of:
-- Revenue + Profitability discussion
-- Current results + Forward guidance
-- Risk disclosure + Financial exposure
-- Concentration + Quantification
-- Multiple segments or geographies
+Extract periods from filing headers (first line of each filing summary):
 
-CITATION FORMATS (extract from filing headers):
-- 10-K: "per FY2024 10-K" (from header: "10-K FILING FOR FISCAL YEAR 2024")
-- 10-Q: "per Q2 2025 10-Q" (from header: "Q2 2025 10-Q Filing")
-- Transcript: "per Oct 23, 2025 transcript" or "on Oct 23 call" (from header: "Q3 2025 Earnings Call (Oct 23, 2025)")
+10-K: "per FY2024 10-K"
+   (from header: "10-K FILING FOR FISCAL YEAR 2024")
+
+10-Q: "per Q2 2025 10-Q"
+   (from header: "Q2 2025 10-Q Filing")
+
+Transcript: "per Oct 23, 2025 transcript" OR "per Oct 23 call"
+   (from header: "Q3 2025 Earnings Call (Oct 23, 2025)")
 
 CRITICAL: Transcript citations MUST include date
 ❌ Wrong: "per transcript"
 ❌ Wrong: "per earnings call"
 ✅ Correct: "per Oct 23, 2025 transcript"
-✅ Correct: "on Oct 23 call"
-
-HOW TO EXTRACT PERIODS:
-1. Look at the filing header (first line before markdown sections)
-2. Extract the period information
-3. Use exact period in all citations for that filing
-
-EXAMPLES (note: periods extracted from filing headers):
-
-✅ Good (42 words, 2 data points):
-"Acquisitions add ~3 GW capacity to 10.3 GW fleet (~29% increase) per FY2024 10-K; management projects ~50% Adj FCF/share accretion per investor presentation on Aug 7, 2025 transcript"
-
-✅ Good (49 words, 3 data points - at cap):
-"Customer concentration increased to 28% of Q2 2025 revenue per 10-Q vs 22% in FY2024 per 10-K; management characterized relationship as 'strategic and expanding' on Aug 7, 2025 call"
-
-❌ Too long (68 words - EXCEEDS 50-word cap):
-"Customer 28% of Q2 revenue per 10-Q, up from 22% in Q1 per Q1 10-Q and 20% in FY2024 per 10-K; largest customer for third consecutive year per 10-K tables; management characterized relationship as 'strategic and expanding' on August 7, 2025 earnings call"
-→ Fix: Remove Q1 comparison, remove redundant details → Cut to 49 words ✓
-
-❌ Too short (18 words): "Segment lost money per 10-Q. Company has other profitable segments per 10-K."
-
-❌ No citations: "Segment margin was -127% in Q2"
+✅ Correct: "per Oct 23 call"
 
 TEMPORAL NOTES (flag only when material):
-- ✅ Filing pre-dates event >1 quarter: "per Q2 10-Q (pre-dates Q3 event)"
-- ✅ Guidance updated: "per Aug 7 transcript (supersedes 10-K guidance)"
-- ✅ Material change: "increased to 28% per Q2 10-Q vs 22% in FY2024 10-K"
-- ❌ Same quarter/normal comparison: Just write "per Q2 2025 10-Q"
+✓ "per Q2 10-Q (pre-dates Q3 event)" - if filing >1 quarter old
+✓ "per Aug 7 transcript (supersedes 10-K guidance)" - if guidance updated
+✓ "increased to 28% per Q2 10-Q vs 22% in FY2024 10-K" - material change
 
 ═══════════════════════════════════════════════════════════════════════════════
-CONTEXT QUALITY EXAMPLES - LEARN FROM THESE
+RULE #6: INFERENCE DISCIPLINE
 ═══════════════════════════════════════════════════════════════════════════════
 
-Study these real examples to understand what makes context "excellent":
+THREE ALLOWED TIERS:
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EXAMPLE 1: REVENUE MENTION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TIER 0 - Direct statements:
+✓ Report what filings explicitly state
+✓ "Management attributed X to Y per call"
 
-❌ BAD (revenue only, 28 words):
-"Robotaxi costs included in Services segment which generated $3,475M revenue (+24.5% YoY per Q2 2025 10-Q) vs $2,790M in Q2 2024"
+TIER 1 - Calculations and comparisons:
+✓ YoY %, QoQ %, basis points, ratios, dollar changes
+✓ "Margin 16.1% vs 18.7% prior year (260 bps compression)"
+✓ "Services margin 58.3% vs automotive 16.1% per Q2 10-Q"
 
-Why bad: No profitability, no management explanation, no outlook
+TIER 2 - Combining data from multiple filings (same metric):
+✓ "Customer 28% Q2 revenue per 10-Q vs 22% FY2024 per 10-K; management called relationship 'strategic' per Oct 23 call"
 
-✅ GOOD (revenue + profitability + management view, 59 words):
-"Robotaxi costs included in Services segment which generated $3,475M revenue (+24.5% YoY) with gross margin 58.3% per Q2 2025 10-Q vs automotive margin 16.1%; segment profitability not disclosed separately but management stated robotaxi currently unprofitable and expects breakeven in 2026 per Oct 22 call"
+NOT ALLOWED - Causal inferences:
+❌ "High installed base suggests limited upgrade pool" (your logic)
+❌ "Margin pressure likely from input costs" (unless management said so)
+❌ "Creating sustainability concerns" (unless explicitly stated)
 
-Why good: Revenue + margin comparison + management outlook + timeline
+FORBIDDEN WORDS (unless quoting management):
+❌ "suggests", "implies", "likely", "could", "may", "might"
+❌ "represents [assessment]", "validates", "demonstrates"
+❌ "pressures", "drives", "enables" (causal without attribution)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EXAMPLE 2: DEPENDENCY MENTION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-❌ BAD (qualitative only, 22 words):
-"Company highly dependent on battery cell supply from Panasonic and CATL per FY2024 10-K MATERIAL DEPENDENCIES section"
-
-Why bad: No quantification (%), no exposure assessment
-
-✅ GOOD (quantified + exposure + mitigation, 52 words):
-"Battery cells sourced primarily from Panasonic (Gigafactory Nevada) and CATL (China operations) per FY2024 10-K; 10-K states China sourcing represents 40%+ of battery supply creating tariff exposure; management stated battery supply sufficient through 2026 but expects tightness in 2027+ per Oct 22 call"
-
-Why good: Quantified dependency + risk exposure + management mitigation plan
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EXAMPLE 3: MARGIN COMPRESSION WITH QUANTIFICATION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-❌ BAD (no quantification, 28 words):
-"Q3 margin compressed due to tariff costs and model mix per management"
-
-Why bad: No numbers, no quantification, no temporal comparison
-
-❌ BAD (one-sided, no quantification, 31 words):
-"Q2 operating margin 4.1% vs 7.2% FY2024 per 10-K, representing margin compression"
-
-Why bad: Only YoY (misses QoQ improvement), no driver quantification
-
-✅ GOOD (complete: trend + quantified driver + outlook, 49 words):
-"Margin 5.8% vs 4.1% Q2 (improving QoQ) but 7.2% FY2024 (compressing YoY) per 10-Q; management attributed compression to tariffs $400M (~12% auto gross profit) and lower-priced model mix per Oct call; expects gradual improvement as Cybertruck scales"
-
-Why good: QoQ AND YoY trends + quantified driver ($400M + %) + mgmt outlook
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EXAMPLE 4: EARNINGS WITH CASH FLOW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-❌ BAD (earnings only, 35 words):
-"Q3 2025 revenue $28.09B exceeded consensus $26.24B (+7% beat) but adjusted EPS $0.50 missed estimates $0.54 (-7% miss) per earnings report"
-
-Why bad: No cash flow context, no explanation of miss, no profitability detail
-
-✅ GOOD (earnings + FCF + profitability + explanation, 72 words):
-"Q3 revenue $28.09B beat consensus $26.24B but EPS $0.50 missed $0.54 (fourth consecutive miss) per report; operating margin 5.8% vs 4.1% Q2 (improving) but 7.2% FY2024 (compressing YoY) per 10-Q; however Q3 FCF ~$4B set new record vs ~$1.5B Q2 per call; management attributed EPS miss to elevated R&D (+57% YoY) and tariff costs ($400M Q3 impact) per Oct 23 call"
-
-Why good: Beat + miss + margin trends + strong FCF + management explanation
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-KEY PATTERNS IN EXCELLENT CONTEXTS:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. Always pair revenue with margin/profitability
-2. Always show both QoQ and YoY trends (not just one)
-3. Always include management's explanation (the "WHY")
-4. Always quantify dependencies (%, not "significant" or "highly")
-5. Always include forward outlook when available
-6. Always calculate implications (Q4 required, % at risk, etc.)
+✅ CORRECT: "Management stated X per transcript"
+❌ WRONG: "AMD partnerships represent competitive pressure"
 
 ═══════════════════════════════════════════════════════════════════════════════
-QUALITY CHECKLIST - REVIEW BEFORE OUTPUTTING
+RULE #7: ANTI-FABRICATION
 ═══════════════════════════════════════════════════════════════════════════════
 
-Before finalizing each context, verify you've included:
+Never cite numbers that don't explicitly appear in filings with matching labels.
 
-□ PROFITABILITY: If revenue mentioned → included margin/profitability?
-□ SEGMENT ECONOMICS: If segment mentioned → included segment margin/ROIC?
-□ QUANTIFICATION: If dependency mentioned → included exact %?
-□ COMPARISON: If guidance mentioned → showed vs prior guidance?
-□ EXPOSURE: If concentration mentioned → showed exact % of revenue?
-□ CASH FLOW: If earnings mentioned → included FCF and conversion rate?
-□ CAPITAL EFFICIENCY: If investment mentioned → assessed ROIC vs WACC?
-□ EXPLANATION: Did I include WHY (per management) not just WHAT?
-□ TRENDS: Did I show both QoQ and YoY (not just one)?
-□ SYNTHESIS: Did I calculate implications (Q4 required, % at risk, etc.)?
-□ MATERIALITY CALCULATION: If $ figure found → calculated % of revenue/profit/EBITDA?
-□ GEOGRAPHIC CROSS-REFERENCE: If policy/tax/regulation → included relevant geography revenue %?
-□ DEVELOPMENT BALANCE: If unprofitable product → included timeline + operational challenges?
-□ NO REPETITION: Did I avoid repeating ANY facts from bullet content?
-□ CITATION ACCURACY: Every filing citation matches ACTUAL source used (not assumed source)
+If you find "$478M" labeled "Asset retirement obligations"
+→ DO NOT cite as "$478M capacity revenues"
 
-SELF-AUDIT EXAMPLES:
+If you cannot find a metric in filings
+→ Output: "No relevant filing context found for this development"
 
-Context draft: "Segment generated $3.5B revenue (+24% YoY)"
-□ PROFITABILITY? ❌ No margin mentioned
-→ REVISE: Search SEGMENT PERFORMANCE TRENDS for margin data
+═══════════════════════════════════════════════════════════════════════════════
+QUALITY CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
 
-Context draft: "Company dependent on supplier per 10-K"
-□ QUANTIFICATION? ❌ No % disclosed
-→ REVISE: Search MATERIAL DEPENDENCIES for concentration %
+Before outputting context, verify:
 
-Context draft: "Margin compressed to 16.1%"
-□ EXPLANATION? ❌ No reason given
-→ REVISE: Search MANAGEMENT COMMENTARY or transcript for driver
-
-If any box unchecked → return to filing sections and extract missing data
+□ Used target company filings ONLY (no competitor/article data)
+□ Added NEW data not in bullet (no repetition of numbers/facts)
+□ Included quantification (% of revenue, margins, exposure)
+□ Paired revenue with profitability when applicable
+□ Showed both QoQ AND YoY trends when discussing metrics
+□ Included management explanation when available
+□ Length 40-50 words
+□ All citations include period ("per Q3 2025 10-Q" not "per 10-Q")
+□ Transcript citations include date ("per Oct 23 call")
+□ No interpretive language unless quoting management
+□ No fabrication - all numbers match filing labels exactly
 
 ═══════════════════════════════════════════════════════════════════════════════
 11 INTEGRATION QUESTIONS - WHAT TO LOOK FOR

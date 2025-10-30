@@ -28241,6 +28241,395 @@ async def get_missing_financials_status(token: str):
         return {"status": "error", "message": str(e)}
 
 
+# ==============================================================================
+# CRON JOB - Check for New Filings (10-K, 10-Q, Transcript, Press Releases)
+# ==============================================================================
+
+def db_get_latest_10k(ticker: str) -> Optional[int]:
+    """Get latest 10-K fiscal year from database. Returns None if not found."""
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT fiscal_year FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-K'
+                ORDER BY fiscal_year DESC LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+            return result['fiscal_year'] if result else None
+    except Exception as e:
+        LOG.error(f"Error getting latest 10-K for {ticker}: {e}")
+        return None
+
+
+def db_get_latest_10q(ticker: str) -> Optional[Dict]:
+    """Get latest 10-Q from database. Returns dict with year and quarter, or None."""
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT fiscal_year, fiscal_quarter FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-Q'
+                ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+            if result and result['fiscal_quarter']:
+                quarter_str = result['fiscal_quarter']
+                quarter_num = int(quarter_str[1]) if len(quarter_str) >= 2 else None
+                if quarter_num:
+                    return {"year": result['fiscal_year'], "quarter": quarter_num}
+            return None
+    except Exception as e:
+        LOG.error(f"Error getting latest 10-Q for {ticker}: {e}")
+        return None
+
+
+def db_get_latest_transcript(ticker: str) -> Optional[Dict]:
+    """Get latest transcript from database. Returns dict with year and quarter, or None."""
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT year, quarter FROM transcript_summaries
+                WHERE ticker = %s AND report_type = 'transcript'
+                ORDER BY year DESC, quarter DESC LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+            if result and result['quarter']:
+                quarter_str = result['quarter']
+                quarter_num = int(quarter_str[1]) if len(quarter_str) >= 2 else None
+                if quarter_num:
+                    return {"year": result['year'], "quarter": quarter_num}
+            return None
+    except Exception as e:
+        LOG.error(f"Error getting latest transcript for {ticker}: {e}")
+        return None
+
+
+def db_check_press_release_exists(ticker: str, pr_date: str) -> bool:
+    """Check if press release already exists in database (by date)."""
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as count FROM transcript_summaries
+                WHERE ticker = %s
+                  AND report_type = 'press_release'
+                  AND report_date = %s
+            """, (ticker, pr_date))
+            result = cur.fetchone()
+            return result['count'] > 0 if result else False
+    except Exception as e:
+        LOG.error(f"Error checking press release for {ticker}: {e}")
+        return False
+
+
+async def check_filings_for_ticker(ticker: str) -> Dict:
+    """
+    Check for NEW filings and press releases for one ticker.
+    Returns dict with counts of new items found and processed.
+
+    Logic:
+    - 10-K/10-Q/Transcript: Compare LATEST from FMP vs LATEST from DB
+    - Press Releases: Check last 4 from FMP, process if not in DB
+    """
+    new_items = {
+        "ticker": ticker,
+        "10k": 0,
+        "10q": 0,
+        "transcript": 0,
+        "press_release": 0
+    }
+
+    try:
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            LOG.warning(f"[{ticker}] Skipping: not in database")
+            return new_items
+
+        # === 10-K CHECK ===
+        try:
+            profile_response = await validate_ticker_for_research(ticker=ticker, type="profile")
+            if profile_response.get("valid"):
+                years = profile_response.get("available_years", [])
+                if years:
+                    latest_year_data = years[0]
+                    latest_year_fmp = latest_year_data["year"]
+                    latest_year_db = db_get_latest_10k(ticker)
+
+                    if not latest_year_db or latest_year_fmp > latest_year_db:
+                        LOG.info(f"[{ticker}] 🆕 NEW 10-K: FY{latest_year_fmp}")
+
+                        # Queue job for generation
+                        batch_id = str(uuid.uuid4())
+                        job_config = {
+                            "ticker": ticker,
+                            "filing_type": "10-K",
+                            "fiscal_year": latest_year_fmp,
+                            "filing_date": latest_year_data.get("filing_date"),
+                            "period_end_date": latest_year_data.get("period_end_date"),
+                            "sec_html_url": latest_year_data.get("sec_html_url"),
+                            "send_email": True
+                        }
+
+                        with db() as conn, conn.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                VALUES (%s, %s, 1, %s)
+                            """, (batch_id, 'processing', json.dumps(job_config)))
+
+                            cur.execute("""
+                                INSERT INTO ticker_processing_jobs (
+                                    batch_id, ticker, status, phase, progress, config
+                                )
+                                VALUES (%s, %s, %s, %s, 0, %s)
+                                RETURNING job_id
+                            """, (batch_id, ticker, 'queued', 'profile_generation', json.dumps(job_config)))
+
+                            conn.commit()
+
+                        new_items["10k"] = 1
+        except Exception as e:
+            LOG.error(f"[{ticker}] 10-K check failed: {e}")
+
+        # === 10-Q CHECK ===
+        try:
+            tenq_response = await validate_ticker_for_research(ticker=ticker, type="10q")
+            if tenq_response.get("valid"):
+                quarters = tenq_response.get("available_quarters", [])
+                if quarters:
+                    q = quarters[0]
+                    if isinstance(q, dict):
+                        quarter_str = q.get("quarter", "")
+                        quarter_fmp = int(quarter_str[1]) if quarter_str and len(quarter_str) >= 2 else None
+                        year_fmp = q.get("fiscal_year")
+
+                        if quarter_fmp and year_fmp:
+                            latest_10q_db = db_get_latest_10q(ticker)
+
+                            needs_update = False
+                            if not latest_10q_db:
+                                needs_update = True
+                            elif year_fmp > latest_10q_db['year']:
+                                needs_update = True
+                            elif year_fmp == latest_10q_db['year'] and quarter_fmp > latest_10q_db['quarter']:
+                                needs_update = True
+
+                            if needs_update:
+                                LOG.info(f"[{ticker}] 🆕 NEW 10-Q: Q{quarter_fmp} {year_fmp}")
+
+                                # Queue job for generation
+                                batch_id = str(uuid.uuid4())
+                                job_config = {
+                                    "ticker": ticker,
+                                    "filing_type": "10-Q",
+                                    "fiscal_year": year_fmp,
+                                    "fiscal_quarter": f"Q{quarter_fmp}",
+                                    "filing_date": q.get("filing_date"),
+                                    "period_end_date": q.get("period_end_date"),
+                                    "sec_html_url": q.get("sec_html_url"),
+                                    "send_email": True
+                                }
+
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                        VALUES (%s, %s, 1, %s)
+                                    """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_jobs (
+                                            batch_id, ticker, status, phase, progress, config
+                                        )
+                                        VALUES (%s, %s, %s, %s, 0, %s)
+                                        RETURNING job_id
+                                    """, (batch_id, ticker, 'queued', '10q_generation', json.dumps(job_config)))
+
+                                    conn.commit()
+
+                                new_items["10q"] = 1
+        except Exception as e:
+            LOG.error(f"[{ticker}] 10-Q check failed: {e}")
+
+        # === TRANSCRIPT CHECK ===
+        try:
+            transcript_response = await validate_ticker_for_research(ticker=ticker, type="transcript")
+            if transcript_response.get("valid"):
+                quarters = transcript_response.get("available_quarters", [])
+                if quarters:
+                    if isinstance(quarters[0], dict):
+                        quarter_fmp = quarters[0].get('quarter')
+                        year_fmp = quarters[0].get('year')
+                    else:
+                        # Fallback: Parse from label string
+                        import re
+                        match = re.match(r"Q(\d+)\s+FY(\d{4})", quarters[0].get('label', ''))
+                        if match:
+                            quarter_fmp = int(match.group(1))
+                            year_fmp = int(match.group(2))
+                        else:
+                            quarter_fmp = None
+                            year_fmp = None
+
+                    if quarter_fmp and year_fmp:
+                        latest_transcript_db = db_get_latest_transcript(ticker)
+
+                        needs_update = False
+                        if not latest_transcript_db:
+                            needs_update = True
+                        elif year_fmp > latest_transcript_db['year']:
+                            needs_update = True
+                        elif year_fmp == latest_transcript_db['year'] and quarter_fmp > latest_transcript_db['quarter']:
+                            needs_update = True
+
+                        if needs_update:
+                            LOG.info(f"[{ticker}] 🆕 NEW Transcript: Q{quarter_fmp} FY{year_fmp}")
+
+                            # Queue job for generation
+                            batch_id = str(uuid.uuid4())
+                            job_config = {
+                                "ticker": ticker,
+                                "quarter": quarter_fmp,
+                                "year": year_fmp,
+                                "send_email": True
+                            }
+
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("""
+                                    INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                    VALUES (%s, %s, 1, %s)
+                                """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                cur.execute("""
+                                    INSERT INTO ticker_processing_jobs (
+                                        batch_id, ticker, status, phase, progress, config
+                                    )
+                                    VALUES (%s, %s, %s, %s, 0, %s)
+                                    RETURNING job_id
+                                """, (batch_id, ticker, 'queued', 'transcript_generation', json.dumps(job_config)))
+
+                                conn.commit()
+
+                            new_items["transcript"] = 1
+        except Exception as e:
+            LOG.error(f"[{ticker}] Transcript check failed: {e}")
+
+        # === PRESS RELEASES CHECK (last 4) ===
+        try:
+            pr_response = await validate_ticker_for_research(ticker=ticker, type="press_release")
+            if pr_response.get("valid"):
+                releases = pr_response.get("available_releases", [])
+                # Only check last 4
+                for pr in releases[:4]:
+                    pr_date = pr.get('date', '').split()[0]  # Extract YYYY-MM-DD
+                    if pr_date:
+                        exists = db_check_press_release_exists(ticker, pr_date)
+                        if not exists:
+                            pr_title = pr.get('title', 'Press Release')
+                            LOG.info(f"[{ticker}] 🆕 NEW Press Release: {pr_title[:60]}... ({pr_date})")
+
+                            # Queue job for generation
+                            batch_id = str(uuid.uuid4())
+                            job_config = {
+                                "ticker": ticker,
+                                "report_type": "press_release",
+                                "pr_date": pr_date,
+                                "pr_title": pr_title,
+                                "send_email": True
+                            }
+
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("""
+                                    INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                    VALUES (%s, %s, 1, %s)
+                                """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                cur.execute("""
+                                    INSERT INTO ticker_processing_jobs (
+                                        batch_id, ticker, status, phase, progress, config
+                                    )
+                                    VALUES (%s, %s, %s, %s, 0, %s)
+                                    RETURNING job_id
+                                """, (batch_id, ticker, 'queued', 'press_release_generation', json.dumps(job_config)))
+
+                                conn.commit()
+
+                            new_items["press_release"] += 1
+        except Exception as e:
+            LOG.error(f"[{ticker}] Press release check failed: {e}")
+
+        return new_items
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Error checking filings: {e}")
+        return new_items
+
+
+def check_all_filings_cron():
+    """
+    Cron job: Check all active user tickers for new filings.
+    Called by: python app.py check_filings
+
+    Used for:
+    - 6:30 AM daily check
+    - Hourly checks (8:30 AM, 9:30 AM, 10:30 AM... 9:30 PM)
+    """
+    LOG.info("="*80)
+    LOG.info("🔍 CHECKING FOR NEW FILINGS")
+    LOG.info("="*80)
+
+    try:
+        # Get active user tickers
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ticker1, ticker2, ticker3
+                FROM beta_users
+                WHERE status = 'active'
+            """)
+            rows = cur.fetchall()
+
+        # Collect unique tickers
+        tickers = set()
+        for row in rows:
+            if row['ticker1']:
+                tickers.add(row['ticker1'])
+            if row['ticker2']:
+                tickers.add(row['ticker2'])
+            if row['ticker3']:
+                tickers.add(row['ticker3'])
+
+        tickers = sorted(list(tickers))
+        LOG.info(f"📊 Checking {len(tickers)} tickers: {', '.join(tickers)}")
+
+        # Check each ticker
+        total_new = {"10k": 0, "10q": 0, "transcript": 0, "press_release": 0}
+
+        async def check_all():
+            results = []
+            for ticker in tickers:
+                result = await check_filings_for_ticker(ticker)
+                results.append(result)
+            return results
+
+        results = asyncio.run(check_all())
+
+        # Aggregate results
+        for result in results:
+            total_new["10k"] += result["10k"]
+            total_new["10q"] += result["10q"]
+            total_new["transcript"] += result["transcript"]
+            total_new["press_release"] += result["press_release"]
+
+        LOG.info("="*80)
+        LOG.info("✅ FILINGS CHECK COMPLETE")
+        LOG.info(f"   10-K: {total_new['10k']} new")
+        LOG.info(f"   10-Q: {total_new['10q']} new")
+        LOG.info(f"   Transcripts: {total_new['transcript']} new")
+        LOG.info(f"   Press Releases: {total_new['press_release']} new")
+        LOG.info("="*80)
+
+    except Exception as e:
+        LOG.error(f"❌ Filings check failed: {e}")
+        raise
+
+
 async def process_ticker_missing_financials(ticker: str):
     """
     Process one ticker for missing financials - fetches 10-K, 10-Q, Transcript in PARALLEL.
@@ -31172,9 +31561,12 @@ if __name__ == "__main__":
         elif func_name == "alerts":
             # Hourly alerts (9 AM - 10 PM EST)
             process_hourly_alerts()
+        elif func_name == "check_filings":
+            # Check for new filings (6:30 AM + hourly 8:30 AM - 9:30 PM)
+            check_all_filings_cron()
         else:
             print(f"Unknown function: {func_name}")
-            print("Available functions: cleanup, process, send, export, commit, alerts")
+            print("Available functions: cleanup, process, send, export, commit, alerts, check_filings")
             sys.exit(1)
     else:
         # Normal server startup

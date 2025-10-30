@@ -613,9 +613,13 @@ def generate_company_profile_email(
     fiscal_year: Optional[int],  # Can be None for presentations
     filing_date: str,
     profile_markdown: str,
-    stock_price: str = "$0.00",
+    stock_price: str = None,
     price_change_pct: str = None,
     price_change_color: str = "#4ade80",
+    ytd_return_pct: str = None,
+    ytd_return_color: str = "#4ade80",
+    market_status: str = "LAST CLOSE",
+    return_label: str = "1D",
     filing_type: str = "10-K",  # "10-K", "10-Q", or "PRESENTATION"
     fiscal_quarter: Optional[str] = None  # e.g., "Q2" (for 10-Q only)
 ) -> Dict[str, str]:
@@ -645,8 +649,8 @@ def generate_company_profile_email(
     else:
         fiscal_period = filing_date
 
-    # Date label for header
-    date_label = f"Generated: {current_date} | {fiscal_period}"
+    # Date label for header (include market status)
+    date_label = f"Generated: {current_date} • {market_status} | {fiscal_period}"
 
     # Filing date display (optional in template)
     filing_date_display = f"Form {filing_type} Filed: {filing_date}"
@@ -688,6 +692,9 @@ def generate_company_profile_email(
         stock_price=stock_price,
         price_change_pct=price_change_pct,
         price_change_color=price_change_color,
+        ytd_return_pct=ytd_return_pct,
+        ytd_return_color=ytd_return_color,
+        return_label=return_label,
         content_html=content_html
     )
 

@@ -647,9 +647,13 @@ def generate_transcript_email(
     pr_title: str = None,
     summary_text: str = None,
     fmp_url: str = None,
-    stock_price: str = "$0.00",
+    stock_price: str = None,
     price_change_pct: str = None,
-    price_change_color: str = "#4ade80"
+    price_change_color: str = "#4ade80",
+    ytd_return_pct: str = None,
+    ytd_return_color: str = "#4ade80",
+    market_status: str = "LAST CLOSE",
+    return_label: str = "1D"
 ) -> Dict[str, str]:
     """
     Generate transcript/press release email HTML using unified Jinja2 template.
@@ -674,14 +678,14 @@ def generate_transcript_email(
     if report_type == 'transcript':
         report_type_label = "EARNINGS CALL TRANSCRIPT"
         fiscal_period = f"{quarter} {year}"
-        date_label = f"Generated: {current_date} | Call Date: {report_date}"
+        date_label = f"Generated: {current_date} • {market_status} | Call Date: {report_date}"
         filing_date_display = f"Call Date: {report_date}"
         transition_text = f"Summary generated from {company_name} {quarter} {year} earnings call transcript."
         fmp_link_text = "View full transcript on FMP"
     else:  # press_release
         report_type_label = "PRESS RELEASE"
         fiscal_period = report_date
-        date_label = f"Generated: {current_date} | Release Date: {report_date}"
+        date_label = f"Generated: {current_date} • {market_status} | Release Date: {report_date}"
         filing_date_display = f"Release Date: {report_date}"
         transition_text = f"Summary generated from {company_name} press release dated {report_date}."
         fmp_link_text = "View original release on FMP"
@@ -710,6 +714,9 @@ def generate_transcript_email(
         stock_price=stock_price,
         price_change_pct=price_change_pct,
         price_change_color=price_change_color,
+        ytd_return_pct=ytd_return_pct,
+        ytd_return_color=ytd_return_color,
+        return_label=return_label,
         content_html=content_html
     )
 
@@ -717,7 +724,7 @@ def generate_transcript_email(
     if report_type == 'transcript':
         subject = f"📊 Earnings Call Summary: {company_name} ({ticker}) {quarter} {year}"
     else:
-        subject = f"📰 Press Release Summary: {company_name} ({ticker}) - {report_date}"
+        subject = f"📰 Press Release: {ticker} - {pr_title}"
 
     return {"html": html, "subject": subject}
 

@@ -41,9 +41,12 @@
                                     </td>
                                     <td align="right" style="width: 42%; vertical-align: top; border: 0;">
                                         {% if stock_price %}
-                                        <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff; margin-bottom: 2px;">{{ stock_price }}</div>
+                                        <div style="font-size: 28px; font-weight: 700; line-height: 1; color: #ffffff;">{{ stock_price }}</div>
                                         {% if price_change_pct %}
-                                        <div style="font-size: 13px; font-weight: 600; color: {{ price_change_color }};">{{ price_change_pct }}</div>
+                                        <div style="font-size: 14px; color: {{ price_change_color }}; font-weight: 600; margin-top: 10px;">{{ return_label }}: {{ price_change_pct }}</div>
+                                        {% endif %}
+                                        {% if ytd_return_pct %}
+                                        <div style="font-size: 14px; color: {{ ytd_return_color }}; font-weight: 600; margin-top: 4px;">YTD: {{ ytd_return_pct }}</div>
                                         {% endif %}
                                         {% endif %}
                                     </td>

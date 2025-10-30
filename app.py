@@ -20256,6 +20256,81 @@ def stop_heartbeat_thread(job_id: str):
         LOG.warning(f"💓 [JOB {job_id_str[:8]}] No heartbeat thread found to stop")
 
 # ============================================================================
+# Filing Stock Data Helper
+# ============================================================================
+
+def get_filing_stock_data(ticker: str) -> dict:
+    """
+    Get real-time stock data for filing emails (10-K, 10-Q, Transcripts, Press Releases).
+
+    Priority order:
+    1. Try yfinance (live data with 3 retries, 10s timeout)
+    2. Try Polygon.io (fallback, rate limited)
+    3. Try ticker_reference database (cached data)
+    4. Return all None if everything fails
+
+    Returns:
+        dict with template variables: stock_price, price_change_pct, price_change_color,
+        ytd_return_pct, ytd_return_color, market_status, return_label
+        All values are None if data fetch completely fails.
+    """
+    LOG.info(f"[{ticker}] Fetching stock data for filing email (live → database → None)")
+
+    # Try live data first (yfinance → Polygon with retries)
+    live_data = get_stock_context(ticker)  # Already has 3 retries + 10s timeout + Polygon fallback
+
+    source_data = None
+    source_type = None
+
+    if live_data and live_data.get('financial_last_price'):
+        source_data = live_data
+        source_type = "live (yfinance/Polygon)"
+    else:
+        # Fallback to database
+        LOG.info(f"[{ticker}] Live data failed, falling back to ticker_reference database")
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT financial_last_price, financial_price_change_pct, financial_ytd_return_pct
+                FROM ticker_reference WHERE ticker = %s
+            """, (ticker,))
+            db_data = cur.fetchone()
+
+            if db_data and db_data.get('financial_last_price'):
+                source_data = db_data
+                source_type = "database (ticker_reference)"
+
+    # If all sources failed, return None for everything
+    if not source_data or not source_data.get('financial_last_price'):
+        LOG.warning(f"[{ticker}] ⚠️ All price sources failed (yfinance, Polygon, database) - email will show no price")
+        return {
+            'stock_price': None,
+            'price_change_pct': None,
+            'price_change_color': None,
+            'ytd_return_pct': None,
+            'ytd_return_color': None,
+            'market_status': None,
+            'return_label': None
+        }
+
+    # Successfully got data - format it
+    LOG.info(f"[{ticker}] ✅ Stock data fetched from {source_type}")
+
+    market_is_open = is_market_open()
+    daily_return = source_data.get('financial_price_change_pct')
+    ytd_return = source_data.get('financial_ytd_return_pct')
+
+    return {
+        'stock_price': f"${source_data['financial_last_price']:.2f}",
+        'price_change_pct': f"{'+' if daily_return >= 0 else ''}{daily_return:.2f}%" if daily_return is not None else None,
+        'price_change_color': "#4ade80" if daily_return is not None and daily_return >= 0 else "#ef4444",
+        'ytd_return_pct': f"{'+' if ytd_return >= 0 else ''}{ytd_return:.2f}%" if ytd_return is not None else None,
+        'ytd_return_color': "#4ade80" if ytd_return is not None and ytd_return >= 0 else "#ef4444",
+        'market_status': "INTRADAY" if market_is_open else "LAST CLOSE",
+        'return_label': "TODAY" if market_is_open else "1D"
+    }
+
+
+# ============================================================================
 # Job Processing
 # ============================================================================
 
@@ -20352,25 +20427,8 @@ async def process_company_profile_phase(job: dict):
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
             try:
-                # Get stock price for email
-                stock_price = "$0.00"
-                price_change_pct = None
-                price_change_color = "#4ade80"
-
-                with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT financial_last_price, financial_price_change_pct
-                        FROM ticker_reference
-                        WHERE ticker = %s
-                    """, (ticker,))
-                    price_data = cur.fetchone()
-
-                    if price_data and price_data['financial_last_price']:
-                        stock_price = f"${price_data['financial_last_price']:.2f}"
-                        if price_data['financial_price_change_pct'] is not None:
-                            pct = price_data['financial_price_change_pct']
-                            price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                            price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+                # Get real-time stock data (yfinance → Polygon → database → None)
+                stock_data = get_filing_stock_data(ticker)
 
                 email_data = generate_company_profile_email(
                     ticker=ticker,
@@ -20379,9 +20437,13 @@ async def process_company_profile_phase(job: dict):
                     fiscal_year=config['fiscal_year'],
                     filing_date=config['filing_date'],
                     profile_markdown=profile_markdown,
-                    stock_price=stock_price,
-                    price_change_pct=price_change_pct,
-                    price_change_color=price_change_color,
+                    stock_price=stock_data['stock_price'],
+                    price_change_pct=stock_data['price_change_pct'],
+                    price_change_color=stock_data['price_change_color'],
+                    ytd_return_pct=stock_data['ytd_return_pct'],
+                    ytd_return_color=stock_data['ytd_return_color'],
+                    market_status=stock_data['market_status'],
+                    return_label=stock_data['return_label'],
                     filing_type="10-K"
                 )
 
@@ -20537,25 +20599,8 @@ async def process_10q_profile_phase(job: dict):
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
             try:
-                # Get stock price
-                stock_price = "$0.00"
-                price_change_pct = None
-                price_change_color = "#4ade80"
-
-                with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT financial_last_price, financial_price_change_pct
-                        FROM ticker_reference
-                        WHERE ticker = %s
-                    """, (ticker,))
-                    price_data = cur.fetchone()
-
-                    if price_data and price_data['financial_last_price']:
-                        stock_price = f"${price_data['financial_last_price']:.2f}"
-                        if price_data['financial_price_change_pct'] is not None:
-                            pct = price_data['financial_price_change_pct']
-                            price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                            price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+                # Get real-time stock data (yfinance → Polygon → database → None)
+                stock_data = get_filing_stock_data(ticker)
 
                 # Generate email (reuse company profile email function)
                 email_data = generate_company_profile_email(
@@ -20565,9 +20610,13 @@ async def process_10q_profile_phase(job: dict):
                     fiscal_year=fiscal_year,
                     filing_date=filing_date,
                     profile_markdown=profile_markdown,
-                    stock_price=stock_price,
-                    price_change_pct=price_change_pct,
-                    price_change_color=price_change_color,
+                    stock_price=stock_data['stock_price'],
+                    price_change_pct=stock_data['price_change_pct'],
+                    price_change_color=stock_data['price_change_color'],
+                    ytd_return_pct=stock_data['ytd_return_pct'],
+                    ytd_return_color=stock_data['ytd_return_color'],
+                    market_status=stock_data['market_status'],
+                    return_label=stock_data['return_label'],
                     filing_type="10-Q",
                     fiscal_quarter=fiscal_quarter
                 )
@@ -20699,25 +20748,8 @@ async def process_transcript_phase(job: dict):
                 # Import email generation function
                 from modules.transcript_summaries import generate_transcript_email
 
-                # Get stock price data for email header
-                stock_price = "$0.00"
-                price_change_pct = None
-                price_change_color = "#4ade80"
-
-                with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT financial_last_price, financial_price_change_pct
-                        FROM ticker_reference
-                        WHERE ticker = %s
-                    """, (ticker,))
-                    price_data = cur.fetchone()
-
-                    if price_data and price_data['financial_last_price']:
-                        stock_price = f"${price_data['financial_last_price']:.2f}"
-                        if price_data['financial_price_change_pct'] is not None:
-                            pct = price_data['financial_price_change_pct']
-                            price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                            price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
+                # Get real-time stock data (yfinance → Polygon → database → None)
+                stock_data = get_filing_stock_data(ticker)
 
                 # Generate email using unified Jinja2 template
                 email_data = generate_transcript_email(
@@ -20730,9 +20762,13 @@ async def process_transcript_phase(job: dict):
                     pr_title=None,
                     summary_text=summary_text,
                     fmp_url=fmp_url,
-                    stock_price=stock_price,
-                    price_change_pct=price_change_pct,
-                    price_change_color=price_change_color
+                    stock_price=stock_data['stock_price'],
+                    price_change_pct=stock_data['price_change_pct'],
+                    price_change_color=stock_data['price_change_color'],
+                    ytd_return_pct=stock_data['ytd_return_pct'],
+                    ytd_return_color=stock_data['ytd_return_color'],
+                    market_status=stock_data['market_status'],
+                    return_label=stock_data['return_label']
                 )
 
                 send_email(subject=email_data['subject'], html_body=email_data['html'], to=DIGEST_TO)
@@ -20751,6 +20787,135 @@ async def process_transcript_phase(job: dict):
 
     except Exception as e:
         LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Transcript generation failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
+
+
+async def process_press_release_phase(job: dict):
+    """Process press release generation (30-60s, Claude)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread
+        start_heartbeat_thread(job_id)
+
+        pr_date = config.get('pr_date')  # String: '2024-10-25'
+        pr_title = config.get('pr_title')  # String: Full press release title
+
+        # Progress: 10% - Fetching press release from FMP
+        update_job_status(job_id, progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching press release {pr_date} from FMP...")
+
+        # Fetch press release content from FMP
+        from modules.transcript_summaries import (
+            generate_transcript_summary_with_claude,
+            fetch_fmp_press_release_by_date
+        )
+
+        data = fetch_fmp_press_release_by_date(ticker, pr_date, FMP_API_KEY)
+        if not data:
+            raise ValueError(f"No press release found for {ticker} on {pr_date}")
+
+        content = data.get('text', '')
+        if not content:
+            raise ValueError(f"Press release content is empty")
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Fetched {len(content)} characters")
+
+        # Progress: 30% - Generating summary with Claude (this takes 30-60s)
+        update_job_status(job_id, progress=30)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with Claude (30-60s)...")
+
+        ticker_config = get_ticker_config(ticker)
+        summary_text = generate_transcript_summary_with_claude(
+            ticker, content, ticker_config, 'press_release',
+            ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
+            _build_research_summary_prompt
+        )
+
+        if not summary_text:
+            raise ValueError("Claude summary generation failed")
+
+        # Progress: 80% - Saving to database
+        update_job_status(job_id, progress=80)
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO transcript_summaries (
+                    ticker, report_type, quarter, year, report_date, pr_title, summary_text, ai_provider
+                )
+                VALUES (%s, 'press_release', NULL, NULL, %s, %s, %s, 'claude')
+                ON CONFLICT (ticker, report_type, quarter, year)
+                DO UPDATE SET
+                    summary_text = EXCLUDED.summary_text,
+                    report_date = EXCLUDED.report_date,
+                    pr_title = EXCLUDED.pr_title,
+                    ai_provider = EXCLUDED.ai_provider
+            """, (ticker, pr_date, pr_title, summary_text))
+            conn.commit()
+
+        # Progress: 95% - Sending email
+        if config.get('send_email', True):
+            update_job_status(job_id, progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+
+            try:
+                # Import email generation function
+                from modules.transcript_summaries import generate_transcript_email
+
+                # Get real-time stock data (yfinance → Polygon → database → None)
+                stock_data = get_filing_stock_data(ticker)
+
+                # Generate email using unified Jinja2 template
+                fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
+                email_data = generate_transcript_email(
+                    ticker=ticker,
+                    company_name=ticker_config.get('company_name', ticker),
+                    report_type='press_release',
+                    quarter=None,
+                    year=None,
+                    report_date=pr_date,
+                    pr_title=pr_title,
+                    summary_text=summary_text,
+                    fmp_url=fmp_url,
+                    stock_price=stock_data['stock_price'],
+                    price_change_pct=stock_data['price_change_pct'],
+                    price_change_color=stock_data['price_change_color'],
+                    ytd_return_pct=stock_data['ytd_return_pct'],
+                    ytd_return_color=stock_data['ytd_return_color'],
+                    market_status=stock_data['market_status'],
+                    return_label=stock_data['return_label']
+                )
+
+                send_email(subject=email_data['subject'], html_body=email_data['html'], to=DIGEST_TO)
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+                # Continue - press release was saved successfully, email failure shouldn't mark job as failed
+
+        # Mark complete
+        update_job_status(job_id, status='completed', progress=100)
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Press release generation complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Press release generation failed: {str(e)}")
         LOG.error(f"Stacktrace: {traceback.format_exc()}")
 
         # Stop heartbeat
@@ -21025,6 +21190,11 @@ async def process_ticker_job(job: dict):
     # ROUTE: If this is a transcript generation job, handle separately
     if phase == 'transcript_generation':
         await process_transcript_phase(job)
+        return
+
+    # ROUTE: If this is a press release generation job, handle separately
+    if phase == 'press_release_generation':
+        await process_press_release_phase(job)
         return
 
     # ROUTE: If this is an investor presentation job, handle separately
@@ -28320,6 +28490,32 @@ def db_check_press_release_exists(ticker: str, pr_date: str) -> bool:
         return False
 
 
+def db_has_any_press_releases_for_ticker(ticker: str) -> bool:
+    """
+    Check if ticker has ANY press releases in database.
+
+    Used for silent initialization logic:
+    - If ticker has no press releases → First check (backfill silently)
+    - If ticker has press releases → Subsequent check (send emails for new ones)
+
+    Returns:
+        bool: True if ticker has at least one press release in DB, False otherwise
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM transcript_summaries
+                    WHERE ticker = %s AND report_type = 'press_release'
+                )
+            """, (ticker,))
+            result = cur.fetchone()
+            return result[0] if result else False
+    except Exception as e:
+        LOG.error(f"Error checking if {ticker} has press releases: {e}")
+        return False
+
+
 async def check_filings_for_ticker(ticker: str) -> Dict:
     """
     Check for NEW filings and press releases for one ticker.
@@ -28511,11 +28707,18 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
         except Exception as e:
             LOG.error(f"[{ticker}] Transcript check failed: {e}")
 
-        # === PRESS RELEASES CHECK (last 4) ===
+        # === PRESS RELEASES CHECK (last 4 with Silent Initialization) ===
         try:
             pr_response = await validate_ticker_for_research(ticker=ticker, type="press_release")
             if pr_response.get("valid"):
                 releases = pr_response.get("available_releases", [])
+
+                # Detect first check: Does this ticker have ANY press releases in DB?
+                is_first_check = not db_has_any_press_releases_for_ticker(ticker)
+
+                if is_first_check:
+                    LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB silently (no emails)")
+
                 # Only check last 4
                 for pr in releases[:4]:
                     pr_date = pr.get('date', '').split()[0]  # Extract YYYY-MM-DD
@@ -28523,7 +28726,15 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                         exists = db_check_press_release_exists(ticker, pr_date)
                         if not exists:
                             pr_title = pr.get('title', 'Press Release')
-                            LOG.info(f"[{ticker}] 🆕 NEW Press Release: {pr_title[:60]}... ({pr_date})")
+
+                            if is_first_check:
+                                # Silent initialization - save to DB but don't send email
+                                LOG.info(f"[{ticker}] 💾 Initializing DB with PR from {pr_date} (no email): {pr_title[:60]}...")
+                                send_email_flag = False
+                            else:
+                                # Truly new press release - send email
+                                LOG.info(f"[{ticker}] 🆕 NEW Press Release: {pr_title[:60]}... ({pr_date})")
+                                send_email_flag = True
 
                             # Queue job for generation
                             batch_id = str(uuid.uuid4())
@@ -28532,7 +28743,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                 "report_type": "press_release",
                                 "pr_date": pr_date,
                                 "pr_title": pr_title,
-                                "send_email": True
+                                "send_email": send_email_flag  # Dynamic based on first check
                             }
 
                             with db() as conn, conn.cursor() as cur:

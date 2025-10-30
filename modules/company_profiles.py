@@ -661,17 +661,77 @@ def generate_company_profile_email(
         extensions=['tables', 'fenced_code', 'nl2br']
     )
 
-    # Wrap content with table formatting CSS (40% label column, auto-distribute remaining)
+    # Add comprehensive styling (NO grey wrapper, smaller headers, 40% column width)
     content_html = f'''
 <style>
+    /* Table styling with 40% label column */
     table {{
         table-layout: fixed;
         width: 100%;
         border-collapse: collapse;
         margin: 16px 0;
+        font-size: 12px;
+    }}
+    th {{
+        background-color: #1e40af;
+        color: white;
+        padding: 8px;
+        text-align: left;
+        border: 1px solid #ddd;
+        font-weight: 600;
+    }}
+    td {{
+        padding: 8px;
+        border: 1px solid #ddd;
+    }}
+    tr:nth-child(even) {{
+        background-color: #f3f4f6;
     }}
     td:first-child, th:first-child {{
         width: 40%;
+    }}
+
+    /* Headers (smaller, cleaner than original) */
+    h1 {{
+        color: #1e40af;
+        font-size: 18px;
+        margin-top: 24px;
+        margin-bottom: 12px;
+        border-bottom: 2px solid #1e40af;
+        padding-bottom: 6px;
+    }}
+    h2 {{
+        color: #1e3a8a;
+        font-size: 16px;
+        margin-top: 20px;
+        margin-bottom: 10px;
+    }}
+    h3 {{
+        color: #1e40af;
+        font-size: 14px;
+        margin-top: 16px;
+        margin-bottom: 8px;
+    }}
+
+    /* Code blocks */
+    code {{
+        background-color: #e5e7eb;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 12px;
+    }}
+    pre {{
+        background-color: #1f2937;
+        color: #f3f4f6;
+        padding: 12px;
+        border-radius: 4px;
+        overflow-x: auto;
+    }}
+    pre code {{
+        background-color: transparent;
+        padding: 0;
+        color: #f3f4f6;
     }}
 </style>
 {profile_html}

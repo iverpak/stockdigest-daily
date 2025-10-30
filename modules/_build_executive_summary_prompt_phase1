@@ -1373,6 +1373,13 @@ Examples:
 - "FDA approves Moderna's new vaccine" → NO (not news without Moderna) → Major Developments ✓
 - "Interest rates rise 25 basis points" → YES (still news without any company) → NOT Major Developments
 
+❌ NOT MAJOR DEVELOPMENTS (these are metrics → Financial/Operational Performance):
+- Earnings results (revenue, EPS, margins - these are reported metrics)
+- Operational KPIs (deliveries, production, users, transplants - these are performance metrics)
+- Milestone achievements that are cumulative totals (e.g., "reached 3,000 units" is a metric)
+
+✓ ARE MAJOR DEVELOPMENTS (these are actions/decisions/events):
+
 WHAT TO INCLUDE:
 
 Must include if articles reported:

@@ -655,29 +655,11 @@ def generate_company_profile_email(
     # Filing date display (optional in template)
     filing_date_display = f"Form {filing_type} Filed: {filing_date}"
 
-    # Convert markdown to HTML with table support
-    profile_html_content = markdown.markdown(
+    # Convert markdown to HTML with table support (clean, like transcripts)
+    content_html = markdown.markdown(
         profile_markdown,
         extensions=['tables', 'fenced_code', 'nl2br']
     )
-
-    # Wrap content with styling for better email rendering
-    content_html = f'''<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.6; color: #374151; background-color: #f9fafb; padding: 20px; border-radius: 4px; overflow-x: auto;">
-        <style>
-            table {{ border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 12px; }}
-            th {{ background-color: #1e40af; color: white; padding: 8px; text-align: left; border: 1px solid #ddd; font-weight: 600; }}
-            td {{ padding: 8px; border: 1px solid #ddd; }}
-            tr:nth-child(even) {{ background-color: #f3f4f6; }}
-            h1 {{ color: #1e40af; font-size: 20px; margin-top: 24px; margin-bottom: 12px; border-bottom: 2px solid #1e40af; padding-bottom: 6px; }}
-            h2 {{ color: #1e3a8a; font-size: 18px; margin-top: 20px; margin-bottom: 10px; }}
-            h3 {{ color: #1e40af; font-size: 16px; margin-top: 16px; margin-bottom: 8px; }}
-            code {{ background-color: #e5e7eb; padding: 2px 4px; border-radius: 3px; font-family: monospace; font-size: 12px; }}
-            pre {{ background-color: #1f2937; color: #f3f4f6; padding: 12px; border-radius: 4px; overflow-x: auto; }}
-            pre code {{ background-color: transparent; padding: 0; color: #f3f4f6; }}
-        </style>
-        <h2 style="font-size: 16px; font-weight: 700; color: #1e40af; margin: 0 0 12px 0;">Company Profile ({len(profile_markdown):,} characters)</h2>
-        {profile_html_content}
-    </div>'''
 
     # Render template with variables
     html = research_template.render(

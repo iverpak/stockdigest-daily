@@ -697,7 +697,7 @@
                                 <strong>${displayTitle}</strong>
                                 ${item.date ? `<span style="color: #6b7280; font-size: 12px; margin-left: 8px;">Date: ${formatShortDate(item.date)}</span>` : ''}
                             </div>
-                            <button onclick="generatePressRelease('${ticker}', '${item.date}')"
+                            <button onclick="generatePressRelease('${ticker}', '${item.date}', \`${item.title}\`)"
                                     style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
                                 Generate
                             </button>
@@ -815,7 +815,7 @@
             }
         }
 
-        async function generatePressRelease(ticker, date) {
+        async function generatePressRelease(ticker, date, title) {
             alert(`Generating press release for ${ticker} on ${date}...`);
 
             try {
@@ -826,7 +826,8 @@
                         token: token,
                         ticker: ticker,
                         report_type: 'press_release',
-                        pr_date: date
+                        pr_date: date,
+                        pr_title: title
                     })
                 });
 

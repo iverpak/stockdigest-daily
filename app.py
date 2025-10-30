@@ -26360,6 +26360,7 @@ async def generate_transcript_summary_api(request: Request):
     quarter = body.get('quarter')  # Integer (3) for transcripts
     year = body.get('year')  # Integer (2024) for transcripts
     pr_date = body.get('pr_date')  # String date for press releases
+    pr_title = body.get('pr_title')  # String title for press releases (optional, for exact matching)
     model = body.get('model', 'claude')  # 'claude' or 'gemini'
 
     try:
@@ -26384,13 +26385,24 @@ async def generate_transcript_summary_api(request: Request):
             pr_title = None
 
         else:  # press_release
-            data = fetch_fmp_press_release_by_date(ticker, pr_date, FMP_API_KEY)
-            if not data:
-                return {"status": "error", "message": f"No press release found for {ticker} on {pr_date}"}
+            # Import appropriate fetch function
+            from modules.transcript_summaries import fetch_fmp_press_release_by_date, fetch_fmp_press_release_by_date_and_title
+
+            # Use title-based matching if title provided (for ad-hoc generation with multiple PRs per day)
+            # Otherwise use date-only matching (for cron job compatibility)
+            if pr_title:
+                data = fetch_fmp_press_release_by_date_and_title(ticker, pr_date, pr_title, FMP_API_KEY)
+                if not data:
+                    return {"status": "error", "message": f"No press release found for {ticker} on {pr_date} with title: {pr_title[:50]}..."}
+            else:
+                data = fetch_fmp_press_release_by_date(ticker, pr_date, FMP_API_KEY)
+                if not data:
+                    return {"status": "error", "message": f"No press release found for {ticker} on {pr_date}"}
 
             content = data['text']
             report_date = pr_date.split()[0]  # Extract date part (YYYY-MM-DD)
-            pr_title = data['title']
+            if not pr_title:  # Only override if not already provided
+                pr_title = data['title']
             fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
 
         # Summarize with selected AI model

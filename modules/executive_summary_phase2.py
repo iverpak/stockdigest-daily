@@ -465,17 +465,14 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
     Expected structure:
     {
         "bullet_id_1": {
-            "impact": "high impact|medium impact|low impact",  [REQUIRED]
-            "sentiment": "bullish|bearish|neutral",             [REQUIRED]
-            "reason": "brief reason string",                    [REQUIRED]
-            "relevance": "direct|indirect|none",                [REQUIRED]
-            "context": "prose paragraph combining filing excerpts"  [OPTIONAL]
+            "impact": "high impact|medium impact|low impact",
+            "sentiment": "bullish|bearish|neutral",
+            "reason": "brief reason string",
+            "relevance": "direct|indirect|none",
+            "context": "prose paragraph combining filing excerpts"
         },
         "bullet_id_2": { ... }
     }
-
-    Note: Context is optional since filing data may not exist. Bullets with tags
-    but missing context are still valuable (80% value vs 0% if rejected entirely).
 
     Args:
         enrichments: Dict keyed by bullet_id
@@ -492,11 +489,7 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
     if not enrichments:
         return False, "Enrichments dict is empty", {}
 
-    # Required fields - must be present and non-empty
-    required_fields = ["impact", "sentiment", "reason", "relevance"]
-    # Optional fields - can be missing or empty
-    optional_fields = ["context"]
-
+    required_fields = ["impact", "sentiment", "reason", "relevance", "context"]
     valid_enrichments = {}
     invalid_bullets = []
 
@@ -506,7 +499,7 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
             invalid_bullets.append(f"{bullet_id} (not a dict)")
             continue
 
-        # Check for missing REQUIRED fields only
+        # Check for missing fields
         missing_fields = [f for f in required_fields if f not in data or not data.get(f)]
         if missing_fields:
             invalid_bullets.append(f"{bullet_id} (missing: {', '.join(missing_fields)})")
@@ -526,11 +519,6 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
         if data["relevance"] not in ["direct", "indirect", "none"]:
             invalid_bullets.append(f"{bullet_id} (invalid relevance: {data['relevance']})")
             continue
-
-        # Handle optional context field - set to empty string if missing
-        # (Email #3 template already handles empty context gracefully)
-        if "context" not in data or not data.get("context"):
-            data["context"] = ""
 
         # Bullet passed all validation checks!
         valid_enrichments[bullet_id] = data

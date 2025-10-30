@@ -166,7 +166,7 @@ def test_invalid_enum_values():
 
 
 def test_empty_string_fields():
-    """Test case: Empty string values in required vs optional fields"""
+    """Test case: Empty string values (should be filtered out)"""
     enrichments = {
         "good": {
             "impact": "high impact",
@@ -178,7 +178,7 @@ def test_empty_string_fields():
         "empty_reason": {
             "impact": "high impact",
             "sentiment": "bullish",
-            "reason": "",  # Empty string in REQUIRED field - should be filtered
+            "reason": "",  # Empty string
             "relevance": "direct",
             "context": "Context"
         },
@@ -187,22 +187,20 @@ def test_empty_string_fields():
             "sentiment": "neutral",
             "reason": "routine",
             "relevance": "direct",
-            "context": ""  # Empty string in OPTIONAL field - should be ACCEPTED
+            "context": ""  # Empty string
         }
     }
 
     is_valid, msg, valid = validate_phase2_json(enrichments)
 
-    print("TEST: Empty string fields (required vs optional)")
+    print("TEST: Empty string fields")
     print(f"  is_valid: {is_valid}")
     print(f"  message: {msg}")
     print(f"  valid_count: {len(valid)}")
     assert is_valid == True, "Should accept partial results"
-    assert len(valid) == 2, "Should keep bullets with empty OPTIONAL fields, filter empty REQUIRED fields"
-    assert "good" in valid, "Should keep bullet with all fields"
-    assert "empty_context" in valid, "Should keep bullet with empty context (context is optional)"
-    assert "empty_reason" not in valid, "Should filter bullet with empty reason (required field)"
-    print("  ✅ PASSED - Context is optional, required fields still enforced\n")
+    assert len(valid) == 1, "Should filter out bullets with empty strings"
+    assert "good" in valid, "Should keep only the valid bullet"
+    print("  ✅ PASSED - Filtered out bullets with empty strings\n")
 
 
 def test_all_invalid():
@@ -284,49 +282,6 @@ def test_bullet_not_a_dict():
     print("  ✅ PASSED - Filtered out non-dict bullet\n")
 
 
-def test_missing_context_field():
-    """Test case: Bullets with tags but missing context field entirely (optional field)"""
-    enrichments = {
-        "has_context": {
-            "impact": "high impact",
-            "sentiment": "bullish",
-            "reason": "delivery outperformance",
-            "relevance": "direct",
-            "context": "Customer 28% Q2 revenue per 10-Q"
-        },
-        "no_context": {
-            "impact": "medium impact",
-            "sentiment": "bearish",
-            "reason": "pricing pressure",
-            "relevance": "direct"
-            # No context field at all - should still be accepted
-        },
-        "empty_context": {
-            "impact": "low impact",
-            "sentiment": "neutral",
-            "reason": "routine update",
-            "relevance": "indirect",
-            "context": ""  # Empty context - should be accepted
-        }
-    }
-
-    is_valid, msg, valid = validate_phase2_json(enrichments)
-
-    print("TEST: Bullets with missing context field (80% value vs 0%)")
-    print(f"  is_valid: {is_valid}")
-    print(f"  message: {msg}")
-    print(f"  valid_count: {len(valid)}")
-    assert is_valid == True, "Should accept bullets even without context"
-    assert len(valid) == 3, "Should accept all 3 bullets (context is optional)"
-    assert "has_context" in valid, "Should keep bullet with context"
-    assert "no_context" in valid, "Should keep bullet without context field"
-    assert "empty_context" in valid, "Should keep bullet with empty context"
-    # Verify context was set to empty string for bullets without it
-    assert valid["no_context"]["context"] == "", "Should set missing context to empty string"
-    assert valid["empty_context"]["context"] == "", "Should preserve empty context"
-    print("  ✅ PASSED - Tags without context = 80% value instead of 0%!\n")
-
-
 def test_realistic_scenario():
     """Test case: Realistic scenario with 19/20 valid bullets (like UNH)"""
     # Generate 19 valid bullets
@@ -378,7 +333,6 @@ if __name__ == "__main__":
         test_empty_dict()
         test_not_a_dict()
         test_bullet_not_a_dict()
-        test_missing_context_field()
         test_realistic_scenario()
 
         print("=" * 70)
@@ -389,7 +343,6 @@ if __name__ == "__main__":
         print("  ✅ Partial acceptance working correctly")
         print("  ✅ Invalid bullets filtered out")
         print("  ✅ Valid bullets preserved")
-        print("  ✅ Context field is optional (tags without context accepted)")
         print("  ✅ Edge cases handled properly")
         print("  ✅ UNH scenario (19/20 valid) now returns 95% value!")
         print()

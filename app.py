@@ -760,6 +760,9 @@ SPAM_DOMAINS = {
     "beritasriwijaya.co.id", "www.beritasriwijaya.co.id",  # Indonesian news aggregator, syndicated content
     # Retail investment screeners - content filtering update (Oct 2025)
     "finviz.com", "www.finviz.com",  # Stock screener, technical analysis charts
+    "investors.com", "www.investors.com",  # Investor's Business Daily - technical analysis, chart patterns
+    "directorstalk.com", "www.directorstalk.com",  # Retail stock analysis aggregator
+    "directorstalkinterviews.com", "www.directorstalkinterviews.com",  # Retail interviews aggregator
     # General spam/low-quality aggregators (Oct 2025)
     "barchart.com", "www.barchart.com",  # Anti-bot issues, promoted from ANTIBOT_DOMAINS
     "aol.com", "www.aol.com",  # Low-quality news aggregator
@@ -6908,8 +6911,15 @@ If price target, rating, or valuation is attributed to NAMED analyst from RECOGN
 ✓ Keep the full commentary with complete attribution
 ✓ Example: "Morgan Stanley analyst John Smith raised price target to $450, citing margin expansion and market share gains..."
 
+**RETAIL SENTIMENT AS SIGNAL:**
+If article aggregates retail investor sentiment from platforms like Stocktwits, Reddit, or social media tracking:
+✓ EXTRACT all factual earnings/operational data presented
+✓ EXTRACT retail sentiment metrics as market positioning signal (message volume, sentiment shifts, positioning)
+✓ Example: "Retail sentiment on Stocktwits turned 'extremely bullish' with +1,175% message volume; traders calling for rebound to $135-150"
+✓ This is VALUABLE data for monitoring flows and meme stock dynamics, not junk to filter
+
 **Extract Everything Else:**
-If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts about the company.
+If article contains material facts about the company's operations, financials, or strategy, extract them regardless of source domain.
 
 **YOUR TASK:**
 The user will provide company name, ticker, article title, and content. Extract and summarize all material facts about the company's actions, performance, and developments. Focus on operational, financial, and strategic information that impacts investment thesis.
@@ -7276,8 +7286,15 @@ This article passed relevance screening and is from an acceptable source. Extrac
 If price target, rating, or valuation is attributed to NAMED analyst from RECOGNIZED SELL-SIDE FIRM:
 ✓ Keep the full commentary with complete attribution
 
+**RETAIL SENTIMENT AS SIGNAL:**
+If article aggregates retail investor sentiment from platforms like Stocktwits, Reddit, or social media tracking:
+✓ EXTRACT all factual earnings/operational data presented
+✓ EXTRACT retail sentiment metrics as market positioning signal (message volume, sentiment shifts, positioning)
+✓ Example: "Retail sentiment on Stocktwits turned 'extremely bullish' with +1,175% message volume; traders calling for rebound to $135-150"
+✓ This is VALUABLE data for monitoring flows and meme stock dynamics, not junk to filter
+
 **Extract Everything Else:**
-If article passed Step 1 (not retail source) and doesn't contain patterns in Step 2, extract ALL material facts about the competitor.
+If article contains material facts about the competitor's operations, financials, or strategy, extract them regardless of source domain.
 
 **YOUR TASK:**
 The user will provide target company, competitor name and ticker, article title, and content. Extract and summarize facts from the article about the competitor's actions, performance, or developments. Focus on operational and strategic information that provides competitive context.

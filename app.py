@@ -28451,6 +28451,72 @@ def db_get_latest_transcript(ticker: str) -> Optional[Dict]:
         return None
 
 
+def db_has_any_10k_for_ticker(ticker: str) -> bool:
+    """
+    Check if ticker has ANY 10-K filings (for first-check detection).
+
+    Used by cron for silent initialization logic.
+
+    Returns:
+        True if ticker has at least one 10-K, False otherwise
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as count FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-K'
+            """, (ticker,))
+            result = cur.fetchone()
+            return result['count'] > 0 if result else False
+    except Exception as e:
+        LOG.error(f"Error checking 10-K filings for {ticker}: {e}")
+        return False
+
+
+def db_has_any_10q_for_ticker(ticker: str) -> bool:
+    """
+    Check if ticker has ANY 10-Q filings (for first-check detection).
+
+    Used by cron for silent initialization logic.
+
+    Returns:
+        True if ticker has at least one 10-Q, False otherwise
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as count FROM sec_filings
+                WHERE ticker = %s AND filing_type = '10-Q'
+            """, (ticker,))
+            result = cur.fetchone()
+            return result['count'] > 0 if result else False
+    except Exception as e:
+        LOG.error(f"Error checking 10-Q filings for {ticker}: {e}")
+        return False
+
+
+def db_has_any_transcript_for_ticker(ticker: str) -> bool:
+    """
+    Check if ticker has ANY transcripts (for first-check detection).
+
+    Used by cron for silent initialization logic.
+
+    Returns:
+        True if ticker has at least one transcript, False otherwise
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as count FROM transcript_summaries
+                WHERE ticker = %s AND report_type = 'transcript'
+            """, (ticker,))
+            result = cur.fetchone()
+            return result['count'] > 0 if result else False
+    except Exception as e:
+        LOG.error(f"Error checking transcripts for {ticker}: {e}")
+        return False
+
+
 def db_check_press_release_exists(ticker: str, pr_date: str) -> bool:
     """Check if press release already exists in database (by date)."""
     try:
@@ -28524,12 +28590,24 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
             if profile_response.get("valid"):
                 years = profile_response.get("available_years", [])
                 if years:
+                    # Detect first check: Does this ticker have ANY 10-K filings in DB?
+                    is_first_check = not db_has_any_10k_for_ticker(ticker)
+
+                    if is_first_check:
+                        LOG.info(f"[{ticker}] 🆕 First 10-K check - will initialize DB silently (no email)")
+
                     latest_year_data = years[0]
                     latest_year_fmp = latest_year_data["year"]
                     latest_year_db = db_get_latest_10k(ticker)
 
                     if not latest_year_db or latest_year_fmp > latest_year_db:
-                        LOG.info(f"[{ticker}] 🆕 NEW 10-K: FY{latest_year_fmp}")
+                        # Determine email flag based on initialization status
+                        if is_first_check:
+                            LOG.info(f"[{ticker}] 💾 Initializing DB with 10-K FY{latest_year_fmp} (no email)")
+                            send_email_flag = False
+                        else:
+                            LOG.info(f"[{ticker}] 🆕 NEW 10-K: FY{latest_year_fmp}")
+                            send_email_flag = True
 
                         # Queue job for generation
                         batch_id = str(uuid.uuid4())
@@ -28540,7 +28618,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             "filing_date": latest_year_data.get("filing_date"),
                             "period_end_date": latest_year_data.get("period_end_date"),
                             "sec_html_url": latest_year_data.get("sec_html_url"),
-                            "send_email": True
+                            "send_email": send_email_flag  # Dynamic based on first check
                         }
 
                         with db() as conn, conn.cursor() as cur:
@@ -28569,6 +28647,12 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
             if tenq_response.get("valid"):
                 quarters = tenq_response.get("available_quarters", [])
                 if quarters:
+                    # Detect first check: Does this ticker have ANY 10-Q filings in DB?
+                    is_first_check = not db_has_any_10q_for_ticker(ticker)
+
+                    if is_first_check:
+                        LOG.info(f"[{ticker}] 🆕 First 10-Q check - will initialize DB silently (no email)")
+
                     q = quarters[0]
                     if isinstance(q, dict):
                         quarter_str = q.get("quarter", "")
@@ -28587,7 +28671,13 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                 needs_update = True
 
                             if needs_update:
-                                LOG.info(f"[{ticker}] 🆕 NEW 10-Q: Q{quarter_fmp} {year_fmp}")
+                                # Determine email flag based on initialization status
+                                if is_first_check:
+                                    LOG.info(f"[{ticker}] 💾 Initializing DB with 10-Q Q{quarter_fmp} {year_fmp} (no email)")
+                                    send_email_flag = False
+                                else:
+                                    LOG.info(f"[{ticker}] 🆕 NEW 10-Q: Q{quarter_fmp} {year_fmp}")
+                                    send_email_flag = True
 
                                 # Queue job for generation
                                 batch_id = str(uuid.uuid4())
@@ -28599,7 +28689,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                     "filing_date": q.get("filing_date"),
                                     "period_end_date": q.get("period_end_date"),
                                     "sec_html_url": q.get("sec_html_url"),
-                                    "send_email": True
+                                    "send_email": send_email_flag  # Dynamic based on first check
                                 }
 
                                 with db() as conn, conn.cursor() as cur:
@@ -28628,6 +28718,12 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
             if transcript_response.get("valid"):
                 quarters = transcript_response.get("available_quarters", [])
                 if quarters:
+                    # Detect first check: Does this ticker have ANY transcripts in DB?
+                    is_first_check = not db_has_any_transcript_for_ticker(ticker)
+
+                    if is_first_check:
+                        LOG.info(f"[{ticker}] 🆕 First transcript check - will initialize DB silently (no email)")
+
                     if isinstance(quarters[0], dict):
                         quarter_fmp = quarters[0].get('quarter')
                         year_fmp = quarters[0].get('year')
@@ -28654,7 +28750,13 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             needs_update = True
 
                         if needs_update:
-                            LOG.info(f"[{ticker}] 🆕 NEW Transcript: Q{quarter_fmp} FY{year_fmp}")
+                            # Determine email flag based on initialization status
+                            if is_first_check:
+                                LOG.info(f"[{ticker}] 💾 Initializing DB with transcript Q{quarter_fmp} FY{year_fmp} (no email)")
+                                send_email_flag = False
+                            else:
+                                LOG.info(f"[{ticker}] 🆕 NEW Transcript: Q{quarter_fmp} FY{year_fmp}")
+                                send_email_flag = True
 
                             # Queue job for generation
                             batch_id = str(uuid.uuid4())
@@ -28662,7 +28764,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                 "ticker": ticker,
                                 "quarter": quarter_fmp,
                                 "year": year_fmp,
-                                "send_email": True
+                                "send_email": send_email_flag  # Dynamic based on first check
                             }
 
                             with db() as conn, conn.cursor() as cur:
@@ -28685,7 +28787,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
         except Exception as e:
             LOG.error(f"[{ticker}] Transcript check failed: {e}")
 
-        # === PRESS RELEASES CHECK (last 4 with Silent Initialization) ===
+        # === PRESS RELEASES CHECK (Silent Initialization) ===
         try:
             pr_response = await validate_ticker_for_research(ticker=ticker, type="press_release")
             if pr_response.get("valid"):
@@ -28696,10 +28798,12 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                 is_first_check = not db_has_any_press_releases_for_ticker(ticker)
 
                 if is_first_check:
-                    LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB silently (no emails)")
+                    LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB silently (no email)")
 
-                # Only check last 4 UNIQUE press releases (by date + title)
-                for pr in releases[:4]:
+                # First check: Only process LATEST 1 | Subsequent checks: Process all new ones
+                releases_to_check = releases[:1] if is_first_check else releases
+
+                for pr in releases_to_check:
                     pr_date = pr.get('date', '').split()[0]  # Extract YYYY-MM-DD
                     pr_title = pr.get('title', 'Press Release')
 

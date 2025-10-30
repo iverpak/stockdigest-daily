@@ -30537,21 +30537,30 @@ def auto_send_cron_job():
 def export_beta_users_csv():
     """
     11:59 PM: Export beta users to CSV for backup.
-    Optionally commit to GitHub.
+    Creates two files:
+    1. data/users/user_tickers.csv - ACTIVE users only (5 fields) for daily processing
+    2. data/users/beta_users_YYYYMMDD.csv - ALL users (9 fields) for legal audit trail
+
+    Both files are committed to GitHub for legal compliance (CASL/PIPEDA).
     """
     LOG.info("📄 Exporting beta users to CSV...")
 
     try:
         import csv
         from datetime import datetime
+        import subprocess
 
         timestamp = datetime.now().strftime('%Y%m%d')
-        filename = f'beta_users_{timestamp}.csv'
 
-        # Create backups directory if needed
-        os.makedirs('/tmp/backups', exist_ok=True)
-        filepath = f'/tmp/backups/{filename}'
+        # Create users directory if needed
+        users_dir = 'data/users'
+        os.makedirs(users_dir, exist_ok=True)
 
+        # File paths
+        active_users_path = os.path.join(users_dir, 'user_tickers.csv')
+        backup_path = os.path.join(users_dir, f'beta_users_{timestamp}.csv')
+
+        # Fetch ALL users from database
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT name, email, ticker1, ticker2, ticker3, status,
@@ -30559,36 +30568,110 @@ def export_beta_users_csv():
                 FROM beta_users
                 ORDER BY created_at DESC
             """)
+            all_users = cur.fetchall()
 
-            rows = cur.fetchall()
+        # Filter ACTIVE users for processing file
+        active_users = [u for u in all_users if u['status'] == 'active']
 
-        # Write CSV
-        with open(filepath, 'w', newline='') as f:
+        # File 1: user_tickers.csv (ACTIVE only, 5 fields)
+        LOG.info(f"📝 Writing active users file: {active_users_path}")
+        with open(active_users_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['name', 'email', 'ticker1', 'ticker2', 'ticker3'])
+
+            for user in active_users:
+                writer.writerow([
+                    user['name'],
+                    user['email'],
+                    user['ticker1'],
+                    user['ticker2'],
+                    user['ticker3']
+                ])
+
+        LOG.info(f"✅ Active users CSV: {len(active_users)} users → {active_users_path}")
+
+        # File 2: beta_users_YYYYMMDD.csv (ALL users, 9 fields)
+        LOG.info(f"📝 Writing backup file: {backup_path}")
+        with open(backup_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow([
                 'name', 'email', 'ticker1', 'ticker2', 'ticker3',
                 'status', 'created_at', 'terms_accepted_at', 'privacy_accepted_at'
             ])
 
-            for row in rows:
+            for user in all_users:
                 writer.writerow([
-                    row['name'],
-                    row['email'],
-                    row['ticker1'],
-                    row['ticker2'],
-                    row['ticker3'],
-                    row['status'],
-                    row['created_at'],
-                    row['terms_accepted_at'],
-                    row['privacy_accepted_at']
+                    user['name'],
+                    user['email'],
+                    user['ticker1'],
+                    user['ticker2'],
+                    user['ticker3'],
+                    user['status'],
+                    user['created_at'],
+                    user['terms_accepted_at'],
+                    user['privacy_accepted_at']
                 ])
 
-        LOG.info(f"✅ CSV export complete: {len(rows)} users → {filepath}")
+        LOG.info(f"✅ Backup CSV: {len(all_users)} users → {backup_path}")
 
-        # TODO: Optionally commit to GitHub
-        # github_commit_csv(filepath, filename)
+        # Commit both files to GitHub (legal audit trail)
+        LOG.info("📤 Committing user CSVs to GitHub...")
+        try:
+            # Git add both files
+            subprocess.run(
+                ['git', 'add', active_users_path, backup_path],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
 
-        return filepath
+            # Git commit with descriptive message
+            commit_message = f"Daily user export - {timestamp}\n\nActive users: {len(active_users)}\nTotal users: {len(all_users)}\nBackup file: beta_users_{timestamp}.csv\n\nLegal audit trail for CASL/PIPEDA compliance."
+
+            commit_result = subprocess.run(
+                ['git', 'commit', '-m', commit_message],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            # Check if commit succeeded or if there were no changes
+            if commit_result.returncode == 0:
+                LOG.info(f"✅ Git commit successful")
+
+                # Git push
+                push_result = subprocess.run(
+                    ['git', 'push', 'origin', 'main'],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                LOG.info(f"✅ Git push successful")
+                LOG.info(f"📦 Committed to GitHub: {active_users_path}, {backup_path}")
+
+            elif "nothing to commit" in commit_result.stdout or "nothing to commit" in commit_result.stderr:
+                LOG.info(f"ℹ️ No changes to commit (user data unchanged)")
+            else:
+                LOG.warning(f"⚠️ Git commit returned code {commit_result.returncode}")
+                LOG.warning(f"   stdout: {commit_result.stdout}")
+                LOG.warning(f"   stderr: {commit_result.stderr}")
+
+        except subprocess.TimeoutExpired:
+            LOG.warning(f"⚠️ Git operations timed out - files saved locally but not pushed to GitHub")
+        except subprocess.CalledProcessError as e:
+            LOG.warning(f"⚠️ Git operations failed: {e}")
+            LOG.warning(f"   Files saved locally: {active_users_path}, {backup_path}")
+        except Exception as e:
+            LOG.warning(f"⚠️ Unexpected error during git operations: {e}")
+
+        return {
+            "active_users_path": active_users_path,
+            "backup_path": backup_path,
+            "active_count": len(active_users),
+            "total_count": len(all_users)
+        }
 
     except Exception as e:
         LOG.error(f"❌ CSV export failed: {e}")

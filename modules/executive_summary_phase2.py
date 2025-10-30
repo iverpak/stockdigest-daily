@@ -430,6 +430,31 @@ def generate_executive_summary_phase2(
                     # Case 3: Direct enrichments dict
                     enrichments = parsed_json
 
+                # Debug logging: Show sample of what Claude actually returned (before validation)
+                if enrichments:
+                    sample_size = min(3, len(enrichments))
+                    sample_bullets = list(enrichments.items())[:sample_size]
+                    LOG.info(f"[{ticker}] 📋 Phase 2 raw output sample ({sample_size}/{len(enrichments)} bullets, BEFORE validation):")
+                    for bullet_id, data in sample_bullets:
+                        if isinstance(data, dict):
+                            present_fields = [f for f in data.keys() if data.get(f)]
+                            empty_fields = [f for f in data.keys() if not data.get(f)]
+                            LOG.info(f"  • {bullet_id}:")
+                            LOG.info(f"      ✓ Present: {', '.join(present_fields) if present_fields else 'NONE'}")
+                            if empty_fields:
+                                LOG.info(f"      ✗ Empty/None: {', '.join(empty_fields)}")
+                            # Show first 60 chars of each field value
+                            for field in ["impact", "sentiment", "reason", "relevance", "context"]:
+                                if field in data:
+                                    value = data[field]
+                                    if value:
+                                        preview = str(value)[:60] + "..." if len(str(value)) > 60 else str(value)
+                                        LOG.info(f"      → {field}: {preview}")
+                                    else:
+                                        LOG.info(f"      → {field}: (empty)")
+                        else:
+                            LOG.info(f"  • {bullet_id}: ⚠️ NOT A DICT (type={type(data).__name__})")
+
                 LOG.info(f"✅ [{ticker}] Phase 2 enrichment generated ({len(json_str)} chars, {len(enrichments)} bullets enriched, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 
                 return {
@@ -502,22 +527,40 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
         # Check for missing fields
         missing_fields = [f for f in required_fields if f not in data or not data.get(f)]
         if missing_fields:
-            invalid_bullets.append(f"{bullet_id} (missing: {', '.join(missing_fields)})")
+            # Enhanced error message: show what IS present too
+            present_fields = [f for f in required_fields if f in data and data.get(f)]
+            error_detail = f"missing: {', '.join(missing_fields)}"
+            if present_fields:
+                error_detail += f" | present: {', '.join(present_fields)}"
+            invalid_bullets.append(f"{bullet_id} ({error_detail})")
             continue
 
         # Validate impact values
         if data["impact"] not in ["high impact", "medium impact", "low impact"]:
-            invalid_bullets.append(f"{bullet_id} (invalid impact: {data['impact']})")
+            # Show what valid fields exist despite bad impact
+            other_valid = [f for f in ["sentiment", "reason", "relevance", "context"] if f in data and data.get(f)]
+            error_detail = f"invalid impact: '{data['impact']}'"
+            if other_valid:
+                error_detail += f" | valid: {', '.join(other_valid)}"
+            invalid_bullets.append(f"{bullet_id} ({error_detail})")
             continue
 
         # Validate sentiment values
         if data["sentiment"] not in ["bullish", "bearish", "neutral", "mixed"]:
-            invalid_bullets.append(f"{bullet_id} (invalid sentiment: {data['sentiment']})")
+            other_valid = [f for f in ["impact", "reason", "relevance", "context"] if f in data and data.get(f)]
+            error_detail = f"invalid sentiment: '{data['sentiment']}'"
+            if other_valid:
+                error_detail += f" | valid: {', '.join(other_valid)}"
+            invalid_bullets.append(f"{bullet_id} ({error_detail})")
             continue
 
         # Validate relevance values
         if data["relevance"] not in ["direct", "indirect", "none"]:
-            invalid_bullets.append(f"{bullet_id} (invalid relevance: {data['relevance']})")
+            other_valid = [f for f in ["impact", "sentiment", "reason", "context"] if f in data and data.get(f)]
+            error_detail = f"invalid relevance: '{data['relevance']}'"
+            if other_valid:
+                error_detail += f" | valid: {', '.join(other_valid)}"
+            invalid_bullets.append(f"{bullet_id} ({error_detail})")
             continue
 
         # Bullet passed all validation checks!
@@ -525,8 +568,14 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
 
     # If no valid enrichments, Phase 2 completely failed
     if not valid_enrichments:
-        error_detail = '; '.join(invalid_bullets) if invalid_bullets else "No enrichments provided"
-        return False, f"No valid enrichments found. Issues: {error_detail}", {}
+        if invalid_bullets:
+            # Show ALL invalid bullets when complete failure (not just first 3)
+            error_detail = '; '.join(invalid_bullets[:5])
+            if len(invalid_bullets) > 5:
+                error_detail += f" (+{len(invalid_bullets) - 5} more with similar issues)"
+        else:
+            error_detail = "No enrichments provided"
+        return False, f"No valid enrichments found ({len(invalid_bullets)} bullets failed). Issues: {error_detail}", {}
 
     # At least some enrichments are valid - accept them
     if invalid_bullets:

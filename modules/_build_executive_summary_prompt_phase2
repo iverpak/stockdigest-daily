@@ -285,23 +285,16 @@ FIELD GENERATION & CRITICAL RULES
    - Examples: "customer concentration", "margin compression", "delivery outperformance", "regulatory risk"
 
 4. relevance: How relevant is this to the target company?
+   - direct: Directly about target company
+   - indirect: Indirectly relevant through market/competitive/industry connection
+   - none: Not relevant to target company
 
-   - direct: Target company explicitly named in bullet OR direct operational/financial impact stated
-   - indirect: Article explicitly compares target to competitor OR discusses shared customer/supplier with stated target connection
-   - none: No target company mention, generic industry news, competitor in different market/geography
-
-   STRICT TEST for "indirect" (if bullet fails ANY test → mark "none"):
-   □ Does article name target company? If NO → Check next test
-   □ Does article mention target product/brand? If NO → Check next test
-   □ Does article explicitly compare competitor to target? If NO → Mark "none"
+   Evaluate based on bullet content + context you found.
 
    Examples:
-   ✓ direct: "Hologic announced acquisition", "Goldman raised HOLX target"
-   ✓ indirect: "GE HealthCare margins 18% vs Hologic's 12% per analyst"
-   ✗ none: "Siemens HK distribution deal" (no Hologic mention, different geography)
-   ✗ none: "IUD device launches" (no Hologic mention, generic industry)
-
-   CRITICAL: relevance=none → Context MUST use escape hatch (line 100-112)
+   - direct: Target company Q3 deliveries beat consensus; Goldman raised target price; Stock hit all-time high
+   - indirect: Competitor capacity expansion in target market; Industry regulation affecting target segment; Supplier pricing for target inputs
+   - none: Competitor CEO compensation; Unrelated industry development; Competitor internal restructuring
 
 5. context: 25-60 words synthesizing 1-3 most relevant filing data points
    - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q"

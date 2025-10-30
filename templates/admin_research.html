@@ -1243,7 +1243,8 @@
                 quarter: doc.quarter,
                 year: doc.year,
                 report_date: doc.report_date,
-                ai_provider: doc.ai_provider  // Include ai_provider for transcript disambiguation
+                pr_title: doc.title,                 // For press releases (title field from doc)
+                ai_provider: doc.ai_provider         // Include ai_provider for transcript disambiguation
             }).replace(/"/g, '&quot;');
 
             // Hide Email button for Gemini transcripts (view-only for A/B testing)
@@ -1286,7 +1287,8 @@
                         // Include ai_provider to distinguish between Gemini and Sonnet versions
                         return d.ticker === docInfo.ticker && d.quarter === docInfo.quarter && d.year === docInfo.year && d.ai_provider === docInfo.ai_provider;
                     } else if (docInfo.type === 'press_releases') {
-                        return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date;
+                        // Match by date AND title (multiple PRs can exist on same date)
+                        return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date && d.title === docInfo.pr_title;
                     }
                 });
 
@@ -1504,7 +1506,8 @@
                         quarter: docInfo.quarter,
                         year: docInfo.year,
                         report_date: docInfo.report_date,
-                        ai_provider: docInfo.ai_provider  // Include for transcript disambiguation
+                        pr_title: docInfo.pr_title,         // Include for press release identification
+                        ai_provider: docInfo.ai_provider    // Include for transcript disambiguation
                     };
                 }
 

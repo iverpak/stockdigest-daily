@@ -27615,24 +27615,38 @@ async def email_research_api(request: Request):
 
             elif research_type == 'press_release':
                 report_date = body.get('report_date')
+                pr_title = body.get('pr_title')
+
                 if not report_date:
                     return {"status": "error", "message": "Report date required"}
 
-                cur.execute("""
-                    SELECT ticker, report_date, summary_text
-                    FROM transcript_summaries
-                    WHERE ticker = %s
-                      AND report_type = 'press_release'
-                      AND report_date = %s
-                    LIMIT 1
-                """, (ticker, report_date))
+                # Query press_releases table and match by date + title (for multiple PRs per day)
+                if pr_title:
+                    cur.execute("""
+                        SELECT ticker, report_date, pr_title, summary_text, ai_provider, ai_model
+                        FROM press_releases
+                        WHERE ticker = %s
+                          AND report_date = %s
+                          AND pr_title = %s
+                        LIMIT 1
+                    """, (ticker, report_date, pr_title))
+                else:
+                    # Fallback: Match by date only (for backward compatibility)
+                    cur.execute("""
+                        SELECT ticker, report_date, pr_title, summary_text, ai_provider, ai_model
+                        FROM press_releases
+                        WHERE ticker = %s
+                          AND report_date = %s
+                        LIMIT 1
+                    """, (ticker, report_date))
 
                 doc = cur.fetchone()
                 if not doc:
                     return {"status": "error", "message": f"No press release found for {ticker}"}
 
                 content = doc['summary_text']
-                subject = f"Press Release: {ticker} - {report_date}"
+                pr_title_display = doc['pr_title'][:60] + '...' if len(doc['pr_title']) > 60 else doc['pr_title']
+                subject = f"📰 Press Release: {ticker} - {pr_title_display}"
 
         if not content:
             return {"status": "error", "message": "No content found"}
@@ -27696,7 +27710,7 @@ async def email_research_api(request: Request):
                 quarter=None,
                 year=None,
                 report_date=doc['report_date'],
-                pr_title=f"Press Release - {doc['report_date']}",
+                pr_title=doc['pr_title'],  # Use actual title from database
                 summary_text=content,
                 fmp_url=f"https://financialmodelingprep.com/press-releases/{ticker}",
                 stock_price=stock_data['stock_price'],

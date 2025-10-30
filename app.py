@@ -5165,31 +5165,38 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                     "success": True,
                     "scraped_content": result["scraped_content"],
                     "ai_summary": None,  # Rejected articles get no summary
-                    "ai_model": None,
+                    "ai_model": "low_relevance",  # Mark as rejected by relevance gate
                     "content_scraped_at": result["content_scraped_at"],
                     "scraping_error": None
                 })
             else:
-                # ✅ NEW: Check for retail platform content BEFORE adding to AI queue
-                # (Industry articles already filtered in relevance gate above)
+                # ✅ Check for retail platform content BEFORE adding to AI queue
+                # Industry articles already checked at Line 5081 (before relevance gate)
+                # Only need to check company/competitor articles here
                 article_category = categories[i] if i < len(categories) else categories[0]
-                is_retail, keyword = is_retail_platform_content(result["scraped_content"])
 
-                if is_retail:
-                    LOG.info(f"[{analysis_ticker}] 🚫 SKIP (Retail): '{keyword}' found in {article_category} article - {articles_batch[i].get('title', 'No title')[:60]}...")
-                    # Add to results as filtered (no AI summary)
-                    results.append({
-                        "article_id": articles_batch[i]["id"],
-                        "article_idx": i,
-                        "success": True,
-                        "scraped_content": result["scraped_content"],
-                        "ai_summary": None,  # Filtered - no AI analysis
-                        "ai_model": "filtered",  # Mark as filtered by Python
-                        "content_scraped_at": result["content_scraped_at"],
-                        "scraping_error": None
-                    })
+                if article_category in ("company", "competitor"):
+                    is_retail, keyword = is_retail_platform_content(result["scraped_content"])
+
+                    if is_retail:
+                        LOG.info(f"[{analysis_ticker}] 🚫 SKIP (Retail): '{keyword}' found in {article_category} article - {articles_batch[i].get('title', 'No title')[:60]}...")
+                        # Add to results as filtered (no AI summary)
+                        results.append({
+                            "article_id": articles_batch[i]["id"],
+                            "article_idx": i,
+                            "success": True,
+                            "scraped_content": result["scraped_content"],
+                            "ai_summary": None,  # Filtered - no AI analysis
+                            "ai_model": "filtered",  # Mark as filtered by Python
+                            "content_scraped_at": result["content_scraped_at"],
+                            "scraping_error": None
+                        })
+                    else:
+                        # Pass to AI queue for analysis
+                        successful_scrapes.append((i, result))
                 else:
-                    # Pass to AI queue for analysis
+                    # Industry article - already passed retail check at Line 5081
+                    # Pass directly to AI queue
                     successful_scrapes.append((i, result))
 
     if successful_scrapes:
@@ -5221,7 +5228,7 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
             if isinstance(ai_result, Exception):
                 LOG.error(f"BATCH AI ERROR: Article {original_idx} failed: {ai_result}")
                 ai_summary = None
-                ai_model = None
+                ai_model = "error"  # Mark as AI analysis error
             else:
                 # ai_result is tuple (summary, model_used)
                 ai_summary, ai_model = ai_result if isinstance(ai_result, tuple) else (ai_result, "unknown")
@@ -5289,7 +5296,8 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                         )
 
                         # Update ticker-specific AI summary and quality score
-                        if clean_summary and result.get("ai_model"):
+                        # ALWAYS save ai_model, even if summary is None (for filtered/rejected/error articles)
+                        if result.get("ai_model"):
                             update_ticker_article_summary(
                                 analysis_ticker, article_id, clean_summary, result.get("ai_model"),
                                 quality_score=quality_score, domain=domain
@@ -6201,7 +6209,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     # 2. SECOND BADGE: Source name
     header_badges.append(f'<span class="source-badge">📰 {display_source}</span>')
 
-    # 3. STATUS BADGES - 5 mutually exclusive statuses (Analyzed, Paywall, Spam, Skipped, Failed)
+    # 3. STATUS BADGES - Mutually exclusive statuses based on ai_model and processing state
     ai_model = article.get('ai_model') or ''
     ai_summary = article.get('ai_summary')
     scraped_content = article.get('scraped_content')
@@ -6214,15 +6222,22 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     elif ai_model == 'headline_only':
         # Paywalled article (flagged + paywalled)
         header_badges.append('<span class="paywall-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e;">📰 Paywall</span>')
-    elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'headline_only'):
+    elif ai_model == 'filtered':
+        # Filtered by retail platform detection
+        header_badges.append('<span class="filtered-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f7fafc; color: #718096; border: 1px solid #cbd5e0;">🚫 Skipped (Retail)</span>')
+    elif ai_model == 'low_relevance':
+        # Rejected by relevance gate (badge handled by relevance_badge_html below at Line 6240+)
+        # No additional badge needed here - relevance section shows score and reason
+        pass
+    elif ai_model == 'error':
+        # AI analysis failed (technical error)
+        header_badges.append('<span class="error-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed (AI Error)</span>')
+    elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'headline_only', 'filtered', 'low_relevance', 'error'):
         # Successfully analyzed article - show which AI model was used
         header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
-    elif scraped_content and not ai_summary:
-        # Scraped but skipped (retail investment analysis)
-        header_badges.append('<span class="skipped-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f7fafc; color: #718096; border: 1px solid #cbd5e0;">🚫 Skipped</span>')
     elif scraping_failed:
         # Scraping failed
-        header_badges.append('<span class="failed-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed</span>')
+        header_badges.append('<span class="failed-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed (Scraping)</span>')
 
     # 4. Quality badge for quality domains
     if normalize_domain(resolved_domain) in QUALITY_DOMAINS:
@@ -18362,7 +18377,6 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                     JOIN ticker_articles ta ON a.id = ta.article_id
                     WHERE ta.ticker = ANY(%s)
                         AND a.id = ANY(%s)
-                        AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                     ORDER BY a.url_hash, ta.ticker,
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (tickers, flagged_article_ids))

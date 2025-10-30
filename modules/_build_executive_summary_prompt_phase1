@@ -1630,6 +1630,12 @@ SOURCE REQUIREMENT: INSTITUTIONAL SELL-SIDE analysts ONLY
 ✗ EXCLUDE: Retail investment analysis (Zacks, Motley Fool, TipRanks, Seeking Alpha contributors)
 ✗ EXCLUDE: Proprietary model scores, screener results, aggregated retail sentiment
 ✗ EXCLUDE: Generic "analysts say" without named firm
+✗ EXCLUDE: Rating/target changes where article doesn't name the firm or analyst
+✗ EXCLUDE: Consensus ratings from aggregators (Meyka, Benzinga, The Fly) without specific firm actions
+
+CRITICAL RULE: Firm name is REQUIRED for every bullet.
+If article reports "analyst downgraded" without naming firm → EXCLUDE entirely.
+If article reports "consensus rating" without specific firm actions → EXCLUDE entirely.
 
 This section is for professional institutional research only.
 
@@ -1672,7 +1678,7 @@ Must include if articles reported:
 REQUIRED DETAILS:
 
 For rating changes:
-✓ Firm name: "Morgan Stanley", "Wells Fargo", "Wedbush"
+✓ Firm name: "Morgan Stanley", "Wells Fargo", "Wedbush" (REQUIRED - no exceptions)
 ✓ Analyst name: If provided in article
 ✓ Rating: "Overweight", "Underweight", "Buy", "Sell", "Neutral"
 ✓ Prior rating: "from Neutral" (if provided)
@@ -1683,9 +1689,17 @@ For price targets:
 ✓ Prior target: "from $450" (if provided)
 ✓ Reasoning: Why analyst changed target
 
-Examples:
+MINIMUM THRESHOLD FOR INCLUSION:
+Every bullet MUST include specific firm name. If article doesn't name firm → exclude bullet.
+
+Examples - CORRECT:
 ✓ "Wedbush raised price target to $600 from $550, stating Tesla at forefront of AI-driven transformation per analyst report (Oct 20)"
 ✓ "UBS maintained Sell rating with $215 target, citing concerns about sustainably higher demand following tax credit expiration (Oct 22)"
+
+Examples - EXCLUDE THESE:
+✗ "Analyst downgraded UnitedHealth per The Fly report" (no firm name)
+✗ "Analysts maintain consensus rating of 'Buy' per Meyka report" (no specific firm actions)
+✗ "Wall Street analysts issued 16 buy ratings per aggregator" (no specific firms named)
 
 WHAT TO EXCLUDE:
 
@@ -1693,6 +1707,10 @@ Do not include:
 - Analyst views on competitors (→ Competitive Dynamics)
 - Analyst views on industry trends without target company focus (→ Competitive Dynamics)
 - Generic sentiment without specific analyst attribution
+- Any rating/target change where article doesn't name the firm
+- Consensus ratings from aggregators (The Fly, Meyka, Benzinga) without specific firm breakdown
+- "Wall Street analysts issued X ratings" summaries without individual firm actions
+- Generic price target averages without attribution to specific methodology/survey
 
 FORMAT NOTE: This section does NOT use sentiment tags in Phase 1 (analyst actions are inherently sentiment indicators)
 

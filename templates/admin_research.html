@@ -683,7 +683,7 @@
                                         style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 8px;">
                                     View
                                 </button>
-                                <button onclick="deleteDocument({ticker: '${ticker}', type: 'press_releases', report_date: '${item.date}'})"
+                                <button onclick="deleteDocument({ticker: '${ticker}', type: 'press_releases', report_date: '${item.date}', pr_title: \`${item.title}\`})"
                                         style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
                                     Delete
                                 </button>
@@ -1451,7 +1451,7 @@
                     body = { token, ticker: docInfo.ticker, quarter: docInfo.quarter, year: docInfo.year, report_type: 'transcript', ai_provider: docInfo.ai_provider };
                 } else if (docInfo.type === 'press_releases') {
                     endpoint = '/api/admin/delete-transcript';
-                    body = { token, ticker: docInfo.ticker, report_date: docInfo.report_date, report_type: 'press_release' };
+                    body = { token, ticker: docInfo.ticker, report_date: docInfo.report_date, pr_title: docInfo.pr_title, report_type: 'press_release' };
                 }
 
                 const response = await fetch(endpoint, {

@@ -1576,6 +1576,53 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_type ON transcript_summaries(report_type);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_date ON transcript_summaries(report_date DESC);
 
+                -- Migration: Add constraint to ensure transcript_summaries only stores transcripts
+                DO $$ BEGIN
+                    ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_type_check CHECK (report_type = 'transcript');
+                EXCEPTION
+                    WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
+                END $$;
+
+                -- Migration: Ensure transcripts have quarter and year (not NULL)
+                DO $$ BEGIN
+                    ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_quarter_year_check CHECK (quarter IS NOT NULL AND year IS NOT NULL);
+                EXCEPTION
+                    WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
+                END $$;
+
+                -- PRESS RELEASES: Store AI-generated press release summaries (separated from transcripts)
+                CREATE TABLE IF NOT EXISTS press_releases (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) NOT NULL,
+                    company_name VARCHAR(255),
+
+                    -- Date & Title (sufficient for uniqueness)
+                    report_date DATE NOT NULL,           -- YYYY-MM-DD
+                    pr_title VARCHAR(200) NOT NULL,      -- Press release title
+
+                    -- Content
+                    summary_text TEXT NOT NULL,          -- AI-generated summary
+
+                    -- AI metadata
+                    ai_provider VARCHAR(20) NOT NULL,    -- 'claude' or 'gemini'
+                    ai_model VARCHAR(50),                -- Model name
+
+                    -- Job tracking
+                    job_id VARCHAR(50),
+                    processing_duration_seconds INTEGER,
+
+                    -- Timestamps
+                    generated_at TIMESTAMPTZ DEFAULT NOW(),
+
+                    -- Unique constraint: ticker + date + title (supports 100+ PRs per day)
+                    CONSTRAINT press_releases_unique UNIQUE(ticker, report_date, pr_title)
+                );
+
+                -- Indexes for press_releases
+                CREATE INDEX IF NOT EXISTS idx_press_releases_ticker ON press_releases(ticker);
+                CREATE INDEX IF NOT EXISTS idx_press_releases_date ON press_releases(report_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_press_releases_ticker_date ON press_releases(ticker, report_date DESC);
+
                 -- COMPANY PROFILES: Store AI-generated 10-K company profiles
                 -- SEC FILINGS: Unified table for 10-K, 10-Q, and investor presentations
                 CREATE TABLE IF NOT EXISTS sec_filings (
@@ -20852,20 +20899,21 @@ async def process_press_release_phase(job: dict):
         update_job_status(job_id, progress=80)
         LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
 
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO transcript_summaries (
-                    ticker, report_type, quarter, year, report_date, pr_title, summary_text, ai_provider
-                )
-                VALUES (%s, 'press_release', NULL, NULL, %s, %s, %s, 'claude')
-                ON CONFLICT (ticker, report_type, quarter, year)
-                DO UPDATE SET
-                    summary_text = EXCLUDED.summary_text,
-                    report_date = EXCLUDED.report_date,
-                    pr_title = EXCLUDED.pr_title,
-                    ai_provider = EXCLUDED.ai_provider
-            """, (ticker, pr_date, pr_title, summary_text))
-            conn.commit()
+        from modules.press_releases import save_press_release_to_database
+
+        with db() as conn:
+            save_press_release_to_database(
+                ticker=ticker,
+                company_name=ticker_config.get('company_name', ticker),
+                report_date=pr_date,
+                pr_title=pr_title,
+                summary_text=summary_text,
+                ai_provider='claude',
+                ai_model=ANTHROPIC_MODEL,
+                processing_duration_seconds=0,  # Could add timing later
+                job_id=job_id,
+                db_connection=conn
+            )
 
         # Progress: 95% - Sending email
         if config.get('send_email', True):
@@ -26399,23 +26447,42 @@ async def generate_transcript_summary_api(request: Request):
             quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
 
         with db() as conn:
-            save_transcript_summary_to_database(
-                ticker=ticker,
-                company_name=company_name,
-                report_type=report_type,
-                quarter=quarter_formatted,
-                year=year,
-                report_date=report_date,
-                pr_title=pr_title,
-                summary_text=summary_text,
-                source_url=fmp_url,
-                ai_provider=ai_provider,
-                ai_model=ai_model,
-                generation_time_seconds=generation_time_seconds,
-                token_count_input=token_count_input,
-                token_count_output=token_count_output,
-                db_connection=conn
-            )
+            if report_type == 'transcript':
+                # Transcripts: Save to transcript_summaries table
+                save_transcript_summary_to_database(
+                    ticker=ticker,
+                    company_name=company_name,
+                    report_type=report_type,
+                    quarter=quarter_formatted,
+                    year=year,
+                    report_date=report_date,
+                    pr_title=None,  # Not applicable for transcripts
+                    summary_text=summary_text,
+                    source_url=fmp_url,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                    generation_time_seconds=generation_time_seconds,
+                    token_count_input=token_count_input,
+                    token_count_output=token_count_output,
+                    db_connection=conn
+                )
+
+            elif report_type == 'press_release':
+                # Press releases: Save to press_releases table
+                from modules.press_releases import save_press_release_to_database
+
+                save_press_release_to_database(
+                    ticker=ticker,
+                    company_name=company_name,
+                    report_date=report_date,
+                    pr_title=pr_title,
+                    summary_text=summary_text,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                    processing_duration_seconds=generation_time_seconds,
+                    job_id=None,  # No job for synchronous generation
+                    db_connection=conn
+                )
 
         LOG.info(f"💾 Saved summary to database")
 
@@ -27314,8 +27381,7 @@ async def get_press_releases_api(token: str = None):
                     ai_provider,
                     processing_duration_seconds,
                     generated_at
-                FROM transcript_summaries
-                WHERE report_type = 'press_release'
+                FROM press_releases
                 ORDER BY report_date DESC, generated_at DESC
             """)
 
@@ -27326,7 +27392,7 @@ async def get_press_releases_api(token: str = None):
                 result.append({
                     "ticker": pr['ticker'],
                     "report_date": str(pr['report_date']) if pr['report_date'] else None,
-                    "title": pr['pr_title'],  # Add title field
+                    "title": pr['pr_title'],
                     "summary_text": pr['summary_text'],
                     "ai_provider": pr['ai_provider'],
                     "processing_duration_seconds": pr['processing_duration_seconds'],
@@ -27427,17 +27493,19 @@ async def delete_transcript_api(request: Request):
                 identifier = f"Q{quarter} {year} ({ai_provider or 'all versions'})"
             else:  # press_release
                 report_date = body.get('report_date')
-                if not report_date:
-                    return {"status": "error", "message": "Report date required for press releases"}
+                pr_title = body.get('pr_title')
+
+                if not report_date or not pr_title:
+                    return {"status": "error", "message": "Report date and title required for press releases"}
 
                 cur.execute("""
-                    DELETE FROM transcript_summaries
+                    DELETE FROM press_releases
                     WHERE ticker = %s
-                      AND report_type = 'press_release'
                       AND report_date = %s
-                """, (ticker, report_date))
+                      AND pr_title = %s
+                """, (ticker, report_date, pr_title))
 
-                identifier = report_date
+                identifier = f"{report_date}: {pr_title[:50]}..."
 
             conn.commit()
 
@@ -27909,11 +27977,14 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
 
             # Check generated press releases
             cur.execute("""
-                SELECT report_date, generated_at
-                FROM transcript_summaries
-                WHERE ticker = %s AND report_type = 'press_release'
+                SELECT report_date, pr_title, generated_at
+                FROM press_releases
+                WHERE ticker = %s
             """, (ticker,))
-            generated_press_releases = {str(row['report_date']): str(row['generated_at']) for row in cur.fetchall()}
+            generated_press_releases = {
+                f"{row['report_date']}|{row['pr_title']}": str(row['generated_at'])
+                for row in cur.fetchall()
+            }
 
         # Combine FMP data with generation status
         for item in available_10k:
@@ -27941,7 +28012,11 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
                 item['generated'] = generated_transcripts.get(key)
 
         for item in available_press_releases:
-            item['generated'] = generated_press_releases.get(item['date'])
+            # Key by date|title to support multiple PRs per day
+            pr_date = item.get('date', '').split()[0] if item.get('date') else ''
+            pr_title = item.get('title', '')
+            key = f"{pr_date}|{pr_title}"
+            item['generated'] = generated_press_releases.get(key)
 
         return {
             "status": "success",
@@ -28605,19 +28680,21 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                 releases = pr_response.get("available_releases", [])
 
                 # Detect first check: Does this ticker have ANY press releases in DB?
+                from modules.press_releases import db_has_any_press_releases_for_ticker, db_check_press_release_exists
                 is_first_check = not db_has_any_press_releases_for_ticker(ticker)
 
                 if is_first_check:
                     LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB silently (no emails)")
 
-                # Only check last 4
+                # Only check last 4 UNIQUE press releases (by date + title)
                 for pr in releases[:4]:
                     pr_date = pr.get('date', '').split()[0]  # Extract YYYY-MM-DD
-                    if pr_date:
-                        exists = db_check_press_release_exists(ticker, pr_date)
-                        if not exists:
-                            pr_title = pr.get('title', 'Press Release')
+                    pr_title = pr.get('title', 'Press Release')
 
+                    if pr_date and pr_title:
+                        # Check by date + title (exact match)
+                        exists = db_check_press_release_exists(ticker, pr_date, pr_title)
+                        if not exists:
                             if is_first_check:
                                 # Silent initialization - save to DB but don't send email
                                 LOG.info(f"[{ticker}] 💾 Initializing DB with PR from {pr_date} (no email): {pr_title[:60]}...")

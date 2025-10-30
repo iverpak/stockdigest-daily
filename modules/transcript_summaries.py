@@ -184,14 +184,28 @@ def fetch_fmp_press_releases(ticker: str, fmp_api_key: str, limit: int = 20) -> 
 
 def fetch_fmp_press_release_by_date(ticker: str, target_date: str, fmp_api_key: str) -> Optional[Dict]:
     """
-    Fetch specific press release by date.
-    target_date format: 'YYYY-MM-DD HH:MM:SS'
+    Fetch specific press release by date (flexible format).
+
+    Args:
+        ticker: Stock ticker
+        target_date: Date in format 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
+        fmp_api_key: FMP API key
+
+    Returns:
+        First press release matching the date (FMP order), or None if not found
     """
     releases = fetch_fmp_press_releases(ticker, fmp_api_key, limit=50)
 
+    # Normalize target date to YYYY-MM-DD (strip time if present)
+    target_date_normalized = target_date.split()[0] if target_date else ''
+
     for release in releases:
-        if release.get('date') == target_date:
-            return release
+        # Normalize FMP date to YYYY-MM-DD for comparison
+        release_date = release.get('date', '')
+        release_date_normalized = release_date.split()[0] if release_date else ''
+
+        if release_date_normalized == target_date_normalized:
+            return release  # Returns WITH full datetime preserved
 
     LOG.warning(f"Press release not found for {ticker} on {target_date}")
     return None

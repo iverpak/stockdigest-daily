@@ -29,7 +29,7 @@ YOUR TASK:
 For each bullet in Phase 1, generate 4 enrichment fields:
 
 - impact: "high impact" | "medium impact" | "low impact"
-- sentiment: "bullish" | "bearish" | "neutral"
+- sentiment: "bullish" | "bearish" | "neutral" | "mixed"
 - reason: 2-4 words describing impact type
 - context: 25-60 word synthesis from filings
 
@@ -1311,10 +1311,11 @@ Sentiment answers: "Is this good, bad, or neutral for the company?"
 
 EXTRACT from article language/tone/comparisons (not independent inference).
 
-THREE OPTIONS:
+FOUR OPTIONS:
 - bullish: Improves company position/performance
 - bearish: Worsens company position/performance
-- neutral: Routine update, unclear direction, or offsetting factors
+- neutral: Routine update, unclear direction
+- mixed: Offsetting factors (both positive AND negative aspects present)
 
 CRITICAL RULE: Single-step inference ONLY (no multi-hop chains X → Y → Z)
 
@@ -1346,8 +1347,7 @@ Examples:
 NEUTRAL (use when):
 - Routine updates: Organizational changes, non-material customer wins/losses
 - Planned transitions: Executive changes with notice period, orderly CEO succession
-- Unclear direction: Could be positive or negative, insufficient information, requires multi-step reasoning
-- Offsetting factors: Positive and negative elements both present
+- Unclear direction: Insufficient information, requires multi-step reasoning
 - DEFAULT: When uncertain → neutral
 
 NOT NEUTRAL - CEO departures:
@@ -1357,14 +1357,28 @@ NOT NEUTRAL - CEO departures:
 Examples:
 "Appointed VP of Operations" → neutral ✓
 "CEO statement on politics; no stated business impact" → neutral ✓
-"Revenue beat but margins missed" → neutral ✓
+
+MIXED (use when):
+- Offsetting factors: Development has BOTH clear positive AND clear negative aspects
+- Trade-offs: Good for one metric (margins) but bad for another (growth)
+- NOT UNCLEAR - both sides are evident, just pulling different directions
+
+Examples:
+"Revenue beat but margins missed" → mixed ✓
+"ACA repricing: 25% rate increase (bad for growth) establishes sustainable premium base (good for margins)" → mixed ✓
+"Medicare Advantage reduction: Losing 1M customers (bad for revenue) but exiting high-risk lives (good for profitability)" → mixed ✓
 
 MIXED RESULTS: When metrics conflict (sequential up but YoY down, revenue beat but EPS miss):
-→ Follow article emphasis: If 3+ articles lead with negative = bearish; lead with positive = bullish
-→ If truly balanced = neutral
+→ If development has BOTH positive AND negative aspects that are roughly balanced: mixed
+→ If article emphasis leans one direction: Follow article (bearish or bullish)
+→ Examples where mixed is appropriate:
+  • ACA repricing: Bad for growth (25% price → -67% enrollment) but good for margins (sustainable premium)
+  • Medicare Advantage reduction: Bad for revenue (-1M customers) but good for profitability (exiting high-risk lives)
+  • Segment performance: Some segments up, others down, net effect unclear
 
 Example: Margin 5.8% vs 7.2% YoY (down) vs 4.1% QoQ (up)
-→ Articles emphasize "margin compression from 7.2%" → BEARISH (follow article)
+→ If articles emphasize "margin compression from 7.2%" → BEARISH (follow article)
+→ If articles balanced on both trends → MIXED (offsetting QoQ vs YoY)
 → Context can show both directions if space permits
 
 ECONOMIC REALITY INTEGRATION:

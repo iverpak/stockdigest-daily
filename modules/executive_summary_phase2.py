@@ -511,7 +511,7 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
             continue
 
         # Validate sentiment values
-        if data["sentiment"] not in ["bullish", "bearish", "neutral"]:
+        if data["sentiment"] not in ["bullish", "bearish", "neutral", "mixed"]:
             invalid_bullets.append(f"{bullet_id} (invalid sentiment: {data['sentiment']})")
             continue
 

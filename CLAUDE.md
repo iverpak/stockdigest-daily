@@ -447,9 +447,21 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Allows existing queries to work unchanged during migration
   - Deprecated: Use sec_filings directly for new code
 
-- **`transcript_summaries`**: Stores earnings transcript and press release summaries
-  - ticker, report_type (transcript/press_release), quarter, year, report_date
-  - summary_text, ai_provider (claude/openai), UNIQUE(ticker, report_type, quarter, year)
+- **`transcript_summaries`**: Stores earnings transcript summaries
+  - ticker, report_type ('transcript'), quarter, year, report_date
+  - summary_text, ai_provider (claude/gemini), ai_model
+  - UNIQUE(ticker, report_type, quarter, year)
+
+- **`press_releases`**: Stores press release summaries **(NEW - Oct 30, 2025)**
+  - ticker, company_name, report_date, pr_title (VARCHAR 200)
+  - summary_text, ai_provider (claude), ai_model
+  - processing_duration_seconds, job_id, generated_at
+  - **UNIQUE(ticker, report_date, pr_title)** - Supports multiple PRs per day
+  - **Migrated from transcript_summaries** - Separate table for better schema design
+  - **Research Library UI (Oct 30, 2025):**
+    - Title displayed prominently (80 char truncation)
+    - Model badge: "🟦 Claude" with generation time
+    - View/Email/Delete buttons work correctly with date + title matching
 
 **Migration:**
 - **Migration guide:** See `SEC_FILINGS_MIGRATION.md` for SQL migration script
@@ -704,6 +716,18 @@ Uses Jinja2 templating and inline HTML generation:
   - Professional layout with styled sections
   - Comprehensive footer with legal disclaimers
   - Full URLs for Terms, Privacy, Contact
+  - **Unified Styling (Oct 30, 2025):** All research emails now use consistent clean styling:
+    - ✅ White background (no grey wrapper)
+    - ✅ Compact header sizes (template default)
+    - ✅ Minimal spacing (no extra padding)
+    - ✅ 10-K/10-Q now match Transcripts/Press Releases
+  - **Table Formatting (10-K/10-Q - Oct 30, 2025):** Consistent financial table layout:
+    - `table-layout: fixed` forces equal distribution
+    - First column (labels): **40% width**
+    - Remaining columns: Split **60% equally**
+    - Works with 2-10+ columns automatically
+    - Example: 4 columns = Labels 40% | Data 20% + 20% + 20%
+    - Email client support: Gmail, Outlook.com, Apple Mail (90-95% coverage)
 - **Email #3 (Premium Intelligence Report)** - Inline HTML generation (no template)
   - Generated via `generate_email_html_core()` in app.py (line 18601)
   - Modern gradient header with stock price card
@@ -1483,17 +1507,28 @@ Command: python app.py check_filings
 - Safe to run cron multiple times
 
 **Press Releases:**
-- Primary key: `UNIQUE(ticker, report_type, quarter, year)`
-- Report date stored in `report_date` field
-- Exact date matching for deduplication
+- Primary key: `UNIQUE(ticker, report_date, pr_title)` in `press_releases` table
+- Separate table from transcripts (migrated Oct 30, 2025)
+- Matches by date AND title (supports multiple PRs per day)
 
-**Silent Initialization (Press Releases Only):**
-- **Problem:** New ticker would send 4 old PR emails (bad optics)
-- **Solution:** First check backfills last 4 PRs silently (`send_email=False`)
-- **Benefit:** Subsequent checks only email truly NEW releases
-- User Flow:
-  - Day 1 (new ticker): 4 summaries saved, 0 emails sent ✅
-  - Day 2 (new PR): 1 summary saved, 1 email sent ✅
+**Unified Silent Initialization (ALL 4 Filing Types - NEW Oct 30, 2025):**
+- **Problem:** New ticker would flood admin inbox with old filings
+- **Solution:** First check saves LATEST 1 of each type silently (`send_email=False`)
+- **Applies to:** 10-K, 10-Q, Transcripts, Press Releases
+- **Detection:** Database-state-based (not time-based)
+  - `db_has_any_10k_for_ticker(ticker)` - Check if ticker has ANY 10-K
+  - `db_has_any_10q_for_ticker(ticker)` - Check if ticker has ANY 10-Q
+  - `db_has_any_transcript_for_ticker(ticker)` - Check if ticker has ANY transcripts
+  - `db_has_any_press_releases_for_ticker(ticker)` - Check if ticker has ANY PRs
+- **User Flow (NEW ticker AAPL):**
+  - 6:30 AM (or any first check): Save latest 1 of each type silently (4 docs, 0 emails) ✅
+  - 8:30 AM (subsequent check): Email any NEW filings ✅
+  - Works at ANY hour, not just 6:30 AM
+- **Benefits:**
+  - ✅ Consistent logic across all 4 document types
+  - ✅ No inbox flooding when adding new tickers
+  - ✅ Clean baseline (1 of each) in research folder
+  - ✅ Real-time email alerts for truly NEW filings
 
 ### Benefits
 

@@ -1304,6 +1304,16 @@ def ensure_schema():
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS geographic_markets TEXT;
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS subsidiaries TEXT;
 
+                -- Add value chain metadata (Oct 31, 2025) - 8 columns for upstream/downstream companies
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_1_name VARCHAR(255);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_1_ticker VARCHAR(20);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_2_name VARCHAR(255);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_2_ticker VARCHAR(20);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_1_name VARCHAR(255);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_1_ticker VARCHAR(20);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_2_name VARCHAR(255);
+                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_2_ticker VARCHAR(20);
+
                 -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
                 CREATE TABLE IF NOT EXISTS feeds (
                     id SERIAL PRIMARY KEY,
@@ -1320,6 +1330,9 @@ def ensure_schema():
 
                 -- Add company_name column if it doesn't exist (migration)
                 ALTER TABLE feeds ADD COLUMN IF NOT EXISTS company_name VARCHAR(255);
+
+                -- Add value_chain_type column for upstream/downstream tracking (Oct 31, 2025)
+                ALTER TABLE feeds ADD COLUMN IF NOT EXISTS value_chain_type VARCHAR(10) CHECK (value_chain_type IN ('upstream', 'downstream') OR value_chain_type IS NULL);
 
                 -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
                 CREATE TABLE IF NOT EXISTS ticker_feeds (
@@ -1357,6 +1370,9 @@ def ensure_schema():
                 ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS relevance_score NUMERIC(3,1);
                 ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS relevance_reason TEXT;
                 ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS is_rejected BOOLEAN DEFAULT FALSE;
+
+                -- Add value_chain_type column for upstream/downstream tracking (Oct 31, 2025)
+                ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS value_chain_type VARCHAR(10) CHECK (value_chain_type IN ('upstream', 'downstream') OR value_chain_type IS NULL);
 
                 -- ticker_reference table - EXACT match to CSV structure
                 CREATE TABLE IF NOT EXISTS ticker_reference (
@@ -1402,7 +1418,15 @@ def ensure_schema():
                     financial_analyst_recommendation VARCHAR(50),
                     financial_snapshot_date DATE,
                     geographic_markets TEXT,
-                    subsidiaries TEXT
+                    subsidiaries TEXT,
+                    upstream_1_name VARCHAR(255),
+                    upstream_1_ticker VARCHAR(20),
+                    upstream_2_name VARCHAR(255),
+                    upstream_2_ticker VARCHAR(20),
+                    downstream_1_name VARCHAR(255),
+                    downstream_1_ticker VARCHAR(20),
+                    downstream_2_name VARCHAR(255),
+                    downstream_2_ticker VARCHAR(20)
                 );
 
                 CREATE TABLE IF NOT EXISTS domain_names (
@@ -2653,6 +2677,10 @@ def get_ticker_reference(ticker: str):
                    competitor_1_name, competitor_1_ticker,
                    competitor_2_name, competitor_2_ticker,
                    competitor_3_name, competitor_3_ticker,
+                   upstream_1_name, upstream_1_ticker,
+                   upstream_2_name, upstream_2_ticker,
+                   downstream_1_name, downstream_1_ticker,
+                   downstream_2_name, downstream_2_ticker,
                    ai_generated, ai_enhanced_at, created_at, updated_at, data_source
             FROM ticker_reference
             WHERE ticker = %s AND active = TRUE
@@ -14514,11 +14542,15 @@ def get_ticker_reference(ticker: str) -> Optional[Dict]:
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT ticker, country, company_name, industry, sector,
-                   exchange, active, 
+                   exchange, active,
                    industry_keyword_1, industry_keyword_2, industry_keyword_3,
                    competitor_1_name, competitor_1_ticker,
                    competitor_2_name, competitor_2_ticker,
                    competitor_3_name, competitor_3_ticker,
+                   upstream_1_name, upstream_1_ticker,
+                   upstream_2_name, upstream_2_ticker,
+                   downstream_1_name, downstream_1_ticker,
+                   downstream_2_name, downstream_2_ticker,
                    ai_generated
             FROM ticker_reference
             WHERE ticker = %s AND active = TRUE
@@ -14552,10 +14584,14 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                     competitor_1_name, competitor_1_ticker,
                     competitor_2_name, competitor_2_ticker,
                     competitor_3_name, competitor_3_ticker,
+                    upstream_1_name, upstream_1_ticker,
+                    upstream_2_name, upstream_2_ticker,
+                    downstream_1_name, downstream_1_ticker,
+                    downstream_2_name, downstream_2_ticker,
                     geographic_markets, subsidiaries,
                     ai_generated, ai_enhanced_at, created_at, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW(), NOW())
                 ON CONFLICT (ticker) DO UPDATE SET
                     industry_keyword_1 = EXCLUDED.industry_keyword_1,
                     industry_keyword_2 = EXCLUDED.industry_keyword_2,
@@ -14566,6 +14602,14 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                     competitor_2_ticker = EXCLUDED.competitor_2_ticker,
                     competitor_3_name = EXCLUDED.competitor_3_name,
                     competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                    upstream_1_name = EXCLUDED.upstream_1_name,
+                    upstream_1_ticker = EXCLUDED.upstream_1_ticker,
+                    upstream_2_name = EXCLUDED.upstream_2_name,
+                    upstream_2_ticker = EXCLUDED.upstream_2_ticker,
+                    downstream_1_name = EXCLUDED.downstream_1_name,
+                    downstream_1_ticker = EXCLUDED.downstream_1_ticker,
+                    downstream_2_name = EXCLUDED.downstream_2_name,
+                    downstream_2_ticker = EXCLUDED.downstream_2_ticker,
                     geographic_markets = EXCLUDED.geographic_markets,
                     subsidiaries = EXCLUDED.subsidiaries,
                     ai_generated = TRUE,
@@ -14584,6 +14628,14 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
                 comp_data['competitor_2_ticker'],
                 comp_data['competitor_3_name'],
                 comp_data['competitor_3_ticker'],
+                comp_data['upstream_1_name'],
+                comp_data['upstream_1_ticker'],
+                comp_data['upstream_2_name'],
+                comp_data['upstream_2_ticker'],
+                comp_data['downstream_1_name'],
+                comp_data['downstream_1_ticker'],
+                comp_data['downstream_2_name'],
+                comp_data['downstream_2_ticker'],
                 geographic_markets,
                 subsidiaries
             ))

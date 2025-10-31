@@ -6708,6 +6708,7 @@ RETAIL_PLATFORM_KEYWORDS = [
     "motley fool", "fool.com", "stock advisor", "rule breakers",
     "marketbeat", "marketbeat.com",
     "finviz", "finviz.com", "finviz screener",
+    "fintel",
     "insider monkey", "insidermonkey",
     "24/7 wall st", "247wallst",
     "stockanalysis.com", "stockrover", "stockcharts.com",
@@ -20894,10 +20895,10 @@ async def process_press_release_phase(job: dict):
         # Fetch press release content from FMP
         from modules.transcript_summaries import (
             generate_transcript_summary_with_claude,
-            fetch_fmp_press_release_by_date
+            fetch_fmp_press_release_by_date_and_title
         )
 
-        data = fetch_fmp_press_release_by_date(ticker, pr_date, FMP_API_KEY)
+        data = fetch_fmp_press_release_by_date_and_title(ticker, pr_date, pr_title, FMP_API_KEY)
         if not data:
             raise ValueError(f"No press release found for {ticker} on {pr_date}")
 
@@ -28557,23 +28558,6 @@ def db_has_any_transcript_for_ticker(ticker: str) -> bool:
         return False
 
 
-def db_check_press_release_exists(ticker: str, pr_date: str) -> bool:
-    """Check if press release already exists in database (by date)."""
-    try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT COUNT(*) as count FROM transcript_summaries
-                WHERE ticker = %s
-                  AND report_type = 'press_release'
-                  AND report_date = %s
-            """, (ticker, pr_date))
-            result = cur.fetchone()
-            return result['count'] > 0 if result else False
-    except Exception as e:
-        LOG.error(f"Error checking press release for {ticker}: {e}")
-        return False
-
-
 def db_has_any_press_releases_for_ticker(ticker: str) -> bool:
     """
     Check if ticker has ANY press releases in database.
@@ -28840,8 +28824,8 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                 if is_first_check:
                     LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB silently (no email)")
 
-                # First check: Only process LATEST 1 | Subsequent checks: Check last 4 (recent releases only)
-                releases_to_check = releases[:1] if is_first_check else releases[:4]
+                # Always check last 4 releases (handles edge case of multiple PRs in same hour)
+                releases_to_check = releases[:4]
 
                 for pr in releases_to_check:
                     pr_date = pr.get('date', '').split()[0]  # Extract YYYY-MM-DD

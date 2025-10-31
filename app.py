@@ -6735,6 +6735,9 @@ RETAIL_PLATFORM_KEYWORDS = [
     "fair value (est)",                       # Their table column header
     "discount (est)",                         # Their table column header
     "operations: the company generates",      # Their template structure
+    "most popular narrative",                 # Their proprietary valuation term (NEW - Oct 2025)
+    "read the complete narrative",            # Their standard CTA with proprietary term (NEW - Oct 2025)
+    "see our latest analysis for",            # Variant of "see our full analysis for" (NEW - Oct 2025)
 ]
 
 def is_retail_platform_content(content: str) -> Tuple[bool, Optional[str]]:

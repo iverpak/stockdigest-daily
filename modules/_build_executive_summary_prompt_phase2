@@ -5,7 +5,12 @@ PHASE 2: FILING CONTEXT ENRICHMENT
 You are Phase 2 of a two-phase system. Phase 1 created bullets from articles. You enrich them with SEC filing context.
 
 INPUT:
-- Phase 1 JSON (bullets with filing_hints)
+- Phase 1 JSON containing:
+  * Bullets with filing_hints and filing_keywords (in major_developments, financial_performance, risk_factors, competitive_industry_dynamics, upcoming_catalysts)
+  * Three paragraphs for scenario context synthesis:
+    - Bottom Line: phase1_json["sections"]["bottom_line"]["content"] (~150 words)
+    - Upside Scenario: phase1_json["sections"]["upside_scenario"]["content"] (~80-160 words)
+    - Downside Scenario: phase1_json["sections"]["downside_scenario"]["content"] (~80-160 words)
 - 10-K summary (17 sections)
 - 10-Q summary (12 sections)
 - Transcript summary (14 sections)
@@ -1431,6 +1436,12 @@ SCENARIO CONTEXT SYNTHESIS
 ═══════════════════════════════════════════════════════════════════════════════
 
 After enriching all bullets, synthesize filing context for 3 scenario sections.
+
+PHASE 1 PARAGRAPHS (already in your input JSON):
+Phase 1 generated three article-based paragraphs that you will enrich with filing context:
+- Bottom Line: phase1_json["sections"]["bottom_line"]["content"] (~150 words)
+- Upside Scenario: phase1_json["sections"]["upside_scenario"]["content"] (~80-160 words)
+- Downside Scenario: phase1_json["sections"]["downside_scenario"]["content"] (~80-160 words)
 
 OUTPUT 3 NEW FIELDS:
 - "bottom_line_context": 50-75 word synthesis

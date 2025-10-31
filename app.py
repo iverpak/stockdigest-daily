@@ -6725,6 +6725,15 @@ RETAIL_PLATFORM_KEYWORDS = [
     "zacks premium", "zacks elite",
     "tipranks premium", "tipranks gold",
     "stock advisor subscription", "rule breakers subscription",
+
+    # SimplyWall.St content patterns (highly specific signatures)
+    "estimated discount to fair value",       # Their signature metric format
+    "stocks from our screener",               # Their screener article signature
+    "based on cash flows screener",           # Their screener naming convention
+    "discounted cash flow as at",             # Their chart caption format
+    "fair value (est)",                       # Their table column header
+    "discount (est)",                         # Their table column header
+    "operations: the company generates",      # Their template structure
 ]
 
 def is_retail_platform_content(content: str) -> Tuple[bool, Optional[str]]:

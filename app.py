@@ -3587,7 +3587,22 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                 except Exception as e:
                     LOG.error(f"[CSV_IMPORT] Row {row_num} failed processing competitor fields: {e}")
                     raise
-                
+
+                # Handle 8 value chain fields (with None safety) - Oct 31, 2025
+                try:
+                    ticker_data['upstream_1_name'] = str(row.get('upstream_1_name', '') or '').strip() or None
+                    ticker_data['upstream_1_ticker'] = str(row.get('upstream_1_ticker', '') or '').strip() or None
+                    ticker_data['upstream_2_name'] = str(row.get('upstream_2_name', '') or '').strip() or None
+                    ticker_data['upstream_2_ticker'] = str(row.get('upstream_2_ticker', '') or '').strip() or None
+                    ticker_data['downstream_1_name'] = str(row.get('downstream_1_name', '') or '').strip() or None
+                    ticker_data['downstream_1_ticker'] = str(row.get('downstream_1_ticker', '') or '').strip() or None
+                    ticker_data['downstream_2_name'] = str(row.get('downstream_2_name', '') or '').strip() or None
+                    ticker_data['downstream_2_ticker'] = str(row.get('downstream_2_ticker', '') or '').strip() or None
+                    LOG.debug(f"[CSV_IMPORT] Row {row_num} value chain fields processed")
+                except Exception as e:
+                    LOG.error(f"[CSV_IMPORT] Row {row_num} failed processing value chain fields: {e}")
+                    raise
+
                 # LEGACY SUPPORT: Handle old "competitors" field format
                 competitors_field = row.get('competitors', '') or ''  # Handle None explicitly
                 LOG.debug(f"[CSV_DEBUG] Row {row_num} competitors field type: {type(competitors_field)}, value: {repr(competitors_field)[:100]}")
@@ -3631,6 +3646,8 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
                     'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
                     'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker',
+                    'upstream_1_name', 'upstream_1_ticker', 'upstream_2_name', 'upstream_2_ticker',
+                    'downstream_1_name', 'downstream_1_ticker', 'downstream_2_name', 'downstream_2_ticker',
                     'geographic_markets', 'subsidiaries'
                 ]
                 for field in text_fields:
@@ -3646,7 +3663,17 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                         if not validate_ticker_format(ticker_data[field]):
                             LOG.warning(f"Invalid competitor ticker format: {ticker_data[field]}")
                             ticker_data[field] = None  # Clear invalid ticker
-                
+
+                # Normalize value chain tickers (Oct 31, 2025)
+                value_chain_ticker_fields = ['upstream_1_ticker', 'upstream_2_ticker', 'downstream_1_ticker', 'downstream_2_ticker']
+                for field in value_chain_ticker_fields:
+                    if ticker_data.get(field):
+                        ticker_data[field] = normalize_ticker_format(ticker_data[field])
+                        # Validate value chain ticker format
+                        if not validate_ticker_format(ticker_data[field]):
+                            LOG.warning(f"Invalid value chain ticker format: {ticker_data[field]}")
+                            ticker_data[field] = None  # Clear invalid ticker
+
                 ticker_data_batch.append(ticker_data)
                     
             except Exception as e:
@@ -3674,6 +3701,10 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             ticker_data.get('competitor_1_name'), ticker_data.get('competitor_1_ticker'),
                             ticker_data.get('competitor_2_name'), ticker_data.get('competitor_2_ticker'),
                             ticker_data.get('competitor_3_name'), ticker_data.get('competitor_3_ticker'),
+                            ticker_data.get('upstream_1_name'), ticker_data.get('upstream_1_ticker'),
+                            ticker_data.get('upstream_2_name'), ticker_data.get('upstream_2_ticker'),
+                            ticker_data.get('downstream_1_name'), ticker_data.get('downstream_1_ticker'),
+                            ticker_data.get('downstream_2_name'), ticker_data.get('downstream_2_ticker'),
                             ticker_data.get('geographic_markets'), ticker_data.get('subsidiaries'),
                             ticker_data.get('ai_generated', False), ticker_data.get('data_source', 'csv_import')
                         ))
@@ -3687,9 +3718,13 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             competitor_1_name, competitor_1_ticker,
                             competitor_2_name, competitor_2_ticker,
                             competitor_3_name, competitor_3_ticker,
+                            upstream_1_name, upstream_1_ticker,
+                            upstream_2_name, upstream_2_ticker,
+                            downstream_1_name, downstream_1_ticker,
+                            downstream_2_name, downstream_2_ticker,
                             geographic_markets, subsidiaries,
                             ai_generated, data_source
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (ticker) DO UPDATE SET
                             country = EXCLUDED.country,
                             company_name = EXCLUDED.company_name,
@@ -3711,6 +3746,14 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                             competitor_2_ticker = EXCLUDED.competitor_2_ticker,
                             competitor_3_name = EXCLUDED.competitor_3_name,
                             competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                            upstream_1_name = EXCLUDED.upstream_1_name,
+                            upstream_1_ticker = EXCLUDED.upstream_1_ticker,
+                            upstream_2_name = EXCLUDED.upstream_2_name,
+                            upstream_2_ticker = EXCLUDED.upstream_2_ticker,
+                            downstream_1_name = EXCLUDED.downstream_1_name,
+                            downstream_1_ticker = EXCLUDED.downstream_1_ticker,
+                            downstream_2_name = EXCLUDED.downstream_2_name,
+                            downstream_2_ticker = EXCLUDED.downstream_2_ticker,
                             geographic_markets = EXCLUDED.geographic_markets,
                             subsidiaries = EXCLUDED.subsidiaries,
                             ai_generated = EXCLUDED.ai_generated,
@@ -3944,6 +3987,10 @@ def export_ticker_references_to_csv():
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
+                       upstream_1_name, upstream_1_ticker,
+                       upstream_2_name, upstream_2_ticker,
+                       downstream_1_name, downstream_1_ticker,
+                       downstream_2_name, downstream_2_ticker,
                        geographic_markets, subsidiaries,
                        financial_last_price, financial_price_change_pct,
                        financial_yesterday_return_pct, financial_ytd_return_pct,
@@ -3983,6 +4030,10 @@ def export_ticker_references_to_csv():
                 'competitor_1_name', 'competitor_1_ticker',
                 'competitor_2_name', 'competitor_2_ticker',
                 'competitor_3_name', 'competitor_3_ticker',
+                'upstream_1_name', 'upstream_1_ticker',
+                'upstream_2_name', 'upstream_2_ticker',
+                'downstream_1_name', 'downstream_1_ticker',
+                'downstream_2_name', 'downstream_2_ticker',
                 'geographic_markets', 'subsidiaries',
                 'financial_last_price', 'financial_price_change_pct',
                 'financial_yesterday_return_pct', 'financial_ytd_return_pct',

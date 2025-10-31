@@ -1904,25 +1904,30 @@ def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
 @with_deadlock_retry()
 def link_article_to_ticker(article_id: int, ticker: str, category: str = None,
                           feed_id: int = None, search_keyword: str = None,
-                          competitor_ticker: str = None) -> None:
-    """Create relationship between article and ticker - category is immutable after first insert"""
+                          competitor_ticker: str = None, value_chain_type: str = None) -> None:
+    """Create relationship between article and ticker - category is immutable after first insert
+
+    Args:
+        value_chain_type: 'upstream', 'downstream', or None (for non-value-chain articles)
+    """
     with db() as conn, conn.cursor() as cur:
         if category is not None:
             # INSERT mode: Set category on first insert
             cur.execute("""
-                INSERT INTO ticker_articles (ticker, article_id, category, feed_id, search_keyword, competitor_ticker)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO ticker_articles (ticker, article_id, category, feed_id, search_keyword, competitor_ticker, value_chain_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ticker, article_id) DO UPDATE SET
                     search_keyword = EXCLUDED.search_keyword,
-                    competitor_ticker = EXCLUDED.competitor_ticker
-            """, (ticker, article_id, category, feed_id, search_keyword, competitor_ticker))
+                    competitor_ticker = EXCLUDED.competitor_ticker,
+                    value_chain_type = EXCLUDED.value_chain_type
+            """, (ticker, article_id, category, feed_id, search_keyword, competitor_ticker, value_chain_type))
         else:
             # UPDATE mode: Only update metadata, don't touch category
             cur.execute("""
                 UPDATE ticker_articles
-                SET search_keyword = %s, competitor_ticker = %s
+                SET search_keyword = %s, competitor_ticker = %s, value_chain_type = %s
                 WHERE ticker = %s AND article_id = %s
-            """, (search_keyword, competitor_ticker, ticker, article_id))
+            """, (search_keyword, competitor_ticker, value_chain_type, ticker, article_id))
 
 @with_deadlock_retry()
 def update_article_content(article_id: int, scraped_content: str = None, ai_summary: str = None,
@@ -6318,9 +6323,11 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         )
 
                         if article_id:
+                            # Get value_chain_type from feed (upstream/downstream/None)
+                            value_chain_type = feed.get("value_chain_type")
                             link_article_to_ticker(
                                 article_id, feed["ticker"], category,
-                                feed["id"], clean_search_keyword, clean_competitor_ticker
+                                feed["id"], clean_search_keyword, clean_competitor_ticker, value_chain_type
                             )
                             stats["inserted"] += 1
                             # Get current count after insertion
@@ -24355,7 +24362,7 @@ async def cron_ingest(
             with db() as conn, conn.cursor() as cur:
                 if tickers:
                     cur.execute("""
-                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, f.value_chain_type
                         FROM feeds f
                         JOIN ticker_feeds tf ON f.id = tf.feed_id
                         WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
@@ -24363,7 +24370,7 @@ async def cron_ingest(
                     """, (tickers,))
                 else:
                     cur.execute("""
-                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, f.value_chain_type
                         FROM feeds f
                         JOIN ticker_feeds tf ON f.id = tf.feed_id
                         WHERE f.active = TRUE AND tf.active = TRUE

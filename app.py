@@ -14292,6 +14292,59 @@ def generate_ticker_metadata_with_fallback(ticker: str, company_name: str = None
     return None
 
 
+def parse_metadata_to_flat_fields(metadata: Dict) -> Dict:
+    """
+    Parse new metadata structure (horizontal_competitors + value_chain) into 14 flat database fields.
+
+    Handles both old format ("competitors") and new format ("horizontal_competitors" + "value_chain").
+
+    Returns dict with:
+        competitor_1_name, competitor_1_ticker, ..., competitor_3_ticker (6 fields)
+        upstream_1_name, upstream_1_ticker, upstream_2_name, upstream_2_ticker (4 fields)
+        downstream_1_name, downstream_1_ticker, downstream_2_name, downstream_2_ticker (4 fields)
+    """
+    result = {
+        # Initialize all 14 fields to None
+        'competitor_1_name': None, 'competitor_1_ticker': None,
+        'competitor_2_name': None, 'competitor_2_ticker': None,
+        'competitor_3_name': None, 'competitor_3_ticker': None,
+        'upstream_1_name': None, 'upstream_1_ticker': None,
+        'upstream_2_name': None, 'upstream_2_ticker': None,
+        'downstream_1_name': None, 'downstream_1_ticker': None,
+        'downstream_2_name': None, 'downstream_2_ticker': None,
+    }
+
+    # Parse horizontal_competitors (0-3)
+    horizontal_competitors = metadata.get("horizontal_competitors", [])
+    # Fallback for old format
+    if not horizontal_competitors:
+        horizontal_competitors = metadata.get("competitors", [])
+
+    for i, comp in enumerate(horizontal_competitors[:3], 1):
+        if isinstance(comp, dict):
+            result[f'competitor_{i}_name'] = comp.get('name')
+            result[f'competitor_{i}_ticker'] = comp.get('ticker')
+
+    # Parse value_chain (0-2 upstream, 0-2 downstream)
+    value_chain = metadata.get("value_chain", {})
+    if isinstance(value_chain, dict):
+        # Upstream (0-2)
+        upstream = value_chain.get("upstream", [])
+        for i, comp in enumerate(upstream[:2], 1):
+            if isinstance(comp, dict):
+                result[f'upstream_{i}_name'] = comp.get('name')
+                result[f'upstream_{i}_ticker'] = comp.get('ticker')
+
+        # Downstream (0-2)
+        downstream = value_chain.get("downstream", [])
+        for i, comp in enumerate(downstream[:2], 1):
+            if isinstance(comp, dict):
+                result[f'downstream_{i}_name'] = comp.get('name')
+                result[f'downstream_{i}_ticker'] = comp.get('ticker')
+
+    return result
+
+
 def generate_enhanced_ticker_metadata_with_ai(ticker: str, company_name: str = None, sector: str = "", industry: str = "") -> Optional[Dict]:
     """
     Enhanced AI generation with company context from ticker reference table
@@ -14443,12 +14496,9 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                 'data_source': 'ai_generated'
             }
 
-            # Convert competitors to separate fields
-            competitors = ai_metadata.get('competitors', [])
-            for i, comp in enumerate(competitors[:3], 1):
-                if isinstance(comp, dict):
-                    reference_data[f'competitor_{i}_name'] = comp.get('name')
-                    reference_data[f'competitor_{i}_ticker'] = comp.get('ticker')
+            # Convert competitors and value chain to separate fields (14 fields total)
+            flat_fields = parse_metadata_to_flat_fields(ai_metadata)
+            reference_data.update(flat_fields)
 
             store_ticker_reference(reference_data)
 
@@ -14484,21 +14534,8 @@ def update_ticker_reference_ai_data(ticker: str, metadata: Dict):
         keyword_2 = keywords[1] if len(keywords) > 1 else None
         keyword_3 = keywords[2] if len(keywords) > 2 else None
 
-        # Convert competitors to separate fields - Initialize all fields
-        competitors = metadata.get("competitors", [])
-        comp_data = {
-            'competitor_1_name': None, 'competitor_1_ticker': None,
-            'competitor_2_name': None, 'competitor_2_ticker': None,
-            'competitor_3_name': None, 'competitor_3_ticker': None
-        }
-
-        for i, comp in enumerate(competitors[:3], 1):
-            if isinstance(comp, dict):
-                comp_data[f'competitor_{i}_name'] = comp.get('name')
-                comp_data[f'competitor_{i}_ticker'] = comp.get('ticker')
-            else:
-                # Handle old string format if needed
-                comp_data[f'competitor_{i}_name'] = str(comp) if comp else None
+        # Convert competitors and value chain to separate fields (14 fields total)
+        comp_data = parse_metadata_to_flat_fields(metadata)
 
         # Extract geographic_markets and subsidiaries
         geographic_markets = metadata.get('geographic_markets', '')

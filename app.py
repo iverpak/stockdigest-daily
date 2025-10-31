@@ -8381,6 +8381,173 @@ async def score_industry_article_relevance(
     }
 
 
+async def generate_claude_value_chain_article_summary(value_chain_company: str, value_chain_ticker: str,
+                                                       value_chain_type: str, target_company: str,
+                                                       target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate Claude summary for value chain article (upstream supplier or downstream customer)
+
+    Args:
+        value_chain_type: 'upstream' (supplier) or 'downstream' (customer)
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
+    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "failed"
+
+    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
+    # with CLAUDE_SEM:
+    if True:  # Maintain indentation
+        try:
+            # Determine focus based on value chain type
+            if value_chain_type == "upstream":
+                focus_area = "SUPPLY CHAIN & COST IMPLICATIONS"
+                signal_type = "supply security, pricing power, technology access, and input cost trends"
+            else:  # downstream
+                focus_area = "DEMAND SIGNALS & REVENUE IMPLICATIONS"
+                signal_type = "order trends, inventory levels, end-market health, and derived demand"
+
+            # System prompt (generic - cacheable)
+            system_prompt = f"""You are a research analyst extracting value chain intelligence for investment analysis.
+
+**FOCUS: {focus_area}**
+
+This article passed relevance screening. Extract all material facts about the value chain company that could affect the target company's {"costs, supply security, or input access" if value_chain_type == "upstream" else "revenue, demand visibility, or pricing power"}.
+
+**YOUR TASK:**
+The user will provide target company, value chain company ({"supplier" if value_chain_type == "upstream" else "customer"}), article title, and content. Extract facts revealing {signal_type}.
+
+**What to Extract:**
+
+{"**For UPSTREAM (Suppliers) - Supply Chain Signals:**" if value_chain_type == "upstream" else "**For DOWNSTREAM (Customers) - Demand Signals:**"}
+
+**1. {"Capacity & Supply" if value_chain_type == "upstream" else "Order Volume & Demand"}**
+{'''- Capacity additions/reductions: facility expansions, closures, production increases/cuts
+- Supply constraints: shortages, allocation, lead time extensions, force majeure
+- Output levels: production volumes, utilization rates, inventory levels
+- Delivery performance: on-time delivery rates, backlog changes''' if value_chain_type == "upstream" else '''- Order changes: volume increases/decreases, new contracts, cancellations
+- Inventory movements: building, destocking, working through excess
+- End-market demand: retail sales, foot traffic, consumption trends
+- Market share shifts: customer gaining/losing position in their markets'''}
+
+**2. {"Pricing & Cost Dynamics" if value_chain_type == "upstream" else "Pricing Power & Revenue"}**
+{'''- Price changes: increases, surcharges, cost pass-through, pricing models
+- Raw material costs: commodity price impacts, input cost trends
+- Negotiating leverage: contract renewals, pricing disputes, take-or-pay terms''' if value_chain_type == "upstream" else '''- Customer pricing: their ability to pass costs, margin trends, discounting
+- Revenue quality: mix shifts, pricing pressure, volume vs. price dynamics
+- Contract terms: pricing mechanisms, volume commitments, renewals'''}
+
+**3. Financial Performance**
+- Revenue and growth rates (total and by segment)
+- Profitability: margins, EBITDA, guidance
+- {"Capex plans: investment levels, capacity timing" if value_chain_type == "upstream" else "Cash generation: ability to invest, financial stress signals"}
+
+**4. Strategic Actions**
+{'''- M&A affecting capacity or technology access
+- Geographic expansion impacting supply chain resilience
+- Technology shifts: new processes, materials, efficiency improvements
+- Customer relationships: other customers mentioned (supply allocation)''' if value_chain_type == "upstream" else '''- M&A affecting end-market exposure
+- Geographic expansion changing demand patterns
+- Product launches incorporating target's components/services
+- Vertical integration: in-sourcing, supplier diversification'''}
+
+**5. Management Commentary**
+- {"Demand outlook from their customers" if value_chain_type == "upstream" else "Demand outlook in their end markets"}
+- {"Capacity plans and investment intentions" if value_chain_type == "upstream" else "Inventory strategies and procurement plans"}
+- Industry trends they're seeing
+- Direct quotes with attribution
+
+**Exclusion Criteria:**
+❌ Pure stock performance without operational context
+❌ DCF models, fair value estimates, technical analysis
+❌ General market commentary not specific to this company
+❌ Speculation not based on explicit statements
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Lead with most material {"supply/cost signal" if value_chain_type == "upstream" else "demand/revenue signal"}
+- Include specific numbers, dates, percentages
+- Include direct quotes from executives (with attribution)
+- Cite source: (domain name)
+- Focus on facts that could affect {target_company}'s {"input costs or supply security" if value_chain_type == "upstream" else "sales volume or pricing power"}
+
+**Output Format:**
+Return ONLY the summary text, or "FILTER: RETAIL ANALYSIS" if article is pure retail investment analysis."""
+
+            # User message with ticker-specific context
+            user_content = f"""**TARGET COMPANY (Our Focus):** {target_company} ({target_ticker})
+**{"SUPPLIER" if value_chain_type == "upstream" else "CUSTOMER"}:** {value_chain_company} ({value_chain_ticker})
+**VALUE CHAIN POSITION:** {"Upstream supplier - focus on supply/cost signals" if value_chain_type == "upstream" else "Downstream customer - focus on demand/revenue signals"}
+
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
+{scraped_content[:20000]}"""
+
+            headers = {
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 2048,
+                "temperature": 0.2,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": user_content
+                    }
+                ]
+            }
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        LOG.error(f"Claude value chain summary error {response.status}: {error_text}")
+                        return None, "failed"
+
+                    result = await response.json()
+
+                    # Track cost
+                    usage = result.get("usage", {})
+                    calculate_claude_api_cost(usage, "summary_value_chain")
+
+                    # Log cache performance
+                    cache_creation = usage.get("cache_creation_input_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    if cache_creation > 0:
+                        LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (value chain summary)")
+                    elif cache_read > 0:
+                        LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (value chain summary) - 90% savings!")
+
+                    content = result.get("content", [{}])[0].get("text", "")
+
+                    # Check for filter signal
+                    if content.strip().startswith("FILTER:"):
+                        LOG.info(f"[{target_ticker}] 🚫 Value chain article filtered by Claude")
+                        return None, "filtered"
+
+                    LOG.info(f"[{target_ticker}] ✅ Claude value chain summary generated ({value_chain_type}): {len(content)} chars")
+                    return content, "success"
+
+        except Exception as e:
+            LOG.error(f"[{target_ticker}] Claude value chain summary failed: {str(e)}")
+            return None, "failed"
+
 async def generate_claude_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
     """Generate Claude summary for fundamental driver article with target company POV
 
@@ -9652,6 +9819,13 @@ async def generate_claude_summary(scraped_content: str, title: str, ticker: str,
             return None, "failed"
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
         return await generate_claude_competitor_article_summary(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
+    elif category == "value_chain":
+        value_chain_ticker = article_metadata.get("competitor_ticker")  # Reused field
+        value_chain_type = article_metadata.get("value_chain_type")  # upstream or downstream
+        if not value_chain_ticker or not value_chain_type:
+            return None, "failed"
+        value_chain_name = competitor_name_cache.get(value_chain_ticker, value_chain_ticker)
+        return await generate_claude_value_chain_article_summary(value_chain_name, value_chain_ticker, value_chain_type, target_company_name, ticker, title, scraped_content)
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
         return await generate_claude_industry_article_summary(industry_keyword, target_company_name, ticker, title, scraped_content)
@@ -9677,6 +9851,9 @@ async def generate_openai_summary(scraped_content: str, title: str, ticker: str,
             return None, "failed"
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
         return await generate_openai_competitor_article_summary(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
+    elif category == "value_chain":
+        # No OpenAI value chain function yet - Claude only for now
+        return None, "failed"
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
         return await generate_openai_industry_article_summary(industry_keyword, target_company_name, ticker, title, scraped_content)

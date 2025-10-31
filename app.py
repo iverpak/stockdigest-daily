@@ -11996,6 +11996,246 @@ Select the {target_cap} most important articles about {competitor_name} from the
         LOG.error(f"Claude competitor triage failed: {str(e)}")
         return []
 
+async def triage_value_chain_articles_claude(articles: List[Dict], ticker: str, company_name: str,
+                                              value_chain_company: str, value_chain_ticker: str,
+                                              value_chain_type: str) -> List[Dict]:
+    """Claude-based value chain triage - focuses on supply/demand signals
+
+    Args:
+        value_chain_type: 'upstream' (supplier) or 'downstream' (customer)
+    """
+    if not ANTHROPIC_API_KEY or not articles:
+        return []
+
+    # Prepare items
+    items = []
+    for i, article in enumerate(articles):
+        item = {
+            "id": i,
+            "title": article.get('title', ''),
+            "published": article.get('published', '')
+        }
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
+
+    target_cap = min(5, len(articles))
+
+    # Value chain-specific prompt focusing on supply/demand signals
+    system_prompt = """You are a financial analyst selecting articles about a company in the value chain (suppliers or customers) based ONLY on titles and descriptions.
+
+**YOUR TASK:**
+The user will provide target company ticker, value chain company name, value chain ticker, value chain type (upstream/downstream), article count, and target cap. Select articles that reveal material supply/demand signals affecting the target company.
+
+PRIMARY CRITERION: Is this article SPECIFICALLY about the value chain company AND does it contain signals affecting the target company? If unclear, skip it.
+
+**FOR UPSTREAM (SUPPLIERS) - Focus on signals affecting target company's COSTS, SUPPLY SECURITY, TECHNOLOGY ACCESS:**
+
+SELECT (choose up to target cap):
+
+TIER 1 - Direct supply/cost impact (scrape_priority=1):
+- Supply disruptions: "shortage," "constraint," "allocation," "rationing," "delay," "halt," "unable to meet"
+- Capacity changes: "expands capacity," "closes plant," "adds production," "reduces output" WITH scale
+- Price changes: "raises prices," "price increase," "surcharge," "cost pass-through" WITH percentages
+- Raw materials: Commodity price moves, input cost changes WITH specific materials and percentages
+- Production issues: "quality problems," "recall," "contamination," "yield issues," "defect rate"
+- Technology shifts: New manufacturing processes, materials, patents WITH specific technologies
+- M&A activity: Acquisitions, divestitures affecting capacity, pricing power, or technology access
+- Regulatory: Environmental, safety, trade regulations affecting costs or availability
+- Contracts: Major supply agreements, long-term contracts WITH volumes, prices, or terms
+- Financial stress: "bankruptcy," "restructuring," "covenant breach," "liquidity crisis"
+
+TIER 2 - Strategic supply chain intelligence (scrape_priority=2):
+- Partnerships: R&D collaborations, co-development, exclusive agreements
+- Customer relationships: Other customers mentioned (competitive intel on supplier's priorities)
+- Geographic expansion: New facilities, market entries affecting supply chain resilience
+- Leadership changes: Supply chain executives, operations leaders WITH strategic implications
+- Capital allocation: Capex plans, facility investments WITH capacity impacts
+- Technology launches: New products, platforms that target company might adopt
+- Pricing strategies: Pricing models, volume discounts, bundling affecting target's costs
+- Logistics: Shipping, warehousing, transportation issues affecting delivery
+
+TIER 3 - Industry and context (scrape_priority=3):
+- Financial results: Earnings, guidance WITH implications for pricing or capacity
+- Analyst coverage: Reports discussing demand trends, pricing power, market share
+- Industry awards: Technology leadership, quality certifications
+- Executive interviews: Strategy, roadmap, capacity plans, technology direction
+- Market trends: Industry-wide supply/demand dynamics affecting this supplier
+
+**FOR DOWNSTREAM (CUSTOMERS) - Focus on signals affecting target company's REVENUE, DEMAND VISIBILITY, PRICING POWER:**
+
+SELECT (choose up to target cap):
+
+TIER 1 - Direct demand/revenue impact (scrape_priority=1):
+- Order changes: "increases orders," "reduces purchases," "delays shipments," "cancels contract" WITH volumes
+- Inventory levels: "inventory buildup," "destocking," "stockpiling," "working through inventory"
+- Demand signals: "strong demand," "weak sales," "slowing growth," "accelerating adoption" WITH specifics
+- Market share shifts: "gains share," "loses customers," "market position improves/deteriorates"
+- Pricing: Customer's ability to pass through costs, pricing pressure, margin trends
+- End-market health: Retail sales, foot traffic, online metrics for customer's business
+- Contracts: New agreements, renewals, contract wins/losses WITH values and terms
+- Financial stress: Customer's liquidity issues, bankruptcy risk affecting receivables
+- Capital spending: Customer capex plans, expansion/contraction affecting demand for target's products
+- Product launches: New products incorporating target's components/services
+
+TIER 2 - Strategic demand intelligence (scrape_priority=2):
+- Strategic shifts: Vertical integration, in-sourcing, supplier diversification efforts
+- Geographic expansion: Market entries, store openings, facility expansions affecting demand
+- Product mix: Portfolio changes affecting demand for target's specific products
+- Partnerships: Customer alliances affecting demand patterns or competitive position
+- Technology adoption: Upgrade cycles, technology transitions affecting target's products
+- Customer wins/losses: Customer's own customer base changes affecting derived demand
+- Management commentary: Demand outlook, inventory strategies, procurement plans
+- Seasonality: Seasonal patterns, inventory building ahead of peak periods
+
+TIER 3 - Market context (scrape_priority=3):
+- Financial results: Customer's earnings, guidance WITH implications for demand
+- Analyst coverage: Reports on customer's demand trends, growth outlook, competitive position
+- Industry trends: End-market dynamics affecting customer's business and demand for target's products
+- Executive interviews: Customer's strategy, outlook, procurement approach
+- Competitive dynamics: Customer vs. their competitors (shifts affecting derived demand)
+
+ANALYTICAL CONTENT - Include demand/supply analysis:
+✓ "Why [value chain company] [moved/performed]..." (understanding demand/supply drivers)
+✓ "[Value chain company]'s [demand/supply outlook]..." (forward-looking signals)
+✓ "Can [value chain company] [sustain/grow/compete]..." (capability affecting demand/supply)
+✓ "What [event] means for [value chain company]..." (implications for demand/supply)
+✓ Industry analysis WITH specific implications for this value chain company
+
+REJECT COMPLETELY - Never select:
+- Generic lists: "Top dividend stocks," "Best performers," "Stocks to watch"
+- Sector roundups: "Tech movers," "Healthcare rally" (unless value chain company is primary focus)
+- Unrelated mentions: Company listed among many without focus on supply/demand signals
+- Pure speculation: "Could 10x" WITHOUT specific demand/supply thesis
+- Historical: "If you'd invested," "20 years of returns"
+- Distant predictions: "2035 forecast" WITHOUT near-term catalysts
+- Market research: "Industry forecast" (unless specifically about this value chain company)
+- Quote pages: "Stock Price | Charts | [Exchange]"
+
+DISAMBIGUATION - Critical accuracy:
+- If title leads with different company, likely not about value chain company
+- If company name is just news source attribution, reject
+- For common names, verify context matches YOUR value chain company
+- Multi-company: Only select if value chain company is ≥50% of focus
+- CRITICAL: Must contain actual supply/demand signals, not just company news
+
+SCRAPE PRIORITY (assign integer 1-3):
+1 = Tier 1 (direct supply/demand impacts with quantifiable signals)
+2 = Tier 2 (strategic supply chain or demand intelligence)
+3 = Tier 3 (market context and industry trends)
+
+SELECTION STANDARD:
+- When uncertain if about value chain company OR lacks supply/demand signals, skip it
+- Prioritize materiality: Could this affect target company's financials in next 1-2 quarters?
+- Look for quantifiable signals: Specific prices, volumes, percentages, capacity numbers
+- Strategic significance: Does this change supply/demand dynamics?
+- Only select if provides actionable intelligence about supply chains or demand trends
+
+Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "brief reason focusing on supply/demand signal"}]
+
+CRITICAL CONSTRAINT: Return UP TO target cap articles. Select fewer if uncertain about relevance or supply/demand impact."""
+
+    # Context-specific user message
+    value_chain_label = "SUPPLIER" if value_chain_type == "upstream" else "CUSTOMER"
+    focus_area = "supply/cost signals" if value_chain_type == "upstream" else "demand/revenue signals"
+
+    user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**{value_chain_label}:** {value_chain_company} ({value_chain_ticker})
+**VALUE CHAIN TYPE:** {value_chain_type}
+**FOCUS:** Select articles revealing {focus_area} affecting {company_name}
+**ARTICLE COUNT:** {len(articles)}
+**TARGET CAP:** {target_cap}
+
+**YOUR TASK:**
+Select the {target_cap} most important articles about {value_chain_company} that contain material supply/demand signals affecting {company_name}.
+
+**ARTICLES:**
+{json.dumps(items, separators=(',', ':'))}"""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",  # Prompt caching
+            "content-type": "application/json"
+        }
+
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 2048,
+            "temperature": 0.4,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ],
+            "messages": [{"role": "user", "content": user_content}]
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    LOG.error(f"Claude value chain triage error {response.status}")
+                    return []
+
+                result = await response.json()
+
+                # Track cost
+                usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "triage_value_chain")
+
+                # Log cache performance
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (value chain triage)")
+                elif cache_read > 0:
+                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (value chain triage) - 90% savings!")
+
+                content = result.get("content", [{}])[0].get("text", "")
+
+                try:
+                    triage_result = json.loads(content)
+                except:
+                    import re
+                    match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if match:
+                        triage_result = json.loads(match.group(0))
+                    else:
+                        return []
+
+                selected_articles = []
+                for item in triage_result:
+                    if isinstance(item, dict) and "id" in item:
+                        if 0 <= item["id"] < len(articles):
+                            selected_articles.append({
+                                "id": item["id"],
+                                "scrape_priority": item.get("scrape_priority", 2),
+                                "why": item.get("why", ""),
+                                "confidence": 0.8,
+                                "likely_repeat": False,
+                                "repeat_key": ""
+                            })
+
+                # Sort by priority (1=HIGH, 2=MEDIUM, 3=LOW), then by recency
+                selected_articles.sort(key=lambda x: (
+                    x["scrape_priority"],
+                    -articles[x["id"]].get("published_at", datetime.min).timestamp() if articles[x["id"]].get("published_at") else 0
+                ))
+
+                # Cap at target after sorting
+                if len(selected_articles) > target_cap:
+                    LOG.warning(f"Claude value chain selected {len(selected_articles)}, capping to top {target_cap} by priority")
+                    selected_articles = selected_articles[:target_cap]
+
+                LOG.info(f"Claude triage value chain ({value_chain_type}): selected {len(selected_articles)}/{len(articles)} articles for {value_chain_company}")
+                return selected_articles
+
+    except Exception as e:
+        LOG.error(f"Claude value chain triage failed: {str(e)}")
+        return []
+
 # ===== END CLAUDE TRIAGE FUNCTIONS =====
 
 # ===== DUAL SCORING LOGIC (OpenAI + Claude) =====

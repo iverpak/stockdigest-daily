@@ -1,8 +1,8 @@
 # Value Chain Integration - Implementation Status
 
 **Created:** October 31, 2025
-**Status:** Phase 1 (Infrastructure) - 20% Complete (3/15 tasks done)
-**Last Updated:** After commits 526ac74, 13cfaa6
+**Status:** Phase 1 (Infrastructure) - 40% Complete (6/15 tasks done)
+**Last Updated:** After commits 526ac74, 13cfaa6, 7d1b378, 52ff527, 848fe6c, c07d507
 
 ---
 
@@ -23,7 +23,7 @@ Adding 2 upstream + 2 downstream companies (4 value chain companies) to feed mon
 
 ---
 
-## ✅ COMPLETED TASKS (3/15)
+## ✅ COMPLETED TASKS (6/15)
 
 ### Task 1: Update `generate_claude_ticker_metadata()` Prompt ✅
 **File:** `app.py` lines 13332-13688
@@ -94,14 +94,84 @@ Adding 2 upstream + 2 downstream companies (4 value chain companies) to feed mon
 - Added VALUE CHAIN section with all 4 examples
 - Updated JSON format specification
 
+### Task 4: Update Database Schema ✅
+**File:** `app.py` lines 1307-1315, 1335, 1375, 1422-1429
+**Commit:** 52ff527
+
+**Changes:**
+1. **ticker_reference table:** Added 8 value chain columns
+   - upstream_1_name, upstream_1_ticker
+   - upstream_2_name, upstream_2_ticker
+   - downstream_1_name, downstream_1_ticker
+   - downstream_2_name, downstream_2_ticker
+   - Both in CREATE TABLE and ALTER TABLE statements
+
+2. **ticker_articles table:** Added value_chain_type column
+   - VARCHAR(10) with CHECK constraint (upstream/downstream/NULL)
+
+3. **feeds table:** Added value_chain_type column
+   - VARCHAR(10) with CHECK constraint (upstream/downstream/NULL)
+
+4. **SQL statements updated:**
+   - `update_ticker_reference_ai_data()` - INSERT/UPDATE with 8 fields
+   - `get_ticker_reference()` (2 functions) - SELECT with 8 fields
+
+### Task 5: Update Feed Creation Logic ✅
+**File:** `app.py` lines 2135-2435
+**Commit:** 848fe6c
+
+**Changes:**
+1. **Updated `upsert_feed_new_architecture()`:**
+   - Added `value_chain_type` parameter (default: None)
+   - Stores value in feeds table
+   - COALESCE update preserves existing values
+
+2. **Added Section 4: Upstream Value Chain feeds**
+   - 0-2 suppliers × 2 sources (Google + Yahoo)
+   - Feed names: "Upstream: {Company Name}"
+   - value_chain_type='upstream'
+   - Category: 'value_chain'
+
+3. **Added Section 5: Downstream Value Chain feeds**
+   - 0-2 customers × 2 sources (Google + Yahoo)
+   - Feed names: "Downstream: {Company Name}"
+   - value_chain_type='downstream'
+   - Category: 'value_chain'
+
+**Result:** 19 feeds per ticker (was 11, now +73%)
+
+### Task 6: Update CSV Import/Export ✅
+**Files:** `app.py` lines 3591-3604, 3649-3650, 3667-3675, 3704-3756, 3990-3993, 4033-4036
+**Commit:** c07d507
+
+**Changes:**
+1. **Import function (`import_ticker_reference_from_csv_content`):**
+   - Added 8 value chain field parsing (lines 3591-3604)
+   - Added to NULL byte cleaning list
+   - Added ticker normalization/validation for value chain fields
+   - Updated bulk INSERT statement (8 columns, 8 parameters, 8 UPDATE assignments)
+
+2. **Export function (`export_ticker_references_to_csv`):**
+   - Updated SELECT to include 8 value chain columns
+   - Updated CSV headers list (47 columns total, was 39)
+
+**CSV Column Order:**
+- Industry keywords (3 fields)
+- Horizontal competitors (6 fields)
+- Value chain upstream (4 fields)
+- Value chain downstream (4 fields)
+
 ---
 
-## 🔄 REMAINING TASKS (12/15)
+## 🔄 REMAINING TASKS (9/15)
 
-### PHASE 1: Core Infrastructure (3 remaining)
+### PHASE 1: Core Infrastructure (0 remaining - COMPLETE ✅)
 
-#### Task 4: Update Database Schema ⏳ IN PROGRESS
-**Files:** `app.py` (ensure_schema function, ~line 1259)
+All Phase 1 tasks complete!
+
+### PHASE 2: Processing Pipeline (6 remaining)
+
+#### Task 7: Add value_chain Category to Ingestion Logic
 
 **Changes Needed:**
 

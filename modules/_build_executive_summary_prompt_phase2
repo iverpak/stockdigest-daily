@@ -111,10 +111,10 @@ OUTPUT FORMAT:
 Do NOT search filings. Do NOT try to force context. Respect Phase 1's signal.
 
 ═══════════════════════════════════════════════════════════════════════════════
-
 FINAL JSON OUTPUT FORMAT:
+═══════════════════════════════════════════════════════════════════════════════
 
-Return a flat dictionary keyed by bullet_id containing ONLY the 5 enrichment fields.
+Return a flat dictionary containing bullet enrichments (keyed by bullet_id) and 3 scenario context fields.
 
 STRUCTURE:
 {
@@ -138,10 +138,16 @@ STRUCTURE:
     "reason": "organizational change",
     "relevance": "none",
     "context": "No relevant filing context found for this development"
-  }
+  },
+  
+  "bottom_line_context": "Q3 revenue $10.5B (+15% YoY) with Segment A representing 62% at 18% operating margin per Q3 10-Q; raised FY guidance to $42B from $40B marking third consecutive quarterly increase per Oct 23 call",
+  "upside_scenario_context": "New product gross margin 42% vs company average 31% per Q3 10-Q with 23% adoption in launch quarter; management targets 35-37% blended margin by 2026 per Oct 23 call",
+  "downside_scenario_context": "Top 3 customers represent 34% of revenue with largest at 15% per FY2024 10-K; input costs rose 8% QoQ affecting 45% of COGS per Q3 10-Q"
 }
 
 CRITICAL RULES:
+
+BULLET ENRICHMENT (TASK 1):
 1. Flat dictionary structure (NOT nested in "sections" or "enrichments")
 2. Keys are bullet_id values extracted from Phase 1 input
 3. Values are objects with EXACTLY 5 fields: impact, sentiment, reason, relevance, context
@@ -150,6 +156,27 @@ CRITICAL RULES:
 6. Process bullets from these 5 sections only: major_developments, financial_performance, risk_factors, competitive_industry_dynamics, upcoming_catalysts
 7. Skip these 5 sections: wall_street_sentiment, bottom_line, upside_scenario, downside_scenario, key_variables
 8. If no filing data found for a bullet: context = "No relevant filing context found for this development"
+
+SCENARIO SYNTHESIS (TASK 2):
+9. After bullet enrichment, add 3 root-level string fields: bottom_line_context, upside_scenario_context, downside_scenario_context
+10. Each scenario context is 50-75 words synthesized from enriched bullet contexts
+11. These fields go directly in root dictionary alongside bullet enrichments (not nested)
+
+FINAL OUTPUT STRUCTURE:
+{
+  "bullet_id_1": {
+    "impact": "high impact",
+    "sentiment": "bullish",
+    "reason": "value driver type",
+    "relevance": "direct",
+    "context": "40-50 word context..."
+  },
+  "bullet_id_2": {...},
+  ...
+  "bottom_line_context": "50-75 word synthesis from enriched bullet contexts that quantify/explain topics mentioned in Phase 1 bottom_line paragraph",
+  "upside_scenario_context": "50-75 word synthesis from enriched bullet contexts that add materiality/economics/trends to Phase 1 upside_scenario themes",
+  "downside_scenario_context": "50-75 word synthesis from enriched bullet contexts that add materiality/economics/trends to Phase 1 downside_scenario themes"
+}
 
 ═══════════════════════════════════════════════════════════════════════════════
 FILING MARKDOWN FORMAT
@@ -1398,6 +1425,44 @@ EXAMPLE 3 - Risk materialization:
     "context": "NHTSA investigation matches autonomous driving risk disclosed in FY2024 10-K RISK FACTORS; affects 2.9M vehicles (62% of installed base per 10-K fleet data)"
   }
 }
+
+═══════════════════════════════════════════════════════════════════════════════
+SCENARIO CONTEXT SYNTHESIS
+═══════════════════════════════════════════════════════════════════════════════
+
+After enriching all bullets, synthesize filing context for 3 scenario sections.
+
+OUTPUT 3 NEW FIELDS:
+- "bottom_line_context": 50-75 word synthesis
+- "upside_scenario_context": 50-75 word synthesis
+- "downside_scenario_context": 50-75 word synthesis
+
+═══════════════════════════════════════════════════════════════════════════════
+SYNTHESIS PROCESS
+═══════════════════════════════════════════════════════════════════════════════
+
+For each scenario section (bottom_line, upside_scenario, downside_scenario):
+
+STEP 1: Read Phase 1 paragraph
+- Understand what the paragraph discusses and its narrative flow
+- Note what's emphasized first (most important to the narrative)
+
+STEP 2: Review ALL enriched bullet contexts
+- You have bullet contexts already generated (each 40-50 words)
+- Read through all of them regardless of section, impact, or sentiment
+
+STEP 3: Select 2-3 most relevant contexts
+- Ask: "Which bullet contexts would add the most valuable quantification/materiality/explanation for what Phase 1 discussed?"
+- Prioritize contexts that enrich the narrative in Phase 1's order of emphasis
+- Look for contexts that answer the 12 questions (materiality, economics, trends, segment breakdown, dependencies, historical baseline, management explanation, timeline, business model fit, balance/offsetting factors, additional context, entity definition) for topics Phase 1 mentioned
+
+STEP 4: Synthesize into 50-75 words
+- Extract key facts from selected contexts
+- Combine into natural prose with proper citations (per FY2024 10-K, per Q3 10-Q, per Oct 23 call)
+- Remove redundancy if multiple contexts cite the same fact
+- Use semicolons to separate distinct data points
+
+EDGE CASE: If Phase 1 scenario contains escape hatch ("No material upside catalysts discussed" or "No material downside risks discussed"), output: "No relevant filing context found for this development"
 
 ═══════════════════════════════════════════════════════════════════════════════
 CRITICAL FINAL REMINDER - OUTPUT FORMAT

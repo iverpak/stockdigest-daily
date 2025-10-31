@@ -2133,20 +2133,26 @@ def strip_legal_suffixes(name: str) -> str:
 
 # NEW FEED ARCHITECTURE V2 - Category per Relationship Functions
 def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None,
-                                competitor_ticker: str = None, company_name: str = None, retain_days: int = 90) -> int:
-    """Insert/update feed in new architecture - NO CATEGORY (category is per-relationship)"""
+                                competitor_ticker: str = None, company_name: str = None, retain_days: int = 90,
+                                value_chain_type: str = None) -> int:
+    """Insert/update feed in new architecture - NO CATEGORY (category is per-relationship)
+
+    Args:
+        value_chain_type: 'upstream', 'downstream', or None (for non-value-chain feeds)
+    """
     with db() as conn, conn.cursor() as cur:
         try:
             # Insert or get existing feed - NEVER overwrite existing feeds
             cur.execute("""
-                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, company_name, retain_days)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, company_name, retain_days, value_chain_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO UPDATE SET
                     active = TRUE,
                     company_name = COALESCE(EXCLUDED.company_name, feeds.company_name),
+                    value_chain_type = COALESCE(EXCLUDED.value_chain_type, feeds.value_chain_type),
                     updated_at = NOW()
                 RETURNING id;
-            """, (url, name, search_keyword, competitor_ticker, company_name, retain_days))
+            """, (url, name, search_keyword, competitor_ticker, company_name, retain_days, value_chain_type))
 
             result = cur.fetchone()
             if result:
@@ -2319,6 +2325,111 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
 
             except Exception as e:
                 LOG.error(f"❌ Failed to create competitor feeds for {comp_name}: {e}")
+
+    # 4. Upstream (Supplier) Value Chain feeds - will be associated with category="value_chain"
+    value_chain = metadata.get("value_chain", {})
+    upstream_companies = value_chain.get("upstream", [])[:2]
+
+    for upstream_comp in upstream_companies:
+        if isinstance(upstream_comp, dict) and upstream_comp.get('name'):
+            comp_name = upstream_comp['name']
+            comp_ticker = upstream_comp.get('ticker')  # May be None for private suppliers
+
+            # Strip legal suffixes for Google News query
+            comp_feed_query_name = strip_legal_suffixes(comp_name)
+
+            try:
+                # ALWAYS create Google News feed (works for any company name)
+                feed_id = upsert_feed_new_architecture(
+                    url=f"https://news.google.com/rss/search?q=\"{comp_feed_query_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    name=f"Upstream: {comp_name}",
+                    search_keyword=comp_feed_query_name,
+                    competitor_ticker=comp_ticker,  # Can be None
+                    company_name=comp_name,
+                    value_chain_type='upstream'  # NEW FIELD
+                )
+
+                # Associate this feed with this ticker as "value_chain" category
+                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                    feeds_created.append({
+                        "feed_id": feed_id,
+                        "config": {"category": "value_chain", "type": "upstream", "name": comp_name, "source": "google"}
+                    })
+
+                # ONLY create Yahoo Finance feed if supplier has a ticker (public company)
+                if comp_ticker:
+                    feed_id = upsert_feed_new_architecture(
+                        url=f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                        name=f"Yahoo Finance: {comp_ticker}",
+                        search_keyword=comp_name,
+                        competitor_ticker=comp_ticker,
+                        company_name=comp_name,
+                        value_chain_type='upstream'  # NEW FIELD
+                    )
+
+                    # Associate this feed with this ticker as "value_chain" category
+                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                        feeds_created.append({
+                            "feed_id": feed_id,
+                            "config": {"category": "value_chain", "type": "upstream", "name": comp_name, "source": "yahoo"}
+                        })
+                else:
+                    LOG.info(f"⏭️ Upstream supplier {comp_name} has no ticker - using Google News only (private company)")
+
+            except Exception as e:
+                LOG.error(f"❌ Failed to create upstream value chain feeds for {comp_name}: {e}")
+
+    # 5. Downstream (Customer) Value Chain feeds - will be associated with category="value_chain"
+    downstream_companies = value_chain.get("downstream", [])[:2]
+
+    for downstream_comp in downstream_companies:
+        if isinstance(downstream_comp, dict) and downstream_comp.get('name'):
+            comp_name = downstream_comp['name']
+            comp_ticker = downstream_comp.get('ticker')  # May be None for private customers
+
+            # Strip legal suffixes for Google News query
+            comp_feed_query_name = strip_legal_suffixes(comp_name)
+
+            try:
+                # ALWAYS create Google News feed (works for any company name)
+                feed_id = upsert_feed_new_architecture(
+                    url=f"https://news.google.com/rss/search?q=\"{comp_feed_query_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
+                    name=f"Downstream: {comp_name}",
+                    search_keyword=comp_feed_query_name,
+                    competitor_ticker=comp_ticker,  # Can be None
+                    company_name=comp_name,
+                    value_chain_type='downstream'  # NEW FIELD
+                )
+
+                # Associate this feed with this ticker as "value_chain" category
+                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                    feeds_created.append({
+                        "feed_id": feed_id,
+                        "config": {"category": "value_chain", "type": "downstream", "name": comp_name, "source": "google"}
+                    })
+
+                # ONLY create Yahoo Finance feed if customer has a ticker (public company)
+                if comp_ticker:
+                    feed_id = upsert_feed_new_architecture(
+                        url=f"https://finance.yahoo.com/rss/headline?s={comp_ticker}",
+                        name=f"Yahoo Finance: {comp_ticker}",
+                        search_keyword=comp_name,
+                        competitor_ticker=comp_ticker,
+                        company_name=comp_name,
+                        value_chain_type='downstream'  # NEW FIELD
+                    )
+
+                    # Associate this feed with this ticker as "value_chain" category
+                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                        feeds_created.append({
+                            "feed_id": feed_id,
+                            "config": {"category": "value_chain", "type": "downstream", "name": comp_name, "source": "yahoo"}
+                        })
+                else:
+                    LOG.info(f"⏭️ Downstream customer {comp_name} has no ticker - using Google News only (private company)")
+
+            except Exception as e:
+                LOG.error(f"❌ Failed to create downstream value chain feeds for {comp_name}: {e}")
 
     LOG.info(f"✅ Created {len(feeds_created)} feed associations for {ticker} using NEW ARCHITECTURE (category-per-relationship)")
     return feeds_created

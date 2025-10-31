@@ -803,7 +803,31 @@ Examples of what to exclude:
 UPSIDE/DOWNSIDE SCENARIOS - LOGIC & CONSISTENCY CHECKS
 ═══════════════════════════════════════════════════════════════════════════════
 
-This section uses TIER 0 ONLY: Facts + Attribution. No unattributed inference.
+CONTENT SUFFICIENCY CHECK - Run this before writing scenarios:
+
+Count directional signals:
+- BULLISH: [COMPANY] positive developments (beat, raise, win, upgrade) OR competitor/industry articles explicitly stating benefit to target company
+- BEARISH: [COMPANY] negative developments (miss, cut, recall, investigation, downgrade) OR competitor/industry articles explicitly stating harm to target company
+
+DO NOT COUNT: Competitor performance without explicit target company impact stated, industry trends without target company connection
+
+SCENARIO OUTPUT BY SIGNAL COUNT:
+
+Upside signals = 0 → "No material upside catalysts discussed in recent articles."
+Upside signals = 1 → Write 1-2 sentences on that signal + "No additional upside catalysts discussed in recent articles."
+Upside signals = 2-3 → Write 3-4 sentence scenario
+Upside signals ≥ 4 → Write 4-6 sentence scenario (full synthesis)
+
+Downside signals = 0 → "No material downside risks discussed in recent articles."
+Downside signals = 1 → Write 1-2 sentences on that signal + "No additional downside risks discussed in recent articles."
+Downside signals = 2-3 → Write 3-4 sentence scenario
+Downside signals ≥ 4 → Write 4-6 sentence scenario (full synthesis)
+
+CRITICAL: Competitor data from geography where target company has 0% exposure = NOT a signal. Essex California strength ≠ upside for DC-only REIT.
+
+When signals are low (0-1), output minimal scenario. Do not fabricate scenarios from tangentially related competitor/industry data lacking explicit target company connection.
+
+INFERENCE DISCIPLINE: Use TIER 0 ONLY (Facts + Attribution). No unattributed inference.
 
 Before finalizing Upside or Downside scenarios, run these validation checks:
 
@@ -935,13 +959,28 @@ You are reporting what analysts/authors stated, not making recommendations yours
 KEY VARIABLES TO MONITOR
 ═══════════════════════════════════════════════════════════════════════════════
 
+CONTENT SUFFICIENCY CHECK - Run this before generating variables:
+
+Count forward-looking themes in articles:
+- Management guidance (revenue, EPS, operational targets)
+- Strategic initiatives announced (M&A, products, expansions)  
+- Catalysts flagged by analysts/management (regulatory decisions, launches, awards)
+- Risks emphasized requiring monitoring (competitive threats, margin pressure, demand concerns)
+
+Forward themes = 0 → Output: [] (empty array)
+Forward themes = 1 → Output: 1 variable only
+Forward themes = 2-4 → Output: 2-4 variables matching themes
+Forward themes ≥ 5 → Output: 3-5 highest-priority variables
+
+CRITICAL: Variables must be triggered by articles. If articles didn't discuss topic, don't create variable for it. DO NOT infer variables from competitor/industry data lacking explicit target company connection.
+
 Extract 3-5 metrics/events that articles suggest matter for future performance
 
 Format as bullet objects (NO filing_hints for this section):
 {
   "bullet_id": "q4_delivery_guidance",
   "topic_label": "Q4 delivery guidance",
-  "content": "Management outlook for fourth quarter deliveries and full-year 2025 performance following Q3 record; sustainability of demand after September 30 tax credit expiration - Timeline: October 22 earnings call"
+  "content": "Management outlook for fourth quarter deliveries and full-year performance following Q3 record; sustainability of demand after tax credit expiration - Timeline: Q4 2024 and FY2025 results"
 }
 
 Structure:
@@ -969,9 +1008,6 @@ Examples of good topic labels:
 - "Regulatory approval timeline"
 - "Margin trajectory"
 - "Product launch impact"
-
-Infer reasonable variables from what articles discussed and emphasized
-Only output empty array [] if using quiet day escape hatch
 
 ═══════════════════════════════════════════════════════════════════════════════
 INTELLIGENCE SYNTHESIS APPROACH

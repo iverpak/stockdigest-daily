@@ -1625,9 +1625,9 @@ python app.py check_filings
 - Monthly: ~$47.70 (30 runs)
 - Yearly: ~$572
 
-## Executive Summary AI Prompt (v3.2)
+## Executive Summary AI Prompt (v3.3)
 
-**Latest Update:** October 2025 - Refined for conciseness
+**Latest Update:** October 2025 - Phase 2 Scenario Context Integration
 
 **Reporting Philosophy Changes:**
 - ❌ ~~"Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals"~~
@@ -1654,6 +1654,93 @@ python app.py check_filings
 - Multiple developments don't get combined inappropriately
 - Competitive/Industry section can expand when needed (most important section)
 - All explicit `{ticker}` references preserved in prompts
+
+### Phase 2: Scenario Context Enrichment (NEW - October 2025)
+
+**Purpose:** Enrich Phase 1 executive summary scenarios (Bottom Line, Upside, Downside) with synthesized context from the latest 10-K filing.
+
+**Two-Phase Architecture:**
+
+**Phase 1: Article Processing**
+- Processes articles only (no filing data)
+- Generates initial executive summary with 6 sections
+- Includes content sufficiency checks (counts directional signals before generating scenarios)
+- Output: Full JSON with all sections and bullets
+
+**Phase 2: Filing Context Enrichment**
+- Receives Phase 1 JSON + latest 10-K profile
+- Generates 50-75 word context syntheses for 3 scenarios:
+  - `bottom_line_context`: Strategic positioning from 10-K
+  - `upside_scenario_context`: Growth drivers from 10-K
+  - `downside_scenario_context`: Risk factors from 10-K
+- **CRITICAL:** Completes bullet enrichments FIRST, then scenario contexts (prevents mixing)
+- Output: Enrichments dict + scenario_contexts dict (separate)
+
+**Prompts:**
+- Phase 1: `modules/_build_executive_summary_prompt_phase1` (lines 806-976)
+  - Content sufficiency checks for scenarios (counts directional signals)
+  - Content sufficiency checks for key variables (counts forward-looking themes)
+- Phase 2: `modules/_build_executive_summary_prompt_phase2` (lines 111-177, 1435-1474)
+  - Updated output format with scenario context fields
+  - 4-step synthesis process with task completion order
+
+**Implementation Details:**
+
+**Parsing Logic** (`modules/executive_summary_phase2.py:412-448`)
+- Separates scenario contexts from bullet enrichments
+- Handles 3 JSON format variations from Claude API
+- Example:
+  ```python
+  enrichments = {}  # Bullet-level enrichments (context_source, impact, sentiment, etc.)
+  scenario_contexts = {
+      "bottom_line_context": "50-75 word synthesis...",
+      "upside_scenario_context": "50-75 word synthesis...",
+      "downside_scenario_context": "50-75 word synthesis..."
+  }
+  ```
+
+**Merge Function** (`modules/executive_summary_phase2.py:715-730`)
+- Adds context fields to scenario sections in Phase 1 JSON
+- Example merged structure:
+  ```python
+  {
+    "sections": {
+      "bottom_line": {
+        "content": "Phase 1 bottom line paragraph",
+        "context": "Phase 2 10-K synthesis"  # NEW
+      },
+      "upside_scenario": {
+        "content": "Phase 1 upside paragraph",
+        "context": "Phase 2 10-K synthesis"  # NEW
+      }
+    }
+  }
+  ```
+
+**Email Display** (`modules/executive_summary_phase1.py`)
+- Email #3 Converter (lines 463-529): Appends `\nContext: {text}` (markdown)
+- Email #2 Converter (lines 571-671): Appends `<br><br>Context: {text}` (HTML)
+- Post-processing: `bold_labels=True` parameter on `build_section()` calls
+- `bold_bullet_labels()` function auto-replaces `Context:` → `<strong>Context:</strong>`
+
+**Database Storage:**
+- Scenario contexts stored in `executive_summaries` table (part of full JSON)
+- Retrieved during Email #3 generation
+- Persists across email regenerations
+
+**Key Functions:**
+- `generate_phase2_enrichments_with_claude()` - Phase 2 generation (lines 200-410)
+- `_parse_phase2_json_response()` - Parsing logic (lines 412-485)
+- `merge_phase1_and_phase2()` - Merge function (lines 598-730)
+- `convert_to_email3_sections()` - Email #3 converter (lines 413-540)
+- `convert_to_email2_sections()` - Email #2 converter (lines 542-684)
+
+**Benefits:**
+- ✅ Richer context for investment decisions
+- ✅ 10-K insights integrated seamlessly with article-driven analysis
+- ✅ Consistent display across Email #2 (QA) and Email #3 (user-facing)
+- ✅ Unified bold formatting via post-processing
+- ✅ Backward compatible (works even if no 10-K exists)
 
 ---
 

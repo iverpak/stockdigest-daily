@@ -2816,6 +2816,10 @@ def get_ticker_reference(ticker: str):
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
+                       upstream_1_name, upstream_1_ticker,
+                       upstream_2_name, upstream_2_ticker,
+                       downstream_1_name, downstream_1_ticker,
+                       downstream_2_name, downstream_2_ticker,
                        ai_generated, ai_enhanced_at, created_at, updated_at, data_source
                 FROM ticker_reference
                 WHERE ticker = %s AND active = TRUE
@@ -2834,6 +2838,10 @@ def get_ticker_reference(ticker: str):
                        competitor_1_name, competitor_1_ticker,
                        competitor_2_name, competitor_2_ticker,
                        competitor_3_name, competitor_3_ticker,
+                       upstream_1_name, upstream_1_ticker,
+                       upstream_2_name, upstream_2_ticker,
+                       downstream_1_name, downstream_1_ticker,
+                       downstream_2_name, downstream_2_ticker,
                        ai_generated, ai_enhanced_at, created_at, updated_at, data_source
                 FROM ticker_reference
                 WHERE ticker = %s AND active = TRUE
@@ -3256,6 +3264,10 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                    competitor_1_name, competitor_1_ticker,
                    competitor_2_name, competitor_2_ticker,
                    competitor_3_name, competitor_3_ticker,
+                   upstream_1_name, upstream_1_ticker,
+                   upstream_2_name, upstream_2_ticker,
+                   downstream_1_name, downstream_1_ticker,
+                   downstream_2_name, downstream_2_ticker,
                    sector, industry, sub_industry,
                    financial_last_price, financial_price_change_pct,
                    financial_yesterday_return_pct, financial_ytd_return_pct,

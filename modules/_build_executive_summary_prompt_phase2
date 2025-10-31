@@ -1435,6 +1435,9 @@ EXAMPLE 3 - Risk materialization:
 SCENARIO CONTEXT SYNTHESIS
 ═══════════════════════════════════════════════════════════════════════════════
 
+CRITICAL: Complete TASK 1 (bullet enrichment) FIRST before starting this section.
+Do not attempt scenario synthesis until all bullet contexts are generated!
+
 After enriching all bullets, synthesize filing context for 3 scenario sections.
 
 PHASE 1 PARAGRAPHS (already in your input JSON):

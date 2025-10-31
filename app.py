@@ -18914,9 +18914,12 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 </div>
             '''
         else:
-            # Paragraph format (used by Bottom Line)
-            # Strip markdown from each line before joining
-            content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
+            # Paragraph format (used by Bottom Line, Upside, Downside scenarios)
+            # Apply bold labels if requested, otherwise strip markdown
+            if bold_labels:
+                content_filtered = [bold_bullet_labels(line) for line in content if line.strip()]
+            else:
+                content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
             text = "<br>".join(content_filtered)
 
             return f'''
@@ -19047,8 +19050,12 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
                 </div>
             '''
         else:
-            # Paragraph format
-            content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
+            # Paragraph format (used by Bottom Line, Upside, Downside scenarios)
+            # Apply bold labels if requested, otherwise strip markdown
+            if bold_labels:
+                content_filtered = [bold_bullet_labels(line) for line in content if line.strip()]
+            else:
+                content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
             text = "<br>".join(content_filtered)
 
             return f'''

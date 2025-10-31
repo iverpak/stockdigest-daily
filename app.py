@@ -12355,7 +12355,7 @@ async def perform_ai_triage_with_fallback_async(
     Claude-first triage with OpenAI fallback: Claude runs first, OpenAI only on error.
     Replaces dual scoring with sequential fallback for cost savings and simplicity.
     """
-    selected_results = {"company": [], "industry": [], "competitor": []}
+    selected_results = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
     if not OPENAI_API_KEY and not ANTHROPIC_API_KEY:
         LOG.warning("No AI API keys configured - skipping triage")
@@ -12367,6 +12367,21 @@ async def perform_ai_triage_with_fallback_async(
     sector = config.get("sector", "") if config else ""
     industry_keywords = [config.get(f"industry_keyword_{i}") for i in range(1, 4) if config.get(f"industry_keyword_{i}")]
     competitors = [(config.get(f"competitor_{i}_name"), config.get(f"competitor_{i}_ticker")) for i in range(1, 4) if config.get(f"competitor_{i}_name")]
+
+    # Get value chain companies (upstream and downstream)
+    value_chain_companies = []
+    # Upstream companies
+    for i in range(1, 3):  # upstream_1, upstream_2
+        vc_name = config.get(f"upstream_{i}_name") if config else None
+        vc_ticker = config.get(f"upstream_{i}_ticker") if config else None
+        if vc_name:
+            value_chain_companies.append((vc_name, vc_ticker, "upstream"))
+    # Downstream companies
+    for i in range(1, 3):  # downstream_1, downstream_2
+        vc_name = config.get(f"downstream_{i}_name") if config else None
+        vc_ticker = config.get(f"downstream_{i}_ticker") if config else None
+        if vc_name:
+            value_chain_companies.append((vc_name, vc_ticker, "downstream"))
 
     # Build peers list for industry triage
     peers = []
@@ -12445,6 +12460,43 @@ async def perform_ai_triage_with_fallback_async(
                 "claude_args": (triage_articles, ticker, competitor_name, competitor_ticker),
                 "index_mapping": entity_articles
             })
+
+    # Value chain operations (one per value chain company)
+    value_chain_articles = articles_by_category.get("value_chain", [])
+    if value_chain_articles:
+        # Group by value chain company (using competitor_ticker field which stores vc ticker)
+        value_chain_by_entity = {}
+        for idx, article in enumerate(value_chain_articles):
+            entity_key = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+            if entity_key not in value_chain_by_entity:
+                value_chain_by_entity[entity_key] = []
+            value_chain_by_entity[entity_key].append({"article": article, "original_idx": idx})
+
+        for entity_key, entity_articles in value_chain_by_entity.items():
+            triage_articles = [item["article"] for item in entity_articles]
+            # Get value chain company name, ticker, and type from article metadata
+            vc_ticker = entity_articles[0]["article"].get("competitor_ticker", entity_key)
+            vc_name = entity_articles[0]["article"].get("search_keyword", entity_key)
+            # Get value_chain_type from first article (upstream or downstream)
+            vc_type = None
+            for article in triage_articles:
+                if article.get("value_chain_type"):
+                    vc_type = article.get("value_chain_type")
+                    break
+
+            if vc_type:  # Only add if we have value_chain_type
+                all_triage_operations.append({
+                    "type": "value_chain",
+                    "key": entity_key,
+                    "articles": triage_articles,
+                    "target_cap": min(5, len(triage_articles)),
+                    "openai_func": None,  # No OpenAI fallback for value chain yet
+                    "openai_args": None,
+                    "claude_func": triage_value_chain_articles_claude,
+                    "claude_args": (triage_articles, ticker, company_name, vc_name, vc_ticker, vc_type),
+                    "index_mapping": entity_articles,
+                    "value_chain_type": vc_type
+                })
 
     total_operations = len(all_triage_operations)
     LOG.info(f"Total triage operations: {total_operations}")
@@ -12562,12 +12614,20 @@ async def perform_ai_triage_with_fallback_async(
                     selected_item["id"] = original_idx
                 selected_results["competitor"].extend(result)
 
+            elif op["type"] == "value_chain":
+                # Map back to original indices
+                for selected_item in result:
+                    original_idx = op["index_mapping"][selected_item["id"]]["original_idx"]
+                    selected_item["id"] = original_idx
+                selected_results["value_chain"].extend(result)
+
         LOG.info(f"BATCH {batch_num} COMPLETE")
 
     LOG.info(f"TRIAGE WITH FALLBACK COMPLETE:")
     LOG.info(f"  Company: {len(selected_results['company'])} selected")
     LOG.info(f"  Industry: {len(selected_results['industry'])} selected")
     LOG.info(f"  Competitor: {len(selected_results['competitor'])} selected")
+    LOG.info(f"  Value Chain: {len(selected_results['value_chain'])} selected")
     LOG.info(f"  API Usage: Claude primary: {claude_success_count}/{total_operations} | OpenAI fallback: {openai_fallback_count}/{total_operations} | Both failed: {both_failed_count}/{total_operations}")
 
     return selected_results

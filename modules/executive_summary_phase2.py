@@ -407,14 +407,20 @@ def generate_executive_summary_phase2(
                 # Claude might return:
                 # 1. {"sections": {"major_developments": [...]}} - full structure
                 # 2. {"enrichments": {"FIN_001": {...}}} - wrapped enrichments
-                # 3. {"FIN_001": {...}} - direct enrichments (what we want)
+                # 3. {"FIN_001": {...}, "bottom_line_context": "..."} - direct enrichments + scenario contexts (NEW)
+
+                enrichments = {}
+                scenario_contexts = {}
 
                 if "enrichments" in parsed_json and isinstance(parsed_json["enrichments"], dict):
                     # Case 2: Wrapped in "enrichments" key
                     enrichments = parsed_json["enrichments"]
+                    # Extract scenario contexts if present at root level
+                    for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
+                        if key in parsed_json:
+                            scenario_contexts[key] = parsed_json[key]
                 elif "sections" in parsed_json and isinstance(parsed_json["sections"], dict):
                     # Case 1: Full section structure - need to flatten to bullet_id dict
-                    enrichments = {}
                     for section_name, bullets in parsed_json["sections"].items():
                         if isinstance(bullets, list):
                             for bullet in bullets:
@@ -424,11 +430,22 @@ def generate_executive_summary_phase2(
                                         "impact": bullet.get("impact"),
                                         "sentiment": bullet.get("sentiment"),
                                         "reason": bullet.get("reason"),
+                                        "relevance": bullet.get("relevance"),
                                         "context": bullet.get("context")
                                     }
+                    # Extract scenario contexts if present at root level
+                    for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
+                        if key in parsed_json:
+                            scenario_contexts[key] = parsed_json[key]
                 else:
-                    # Case 3: Direct enrichments dict
-                    enrichments = parsed_json
+                    # Case 3: Direct enrichments dict + scenario contexts
+                    # Separate bullet enrichments from scenario contexts
+                    for key, value in parsed_json.items():
+                        if key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
+                            scenario_contexts[key] = value
+                        else:
+                            # Assume it's a bullet enrichment (dict with impact, sentiment, etc.)
+                            enrichments[key] = value
 
                 # Debug logging: Show sample of what Claude actually returned (before validation)
                 if enrichments:
@@ -455,10 +472,23 @@ def generate_executive_summary_phase2(
                         else:
                             LOG.info(f"  • {bullet_id}: ⚠️ NOT A DICT (type={type(data).__name__})")
 
+                # Debug logging: Show scenario contexts if present
+                if scenario_contexts:
+                    LOG.info(f"[{ticker}] 📄 Phase 2 scenario contexts found: {', '.join(scenario_contexts.keys())}")
+                    for key, value in scenario_contexts.items():
+                        if value:
+                            preview = value[:80] + "..." if len(value) > 80 else value
+                            LOG.info(f"  • {key}: {preview}")
+                        else:
+                            LOG.info(f"  • {key}: (empty)")
+                else:
+                    LOG.info(f"[{ticker}] 📄 No scenario contexts in Phase 2 output")
+
                 LOG.info(f"✅ [{ticker}] Phase 2 enrichment generated ({len(json_str)} chars, {len(enrichments)} bullets enriched, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 
                 return {
                     "enrichments": enrichments,
+                    "scenario_contexts": scenario_contexts,
                     "model_used": "claude",
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
@@ -601,78 +631,102 @@ def strip_escape_hatch_context(phase2_result: Dict) -> Dict:
     if context exists, without seeing "not found" messages in the UI.
 
     Args:
-        phase2_result: Phase 2 result dict with 'enrichments' key
+        phase2_result: Phase 2 result dict with 'enrichments' and 'scenario_contexts' keys
 
     Returns:
         Modified phase2_result with escape hatch text replaced
     """
     ESCAPE_HATCH = "No relevant filing context found for this development"
 
+    # Strip escape hatch from bullet enrichments
     enrichments = phase2_result.get("enrichments", {})
-
     for bullet_id, enrichment in enrichments.items():
         if enrichment.get("context") == ESCAPE_HATCH:
             enrichment["context"] = ""
+
+    # Strip escape hatch from scenario contexts
+    scenario_contexts = phase2_result.get("scenario_contexts", {})
+    for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
+        if scenario_contexts.get(key) == ESCAPE_HATCH:
+            scenario_contexts[key] = ""
 
     return phase2_result
 
 
 def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
     """
-    Merge Phase 2 enrichments into Phase 1 JSON by bullet_id.
+    Merge Phase 2 enrichments and scenario contexts into Phase 1 JSON.
 
-    Takes Phase 1 JSON structure and adds impact, sentiment, reason, relevance, context fields
-    to each bullet that has enrichment data.
+    Takes Phase 1 JSON structure and:
+    1. Adds impact, sentiment, reason, relevance, context fields to each bullet
+    2. Adds context field to paragraph sections (bottom_line, upside_scenario, downside_scenario)
 
     Args:
         phase1_json: Complete Phase 1 JSON output
-        phase2_result: Phase 2 result dict with 'enrichments' key
+        phase2_result: Phase 2 result dict with 'enrichments' and 'scenario_contexts' keys
 
     Returns:
-        Merged JSON with Phase 2 fields added to bullets
+        Merged JSON with Phase 2 fields added to bullets and scenarios
     """
     merged = copy.deepcopy(phase1_json)
     enrichments = phase2_result.get("enrichments", {})
+    scenario_contexts = phase2_result.get("scenario_contexts", {})
 
-    if not enrichments:
-        return merged
+    # Merge bullet enrichments
+    if enrichments:
+        # List of sections with bullets (not paragraphs)
+        bullet_sections = [
+            "major_developments",
+            "financial_performance",
+            "risk_factors",
+            "wall_street_sentiment",
+            "competitive_industry_dynamics",
+            "upcoming_catalysts",
+            "key_variables"
+        ]
 
-    # List of sections with bullets (not paragraphs)
-    bullet_sections = [
-        "major_developments",
-        "financial_performance",
-        "risk_factors",
-        "wall_street_sentiment",
-        "competitive_industry_dynamics",
-        "upcoming_catalysts",
-        "key_variables"
-    ]
-
-    # Iterate through all sections
-    for section_name in bullet_sections:
-        if section_name not in merged.get("sections", {}):
-            continue
-
-        section_content = merged["sections"][section_name]
-
-        if not isinstance(section_content, list):
-            continue
-
-        # Enrich each bullet
-        for bullet in section_content:
-            if not isinstance(bullet, dict):
+        # Iterate through all sections
+        for section_name in bullet_sections:
+            if section_name not in merged.get("sections", {}):
                 continue
 
-            bullet_id = bullet.get("bullet_id")
-            if not bullet_id or bullet_id not in enrichments:
+            section_content = merged["sections"][section_name]
+
+            if not isinstance(section_content, list):
                 continue
 
-            # Add Phase 2 enrichment fields
-            enrichment = enrichments[bullet_id]
-            bullet["impact"] = enrichment.get("impact")
-            bullet["sentiment"] = enrichment.get("sentiment")
-            bullet["reason"] = enrichment.get("reason")
-            bullet["relevance"] = enrichment.get("relevance")
-            bullet["context"] = enrichment.get("context")
+            # Enrich each bullet
+            for bullet in section_content:
+                if not isinstance(bullet, dict):
+                    continue
+
+                bullet_id = bullet.get("bullet_id")
+                if not bullet_id or bullet_id not in enrichments:
+                    continue
+
+                # Add Phase 2 enrichment fields
+                enrichment = enrichments[bullet_id]
+                bullet["impact"] = enrichment.get("impact")
+                bullet["sentiment"] = enrichment.get("sentiment")
+                bullet["reason"] = enrichment.get("reason")
+                bullet["relevance"] = enrichment.get("relevance")
+                bullet["context"] = enrichment.get("context")
+
+    # Merge scenario contexts into paragraph sections
+    if scenario_contexts:
+        # Add context to bottom_line
+        if "bottom_line_context" in scenario_contexts and scenario_contexts["bottom_line_context"]:
+            if "bottom_line" in merged.get("sections", {}):
+                merged["sections"]["bottom_line"]["context"] = scenario_contexts["bottom_line_context"]
+
+        # Add context to upside_scenario
+        if "upside_scenario_context" in scenario_contexts and scenario_contexts["upside_scenario_context"]:
+            if "upside_scenario" in merged.get("sections", {}):
+                merged["sections"]["upside_scenario"]["context"] = scenario_contexts["upside_scenario_context"]
+
+        # Add context to downside_scenario
+        if "downside_scenario_context" in scenario_contexts and scenario_contexts["downside_scenario_context"]:
+            if "downside_scenario" in merged.get("sections", {}):
+                merged["sections"]["downside_scenario"]["context"] = scenario_contexts["downside_scenario_context"]
 
     return merged

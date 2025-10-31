@@ -460,9 +460,15 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
 
     json_sections = phase1_json.get("sections", {})
 
-    # Bottom Line (paragraph)
+    # Bottom Line (paragraph with Phase 2 context)
     if "bottom_line" in json_sections:
-        sections["bottom_line"] = [json_sections["bottom_line"].get("content", "")]
+        content = json_sections["bottom_line"].get("content", "")
+        context = json_sections["bottom_line"].get("context", "")
+
+        if context:
+            sections["bottom_line"] = [f"{content}\nContext: {context}"]
+        else:
+            sections["bottom_line"] = [content]
 
     # Major Developments (bullets)
     if "major_developments" in json_sections:
@@ -502,13 +508,25 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
             format_bullet_for_email3(b) for b in json_sections["upcoming_catalysts"]
         ]
 
-    # Upside Scenario (paragraph)
+    # Upside Scenario (paragraph with Phase 2 context)
     if "upside_scenario" in json_sections:
-        sections["upside_scenario"] = [json_sections["upside_scenario"].get("content", "")]
+        content = json_sections["upside_scenario"].get("content", "")
+        context = json_sections["upside_scenario"].get("context", "")
 
-    # Downside Scenario (paragraph)
+        if context:
+            sections["upside_scenario"] = [f"{content}\nContext: {context}"]
+        else:
+            sections["upside_scenario"] = [content]
+
+    # Downside Scenario (paragraph with Phase 2 context)
     if "downside_scenario" in json_sections:
-        sections["downside_scenario"] = [json_sections["downside_scenario"].get("content", "")]
+        content = json_sections["downside_scenario"].get("content", "")
+        context = json_sections["downside_scenario"].get("context", "")
+
+        if context:
+            sections["downside_scenario"] = [f"{content}\nContext: {context}"]
+        else:
+            sections["downside_scenario"] = [content]
 
     # Key Variables
     if "key_variables" in json_sections:
@@ -550,9 +568,15 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
 
     json_sections = phase1_json.get("sections", {})
 
-    # Bottom Line (simple, no metadata)
+    # Bottom Line (with Phase 2 context if present)
     if "bottom_line" in json_sections:
-        sections["bottom_line"] = [json_sections["bottom_line"].get("content", "")]
+        content = json_sections["bottom_line"].get("content", "")
+        context = json_sections["bottom_line"].get("context", "")
+
+        if context:
+            sections["bottom_line"] = [f"{content}<br><br>Context: {context}"]
+        else:
+            sections["bottom_line"] = [content]
 
     # Helper function to format bullets with filing hints and Phase 2 metadata
     def format_bullet_with_hints(bullet: Dict) -> str:
@@ -627,12 +651,24 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
             format_bullet_with_hints(b) for b in json_sections["upcoming_catalysts"]
         ]
 
-    # Upside/Downside Scenarios (simple, no metadata)
+    # Upside/Downside Scenarios (with Phase 2 context if present)
     if "upside_scenario" in json_sections:
-        sections["upside_scenario"] = [json_sections["upside_scenario"].get("content", "")]
+        content = json_sections["upside_scenario"].get("content", "")
+        context = json_sections["upside_scenario"].get("context", "")
+
+        if context:
+            sections["upside_scenario"] = [f"{content}<br><br>Context: {context}"]
+        else:
+            sections["upside_scenario"] = [content]
 
     if "downside_scenario" in json_sections:
-        sections["downside_scenario"] = [json_sections["downside_scenario"].get("content", "")]
+        content = json_sections["downside_scenario"].get("content", "")
+        context = json_sections["downside_scenario"].get("context", "")
+
+        if context:
+            sections["downside_scenario"] = [f"{content}<br><br>Context: {context}"]
+        else:
+            sections["downside_scenario"] = [content]
 
     # Key Variables (no filing hints, but show ID)
     if "key_variables" in json_sections:

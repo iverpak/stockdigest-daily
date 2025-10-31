@@ -466,7 +466,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
         context = json_sections["bottom_line"].get("context", "")
 
         if context:
-            sections["bottom_line"] = [f"{content}\nContext: {context}"]
+            sections["bottom_line"] = [f"{content}\n**Context:** {context}"]
         else:
             sections["bottom_line"] = [content]
 
@@ -514,7 +514,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
         context = json_sections["upside_scenario"].get("context", "")
 
         if context:
-            sections["upside_scenario"] = [f"{content}\nContext: {context}"]
+            sections["upside_scenario"] = [f"{content}\n**Context:** {context}"]
         else:
             sections["upside_scenario"] = [content]
 
@@ -524,7 +524,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
         context = json_sections["downside_scenario"].get("context", "")
 
         if context:
-            sections["downside_scenario"] = [f"{content}\nContext: {context}"]
+            sections["downside_scenario"] = [f"{content}\n**Context:** {context}"]
         else:
             sections["downside_scenario"] = [content]
 
@@ -574,7 +574,7 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
         context = json_sections["bottom_line"].get("context", "")
 
         if context:
-            sections["bottom_line"] = [f"{content}<br><br>Context: {context}"]
+            sections["bottom_line"] = [f"{content}<br><br><strong>Context:</strong> {context}"]
         else:
             sections["bottom_line"] = [content]
 
@@ -657,7 +657,7 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
         context = json_sections["upside_scenario"].get("context", "")
 
         if context:
-            sections["upside_scenario"] = [f"{content}<br><br>Context: {context}"]
+            sections["upside_scenario"] = [f"{content}<br><br><strong>Context:</strong> {context}"]
         else:
             sections["upside_scenario"] = [content]
 
@@ -666,7 +666,7 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
         context = json_sections["downside_scenario"].get("context", "")
 
         if context:
-            sections["downside_scenario"] = [f"{content}<br><br>Context: {context}"]
+            sections["downside_scenario"] = [f"{content}<br><br><strong>Context:</strong> {context}"]
         else:
             sections["downside_scenario"] = [content]
 

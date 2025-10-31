@@ -29835,7 +29835,7 @@ async def regenerate_email_api(request: Request):
                 send_email(email2_subject, email2_html)
                 LOG.info(f"✅ [{ticker}] Email #2 (Content QA) sent successfully")
             else:
-                LOG.warning(f"[{ticker}] No articles returned from fetch_digest_articles_with_enhanced_content")
+                LOG.warning(f"[{ticker}] No articles returned from fetch_digest_articles_with_enhanced_content (articles may be outside lookback window - this is expected for old emails, Email #2 skipped but Email #3 will generate normally)")
 
         except Exception as e:
             LOG.error(f"[{ticker}] ❌ Failed to generate/send Email #2: {e}")

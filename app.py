@@ -18811,6 +18811,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".company { border-left-color: #27ae60; }",
             ".industry { border-left-color: #f39c12; }",
             ".competitor { border-left-color: #e74c3c; }",
+            ".value_chain { border-left-color: #9b59b6; }",
             ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
             ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
             ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
@@ -18832,6 +18833,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".claude-none { background-color: #f5f5f5; color: #9e9e9e; border: 1px solid #e0e0e0; }",
             ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
             ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+            ".value-chain-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
             ".meta { color: #95a5a6; font-size: 11px; }",
@@ -18868,7 +18870,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             # Count ONLY flagged articles (not quality domains)
             ticker_flagged = 0
             triage_data = triage_results.get(ticker, {})
-            for category in ["company", "industry", "competitor"]:
+            for category in ["company", "industry", "competitor", "value_chain"]:
                 ticker_flagged += len(triage_data.get(category, []))
 
             total_flagged += ticker_flagged
@@ -18898,7 +18900,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             # Count ONLY flagged articles
             ticker_flagged = 0
             triage_data = triage_results.get(ticker, {})
-            for category in ["company", "industry", "competitor"]:
+            for category in ["company", "industry", "competitor", "value_chain"]:
                 ticker_flagged += len(triage_data.get(category, []))
 
             html.append(f"<div class='ticker-section'>")
@@ -18910,10 +18912,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             category_icons = {
                 "company": "🎯",
                 "industry": "🏭",
-                "competitor": "⚔️"
+                "competitor": "⚔️",
+                "value_chain": "🔗"
             }
 
-            for category in ["company", "industry", "competitor"]:
+            for category in ["company", "industry", "competitor", "value_chain"]:
                 articles = categories.get(category, [])
                 if not articles:
                     continue
@@ -18967,6 +18970,13 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         # Use company_name from article metadata (populated from feeds.company_name)
                         comp_name = article.get('company_name') or get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
                         header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
+                    elif category == "value_chain":
+                        # Show value chain company name with upstream/downstream indicator
+                        vc_name = article.get('company_name') or article.get('search_keyword', 'Unknown')
+                        vc_type = article.get('value_chain_type', '')
+                        vc_icon = "⬆️" if vc_type == "upstream" else "⬇️" if vc_type == "downstream" else "🔗"
+                        vc_label = "Upstream" if vc_type == "upstream" else "Downstream" if vc_type == "downstream" else "Value Chain"
+                        header_badges.append(f'<span class="value-chain-badge">{vc_icon} {vc_label}: {vc_name}</span>')
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
 

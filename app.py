@@ -13349,7 +13349,7 @@ def generate_claude_ticker_metadata(ticker: str, company_name: str = None, secto
     system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
-- All competitors must be currently publicly traded with valid ticker symbols
+- All competitors and value chain companies must be currently publicly traded with valid ticker symbols
 - Fundamental driver keywords must capture QUANTIFIABLE market forces that move the stock (NOT industry labels)
 - Industry keywords MUST be in Title Case (e.g., "Loan Growth", "EV Adoption", "Copper Prices")
 - Benchmarks must be sector-specific, not generic market indices
@@ -13471,13 +13471,13 @@ BUSINESS STRUCTURE GUIDANCE:
 
 For MOST companies (single core business):
 - Standard approach: 3 keywords for primary business
-- Example: Netflix → ["Streaming Entertainment", "Subscription Video", "Original Content"]
+- Example: Netflix → ["streaming subscriber growth", "content spending", "streaming competition"]
 
 For DIVERSIFIED companies (2-3 major business lines):
 - Keywords should cover top 2-3 revenue segments (prioritize profit contributors)
-- Competitors can be a MIX across segments (no single competitor may compete in all areas)
-- Example: Amazon → Keywords: ["E-commerce Marketplace", "Cloud Infrastructure", "Digital Advertising"]
-  Competitors: Walmart (retail), Microsoft (cloud), Shopify (platform)
+- Horizontal competitors can be a MIX across segments (no single competitor may compete in all areas)
+- Example: Amazon → Keywords: ["cloud infrastructure spending", "e-commerce sales", "digital advertising spending"]
+  Horizontal Competitors: Walmart (retail), Microsoft (cloud), Shopify (platform)
 
 For CONGLOMERATES (Berkshire, 3M, Honeywell):
 - Focus on 3 largest operating segments OR conglomerate-level themes
@@ -13490,19 +13490,138 @@ For REGIONAL/GEOGRAPHIC companies (utilities, Canadian banks):
 - Example: RY.TO → Competitors: TD.TO, BMO.TO, BNS.TO (NOT JPM, BAC)
 - Example: Southern Company → Competitors: Duke Energy, Dominion, Entergy (all Southeast regulated utilities)
 
-COMPETITORS (exactly 3):
-- Must be DIRECT business competitors where the MAJORITY of both companies' revenues/operations compete in the same markets with similar products or services
-- NOT companies with only minor product overlap (e.g., Autodesk is NOT a Figma competitor despite both having design tools)
-- NOT companies in the same sector but serving different customers or markets
-- GEOGRAPHIC PRIORITY: For regional companies (utilities, local banks), prioritize competitors in same PRIMARY market over global peers
-  → Example: Royal Bank of Canada (RY.TO) → Canadian banks (TD.TO, BMO.TO), NOT JPMorgan/BofA
-  → Example: Southern Company (SO) → Southeast utilities (Duke, Dominion), NOT all US utilities
-- Prefer publicly traded companies with tickers when possible
-- For private companies: Include name but omit or set ticker to empty string
-- Company names should be the common/brand name ONLY (e.g., "Canva" not "Canva Pty Ltd", "Adobe" not "Adobe Inc")
-- Format as structured objects with 'name' and 'ticker' fields
-- Verify ticker is correct Yahoo Finance format (if provided)
-- Exclude: Subsidiaries, companies acquired in last 2 years
+HORIZONTAL COMPETITORS (0-3):
+Select direct business competitors competing for the same customers in the same markets.
+
+**Selection Criteria:**
+- Must compete in SAME CUSTOMER SEGMENT and price point (not just same industry)
+- GEOGRAPHIC PRIORITY: For regional companies, prioritize competitors in same primary market
+- Prioritize in order: (1) Direct peer (similar scale/model), (2) Adjacent competitor, (3) Bellwether (larger sector leader)
+- Return 0-3 based on availability - quality over quantity
+- Strongly prefer publicly traded companies with valid tickers
+- Only include private if industry-dominant with significant newsflow (≥5 major articles/month)
+- Exclude: Subsidiaries, companies acquired in last 2 years, companies already listed in value chain
+
+**Bad match examples:**
+❌ AvalonBay (luxury apartments) for ELME (value-add apartments) - different customer segment
+❌ IBM (enterprise conglomerate) for D-Wave (quantum startup) - different scale/focus
+❌ JPMorgan (universal bank) for Robinhood (retail trading) - different customer demographic
+
+**Format:**
+[
+  {"name": "Company Name", "ticker": "TICKER"},
+  {"name": "Company Name", "ticker": "TICKER"},
+  {"name": "Company Name", "ticker": "TICKER"}
+]
+
+VALUE CHAIN (0-2 upstream, 0-2 downstream):
+Select suppliers (upstream) and/or customers (downstream) that provide material intelligence signals.
+
+**UPSTREAM (0-2 suppliers/input providers):**
+Include if:
+- Represents >10% of COGS, OR
+- CRITICAL ENABLER: Sole-source/oligopoly (≤3 global suppliers), would halt production if lost, specialized technology/patents (e.g., TSMC for Intel, ASML for semiconductor manufacturers, rare earth suppliers for EVs)
+
+Rank by materiality (highest % of COGS first):
+- Slot 1: Most material supplier
+- Slot 2: Second most material supplier
+
+**DOWNSTREAM (0-2 buyers/customers):**
+Include if:
+- Represents >5% of revenue, OR
+- Provides demand signal proxy for market trends
+
+Rank by materiality (highest % of revenue first):
+- Slot 1: Most material customer
+- Slot 2: Second most material customer
+
+**General Rules:**
+- Strongly prefer publicly traded companies (only private if ≥5 major articles/month or industry-dominant with pricing power)
+- Geographic flexibility (can be national/international, unlike horizontal competitors)
+- Exclude: Subsidiaries, companies acquired in last 2 years, companies already listed in horizontal competitors
+- For conglomerates: Prioritize by absolute materiality across all segments (don't force coverage of every segment)
+- Return empty arrays if no material value chain exists (direct-to-consumer brands, fragmented supply/customer base)
+
+**Format:**
+{
+  "upstream": [
+    {"name": "Supplier Name", "ticker": "TICKER"},
+    {"name": "Supplier Name", "ticker": "TICKER"}
+  ],
+  "downstream": [
+    {"name": "Customer Name", "ticker": "TICKER"},
+    {"name": "Customer Name", "ticker": "TICKER"}
+  ]
+}
+
+**Examples:**
+
+Tesla (manufacturer with supplier dependency):
+{
+  "horizontal_competitors": [
+    {"name": "BYD Company", "ticker": "BYDDY"},
+    {"name": "Ford Motor", "ticker": "F"},
+    {"name": "General Motors", "ticker": "GM"}
+  ],
+  "value_chain": {
+    "upstream": [
+      {"name": "Panasonic", "ticker": "PCRFY"},
+      {"name": "CATL", "ticker": "300750.SZ"}
+    ],
+    "downstream": []
+  },
+  "industry_keywords": ["electric vehicle sales", "battery costs", "EV regulations"]
+}
+
+Intel (B2B component with major customers):
+{
+  "horizontal_competitors": [
+    {"name": "AMD", "ticker": "AMD"},
+    {"name": "NVIDIA", "ticker": "NVDA"},
+    {"name": "Qualcomm", "ticker": "QCOM"}
+  ],
+  "value_chain": {
+    "upstream": [
+      {"name": "TSMC", "ticker": "TSM"}
+    ],
+    "downstream": [
+      {"name": "Microsoft", "ticker": "MSFT"},
+      {"name": "Apple", "ticker": "AAPL"}
+    ]
+  },
+  "industry_keywords": ["x86 CPU demand", "semiconductor manufacturing capacity", "data center chip sales"]
+}
+
+Denison Mines (commodity producer):
+{
+  "horizontal_competitors": [
+    {"name": "Cameco", "ticker": "CCJ"},
+    {"name": "NexGen Energy", "ticker": "NXE"},
+    {"name": "Energy Fuels", "ticker": "UUUU"}
+  ],
+  "value_chain": {
+    "upstream": [],
+    "downstream": [
+      {"name": "Centrus Energy", "ticker": "LEU"},
+      {"name": "Constellation Energy", "ticker": "CEG"}
+    ]
+  },
+  "industry_keywords": ["uranium price", "nuclear power demand", "uranium supply"]
+}
+
+Netflix (direct-to-consumer, no value chain):
+{
+  "horizontal_competitors": [
+    {"name": "Disney", "ticker": "DIS"},
+    {"name": "Warner Bros Discovery", "ticker": "WBD"},
+    {"name": "Paramount Global", "ticker": "PARA"}
+  ],
+  "value_chain": {
+    "upstream": [],
+    "downstream": []
+  },
+  "industry_keywords": ["streaming subscriber growth", "content spending", "streaming competition"]
+}
 
 GEOGRAPHIC MARKETS (string format):
 - List the primary countries/regions where {company_name} has significant operations, revenue, or customers
@@ -13538,11 +13657,21 @@ Return ONLY valid JSON in this exact format:
     "industry": "{industry if industry else 'GICS Industry'}",
     "sub_industry": "GICS Sub-Industry",
     "industry_keywords": ["keyword1", "keyword2", "keyword3"],
-    "competitors": [
+    "horizontal_competitors": [
         {{"name": "Company Name", "ticker": "TICKER"}},
         {{"name": "Company Name", "ticker": "TICKER.TO"}},
         {{"name": "Company Name", "ticker": "TICKER"}}
     ],
+    "value_chain": {{
+        "upstream": [
+            {{"name": "Supplier Name", "ticker": "TICKER"}},
+            {{"name": "Supplier Name", "ticker": "TICKER"}}
+        ],
+        "downstream": [
+            {{"name": "Customer Name", "ticker": "TICKER"}},
+            {{"name": "Customer Name", "ticker": "TICKER"}}
+        ]
+    }},
     "sector_profile": {{
         "core_inputs": ["input1", "input2", "input3"],
         "core_channels": ["channel1", "channel2", "channel3"],
@@ -13682,7 +13811,7 @@ def generate_openai_ticker_metadata(ticker: str, company_name: str = None, secto
     system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
-- All competitors must be currently publicly traded with valid ticker symbols
+- All competitors and value chain companies must be currently publicly traded with valid ticker symbols
 - Industry keywords must be SPECIFIC enough to avoid false positives in news filtering, but not so narrow that they miss material news.
 - Benchmarks must be sector-specific, not generic market indices
 - Industry keywords MUST be in Title Case (e.g., "Loan Growth", "EV Adoption", "Copper Prices")
@@ -13804,13 +13933,13 @@ BUSINESS STRUCTURE GUIDANCE:
 
 For MOST companies (single core business):
 - Standard approach: 3 keywords for primary business
-- Example: Netflix → ["Streaming Entertainment", "Subscription Video", "Original Content"]
+- Example: Netflix → ["streaming subscriber growth", "content spending", "streaming competition"]
 
 For DIVERSIFIED companies (2-3 major business lines):
 - Keywords should cover top 2-3 revenue segments (prioritize profit contributors)
-- Competitors can be a MIX across segments (no single competitor may compete in all areas)
-- Example: Amazon → Keywords: ["E-commerce Marketplace", "Cloud Infrastructure", "Digital Advertising"]
-  Competitors: Walmart (retail), Microsoft (cloud), Shopify (platform)
+- Horizontal competitors can be a MIX across segments (no single competitor may compete in all areas)
+- Example: Amazon → Keywords: ["cloud infrastructure spending", "e-commerce sales", "digital advertising spending"]
+  Horizontal Competitors: Walmart (retail), Microsoft (cloud), Shopify (platform)
 
 For CONGLOMERATES (Berkshire, 3M, Honeywell):
 - Focus on 3 largest operating segments OR conglomerate-level themes
@@ -13823,19 +13952,138 @@ For REGIONAL/GEOGRAPHIC companies (utilities, Canadian banks):
 - Example: RY.TO → Competitors: TD.TO, BMO.TO, BNS.TO (NOT JPM, BAC)
 - Example: Southern Company → Competitors: Duke Energy, Dominion, Entergy (all Southeast regulated utilities)
 
-COMPETITORS (exactly 3):
-- Must be DIRECT business competitors where the MAJORITY of both companies' revenues/operations compete in the same markets with similar products or services
-- NOT companies with only minor product overlap (e.g., Autodesk is NOT a Figma competitor despite both having design tools)
-- NOT companies in the same sector but serving different customers or markets
-- GEOGRAPHIC PRIORITY: For regional companies (utilities, local banks), prioritize competitors in same PRIMARY market over global peers
-  → Example: Royal Bank of Canada (RY.TO) → Canadian banks (TD.TO, BMO.TO), NOT JPMorgan/BofA
-  → Example: Southern Company (SO) → Southeast utilities (Duke, Dominion), NOT all US utilities
-- Prefer publicly traded companies with tickers when possible
-- For private companies: Include name but omit or set ticker to empty string
-- Company names should be the common/brand name ONLY (e.g., "Canva" not "Canva Pty Ltd", "Adobe" not "Adobe Inc")
-- Format as structured objects with 'name' and 'ticker' fields
-- Verify ticker is correct and current Yahoo Finance format (if provided)
-- Exclude: Subsidiaries, companies acquired in last 2 years
+HORIZONTAL COMPETITORS (0-3):
+Select direct business competitors competing for the same customers in the same markets.
+
+**Selection Criteria:**
+- Must compete in SAME CUSTOMER SEGMENT and price point (not just same industry)
+- GEOGRAPHIC PRIORITY: For regional companies, prioritize competitors in same primary market
+- Prioritize in order: (1) Direct peer (similar scale/model), (2) Adjacent competitor, (3) Bellwether (larger sector leader)
+- Return 0-3 based on availability - quality over quantity
+- Strongly prefer publicly traded companies with valid tickers
+- Only include private if industry-dominant with significant newsflow (≥5 major articles/month)
+- Exclude: Subsidiaries, companies acquired in last 2 years, companies already listed in value chain
+
+**Bad match examples:**
+❌ AvalonBay (luxury apartments) for ELME (value-add apartments) - different customer segment
+❌ IBM (enterprise conglomerate) for D-Wave (quantum startup) - different scale/focus
+❌ JPMorgan (universal bank) for Robinhood (retail trading) - different customer demographic
+
+**Format:**
+[
+  {"name": "Company Name", "ticker": "TICKER"},
+  {"name": "Company Name", "ticker": "TICKER"},
+  {"name": "Company Name", "ticker": "TICKER"}
+]
+
+VALUE CHAIN (0-2 upstream, 0-2 downstream):
+Select suppliers (upstream) and/or customers (downstream) that provide material intelligence signals.
+
+**UPSTREAM (0-2 suppliers/input providers):**
+Include if:
+- Represents >10% of COGS, OR
+- CRITICAL ENABLER: Sole-source/oligopoly (≤3 global suppliers), would halt production if lost, specialized technology/patents (e.g., TSMC for Intel, ASML for semiconductor manufacturers, rare earth suppliers for EVs)
+
+Rank by materiality (highest % of COGS first):
+- Slot 1: Most material supplier
+- Slot 2: Second most material supplier
+
+**DOWNSTREAM (0-2 buyers/customers):**
+Include if:
+- Represents >5% of revenue, OR
+- Provides demand signal proxy for market trends
+
+Rank by materiality (highest % of revenue first):
+- Slot 1: Most material customer
+- Slot 2: Second most material customer
+
+**General Rules:**
+- Strongly prefer publicly traded companies (only private if ≥5 major articles/month or industry-dominant with pricing power)
+- Geographic flexibility (can be national/international, unlike horizontal competitors)
+- Exclude: Subsidiaries, companies acquired in last 2 years, companies already listed in horizontal competitors
+- For conglomerates: Prioritize by absolute materiality across all segments (don't force coverage of every segment)
+- Return empty arrays if no material value chain exists (direct-to-consumer brands, fragmented supply/customer base)
+
+**Format:**
+{
+  "upstream": [
+    {"name": "Supplier Name", "ticker": "TICKER"},
+    {"name": "Supplier Name", "ticker": "TICKER"}
+  ],
+  "downstream": [
+    {"name": "Customer Name", "ticker": "TICKER"},
+    {"name": "Customer Name", "ticker": "TICKER"}
+  ]
+}
+
+**Examples:**
+
+Tesla (manufacturer with supplier dependency):
+{
+  "horizontal_competitors": [
+    {"name": "BYD Company", "ticker": "BYDDY"},
+    {"name": "Ford Motor", "ticker": "F"},
+    {"name": "General Motors", "ticker": "GM"}
+  ],
+  "value_chain": {
+    "upstream": [
+      {"name": "Panasonic", "ticker": "PCRFY"},
+      {"name": "CATL", "ticker": "300750.SZ"}
+    ],
+    "downstream": []
+  },
+  "industry_keywords": ["electric vehicle sales", "battery costs", "EV regulations"]
+}
+
+Intel (B2B component with major customers):
+{
+  "horizontal_competitors": [
+    {"name": "AMD", "ticker": "AMD"},
+    {"name": "NVIDIA", "ticker": "NVDA"},
+    {"name": "Qualcomm", "ticker": "QCOM"}
+  ],
+  "value_chain": {
+    "upstream": [
+      {"name": "TSMC", "ticker": "TSM"}
+    ],
+    "downstream": [
+      {"name": "Microsoft", "ticker": "MSFT"},
+      {"name": "Apple", "ticker": "AAPL"}
+    ]
+  },
+  "industry_keywords": ["x86 CPU demand", "semiconductor manufacturing capacity", "data center chip sales"]
+}
+
+Denison Mines (commodity producer):
+{
+  "horizontal_competitors": [
+    {"name": "Cameco", "ticker": "CCJ"},
+    {"name": "NexGen Energy", "ticker": "NXE"},
+    {"name": "Energy Fuels", "ticker": "UUUU"}
+  ],
+  "value_chain": {
+    "upstream": [],
+    "downstream": [
+      {"name": "Centrus Energy", "ticker": "LEU"},
+      {"name": "Constellation Energy", "ticker": "CEG"}
+    ]
+  },
+  "industry_keywords": ["uranium price", "nuclear power demand", "uranium supply"]
+}
+
+Netflix (direct-to-consumer, no value chain):
+{
+  "horizontal_competitors": [
+    {"name": "Disney", "ticker": "DIS"},
+    {"name": "Warner Bros Discovery", "ticker": "WBD"},
+    {"name": "Paramount Global", "ticker": "PARA"}
+  ],
+  "value_chain": {
+    "upstream": [],
+    "downstream": []
+  },
+  "industry_keywords": ["streaming subscriber growth", "content spending", "streaming competition"]
+}
 
 GEOGRAPHIC MARKETS (string format):
 - List the primary countries/regions where the company has significant operations, revenue, or customers

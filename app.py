@@ -18933,14 +18933,14 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     if is_quiet_day:
         # Quiet day: render ONLY bottom line section (3 lines)
         return build_section("📌 Bottom Line" if not strip_emojis else "Bottom Line",
-                           bottom_line_content, use_bullets=False)
+                           bottom_line_content, use_bullets=False, bold_labels=True)
 
     # Material news day: build sections
     html = ""
 
     # Bottom Line first (paragraph format)
     html += build_section("📌 Bottom Line" if not strip_emojis else "Bottom Line",
-                         sections.get("bottom_line", []), use_bullets=False)
+                         sections.get("bottom_line", []), use_bullets=False, bold_labels=True)
 
     # Standard sections (bullet format)
     html += build_section("🔴 Major Developments" if not strip_emojis else "Major Developments",
@@ -18957,12 +18957,12 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                          sections.get("upcoming_catalysts", []), use_bullets=True, bold_labels=True)
 
     # Three new top-level sections (Oct 2025 - upgraded from sub-sections)
-    # Upside/Downside are PARAGRAPHS (use_bullets=False)
+    # Upside/Downside are PARAGRAPHS (use_bullets=False, bold_labels=True for Context)
     # Key Variables are BULLETS (use_bullets=True, bold_labels=True)
     html += build_section("📈 Upside Scenario" if not strip_emojis else "Upside Scenario",
-                         sections.get("upside_scenario", []), use_bullets=False)
+                         sections.get("upside_scenario", []), use_bullets=False, bold_labels=True)
     html += build_section("📉 Downside Scenario" if not strip_emojis else "Downside Scenario",
-                         sections.get("downside_scenario", []), use_bullets=False)
+                         sections.get("downside_scenario", []), use_bullets=False, bold_labels=True)
     html += build_section("🔍 Key Variables to Monitor" if not strip_emojis else "Key Variables to Monitor",
                          sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
@@ -19086,7 +19086,7 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
 
     # 1. Bottom Line (always, paragraph format)
     if "bottom_line" in sections:
-        html += build_section("📌 Bottom Line", sections["bottom_line"], use_bullets=False)
+        html += build_section("📌 Bottom Line", sections["bottom_line"], use_bullets=False, bold_labels=True)
 
     # 2-10. Conditional sections (bullet format with bold labels)
     if "financial_results" in sections:
@@ -19121,9 +19121,9 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
         html += build_qa_section(sections["qa_highlights"])
 
     # 12-14. Top-level Upside/Downside/Variables sections (Oct 2025 - promoted from sub-sections)
-    # Upside/Downside are PARAGRAPHS, Variables are BULLETS
-    html += build_section("📈 Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=False)
-    html += build_section("📉 Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=False)
+    # Upside/Downside are PARAGRAPHS (bold_labels=True for Context), Variables are BULLETS
+    html += build_section("📈 Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=True)
+    html += build_section("📉 Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=True)
     html += build_section("🔍 Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
     return html

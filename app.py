@@ -6450,6 +6450,13 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     elif category == "competitor":
         comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
         header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
+    elif category == "value_chain":
+        # Show value chain company name with upstream/downstream indicator
+        vc_name = article.get('search_keyword', 'Unknown')
+        vc_type = article.get('value_chain_type', '')
+        vc_icon = "⬆️" if vc_type == "upstream" else "⬇️" if vc_type == "downstream" else "🔗"
+        vc_label = "Upstream" if vc_type == "upstream" else "Downstream" if vc_type == "downstream" else "Value Chain"
+        header_badges.append(f'<span class="value-chain-badge">{vc_icon} {vc_label}: {vc_name}</span>')
     elif category == "industry" and article.get('search_keyword'):
         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
     
@@ -19126,6 +19133,7 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         ".company { border-left-color: #27ae60; }",
         ".industry { border-left-color: #f39c12; }",
         ".competitor { border-left-color: #e74c3c; }",
+        ".value_chain { border-left-color: #9b59b6; }",
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
         ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
@@ -19140,6 +19148,7 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
+        ".value-chain-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
         ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
         ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
         ".meta { color: #95a5a6; font-size: 11px; }",
@@ -19245,7 +19254,7 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             html.append("</div>")
 
         # Sort articles chronologically within each category (newest first)
-        for category in ["company", "industry", "competitor"]:
+        for category in ["company", "industry", "competitor", "value_chain"]:
             if category in categories and categories[category]:
                 articles = categories[category]
 
@@ -19255,10 +19264,11 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
                 category_icons = {
                     "company": "🎯",
                     "industry": "🏭",
-                    "competitor": "⚔️"
+                    "competitor": "⚔️",
+                    "value_chain": "🔗"
                 }
 
-                html.append(f"<h3>{category_icons.get(category, '📰')} {category.title()} News ({len(articles)} articles)</h3>")
+                html.append(f"<h3>{category_icons.get(category, '📰')} {category.replace('_', ' ').title()} News ({len(articles)} articles)</h3>")
                 for article in articles[:100]:
                     # Use simplified ticker metadata cache (just company name)
                     simple_cache = {ticker: {"company_name": company_name}}
@@ -19443,6 +19453,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                         a.quality_score,
                         ta.competitor_ticker,
+                        ta.value_chain_type,
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
@@ -19467,6 +19478,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                         a.quality_score,
                         ta.competitor_ticker,
+                        ta.value_chain_type,
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
@@ -19596,7 +19608,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     success = send_email(subject, html)
 
     # Count by category and content scraping
-    category_counts = {"company": 0, "industry": 0, "competitor": 0}
+    category_counts = {"company": 0, "industry": 0, "competitor": 0, "value_chain": 0}
     content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
 
     for ticker_cats in articles_by_ticker.values():
@@ -20187,6 +20199,92 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     html += build_category_section("INDUSTRY", articles_by_category.get('industry', []), "industry")
     html += build_category_section("COMPETITORS", articles_by_category.get('competitor', []), "competitor")
 
+    # Value Chain section (grouped by upstream/downstream)
+    value_chain_articles = articles_by_category.get('value_chain', [])
+    if value_chain_articles:
+        upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
+        downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+
+        value_chain_html = ""
+        if upstream_articles or downstream_articles:
+            value_chain_html += '<div style="margin-bottom: 16px;">'
+            value_chain_html += '<h3 style="margin: 0 0 12px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">VALUE CHAIN ({0})</h3>'.format(len(value_chain_articles))
+
+            # Upstream subsection
+            if upstream_articles:
+                value_chain_html += '<div style="margin-bottom: 12px;"><h4 style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #6b7280;">⬆️ Upstream</h4>'
+                for article in upstream_articles:
+                    is_paywalled = is_paywall_article(article.get('domain', ''))
+                    paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
+
+                    is_new = False
+                    if article.get('published_at'):
+                        published_at = article['published_at']
+                        if published_at.tzinfo is None:
+                            published_at = published_at.replace(tzinfo=timezone.utc)
+                        age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+                        is_new = age_hours < 24
+                    new_badge = '🆕 ' if is_new else ''
+
+                    domain = article.get('domain', '')
+                    is_quality = domain.lower() in [
+                        'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
+                        'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
+                    ]
+                    star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
+
+                    domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
+                    company_name = article.get('search_keyword', 'Unknown')
+
+                    value_chain_html += f'''
+                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
+                            <div style="font-size: 11px; color: #9b59b6; font-weight: 600; margin-bottom: 2px;">[{company_name}]</div>
+                            <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                        </div>
+                    '''
+                value_chain_html += '</div>'
+
+            # Downstream subsection
+            if downstream_articles:
+                value_chain_html += '<div style="margin-bottom: 12px;"><h4 style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #6b7280;">⬇️ Downstream</h4>'
+                for article in downstream_articles:
+                    is_paywalled = is_paywall_article(article.get('domain', ''))
+                    paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
+
+                    is_new = False
+                    if article.get('published_at'):
+                        published_at = article['published_at']
+                        if published_at.tzinfo is None:
+                            published_at = published_at.replace(tzinfo=timezone.utc)
+                        age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+                        is_new = age_hours < 24
+                    new_badge = '🆕 ' if is_new else ''
+
+                    domain = article.get('domain', '')
+                    is_quality = domain.lower() in [
+                        'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
+                        'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
+                    ]
+                    star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
+
+                    domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+                    date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
+                    company_name = article.get('search_keyword', 'Unknown')
+
+                    value_chain_html += f'''
+                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
+                            <div style="font-size: 11px; color: #9b59b6; font-weight: 600; margin-bottom: 2px;">[{company_name}]</div>
+                            <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                        </div>
+                    '''
+                value_chain_html += '</div>'
+
+            value_chain_html += '</div>'
+            html += value_chain_html
+
     return html
 
 
@@ -20285,7 +20383,7 @@ def generate_email_html_core(
 
     # Fetch flagged articles (already sorted by SQL)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    articles_by_category = {"company": [], "industry": [], "competitor": []}
+    articles_by_category = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
     with db() as conn, conn.cursor() as cur:
         if flagged_article_ids is not None and len(flagged_article_ids) > 0:
@@ -20293,7 +20391,7 @@ def generate_email_html_core(
             # Excludes: spam, skipped retail, failed scrapes
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker,
+                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id

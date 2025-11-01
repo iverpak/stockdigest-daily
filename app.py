@@ -3246,6 +3246,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                 'company_name': ticker,
                 'industry_keywords': [],
                 'competitors': [],
+                'value_chain': {'upstream': [], 'downstream': []},
                 'sector': 'Unknown',
                 'industry': 'Unknown',
                 'sub_industry': '',
@@ -3303,6 +3304,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                 'company_name': ticker,  # Use ticker as display name
                 'industry_keywords': [],
                 'competitors': [],
+                'value_chain': {'upstream': [], 'downstream': []},
                 'sector': 'Unknown',
                 'industry': 'Unknown',
                 'sub_industry': '',
@@ -3327,12 +3329,36 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
                 if ticker_field and ticker_field.strip():
                     comp["ticker"] = ticker_field.strip()
                 competitors.append(comp)
-        
+
+        # Convert 4 separate value chain fields back to structured format
+        value_chain = {"upstream": [], "downstream": []}
+
+        # Upstream companies (2 max)
+        for i in range(1, 3):
+            name = result.get(f"upstream_{i}_name")
+            ticker_field = result.get(f"upstream_{i}_ticker")
+            if name and name.strip():
+                vc = {"name": name.strip()}
+                if ticker_field and ticker_field.strip():
+                    vc["ticker"] = ticker_field.strip()
+                value_chain["upstream"].append(vc)
+
+        # Downstream companies (2 max)
+        for i in range(1, 3):
+            name = result.get(f"downstream_{i}_name")
+            ticker_field = result.get(f"downstream_{i}_ticker")
+            if name and name.strip():
+                vc = {"name": name.strip()}
+                if ticker_field and ticker_field.strip():
+                    vc["ticker"] = ticker_field.strip()
+                value_chain["downstream"].append(vc)
+
         config = {
             "name": result["company_name"],
             "company_name": result["company_name"],  # Some functions expect this field name
             "industry_keywords": industry_keywords,
             "competitors": competitors,
+            "value_chain": value_chain,
             "sector": result.get("sector", ""),
             "industry": result.get("industry", ""),
             "sub_industry": result.get("sub_industry", ""),
@@ -6462,8 +6488,16 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     elif category == "competitor":
         comp_name = get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
         header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
+    elif category == "upstream":
+        # Show upstream supplier company name
+        vc_name = article.get('search_keyword', 'Unknown')
+        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
+    elif category == "downstream":
+        # Show downstream customer company name
+        vc_name = article.get('search_keyword', 'Unknown')
+        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
     elif category == "value_chain":
-        # Show value chain company name with upstream/downstream indicator
+        # Fallback for old value_chain category (should not be used anymore)
         vc_name = article.get('search_keyword', 'Unknown')
         vc_type = article.get('value_chain_type', '')
         vc_icon = "⬆️" if vc_type == "upstream" else "⬇️" if vc_type == "downstream" else "🔗"
@@ -8400,6 +8434,731 @@ async def score_industry_article_relevance(
     }
 
 
+async def generate_claude_upstream_article_summary(
+    value_chain_company: str,
+    value_chain_ticker: str,
+    target_company: str,
+    target_ticker: str,
+    title: str,
+    scraped_content: str
+) -> Tuple[Optional[str], str]:
+    """Generate Claude summary for upstream supplier article with target company POV
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
+    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "failed"
+
+    if True:  # Maintain indentation for semaphore removal
+        try:
+            # Use context-specific names for prompt clarity
+            upstream_company_name = value_chain_company
+            upstream_ticker = value_chain_ticker
+
+            # System prompt (generic - cacheable, ~1800 tokens)
+            system_prompt = """You are a research analyst extracting supply chain intelligence about an upstream supplier for investment analysis.
+
+**CONTENT FILTERING**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+   - Exception: Keep if attributed to named analyst from recognized firm
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+   - Unnamed mathematical valuation models
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns, support/resistance levels, day trading signals
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+   - Proprietary rating numbers without human analyst attribution
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+   - Keep if presented as factual observation, exclude if retail investment recommendation
+
+**Professional Analyst Exception:**
+If price target, rating, or valuation is attributed to NAMED analyst from RECOGNIZED SELL-SIDE FIRM:
+✓ Keep the full commentary with complete attribution
+
+**Extract Everything Else:**
+If article contains material facts about the supplier's operations, financials, capacity, or costs, extract them regardless of source domain.
+
+**YOUR TASK:**
+The user will provide target company, upstream supplier name and ticker, article title, and content. Extract and summarize facts about the supplier's supply capacity, costs, financial health, and operational performance. Focus on supply chain intelligence affecting the target company's input costs, supply security, and product capabilities.
+
+**What to Extract:**
+
+**1. Supply Availability & Security**
+- **Capacity Changes:** Facility expansions, closures, production increases/cuts, new plants WITH scale, location, timing
+- **Supply Disruptions:** Shortages, constraints, allocation, rationing, delays, outages, force majeure WITH duration and impact
+- **Production Issues:** Quality problems, recalls, contamination, yield issues, defect rates, failed inspections
+- **Lead Times:** Delivery delays, extended lead times, backlog changes, on-time delivery performance
+- **Inventory Levels:** Supplier stockpiles, working capital issues, material availability, buffer stocks
+- Extract: Specific volumes with units, percentages, time periods, affected products/facilities, recovery timelines, root causes
+
+**2. Pricing & Cost Dynamics**
+- **Price Actions:** Price increases, surcharges, cost pass-through, pricing model changes WITH percentages, effective dates
+- **Raw Material Costs:** Commodity price impacts on supplier's costs (steel, energy, chemicals, logistics) WITH specific materials and amounts
+- **Negotiating Leverage:** Contract renewals, pricing disputes, long-term agreements, take-or-pay terms, volume commitments
+- **Margin Pressure:** Supplier profitability trends affecting ability to maintain capacity, quality, or pricing stability
+- Extract: Price percentages, effective dates, contract terms, margin levels, year-over-year comparisons, cost drivers stated
+
+**3. Financial Health**
+- **Stress Signals:** Bankruptcy filings, restructuring, liquidity crises, covenant breaches, going concern warnings, credit downgrades
+- **Profitability:** Gross margin, EBITDA, operating margin, net income WITH specific percentages and time periods
+- **Cash Flow:** Operating cash flow, free cash flow levels, working capital changes, debt service capacity
+- **Capex Plans:** Investment levels, facility timing, technology upgrades WITH amounts and capacity implications
+- **Guidance:** Forward outlook on revenue, earnings, capacity, demand from their customers
+- Extract: Exact financial figures, debt levels, cash positions, credit ratings, capex amounts, margin trends, guidance ranges
+
+**4. Technology & Quality**
+- **Manufacturing Technology:** Process improvements, yield enhancements, new production methods, automation initiatives
+- **Quality Metrics:** Defect rates, first-pass yield, quality certifications, customer satisfaction scores
+- **Innovation:** New products, materials, patents, R&D milestones affecting what they can supply
+- **Technical Standards:** Certifications achieved, compliance milestones, regulatory approvals
+- Extract: Specific technologies, yield percentages, quality metrics, certification names and dates, R&D investment levels
+
+**5. Analyst Commentary**
+- **Analyst Actions:** Firm name, analyst name, rating changes (upgrade/downgrade/initiate)
+- **Price Targets:** Specific targets, changes from prior targets
+- **Operational Rationale:** Reasons given for rating/target focused on capacity, demand, costs, or competitive position
+- Extract: Specific ratings, targets, analyst names, operational insights (not just valuation commentary)
+
+**6. Strategic Shifts**
+- **M&A Activity:** Acquisitions, divestitures, joint ventures affecting capacity, technology access, or competitive position
+- **Customer Allocation:** Other major customers mentioned, capacity priority decisions, contract wins/losses
+- **Geographic Expansion:** New facilities, market entries WITH locations and capacity implications for supply chain resilience
+- **Vertical Integration:** Supplier moving upstream/downstream, in-sourcing, outsourcing decisions
+- **Leadership Changes:** CEO, CFO, COO, operations executives WITH names and strategic implications
+- Extract: Deal terms, capacity impacts, customer names, facility locations and capacities, executive names and prior roles
+
+**7. Operational Performance**
+- **Production Metrics:** Quarterly volumes, shipment data, capacity utilization rates, throughput levels
+- **Efficiency Measures:** Cost per unit, productivity improvements, operational KPIs, waste reduction
+- **Market Position:** Supplier's market share in their industry, competitive positioning, pricing power indicators
+- **Delivery Performance:** On-time delivery rates, backlog levels, order fulfillment metrics
+- Extract: Volume figures with units, efficiency percentages, market share data, utilization rates, comparative metrics
+
+**8. Management Commentary**
+- **Capacity Plans:** Expansion intentions, investment priorities, timing of capacity additions
+- **Demand Outlook:** What supplier is seeing from their customers, order book trends, booking patterns
+- **Cost Pressures:** Input cost trends, labor costs, energy costs, logistics challenges supplier is facing
+- **Pricing Strategy:** Supplier's pricing approach, contract structures, pass-through mechanisms
+- Extract: Direct quotes with attribution (CEO, CFO names), specific forward-looking statements, strategic priorities
+
+**9. Challenges & Headwinds**
+- **Categorical Challenges (always include):**
+  - Financial stress: Bankruptcy, restructuring, covenant breaches, liquidity crises
+  - Regulatory issues: Investigations, fines, compliance violations, consent decrees
+  - Operational incidents: Plant fires, equipment failures, natural disasters, cybersecurity breaches
+  - Labor disruptions: Strikes, work stoppages, union disputes WITH production impacts
+  - Quality failures: Product recalls, contamination, safety incidents, major defect discoveries
+
+- **Explicit Framing Required (only include if article uses challenge language):**
+  - Capacity constraints - Include ONLY if article says "struggling to meet demand", "capacity bottleneck", "unable to fulfill orders"
+  - Cost pressures - Include ONLY if article says "margin pressure", "squeezed by costs", "unable to pass through"
+  - Demand weakness - Include ONLY if article says "soft demand", "order cancellations", "customers pulling back"
+
+❌ WRONG: "Supplier announces capex reduction" → infer "facing financial stress"
+✅ CORRECT: "Supplier announces capex reduction" → report as strategic action (section 6)
+Only categorize as "challenge" if article explicitly frames it that way.
+
+**Exclusion Criteria:**
+❌ Pure stock performance (price movements, technical analysis) without operational context
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to operational capacity/demand
+❌ General market commentary not specific to supplier
+❌ Historical background not relevant to current supply dynamics
+❌ Speculation about future actions not based on explicit company statements
+❌ Opinion pieces without factual operational content
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Lead with most material supply/cost signal first
+- Include specific numbers, dates, names, locations, percentages
+- Include direct quotes from executives or analysts (with attribution: "CEO John Smith stated...")
+- Cite source: (domain name)
+- Present facts in logical flow (financial results, then capacity/cost actions, then outlook)
+
+**Final Sentence - Source Citation Only:**
+
+End with source citation in parentheses: (domain.com)
+
+DO NOT add supply chain framing, cost implications, or relationship statements unless the article explicitly provided detailed analysis connecting supplier to target company.
+
+This summary will be labeled as [UPSTREAM SUPPLIER] content in the executive summary system, which already knows the supply chain relationship. Your job is to extract facts about the supplier only.
+
+**Critical Rules:**
+✅ ONLY extract facts explicitly stated about supplier
+✅ Every quantitative claim must include: number, units, time period, source
+✅ Always cite source domain in parentheses
+✅ Include executive quotes verbatim with attribution (name and title)
+✅ Present supplier facts objectively without editorializing
+
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "Sept. 30" → Write "Sept. 30" (not "September 30, 2024")
+   - Article says "Q2" → Write "Q2" (not "Q2 2025" or "second quarter 2025")
+   - Article says "next year" → Write "next year" (not "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year" (not "2025")
+   - ONLY include specific years when article explicitly states them ("Q3 2025", "fiscal 2024")
+❌ NEVER speculate on target company's supply security or cost implications
+❌ NEVER infer impact on target company's operations unless article explicitly states it
+❌ NEVER write about what target company "faces" or "must do" in response
+❌ NEVER assume target company's dependency level, purchasing volumes, or alternative suppliers
+❌ NEVER create supply chain implications beyond what article explicitly states
+❌ NEVER compare supplier's metrics to target company unless article does so explicitly
+❌ NEVER use speculative language: "may impact", "could affect", "likely to", "suggests", "threatens", "creates pressure for", "forces"
+❌ NEVER invent supply dynamics (allocation, pricing pressure, capacity constraints for target) not stated in article
+❌ NEVER add supply chain context like "supplies components to [target company]", "key supplier for [target company's products]" unless article explicitly discusses this specific relationship
+
+**CRITICAL FABRICATION PREVENTION:**
+
+❌ NEVER claim information was "not disclosed" or "undisclosed" unless article explicitly states this
+❌ Article silence ≠ information absence
+
+If article omits details (specific amounts, dates, customer names) that aren't material to the story:
+✅ Simply don't mention those details
+❌ Don't write "without disclosed amounts", "article did not provide", "undisclosed figures"
+
+Only note omission if:
+- Article explicitly states information is undisclosed/withheld
+- Or analyst/source flags the non-disclosure as unusual/noteworthy
+
+Examples:
+❌ WRONG: "Announced capacity expansion without disclosed investment amount"
+❌ WRONG: "Price increase announced; article did not provide specific percentage"
+✅ CORRECT: "Announced capacity expansion in Texas" (if amount not mentioned, just omit it)
+✅ CORRECT: "Announced price increases effective Q2" (if percentage not mentioned, just omit it)
+✅ CORRECT: "Company declined to disclose investment amount per press release" (if article explicitly says this)
+
+**SELF-CHECK BEFORE FINALIZING:**
+
+Review your summary against these questions:
+
+Supply Signal Check:
+□ Extracted facts about supplier's capacity, costs, quality, or financial health?
+□ No speculation about how this "affects our supply security" or "impacts our costs" unless article stated it?
+
+Attribution Check:
+□ Every causal connection has attribution ("CEO stated", "Per earnings call", "Analyst projected")?
+□ No unattributed forward-looking statements ("will increase capacity", "expected to raise prices")?
+
+Target Company Separation Check:
+□ No claims about impact on target company unless article explicitly stated it?
+□ No supply chain framing statements ("supplies to", "key input for target company")?
+□ Purely factual supplier data extraction without target company implications?
+
+Fabrication Check:
+□ No "undisclosed", "without disclosed", "article did not provide" phrases unless article explicitly stated this?
+□ Article silence not interpreted as information absence or non-disclosure?
+
+Speculative Language Check:
+□ No hedge words: "may", "could", "likely", "positioned", "poised", "suggests", "appears", "indicates"?
+□ Exception: Only in direct quotes with full attribution
+
+Temporal Phrasing Check:
+□ Preserved article's EXACT dates, months, quarters, and temporal phrasing without adding years?
+□ "Sept. 30" stays "Sept. 30" (not "September 30, 2024")?
+□ "Q2" stays "Q2" (not "Q2 2025" or "second quarter 2025")?
+□ "November" stays "November" (not "November 2024")?
+□ "Later this year" stays "later this year" (not "later in 2025")?
+
+Challenge Framing Check:
+□ Only categorical challenges (recalls, bankruptcies, strikes, regulatory violations) OR explicitly framed challenges?
+□ No neutral operational facts miscategorized as challenges without explicit framing?
+
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{"quality": X.X}
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
+
+Example endings:
+...Company announced 500MW capacity expansion in Arizona facility with completion expected in Q4 (renewableenergyworld.com).
+{"quality": 6.5}
+
+...CEO stated battery cell production increased 40% year-over-year to meet electric vehicle demand (reuters.com).
+{"quality": 7.5}"""
+
+            # User content (ticker-specific)
+            user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
+**UPSTREAM SUPPLIER:** {upstream_company_name} ({upstream_ticker})
+
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
+{scraped_content[:CONTENT_CHAR_LIMIT]}
+
+**YOUR TASK:**
+Extract facts about {upstream_company_name}'s supply capacity, costs, financial health, and operational performance. Focus on signals affecting supply security and input costs. Do not speculate on impact to {target_company}.
+
+🚨 CRITICAL REMINDER: You MUST end your response with quality score JSON on the absolute final line:
+{{"quality": X.X}}
+Omitting this will cause processing failure. This is MANDATORY for every article."""
+
+            headers = {
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 8192,
+                "temperature": 0.0,  # Maximum determinism for consistent article extraction
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
+                "messages": [{"role": "user", "content": user_content}]
+            }
+
+            session = get_http_session()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=90)) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"Claude upstream summary error {response.status} for {target_ticker}: {error_text[:500]}")
+                    return None, "failed"
+
+                result = await response.json()
+
+                # Track cost
+                usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "upstream_summary")
+
+                # Log cache performance
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (upstream summary)")
+                elif cache_read > 0:
+                    LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (upstream summary) - 90% savings!")
+
+                content = result.get("content", [{}])[0].get("text", "")
+
+                if not content or len(content.strip()) < 50:
+                    LOG.warning(f"Claude returned insufficient upstream summary for {target_ticker}")
+                    return None, "failed"
+
+                # Check for skip response
+                if content.strip().startswith('{"skip"'):
+                    try:
+                        json_end = content.find('}')
+                        if json_end != -1:
+                            json_part = content[:json_end+1].strip()
+                            skip_data = json.loads(json_part)
+
+                            has_reconsideration = ("Wait" in content[json_end:] or
+                                                   "reconsider" in content[json_end:].lower())
+
+                            if skip_data.get("skip") and not has_reconsideration:
+                                LOG.info(f"[{target_ticker}] 🚫 FILTERED (upstream): {skip_data.get('reason')} - {title[:80]}")
+                                return None, "filtered"
+                            elif has_reconsideration:
+                                LOG.info(f"[{target_ticker}] ✅ AI reconsidered skip signal - proceeding with analysis")
+                    except json.JSONDecodeError:
+                        pass
+
+                return content.strip(), "success"
+
+        except Exception as e:
+            LOG.error(f"Claude upstream summary generation failed for {target_ticker}: {str(e)}")
+            return None, "failed"
+
+    return None, "failed"
+
+
+async def generate_claude_downstream_article_summary(
+    value_chain_company: str,
+    value_chain_ticker: str,
+    target_company: str,
+    target_ticker: str,
+    title: str,
+    scraped_content: str
+) -> Tuple[Optional[str], str]:
+    """Generate Claude summary for downstream customer article with target company POV
+
+    Returns:
+        Tuple[Optional[str], str]: (summary, status) where status is:
+            - "success": Summary generated successfully
+            - "filtered": Article intentionally skipped (retail analysis)
+            - "failed": API error or processing failure
+    """
+    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "failed"
+
+    if True:  # Maintain indentation for semaphore removal
+        try:
+            # Use context-specific names for prompt clarity
+            downstream_company_name = value_chain_company
+            downstream_ticker = value_chain_ticker
+
+            # System prompt (generic - cacheable, ~1800 tokens)
+            system_prompt = """You are a research analyst extracting demand intelligence about a downstream customer for investment analysis.
+
+**CONTENT FILTERING**
+
+This article passed relevance screening and is from an acceptable source. Extract all material facts EXCEPT these retail investment analysis patterns:
+
+❌ DO NOT EXTRACT:
+
+1. **Fair Value Estimates (unless attributed to named sell-side analyst)**
+   - "Fair Value: $X per share" or "Intrinsic Value: $X"
+   - "Our model shows value of $X"
+   - Exception: Keep if attributed to named analyst from recognized firm
+
+2. **DCF Model Calculations**
+   - Terminal value calculations, WACC assumptions, discount rates
+   - "DCF model suggests..." or valuation formula outputs
+   - Unnamed mathematical valuation models
+
+3. **Technical Analysis**
+   - RSI, MACD, Bollinger Bands, moving average crosses
+   - Chart patterns, support/resistance levels, day trading signals
+
+4. **Stock Screener Scores/Rankings**
+   - "6 out of 10 valuation score"
+   - "Ranks #3 in momentum category"
+   - Proprietary rating numbers without human analyst attribution
+
+5. **Unnamed Valuation Multiples (when presented as retail recommendation)**
+   - "Trading at 15x P/E, should be 20x" (without analyst attribution)
+   - Keep if presented as factual observation, exclude if retail investment recommendation
+
+**Professional Analyst Exception:**
+If price target, rating, or valuation is attributed to NAMED analyst from RECOGNIZED SELL-SIDE FIRM:
+✓ Keep the full commentary with complete attribution
+
+**Extract Everything Else:**
+If article contains material facts about the customer's operations, financials, demand trends, or strategic plans, extract them regardless of source domain.
+
+**YOUR TASK:**
+The user will provide target company, downstream customer name and ticker, article title, and content. Extract and summarize facts about the customer's order activity, demand signals, financial health, and expansion plans. Focus on demand intelligence affecting the target company's revenue visibility, order volumes, and pricing power.
+
+**What to Extract:**
+
+**1. Order Activity & Demand Signals**
+- **Orders & Contracts:** Volume increases/decreases, new purchase orders, contract renewals, cancellations, delays WITH volumes, dollar amounts, terms
+- **Inventory Levels:** Building inventory (demand strength), destocking (demand weakness), working through excess, channel inventory WITH levels and trends
+- **Backlogs:** Customer's own order books, booking trends, demand visibility, quote activity WITH amounts and time periods
+- **Demand Commentary:** Management statements about demand strength, growth outlook, customer behavior, order patterns WITH specific characterizations
+- Extract: Order volumes with units, contract values, inventory levels, growth rates, year-over-year comparisons, management quotes on demand
+
+**2. End-Market Health**
+- **Revenue Performance:** Customer's sales growth, same-store sales, comparable sales, traffic metrics, consumption data WITH percentages and time periods
+- **Market Share:** Customer gaining/losing position in their markets, competitive wins/losses, market penetration WITH share percentages
+- **Pricing Power:** Customer's ability to pass costs, margin trends, discounting behavior, promotional activity WITH margin levels and pricing actions
+- **Geographic Mix:** Regional strength/weakness, market-by-market performance, international expansion WITH regional breakdowns
+- Extract: Revenue figures, growth rates, market share percentages, margin trends, geographic performance data, pricing dynamics
+
+**3. Capex & Expansion Plans**
+- **Investment Levels:** Capital spending plans, facility investments, capacity additions WITH dollar amounts, locations, timing
+- **Geographic Expansion:** New market entries, store openings, facility launches, distribution expansion WITH counts, locations, timelines
+- **Product Launches:** New offerings, platform launches, feature additions incorporating target's components/services WITH launch schedules
+- **Technology Investments:** IT infrastructure, automation, digital transformation WITH budgets and implementation timelines
+- Extract: Capex amounts, facility counts/square footage, expansion timelines, product launch schedules, investment rationales
+
+**4. Financial Health**
+- **Stress Signals:** Bankruptcy risk, restructuring plans, payment delays, liquidity issues, credit downgrades, covenant concerns
+- **Profitability:** Gross margin, EBITDA, operating margin, net income WITH specific percentages, trends, and comparisons
+- **Cash Flow:** Operating cash flow, free cash flow, working capital changes, debt service capacity WITH amounts
+- **Guidance:** Forward outlook on revenue, earnings, capex, demand trends WITH ranges and assumptions
+- **Balance Sheet:** Debt levels, cash positions, credit ratings, liquidity metrics WITH specific figures
+- Extract: Exact financial figures, margin percentages, cash positions, debt levels, credit ratings, guidance ranges, year-over-year changes
+
+**5. Analyst Commentary**
+- **Analyst Actions:** Firm name, analyst name, rating changes (upgrade/downgrade/initiate)
+- **Price Targets:** Specific targets, changes from prior targets
+- **Operational Rationale:** Reasons given for rating/target focused on demand trends, market position, growth outlook, or financial health
+- Extract: Specific ratings, targets, analyst names, demand-focused insights (not just valuation commentary)
+
+**6. Strategic Shifts**
+- **Vertical Integration:** Customer in-sourcing, backward integration, supplier diversification plans threatening demand
+- **M&A Activity:** Customer acquisitions/divestitures changing demand profile, market positioning, or purchasing power
+- **Product Mix:** Portfolio changes, SKU rationalization, category exits/entries affecting demand for specific products target supplies
+- **Partnerships:** Strategic alliances, joint ventures, distribution agreements affecting competitive position or demand patterns
+- **Leadership Changes:** CEO, CFO, procurement, operations executives WITH names and strategic implications
+- Extract: Integration plans, deal terms, demand impacts stated, product portfolio changes, partnership details, executive names and prior roles
+
+**7. Operational Trends**
+- **Production Levels:** Customer's manufacturing volumes, capacity utilization, throughput WITH utilization percentages and volume figures
+- **Channel Strategy:** Distribution changes, e-commerce growth, retail footprint, omnichannel initiatives WITH channel mix and performance
+- **Technology Adoption:** Customer's upgrade cycles, platform migrations, technology shifts affecting demand for target's products WITH adoption rates
+- **Efficiency Metrics:** Operational KPIs, productivity improvements, cost reduction initiatives WITH specific metrics
+- Extract: Production volumes, utilization rates, channel performance data, adoption percentages, efficiency improvements stated
+
+**8. Management Commentary**
+- **Demand Outlook:** What customer is seeing in their end markets, consumer trends, order patterns, booking activity
+- **Inventory Strategy:** Build vs. reduce decisions, working capital management, supply chain positioning
+- **Procurement Plans:** Purchasing intentions, supplier relationships, contract strategies, volume commitments
+- **Expansion Timeline:** Store openings, facility launches, geographic priorities, investment pacing
+- Extract: Direct quotes with attribution (CEO, CFO names), specific forward-looking statements, strategic priorities stated
+
+**9. Challenges & Headwinds**
+- **Categorical Challenges (always include):**
+  - Financial stress: Bankruptcy, restructuring, liquidity crises, covenant breaches, credit downgrades
+  - Regulatory issues: Investigations, fines, compliance violations, consent decrees
+  - Operational incidents: Store closures, system outages, cybersecurity breaches, supply chain failures
+  - Legal issues: Major lawsuits, liability determinations, settlements WITH material amounts
+  - Market exits: Geographic withdrawals, category exits, store closing programs WITH scale
+
+- **Explicit Framing Required (only include if article uses challenge language):**
+  - Demand weakness - Include ONLY if article says "soft demand", "slowing sales", "customer pullback", "weakening trends"
+  - Competitive pressure - Include ONLY if article says "losing share", "competitive headwinds", "pricing pressure from rivals"
+  - Margin squeeze - Include ONLY if article says "margin compression", "unable to pass costs", "profitability pressure"
+
+❌ WRONG: "Customer lowers prices" → infer "facing competitive pressure"
+✅ CORRECT: "Customer lowers prices" → report as pricing action (section 2)
+Only categorize as "challenge" if article explicitly frames it that way.
+
+**Exclusion Criteria:**
+❌ Pure stock performance (price movements, technical analysis) without operational context
+❌ Valuation analysis (P/E ratios, DCF models, multiples) unless tied to operational demand/growth
+❌ General market commentary not specific to customer
+❌ Historical background not relevant to current demand dynamics
+❌ Speculation about future actions not based on explicit company statements
+❌ Opinion pieces without factual operational content
+
+**Structure:**
+- Write 2-6 paragraphs in natural prose (no headers, no bullets)
+- Lead with most material demand/revenue signal first
+- Include specific numbers, dates, names, locations, percentages
+- Include direct quotes from executives or analysts (with attribution: "CEO Jane Doe stated...")
+- Cite source: (domain name)
+- Present facts in logical flow (financial results, then demand/expansion actions, then outlook)
+
+**Final Sentence - Source Citation Only:**
+
+End with source citation in parentheses: (domain.com)
+
+DO NOT add demand implications, revenue impact statements, or relationship statements unless the article explicitly provided detailed analysis connecting customer to target company.
+
+This summary will be labeled as [DOWNSTREAM CUSTOMER] content in the executive summary system, which already knows the customer relationship. Your job is to extract facts about the customer only.
+
+**Critical Rules:**
+✅ ONLY extract facts explicitly stated about customer
+✅ Every quantitative claim must include: number, units, time period, source
+✅ Always cite source domain in parentheses
+✅ Include executive quotes verbatim with attribution (name and title)
+✅ Present customer facts objectively without editorializing
+
+❌ NEVER resolve relative dates to specific years - preserve article's exact temporal phrasing
+   - Article says "Sept. 30" → Write "Sept. 30" (not "September 30, 2024")
+   - Article says "Q2" → Write "Q2" (not "Q2 2025" or "second quarter 2025")
+   - Article says "next year" → Write "next year" (not "2026")
+   - Article says "November" → Write "November" (not "November 2024")
+   - Article says "later this year" → Write "later this year" (not "2025")
+   - ONLY include specific years when article explicitly states them ("Q3 2025", "fiscal 2024")
+❌ NEVER speculate on target company's revenue implications or demand outlook
+❌ NEVER infer impact on target company's sales unless article explicitly states it
+❌ NEVER write about what target company "faces" or "must do" in response
+❌ NEVER assume target company's revenue dependency, customer concentration, or product mix
+❌ NEVER create demand implications beyond what article explicitly states
+❌ NEVER compare customer's metrics to target company unless article does so explicitly
+❌ NEVER use speculative language: "may impact", "could affect", "likely to", "suggests", "threatens", "creates pressure for", "forces"
+❌ NEVER invent demand dynamics (order reductions, contract losses, pricing pressure) not stated in article
+❌ NEVER add customer context like "purchases products from [target company]", "key customer for [target company's revenue]" unless article explicitly discusses this specific relationship
+
+**CRITICAL FABRICATION PREVENTION:**
+
+❌ NEVER claim information was "not disclosed" or "undisclosed" unless article explicitly states this
+❌ Article silence ≠ information absence
+
+If article omits details (specific amounts, dates, contract terms) that aren't material to the story:
+✅ Simply don't mention those details
+❌ Don't write "without disclosed amounts", "article did not provide", "undisclosed figures"
+
+Only note omission if:
+- Article explicitly states information is undisclosed/withheld
+- Or analyst/source flags the non-disclosure as unusual/noteworthy
+
+Examples:
+❌ WRONG: "Announced new contract without disclosed dollar value"
+❌ WRONG: "Expansion announced; article did not provide capex amount"
+✅ CORRECT: "Announced new supply contract with delivery starting Q2" (if value not mentioned, just omit it)
+✅ CORRECT: "Announced expansion into Southeast Asia" (if capex not mentioned, just omit it)
+✅ CORRECT: "Company declined to disclose contract terms per press release" (if article explicitly says this)
+
+**SELF-CHECK BEFORE FINALIZING:**
+
+Review your summary against these questions:
+
+Demand Signal Check:
+□ Extracted facts about customer's orders, demand trends, financial health, or expansion plans?
+□ No speculation about how this "affects our revenue" or "impacts our demand" unless article stated it?
+
+Attribution Check:
+□ Every causal connection has attribution ("CEO stated", "Per earnings call", "Analyst projected")?
+□ No unattributed forward-looking statements ("will increase orders", "expected to expand")?
+
+Target Company Separation Check:
+□ No claims about impact on target company unless article explicitly stated it?
+□ No customer relationship framing statements ("purchases from", "key revenue source for target company")?
+□ Purely factual customer data extraction without target company implications?
+
+Fabrication Check:
+□ No "undisclosed", "without disclosed", "article did not provide" phrases unless article explicitly stated this?
+□ Article silence not interpreted as information absence or non-disclosure?
+
+Speculative Language Check:
+□ No hedge words: "may", "could", "likely", "positioned", "poised", "suggests", "appears", "indicates"?
+□ Exception: Only in direct quotes with full attribution
+
+Temporal Phrasing Check:
+□ Preserved article's EXACT dates, months, quarters, and temporal phrasing without adding years?
+□ "Sept. 30" stays "Sept. 30" (not "September 30, 2024")?
+□ "Q2" stays "Q2" (not "Q2 2025" or "second quarter 2025")?
+□ "November" stays "November" (not "November 2024")?
+□ "Later this year" stays "later this year" (not "later in 2025")?
+
+Challenge Framing Check:
+□ Only categorical challenges (bankruptcies, closures, regulatory violations, lawsuits) OR explicitly framed challenges?
+□ No neutral operational facts miscategorized as challenges without explicit framing?
+
+**QUALITY SCORING (MANDATORY - MUST BE FINAL LINE):**
+❗ CRITICAL: You MUST output quality score as JSON on the absolute final line of your response.
+❗ This is required for all articles without exception.
+
+After summary, output JSON as last line:
+{"quality": X.X}
+
+Score based on:
+- 9-10: Original investigative reporting, named author, exclusive interviews/data, substantial depth
+- 7-8: Original analysis, identified author, detailed content, primary sources cited
+- 5-6: Standard reporting, adequate detail, properly attributed sources
+- 3-4: Thin content, aggregated from elsewhere, minimal detail, generic phrasing
+- 1-2: Press release rewrite, advertorial, obvious AI-generated content
+
+AI-Generated Indicators: No author byline, generic/repetitive phrasing, overly formal, present tense throughout, lacks specific details/quotes.
+
+Example endings:
+...Company announced 50 new store openings across Northeast region with completion expected by year-end (retaildive.com).
+{"quality": 6.5}
+
+...CEO stated same-store sales increased 8% driven by higher traffic and average transaction value (reuters.com).
+{"quality": 7.5}"""
+
+            # User content (ticker-specific)
+            user_content = f"""**TARGET COMPANY:** {target_company} ({target_ticker})
+**DOWNSTREAM CUSTOMER:** {downstream_company_name} ({downstream_ticker})
+
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
+{scraped_content[:CONTENT_CHAR_LIMIT]}
+
+**YOUR TASK:**
+Extract facts about {downstream_company_name}'s order trends, demand signals, financial health, and expansion plans. Focus on signals affecting demand visibility and revenue outlook. Do not speculate on impact to {target_company}.
+
+🚨 CRITICAL REMINDER: You MUST end your response with quality score JSON on the absolute final line:
+{{"quality": X.X}}
+Omitting this will cause processing failure. This is MANDATORY for every article."""
+
+            headers = {
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 8192,
+                "temperature": 0.0,  # Maximum determinism for consistent article extraction
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
+                "messages": [{"role": "user", "content": user_content}]
+            }
+
+            session = get_http_session()
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=90)) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    LOG.error(f"Claude downstream summary error {response.status} for {target_ticker}: {error_text[:500]}")
+                    return None, "failed"
+
+                result = await response.json()
+
+                # Track cost
+                usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "downstream_summary")
+
+                # Log cache performance
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (downstream summary)")
+                elif cache_read > 0:
+                    LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (downstream summary) - 90% savings!")
+
+                content = result.get("content", [{}])[0].get("text", "")
+
+                if not content or len(content.strip()) < 50:
+                    LOG.warning(f"Claude returned insufficient downstream summary for {target_ticker}")
+                    return None, "failed"
+
+                # Check for skip response
+                if content.strip().startswith('{"skip"'):
+                    try:
+                        json_end = content.find('}')
+                        if json_end != -1:
+                            json_part = content[:json_end+1].strip()
+                            skip_data = json.loads(json_part)
+
+                            has_reconsideration = ("Wait" in content[json_end:] or
+                                                   "reconsider" in content[json_end:].lower())
+
+                            if skip_data.get("skip") and not has_reconsideration:
+                                LOG.info(f"[{target_ticker}] 🚫 FILTERED (downstream): {skip_data.get('reason')} - {title[:80]}")
+                                return None, "filtered"
+                            elif has_reconsideration:
+                                LOG.info(f"[{target_ticker}] ✅ AI reconsidered skip signal - proceeding with analysis")
+                    except json.JSONDecodeError:
+                        pass
+
+                return content.strip(), "success"
+
+        except Exception as e:
+            LOG.error(f"Claude downstream summary generation failed for {target_ticker}: {str(e)}")
+            return None, "failed"
+
+    return None, "failed"
+
+
 async def generate_claude_value_chain_article_summary(value_chain_company: str, value_chain_ticker: str,
                                                        value_chain_type: str, target_company: str,
                                                        target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
@@ -8414,158 +9173,25 @@ async def generate_claude_value_chain_article_summary(value_chain_company: str, 
             - "filtered": Article intentionally skipped (retail analysis)
             - "failed": API error or processing failure
     """
-    if not ANTHROPIC_API_KEY or not scraped_content or len(scraped_content.strip()) < 200:
+    # Dispatcher: Route to specialized upstream or downstream summary functions
+    if value_chain_type == 'upstream':
+        LOG.info(f"[{target_ticker}] Routing to upstream summary for {value_chain_company}")
+        return await generate_claude_upstream_article_summary(
+            value_chain_company, value_chain_ticker,
+            target_company, target_ticker,
+            title, scraped_content
+        )
+    elif value_chain_type == 'downstream':
+        LOG.info(f"[{target_ticker}] Routing to downstream summary for {value_chain_company}")
+        return await generate_claude_downstream_article_summary(
+            value_chain_company, value_chain_ticker,
+            target_company, target_ticker,
+            title, scraped_content
+        )
+    else:
+        LOG.error(f"[{target_ticker}] Invalid value_chain_type: {value_chain_type}")
         return None, "failed"
 
-    # SEMAPHORE DISABLED: Prevents threading deadlock with concurrent tickers
-    # with CLAUDE_SEM:
-    if True:  # Maintain indentation
-        try:
-            # Determine focus based on value chain type
-            if value_chain_type == "upstream":
-                focus_area = "SUPPLY CHAIN & COST IMPLICATIONS"
-                signal_type = "supply security, pricing power, technology access, and input cost trends"
-            else:  # downstream
-                focus_area = "DEMAND SIGNALS & REVENUE IMPLICATIONS"
-                signal_type = "order trends, inventory levels, end-market health, and derived demand"
-
-            # System prompt (generic - cacheable)
-            system_prompt = f"""You are a research analyst extracting value chain intelligence for investment analysis.
-
-**FOCUS: {focus_area}**
-
-This article passed relevance screening. Extract all material facts about the value chain company that could affect the target company's {"costs, supply security, or input access" if value_chain_type == "upstream" else "revenue, demand visibility, or pricing power"}.
-
-**YOUR TASK:**
-The user will provide target company, value chain company ({"supplier" if value_chain_type == "upstream" else "customer"}), article title, and content. Extract facts revealing {signal_type}.
-
-**What to Extract:**
-
-{"**For UPSTREAM (Suppliers) - Supply Chain Signals:**" if value_chain_type == "upstream" else "**For DOWNSTREAM (Customers) - Demand Signals:**"}
-
-**1. {"Capacity & Supply" if value_chain_type == "upstream" else "Order Volume & Demand"}**
-{'''- Capacity additions/reductions: facility expansions, closures, production increases/cuts
-- Supply constraints: shortages, allocation, lead time extensions, force majeure
-- Output levels: production volumes, utilization rates, inventory levels
-- Delivery performance: on-time delivery rates, backlog changes''' if value_chain_type == "upstream" else '''- Order changes: volume increases/decreases, new contracts, cancellations
-- Inventory movements: building, destocking, working through excess
-- End-market demand: retail sales, foot traffic, consumption trends
-- Market share shifts: customer gaining/losing position in their markets'''}
-
-**2. {"Pricing & Cost Dynamics" if value_chain_type == "upstream" else "Pricing Power & Revenue"}**
-{'''- Price changes: increases, surcharges, cost pass-through, pricing models
-- Raw material costs: commodity price impacts, input cost trends
-- Negotiating leverage: contract renewals, pricing disputes, take-or-pay terms''' if value_chain_type == "upstream" else '''- Customer pricing: their ability to pass costs, margin trends, discounting
-- Revenue quality: mix shifts, pricing pressure, volume vs. price dynamics
-- Contract terms: pricing mechanisms, volume commitments, renewals'''}
-
-**3. Financial Performance**
-- Revenue and growth rates (total and by segment)
-- Profitability: margins, EBITDA, guidance
-- {"Capex plans: investment levels, capacity timing" if value_chain_type == "upstream" else "Cash generation: ability to invest, financial stress signals"}
-
-**4. Strategic Actions**
-{'''- M&A affecting capacity or technology access
-- Geographic expansion impacting supply chain resilience
-- Technology shifts: new processes, materials, efficiency improvements
-- Customer relationships: other customers mentioned (supply allocation)''' if value_chain_type == "upstream" else '''- M&A affecting end-market exposure
-- Geographic expansion changing demand patterns
-- Product launches incorporating target's components/services
-- Vertical integration: in-sourcing, supplier diversification'''}
-
-**5. Management Commentary**
-- {"Demand outlook from their customers" if value_chain_type == "upstream" else "Demand outlook in their end markets"}
-- {"Capacity plans and investment intentions" if value_chain_type == "upstream" else "Inventory strategies and procurement plans"}
-- Industry trends they're seeing
-- Direct quotes with attribution
-
-**Exclusion Criteria:**
-❌ Pure stock performance without operational context
-❌ DCF models, fair value estimates, technical analysis
-❌ General market commentary not specific to this company
-❌ Speculation not based on explicit statements
-
-**Structure:**
-- Write 2-6 paragraphs in natural prose (no headers, no bullets)
-- Lead with most material {"supply/cost signal" if value_chain_type == "upstream" else "demand/revenue signal"}
-- Include specific numbers, dates, percentages
-- Include direct quotes from executives (with attribution)
-- Cite source: (domain name)
-- Focus on facts that could affect {target_company}'s {"input costs or supply security" if value_chain_type == "upstream" else "sales volume or pricing power"}
-
-**Output Format:**
-Return ONLY the summary text, or "FILTER: RETAIL ANALYSIS" if article is pure retail investment analysis."""
-
-            # User message with ticker-specific context
-            user_content = f"""**TARGET COMPANY (Our Focus):** {target_company} ({target_ticker})
-**{"SUPPLIER" if value_chain_type == "upstream" else "CUSTOMER"}:** {value_chain_company} ({value_chain_ticker})
-**VALUE CHAIN POSITION:** {"Upstream supplier - focus on supply/cost signals" if value_chain_type == "upstream" else "Downstream customer - focus on demand/revenue signals"}
-
-**ARTICLE TITLE:**
-{title}
-
-**ARTICLE CONTENT:**
-{scraped_content[:20000]}"""
-
-            headers = {
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            }
-
-            data = {
-                "model": ANTHROPIC_MODEL,
-                "max_tokens": 2048,
-                "temperature": 0.2,
-                "system": [
-                    {
-                        "type": "text",
-                        "text": system_prompt,
-                        "cache_control": {"type": "ephemeral"}
-                    }
-                ],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": user_content
-                    }
-                ]
-            }
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
-                async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        LOG.error(f"Claude value chain summary error {response.status}: {error_text}")
-                        return None, "failed"
-
-                    result = await response.json()
-
-                    # Track cost
-                    usage = result.get("usage", {})
-                    calculate_claude_api_cost(usage, "summary_value_chain")
-
-                    # Log cache performance
-                    cache_creation = usage.get("cache_creation_input_tokens", 0)
-                    cache_read = usage.get("cache_read_input_tokens", 0)
-                    if cache_creation > 0:
-                        LOG.info(f"[{target_ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (value chain summary)")
-                    elif cache_read > 0:
-                        LOG.info(f"[{target_ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (value chain summary) - 90% savings!")
-
-                    content = result.get("content", [{}])[0].get("text", "")
-
-                    # Check for filter signal
-                    if content.strip().startswith("FILTER:"):
-                        LOG.info(f"[{target_ticker}] 🚫 Value chain article filtered by Claude")
-                        return None, "filtered"
-
-                    LOG.info(f"[{target_ticker}] ✅ Claude value chain summary generated ({value_chain_type}): {len(content)} chars")
-                    return content, "success"
-
-        except Exception as e:
-            LOG.error(f"[{target_ticker}] Claude value chain summary failed: {str(e)}")
-            return None, "failed"
 
 async def generate_claude_industry_article_summary(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
     """Generate Claude summary for fundamental driver article with target company POV
@@ -9943,9 +10569,9 @@ def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker:
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - skipping triage")
-        return {"company": [], "industry": [], "competitor": []}
+        return {"company": [], "industry": [], "competitor": [], "value_chain": []}
     
-    selected_results = {"company": [], "industry": [], "competitor": []}
+    selected_results = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
     # Get ticker metadata for enhanced prompts
     config = get_ticker_config(ticker)
@@ -10526,9 +11152,9 @@ def perform_ai_triage_batch_with_enhanced_selection(articles_by_category: Dict[s
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - using existing triage data and quality domains only")
-        return {"company": [], "industry": [], "competitor": []}
+        return {"company": [], "industry": [], "competitor": [], "value_chain": []}
     
-    selected_results = {"company": [], "industry": [], "competitor": []}
+    selected_results = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
     # Get ticker metadata
     config = get_ticker_config(ticker)
@@ -12192,14 +12818,14 @@ Select the {target_cap} most important articles about {competitor_name} from the
         LOG.error(f"Claude competitor triage failed: {str(e)}")
         return []
 
-async def triage_value_chain_articles_claude(articles: List[Dict], ticker: str, company_name: str,
-                                              value_chain_company: str, value_chain_ticker: str,
-                                              value_chain_type: str) -> List[Dict]:
-    """Claude-based value chain triage - focuses on supply/demand signals
-
-    Args:
-        value_chain_type: 'upstream' (supplier) or 'downstream' (customer)
-    """
+async def triage_upstream_articles_claude(
+    articles: List[Dict],
+    ticker: str,
+    company_name: str,
+    upstream_company_name: str,
+    upstream_ticker: str
+) -> List[Dict]:
+    """Claude-based upstream supplier triage"""
     if not ANTHROPIC_API_KEY or not articles:
         return []
 
@@ -12217,133 +12843,94 @@ async def triage_value_chain_articles_claude(articles: List[Dict], ticker: str, 
 
     target_cap = min(5, len(articles))
 
-    # Value chain-specific prompt focusing on supply/demand signals
-    system_prompt = """You are a financial analyst selecting articles about a company in the value chain (suppliers or customers) based ONLY on titles and descriptions.
+    # Generic system prompt (cacheable across all tickers)
+    system_prompt = """You are a financial analyst selecting articles about an upstream supplier based ONLY on titles and descriptions.
 
 **YOUR TASK:**
-The user will provide target company ticker, value chain company name, value chain ticker, value chain type (upstream/downstream), article count, and target cap. Select articles that reveal material supply/demand signals affecting the target company.
+The user will provide target company ticker, upstream supplier name, upstream ticker, article count, and target cap. Select the highest-quality articles about that specific upstream supplier.
 
-PRIMARY CRITERION: Is this article SPECIFICALLY about the value chain company AND does it contain signals affecting the target company? If unclear, skip it.
+**UPSTREAM CONTEXT:**
+Upstream suppliers provide inputs affecting the target company's production capacity, costs, supply security, and product quality.
 
-**FOR UPSTREAM (SUPPLIERS) - Focus on signals affecting target company's COSTS, SUPPLY SECURITY, TECHNOLOGY ACCESS:**
-
-SELECT (choose up to target cap):
-
-TIER 1 - Direct supply/cost impact (scrape_priority=1):
-- Supply disruptions: "shortage," "constraint," "allocation," "rationing," "delay," "halt," "unable to meet"
-- Capacity changes: "expands capacity," "closes plant," "adds production," "reduces output" WITH scale
-- Price changes: "raises prices," "price increase," "surcharge," "cost pass-through" WITH percentages
-- Raw materials: Commodity price moves, input cost changes WITH specific materials and percentages
-- Production issues: "quality problems," "recall," "contamination," "yield issues," "defect rate"
-- Technology shifts: New manufacturing processes, materials, patents WITH specific technologies
-- M&A activity: Acquisitions, divestitures affecting capacity, pricing power, or technology access
-- Regulatory: Environmental, safety, trade regulations affecting costs or availability
-- Contracts: Major supply agreements, long-term contracts WITH volumes, prices, or terms
-- Financial stress: "bankruptcy," "restructuring," "covenant breach," "liquidity crisis"
-
-TIER 2 - Strategic supply chain intelligence (scrape_priority=2):
-- Partnerships: R&D collaborations, co-development, exclusive agreements
-- Customer relationships: Other customers mentioned (competitive intel on supplier's priorities)
-- Geographic expansion: New facilities, market entries affecting supply chain resilience
-- Leadership changes: Supply chain executives, operations leaders WITH strategic implications
-- Capital allocation: Capex plans, facility investments WITH capacity impacts
-- Technology launches: New products, platforms that target company might adopt
-- Pricing strategies: Pricing models, volume discounts, bundling affecting target's costs
-- Logistics: Shipping, warehousing, transportation issues affecting delivery
-
-TIER 3 - Industry and context (scrape_priority=3):
-- Financial results: Earnings, guidance WITH implications for pricing or capacity
-- Analyst coverage: Reports discussing demand trends, pricing power, market share
-- Industry awards: Technology leadership, quality certifications
-- Executive interviews: Strategy, roadmap, capacity plans, technology direction
-- Market trends: Industry-wide supply/demand dynamics affecting this supplier
-
-**FOR DOWNSTREAM (CUSTOMERS) - Focus on signals affecting target company's REVENUE, DEMAND VISIBILITY, PRICING POWER:**
+PRIMARY CRITERION: Is this article SPECIFICALLY about the upstream supplier? If unclear, skip it.
 
 SELECT (choose up to target cap):
 
-TIER 1 - Direct demand/revenue impact (scrape_priority=1):
-- Order changes: "increases orders," "reduces purchases," "delays shipments," "cancels contract" WITH volumes
-- Inventory levels: "inventory buildup," "destocking," "stockpiling," "working through inventory"
-- Demand signals: "strong demand," "weak sales," "slowing growth," "accelerating adoption" WITH specifics
-- Market share shifts: "gains share," "loses customers," "market position improves/deteriorates"
-- Pricing: Customer's ability to pass through costs, pricing pressure, margin trends
-- End-market health: Retail sales, foot traffic, online metrics for customer's business
-- Contracts: New agreements, renewals, contract wins/losses WITH values and terms
-- Financial stress: Customer's liquidity issues, bankruptcy risk affecting receivables
-- Capital spending: Customer capex plans, expansion/contraction affecting demand for target's products
-- Product launches: New products incorporating target's components/services
+TIER 1 - High-priority supply intelligence (scrape_priority=1):
+- **Financial Results:** Earnings, revenue, guidance, margins WITH operational metrics (capacity, production, backlogs)
+- **Capacity & Production:** Expansions, closures, output levels, utilization rates, bottlenecks WITH scale/timeline
+- **Supply Disruptions:** Shortages, constraints, allocation, rationing, delays, outages, production halts
+- **Pricing:** Price increases, surcharges, cost pass-through WITH percentages or amounts
+- **Operational Events:** Fires, accidents, disasters, equipment failures, plant shutdowns
+- **Labor:** Strikes, work stoppages, union negotiations WITH production or wage implications
+- **Contracts:** Supply agreements WITH dollar amounts, volumes, pricing terms, or duration
+- **Financial Stress:** Bankruptcy, restructuring, liquidity crises, covenant breaches, going concern warnings
+- **Technology:** Manufacturing breakthroughs, yield improvements, quality issues, recalls, defect rates
+- **Regulatory:** Approvals, violations, fines, investigations, compliance actions WITH penalties
+- **Trade:** Tariffs, export controls, sanctions, trade restrictions affecting supply costs/availability
+- **Standards:** New compliance requirements, safety/environmental rules WITH deadlines and cost impacts
 
-TIER 2 - Strategic demand intelligence (scrape_priority=2):
-- Strategic shifts: Vertical integration, in-sourcing, supplier diversification efforts
-- Geographic expansion: Market entries, store openings, facility expansions affecting demand
-- Product mix: Portfolio changes affecting demand for target's specific products
-- Partnerships: Customer alliances affecting demand patterns or competitive position
-- Technology adoption: Upgrade cycles, technology transitions affecting target's products
-- Customer wins/losses: Customer's own customer base changes affecting derived demand
-- Management commentary: Demand outlook, inventory strategies, procurement plans
-- Seasonality: Seasonal patterns, inventory building ahead of peak periods
+TIER 2 - Strategic supply intelligence (scrape_priority=2):
+- **M&A:** Acquisitions, divestitures, joint ventures affecting capacity, pricing, or technology
+- **Leadership:** CEO, CFO, operations executives WITH names and strategic implications
+- **Strategic Shifts:** Vertical integration, geographic expansion, product line changes
+- **Capex:** Facility investments, R&D spending WITH amounts and capacity implications
+- **Customer Allocation:** Major customer wins/losses, capacity priorities, allocation decisions
+- **Partnerships:** Technology licensing, co-development, exclusive supply arrangements
+- **Pricing Strategies:** Pricing models, volume discounts, bundling, contract renegotiations
+- **Logistics:** Port strikes, shipping delays, freight costs, warehouse disruptions
+- **Operational Updates:** Quarterly reports, shipment volumes, inventory levels, lead times
 
-TIER 3 - Market context (scrape_priority=3):
-- Financial results: Customer's earnings, guidance WITH implications for demand
-- Analyst coverage: Reports on customer's demand trends, growth outlook, competitive position
-- Industry trends: End-market dynamics affecting customer's business and demand for target's products
-- Executive interviews: Customer's strategy, outlook, procurement approach
-- Competitive dynamics: Customer vs. their competitors (shifts affecting derived demand)
+TIER 3 - Industry context (scrape_priority=3):
+- **Analyst Coverage:** Upgrades, downgrades, reports WITH operational insights or supply implications
+- **Forecasts:** Production outlook, capacity plans, demand projections from credible sources
+- **Industry Analysis:** Competitive positioning, sector supply/demand dynamics, pricing trends
+- **Performance Reviews:** "Why [supplier] performed..." WITH operational explanations
+- **Strategic Questions:** "Can [supplier] meet demand?" WITH supporting analysis
 
-ANALYTICAL CONTENT - Include demand/supply analysis:
-✓ "Why [value chain company] [moved/performed]..." (understanding demand/supply drivers)
-✓ "[Value chain company]'s [demand/supply outlook]..." (forward-looking signals)
-✓ "Can [value chain company] [sustain/grow/compete]..." (capability affecting demand/supply)
-✓ "What [event] means for [value chain company]..." (implications for demand/supply)
-✓ Industry analysis WITH specific implications for this value chain company
+REJECT - Never select:
+- Generic lists: "Top stocks," "Best picks," "Stocks to watch"
+- Sector roundups: "Tech movers," "Materials rally" (unless supplier is primary focus)
+- Pure stock analysis: Price predictions, technical analysis WITHOUT operational data
+- Unrelated mentions: Supplier listed among many without substantive focus
+- Historical pieces: "If you'd invested," "Past returns"
+- Promotional content: Advertorials, sponsored content, stock promotion
+- Quote pages: Stock price metadata without news
 
-REJECT COMPLETELY - Never select:
-- Generic lists: "Top dividend stocks," "Best performers," "Stocks to watch"
-- Sector roundups: "Tech movers," "Healthcare rally" (unless value chain company is primary focus)
-- Unrelated mentions: Company listed among many without focus on supply/demand signals
-- Pure speculation: "Could 10x" WITHOUT specific demand/supply thesis
-- Historical: "If you'd invested," "20 years of returns"
-- Distant predictions: "2035 forecast" WITHOUT near-term catalysts
-- Market research: "Industry forecast" (unless specifically about this value chain company)
-- Quote pages: "Stock Price | Charts | [Exchange]"
+DISAMBIGUATION:
+- If title leads with different company, likely not about supplier
+- If supplier name is just attribution (e.g., "According to [Supplier]..."), reject
+- Multi-company: Only select if supplier is ≥50% of focus
+- Verify context matches YOUR supplier (not different company with similar name)
 
-DISAMBIGUATION - Critical accuracy:
-- If title leads with different company, likely not about value chain company
-- If company name is just news source attribution, reject
-- For common names, verify context matches YOUR value chain company
-- Multi-company: Only select if value chain company is ≥50% of focus
-- CRITICAL: Must contain actual supply/demand signals, not just company news
+QUALITY SIGNALS:
+- Specificity: Exact figures, dates, facility names, percentages, capacity numbers
+- Credible sources: Trade publications, regulatory filings, company announcements
+- Action verbs: "expands," "cuts," "raises," "shuts," "signs," "halts," "disrupts"
+- Data language: "data shows," "figures reveal," "announces [number]"
+- Time markers: "Q3," "October," "2024," "latest," "monthly"
 
-SCRAPE PRIORITY (assign integer 1-3):
-1 = Tier 1 (direct supply/demand impacts with quantifiable signals)
-2 = Tier 2 (strategic supply chain or demand intelligence)
-3 = Tier 3 (market context and industry trends)
+SCRAPE PRIORITY:
+1 = Financial results with ops data, capacity, disruptions, pricing, labor, contracts, stress, technology, regulatory, trade, standards
+2 = M&A, leadership, strategic shifts, capex, customer allocation, partnerships, pricing, logistics, updates
+3 = Analyst coverage, forecasts, industry analysis, performance reviews
 
 SELECTION STANDARD:
-- When uncertain if about value chain company OR lacks supply/demand signals, skip it
-- Prioritize materiality: Could this affect target company's financials in next 1-2 quarters?
-- Look for quantifiable signals: Specific prices, volumes, percentages, capacity numbers
-- Strategic significance: Does this change supply/demand dynamics?
-- Only select if provides actionable intelligence about supply chains or demand trends
+- When uncertain, skip it
+- Hard news > speculation
+- Supply chain materiality: Could this affect target's costs, supply security, or quality?
+- Only select if actionable intelligence about supplier operations
 
-Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "brief reason focusing on supply/demand signal"}]
+Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "brief reason"}]"""
 
-CRITICAL CONSTRAINT: Return UP TO target cap articles. Select fewer if uncertain about relevance or supply/demand impact."""
-
-    # Context-specific user message
-    value_chain_label = "SUPPLIER" if value_chain_type == "upstream" else "CUSTOMER"
-    focus_area = "supply/cost signals" if value_chain_type == "upstream" else "demand/revenue signals"
-
+    # User message with ticker-specific context
     user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
-**{value_chain_label}:** {value_chain_company} ({value_chain_ticker})
-**VALUE CHAIN TYPE:** {value_chain_type}
-**FOCUS:** Select articles revealing {focus_area} affecting {company_name}
+**UPSTREAM SUPPLIER:** {upstream_company_name} ({upstream_ticker})
 **ARTICLE COUNT:** {len(articles)}
 **TARGET CAP:** {target_cap}
 
 **YOUR TASK:**
-Select the {target_cap} most important articles about {value_chain_company} that contain material supply/demand signals affecting {company_name}.
+Select the {target_cap} highest-quality articles about {upstream_company_name} from the {len(articles)} candidates below.
 
 **ARTICLES:**
 {json.dumps(items, separators=(',', ':'))}"""
@@ -12351,7 +12938,7 @@ Select the {target_cap} most important articles about {value_chain_company} that
     try:
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",  # Prompt caching
+            "anthropic-version": "2023-06-01",
             "content-type": "application/json"
         }
 
@@ -12372,22 +12959,22 @@ Select the {target_cap} most important articles about {value_chain_company} that
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
             async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
                 if response.status != 200:
-                    LOG.error(f"Claude value chain triage error {response.status}")
+                    LOG.error(f"Claude upstream triage error {response.status}")
                     return []
 
                 result = await response.json()
 
                 # Track cost
                 usage = result.get("usage", {})
-                calculate_claude_api_cost(usage, "triage_value_chain")
+                calculate_claude_api_cost(usage, "triage_upstream")
 
                 # Log cache performance
                 cache_creation = usage.get("cache_creation_input_tokens", 0)
                 cache_read = usage.get("cache_read_input_tokens", 0)
                 if cache_creation > 0:
-                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (value chain triage)")
+                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (upstream triage)")
                 elif cache_read > 0:
-                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (value chain triage) - 90% savings!")
+                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (upstream triage) - 90% savings!")
 
                 content = result.get("content", [{}])[0].get("text", "")
 
@@ -12422,14 +13009,240 @@ Select the {target_cap} most important articles about {value_chain_company} that
 
                 # Cap at target after sorting
                 if len(selected_articles) > target_cap:
-                    LOG.warning(f"Claude value chain selected {len(selected_articles)}, capping to top {target_cap} by priority")
+                    LOG.warning(f"Claude upstream triage selected {len(selected_articles)}, capping to top {target_cap} by priority")
                     selected_articles = selected_articles[:target_cap]
 
-                LOG.info(f"Claude triage value chain ({value_chain_type}): selected {len(selected_articles)}/{len(articles)} articles for {value_chain_company}")
+                LOG.info(f"Claude triage upstream: selected {len(selected_articles)}/{len(articles)} articles")
                 return selected_articles
 
     except Exception as e:
-        LOG.error(f"Claude value chain triage failed: {str(e)}")
+        LOG.error(f"Claude upstream triage failed: {str(e)}")
+        return []
+
+
+async def triage_downstream_articles_claude(
+    articles: List[Dict],
+    ticker: str,
+    company_name: str,
+    downstream_company_name: str,
+    downstream_ticker: str
+) -> List[Dict]:
+    """Claude-based downstream customer triage"""
+    if not ANTHROPIC_API_KEY or not articles:
+        return []
+
+    # Prepare items
+    items = []
+    for i, article in enumerate(articles):
+        item = {
+            "id": i,
+            "title": article.get('title', ''),
+            "published": article.get('published', '')
+        }
+        if article.get('description'):
+            item["description"] = article.get('description')
+        items.append(item)
+
+    target_cap = min(5, len(articles))
+
+    # Generic system prompt (cacheable across all tickers)
+    system_prompt = """You are a financial analyst selecting articles about a downstream customer based ONLY on titles and descriptions.
+
+**YOUR TASK:**
+The user will provide target company ticker, downstream customer name, downstream ticker, article count, and target cap. Select the highest-quality articles about that specific downstream customer.
+
+**DOWNSTREAM CONTEXT:**
+Downstream customers are buyers whose demand signals, purchasing patterns, and business health affect the target company's revenue, pricing power, and growth prospects.
+
+PRIMARY CRITERION: Is this article SPECIFICALLY about the downstream customer? If unclear, skip it.
+
+SELECT (choose up to target cap):
+
+TIER 1 - High-priority demand intelligence (scrape_priority=1):
+- **Financial Results:** Earnings, revenue, guidance, margins WITH demand metrics (sales, orders, inventory, backlogs)
+- **Orders & Contracts:** Purchase orders, supply agreements, contract wins/renewals WITH volumes, values, or terms
+- **Demand Signals:** "Strong demand," "weak sales," "accelerating growth," "slowing orders" WITH specifics
+- **Inventory:** Stockpiling, destocking, inventory buildup, working through excess, channel inventory
+- **Capex & Expansion:** Capital spending plans, facility expansions, capacity additions WITH budgets/timelines
+- **Market Share:** Gains/losses, competitive position shifts, customer wins/defections
+- **Pricing:** Customer's pricing power, margin pressure, cost pass-through ability
+- **End-Market Health:** Retail sales, traffic, utilization rates, occupancy, same-store sales
+- **Product Launches:** New products incorporating target's components/services WITH launch timelines
+- **Financial Stress:** Bankruptcy, restructuring, payment delays, liquidity issues, credit downgrades
+- **Strategic Shifts:** Vertical integration, insourcing, supplier diversification threatening demand
+- **Regulatory:** Approvals, restrictions, compliance costs affecting customer's demand for target's products
+
+TIER 2 - Strategic demand intelligence (scrape_priority=2):
+- **M&A:** Acquisitions, divestitures affecting customer's demand profile or purchasing power
+- **Leadership:** CEO, CFO, procurement executives WITH strategic implications for purchasing
+- **Geographic Expansion:** Market entries, store openings, facility launches affecting demand geography
+- **Product Mix:** Portfolio changes, SKU rationalization affecting demand for target's specific products
+- **Partnerships:** Alliances, joint ventures affecting demand patterns or competitive dynamics
+- **Technology Adoption:** Upgrade cycles, platform migrations, technology shifts affecting demand
+- **Customer Base:** Customer's own customer wins/losses affecting derived demand
+- **Operational Changes:** Manufacturing shifts, distribution changes, channel strategies
+- **Pricing Strategies:** Customer's pricing actions revealing demand strength or competitive pressure
+
+TIER 3 - Market context (scrape_priority=3):
+- **Analyst Coverage:** Upgrades, downgrades, reports WITH demand outlook or growth implications
+- **Forecasts:** Demand projections, sales outlook, growth targets from credible sources
+- **Industry Trends:** End-market dynamics, sector growth rates, competitive intensity
+- **Performance Reviews:** "Why [customer] performed..." WITH demand or operational drivers
+- **Strategic Questions:** "Can [customer] sustain growth?" WITH demand analysis
+
+REJECT - Never select:
+- Generic lists: "Top stocks," "Best picks," "Stocks to watch"
+- Sector roundups: "Tech movers," "Retail rally" (unless customer is primary focus)
+- Pure stock analysis: Price predictions, technical analysis WITHOUT operational data
+- Unrelated mentions: Customer listed among many without substantive focus
+- Historical pieces: "If you'd invested," "Past returns"
+- Promotional content: Advertorials, sponsored content, stock promotion
+- Quote pages: Stock price metadata without news
+
+DISAMBIGUATION:
+- If title leads with different company, likely not about customer
+- If customer name is just attribution (e.g., "According to [Customer]..."), reject
+- Multi-company: Only select if customer is ≥50% of focus
+- Verify context matches YOUR customer (not different company with similar name)
+
+QUALITY SIGNALS:
+- Specificity: Exact figures, growth rates, order sizes, volumes, percentages
+- Credible sources: Trade publications, regulatory filings, company announcements
+- Action verbs: "orders," "expands," "cuts," "launches," "increases," "reduces"
+- Data language: "data shows," "sales figures," "reports [number]"
+- Time markers: "Q3," "October," "2024," "latest," "quarterly"
+
+SCRAPE PRIORITY:
+1 = Financial results with demand data, orders, demand signals, inventory, capex, market share, pricing, end-market health, launches, stress, strategic shifts, regulatory
+2 = M&A, leadership, geographic expansion, product mix, partnerships, technology adoption, customer base, operational changes, pricing strategies
+3 = Analyst coverage, forecasts, industry trends, performance reviews
+
+SELECTION STANDARD:
+- When uncertain, skip it
+- Hard news > speculation
+- Demand materiality: Could this affect target's revenue, growth, or pricing?
+- Only select if actionable intelligence about customer demand
+
+Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "brief reason"}]"""
+
+    # User message with ticker-specific context
+    user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**DOWNSTREAM CUSTOMER:** {downstream_company_name} ({downstream_ticker})
+**ARTICLE COUNT:** {len(articles)}
+**TARGET CAP:** {target_cap}
+
+**YOUR TASK:**
+Select the {target_cap} highest-quality articles about {downstream_company_name} from the {len(articles)} candidates below.
+
+**ARTICLES:**
+{json.dumps(items, separators=(',', ':'))}"""
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+
+        data = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 2048,
+            "temperature": 0.4,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ],
+            "messages": [{"role": "user", "content": user_content}]
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
+            async with session.post(ANTHROPIC_API_URL, headers=headers, json=data) as response:
+                if response.status != 200:
+                    LOG.error(f"Claude downstream triage error {response.status}")
+                    return []
+
+                result = await response.json()
+
+                # Track cost
+                usage = result.get("usage", {})
+                calculate_claude_api_cost(usage, "triage_downstream")
+
+                # Log cache performance
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                if cache_creation > 0:
+                    LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens cached (downstream triage)")
+                elif cache_read > 0:
+                    LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens read from cache (downstream triage) - 90% savings!")
+
+                content = result.get("content", [{}])[0].get("text", "")
+
+                try:
+                    triage_result = json.loads(content)
+                except:
+                    import re
+                    match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if match:
+                        triage_result = json.loads(match.group(0))
+                    else:
+                        return []
+
+                selected_articles = []
+                for item in triage_result:
+                    if isinstance(item, dict) and "id" in item:
+                        if 0 <= item["id"] < len(articles):
+                            selected_articles.append({
+                                "id": item["id"],
+                                "scrape_priority": item.get("scrape_priority", 2),
+                                "why": item.get("why", ""),
+                                "confidence": 0.8,
+                                "likely_repeat": False,
+                                "repeat_key": ""
+                            })
+
+                # Sort by priority (1=HIGH, 2=MEDIUM, 3=LOW), then by recency
+                selected_articles.sort(key=lambda x: (
+                    x["scrape_priority"],
+                    -articles[x["id"]].get("published_at", datetime.min).timestamp() if articles[x["id"]].get("published_at") else 0
+                ))
+
+                # Cap at target after sorting
+                if len(selected_articles) > target_cap:
+                    LOG.warning(f"Claude downstream triage selected {len(selected_articles)}, capping to top {target_cap} by priority")
+                    selected_articles = selected_articles[:target_cap]
+
+                LOG.info(f"Claude triage downstream: selected {len(selected_articles)}/{len(articles)} articles")
+                return selected_articles
+
+    except Exception as e:
+        LOG.error(f"Claude downstream triage failed: {str(e)}")
+        return []
+
+
+async def triage_value_chain_articles_claude(articles: List[Dict], ticker: str, company_name: str,
+                                              value_chain_company: str, value_chain_ticker: str,
+                                              value_chain_type: str) -> List[Dict]:
+    """Claude-based value chain triage dispatcher - routes to upstream or downstream specific functions
+
+    Args:
+        value_chain_type: 'upstream' (supplier) or 'downstream' (customer)
+    """
+    # Dispatcher: Route to specialized upstream or downstream triage functions
+    if value_chain_type == 'upstream':
+        LOG.info(f"[{ticker}] Routing to upstream triage for {value_chain_company}")
+        return await triage_upstream_articles_claude(
+            articles, ticker, company_name, value_chain_company, value_chain_ticker
+        )
+    elif value_chain_type == 'downstream':
+        LOG.info(f"[{ticker}] Routing to downstream triage for {value_chain_company}")
+        return await triage_downstream_articles_claude(
+            articles, ticker, company_name, value_chain_company, value_chain_ticker
+        )
+    else:
+        LOG.error(f"[{ticker}] Invalid value_chain_type: {value_chain_type}")
         return []
 
 # ===== END CLAUDE TRIAGE FUNCTIONS =====
@@ -12840,9 +13653,9 @@ async def perform_ai_triage_with_batching_async(
     """
     if not OPENAI_API_KEY:
         LOG.warning("OpenAI API key not configured - skipping triage")
-        return {"company": [], "industry": [], "competitor": []}
+        return {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
-    selected_results = {"company": [], "industry": [], "competitor": []}
+    selected_results = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
     # Get ticker metadata for enhanced prompts
     config = get_ticker_config(ticker)
@@ -18831,6 +19644,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".industry { border-left-color: #f39c12; }",
             ".competitor { border-left-color: #e74c3c; }",
             ".value_chain { border-left-color: #9b59b6; }",
+            ".upstream { border-left-color: #9b59b6; }",
+            ".downstream { border-left-color: #9b59b6; }",
             ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
             ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
             ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
@@ -18927,20 +19742,30 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 
             html.append(f"<p><strong>✅ Flagged for Analysis:</strong> {ticker_flagged} articles</p>")
 
+            # Split value_chain articles into upstream and downstream for separate display
+            value_chain_articles = categories.get("value_chain", [])
+            upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
+            downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+            categories["upstream"] = upstream_articles
+            categories["downstream"] = downstream_articles
+
             # Process each category independently with proper sorting
             category_icons = {
                 "company": "🎯",
                 "industry": "🏭",
                 "competitor": "⚔️",
-                "value_chain": "🔗"
+                "upstream": "⬆️",
+                "downstream": "⬇️"
             }
 
-            for category in ["company", "industry", "competitor", "value_chain"]:
+            for category in ["company", "industry", "competitor", "upstream", "downstream"]:
                 articles = categories.get(category, [])
                 if not articles:
                     continue
 
-                category_triage = triage_data.get(category, [])
+                # Map upstream/downstream to value_chain triage data
+                triage_category = "value_chain" if category in ["upstream", "downstream"] else category
+                category_triage = triage_data.get(triage_category, [])
                 selected_article_data = {item["id"]: item for item in category_triage}
 
                 # Chronological sorting - newest to oldest within category
@@ -18989,13 +19814,14 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                         # Use company_name from article metadata (populated from feeds.company_name)
                         comp_name = article.get('company_name') or get_competitor_display_name(article.get('search_keyword'), article.get('competitor_ticker'))
                         header_badges.append(f'<span class="competitor-badge">🏢 {comp_name}</span>')
-                    elif category == "value_chain":
-                        # Show value chain company name with upstream/downstream indicator
+                    elif category == "upstream":
+                        # Show upstream supplier company name
                         vc_name = article.get('company_name') or article.get('search_keyword', 'Unknown')
-                        vc_type = article.get('value_chain_type', '')
-                        vc_icon = "⬆️" if vc_type == "upstream" else "⬇️" if vc_type == "downstream" else "🔗"
-                        vc_label = "Upstream" if vc_type == "upstream" else "Downstream" if vc_type == "downstream" else "Value Chain"
-                        header_badges.append(f'<span class="value-chain-badge">{vc_icon} {vc_label}: {vc_name}</span>')
+                        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
+                    elif category == "downstream":
+                        # Show downstream customer company name
+                        vc_name = article.get('company_name') or article.get('search_keyword', 'Unknown')
+                        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
 
@@ -19146,6 +19972,8 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         ".industry { border-left-color: #f39c12; }",
         ".competitor { border-left-color: #e74c3c; }",
         ".value_chain { border-left-color: #9b59b6; }",
+        ".upstream { border-left-color: #9b59b6; }",
+        ".downstream { border-left-color: #9b59b6; }",
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
         ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
@@ -19265,8 +20093,15 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             html.append("</div>")
             html.append("</div>")
 
+        # Split value_chain articles into upstream and downstream for separate display
+        value_chain_articles = categories.get("value_chain", [])
+        upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
+        downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+        categories["upstream"] = upstream_articles
+        categories["downstream"] = downstream_articles
+
         # Sort articles chronologically within each category (newest first)
-        for category in ["company", "industry", "competitor", "value_chain"]:
+        for category in ["company", "industry", "competitor", "upstream", "downstream"]:
             if category in categories and categories[category]:
                 articles = categories[category]
 
@@ -19277,7 +20112,8 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
                     "company": "🎯",
                     "industry": "🏭",
                     "competitor": "⚔️",
-                    "value_chain": "🔗"
+                    "upstream": "⬆️",
+                    "downstream": "⬇️"
                 }
 
                 html.append(f"<h3>{category_icons.get(category, '📰')} {category.replace('_', ' ').title()} News ({len(articles)} articles)</h3>")
@@ -19620,7 +20456,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     success = send_email(subject, html)
 
     # Count by category and content scraping
-    category_counts = {"company": 0, "industry": 0, "competitor": 0, "value_chain": 0}
+    category_counts = {"company": 0, "industry": 0, "competitor": 0, "value_chain": 0, "upstream": 0, "downstream": 0}
     content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
 
     for ticker_cats in articles_by_ticker.values():
@@ -25028,6 +25864,7 @@ async def cron_ingest(
         company_feeds = []       # Will be processed: Google→Yahoo sequentially per ticker
         industry_feeds = []      # Will be processed: All in parallel (Google only)
         competitor_feeds = []    # Will be processed: Google→Yahoo sequentially per competitor
+        value_chain_feeds = []   # Will be processed: Google→Yahoo sequentially per value chain company
 
         for feed in feeds:
             category = feed.get('category', 'company')
@@ -25037,8 +25874,10 @@ async def cron_ingest(
                 industry_feeds.append(feed)
             elif category == 'competitor':
                 competitor_feeds.append(feed)
+            elif category == 'value_chain':
+                value_chain_feeds.append(feed)
 
-        LOG.info(f"Feed groups - Company: {len(company_feeds)}, Industry: {len(industry_feeds)}, Competitor: {len(competitor_feeds)}")
+        LOG.info(f"Feed groups - Company: {len(company_feeds)}, Industry: {len(industry_feeds)}, Competitor: {len(competitor_feeds)}, Value Chain: {len(value_chain_feeds)}")
 
         # Further group company and competitor feeds by ticker for sequential Google→Yahoo processing
         company_by_ticker = {}  # {ticker: [google_feed, yahoo_feed]}
@@ -25066,6 +25905,21 @@ async def cron_ingest(
         for key in competitor_by_key:
             competitor_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
 
+        # Group value chain feeds by (ticker, competitor_ticker, value_chain_type) for sequential processing
+        value_chain_by_key = {}  # {(ticker, vc_ticker, vc_type): [google_feed, yahoo_feed]}
+        for feed in value_chain_feeds:
+            ticker = feed.get('ticker')
+            vc_ticker = feed.get('competitor_ticker', 'unknown')
+            vc_type = feed.get('value_chain_type', 'unknown')
+            key = (ticker, vc_ticker, vc_type)
+            if key not in value_chain_by_key:
+                value_chain_by_key[key] = []
+            value_chain_by_key[key].append(feed)
+
+        # Sort each value chain company's feeds: Google first, then Yahoo
+        for key in value_chain_by_key:
+            value_chain_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+
         # Process all groups in parallel using ThreadPoolExecutor
         # REDUCED: max_workers=8 (was 15) to reduce DB connection contention
         # With 3 concurrent tickers: 3 × 8 = 24 peak DB connections (30% of 80-conn pool)
@@ -25092,6 +25946,12 @@ async def cron_ingest(
                 future = executor.submit(process_feeds_sequentially, comp_feeds)
                 futures.append(("competitor", f"{ticker}/{comp_ticker}", future))
                 LOG.info(f"Submitted competitor feeds for {ticker}/{comp_ticker}: {len(comp_feeds)} feeds (Google→Yahoo sequential)")
+
+            # Submit value chain feed groups (sequential Google→Yahoo within each value chain company)
+            for (ticker, vc_ticker, vc_type), vc_feeds in value_chain_by_key.items():
+                future = executor.submit(process_feeds_sequentially, vc_feeds)
+                futures.append(("value_chain", f"{ticker}/{vc_ticker}/{vc_type}", future))
+                LOG.info(f"Submitted value chain feeds for {ticker}/{vc_ticker} ({vc_type}): {len(vc_feeds)} feeds (Google→Yahoo sequential)")
 
             # Collect results as they complete
             completed_count = 0
@@ -25136,7 +25996,7 @@ async def cron_ingest(
                     cur.execute("""
                         WITH ranked_articles AS (
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type, ta.ticker,
                                    a.scraped_content, ta.ai_summary, a.url_hash, f.company_name,
                                    ROW_NUMBER() OVER (
                                        PARTITION BY ta.ticker,
@@ -25144,6 +26004,7 @@ async def cron_ingest(
                                                WHEN ta.category = 'company' THEN ta.category
                                                WHEN ta.category = 'industry' THEN ta.search_keyword
                                                WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                               WHEN ta.category = 'value_chain' THEN ta.competitor_ticker
                                            END
                                        ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
                                    ) as rn
@@ -25154,19 +26015,20 @@ async def cron_ingest(
                             AND (a.published_at >= %s OR a.published_at IS NULL)
                         )
                         SELECT id, url, resolved_url, title, domain, published_at,
-                               category, search_keyword, competitor_ticker, ticker,
+                               category, search_keyword, competitor_ticker, value_chain_type, ticker,
                                scraped_content, ai_summary, url_hash, company_name
                         FROM ranked_articles
                         WHERE (category = 'company' AND rn <= 50)
                            OR (category = 'industry' AND rn <= 25)
                            OR (category = 'competitor' AND rn <= 25)
+                           OR (category = 'value_chain' AND rn <= 25)
                         ORDER BY ticker, category, rn
                     """, (tickers, cutoff))
                 else:
                     cur.execute("""
                         WITH ranked_articles AS (
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.ticker,
+                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type, ta.ticker,
                                    a.scraped_content, ta.ai_summary, a.url_hash, f.company_name,
                                    ROW_NUMBER() OVER (
                                        PARTITION BY ta.ticker,
@@ -25174,6 +26036,7 @@ async def cron_ingest(
                                                WHEN ta.category = 'company' THEN ta.category
                                                WHEN ta.category = 'industry' THEN ta.search_keyword
                                                WHEN ta.category = 'competitor' THEN ta.competitor_ticker
+                                               WHEN ta.category = 'value_chain' THEN ta.competitor_ticker
                                            END
                                        ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
                                    ) as rn
@@ -25183,12 +26046,13 @@ async def cron_ingest(
                             WHERE (a.published_at >= %s OR a.published_at IS NULL)
                         )
                         SELECT id, url, resolved_url, title, domain, published_at,
-                               category, search_keyword, competitor_ticker, ticker,
+                               category, search_keyword, competitor_ticker, value_chain_type, ticker,
                                scraped_content, ai_summary, url_hash, company_name
                         FROM ranked_articles
                         WHERE (category = 'company' AND rn <= 50)
                            OR (category = 'industry' AND rn <= 25)
                            OR (category = 'competitor' AND rn <= 25)
+                           OR (category = 'value_chain' AND rn <= 25)
                         ORDER BY ticker, category, rn
                     """, (cutoff,))
 
@@ -25235,7 +26099,7 @@ async def cron_ingest(
             category = article["category"] or "company"
 
             if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": []}
+                articles_by_ticker[ticker] = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
             articles_by_ticker[ticker][category].append(article)
 
@@ -30749,7 +31613,7 @@ async def regenerate_email_api(request: Request):
         LOG.info(f"[{ticker}] Found {len(articles)} flagged articles from original run")
 
         # Step 4: Group articles by category for executive summary generation
-        categories = {"company": [], "industry": [], "competitor": []}
+        categories = {"company": [], "industry": [], "competitor": [], "value_chain": []}
         flagged_article_ids = []
 
         for article in articles:

@@ -15112,7 +15112,7 @@ Select direct business competitors competing for the same customers in the same 
 - Return 0-3 based on availability - quality over quantity
 - Strongly prefer publicly traded companies with valid tickers
 - Only include private if industry-dominant with significant newsflow (≥5 major articles/month)
-- Exclude: Subsidiaries, companies acquired in last 2 years, companies already listed in value chain
+- Exclude: Subsidiaries, companies acquired in last 2 years
 
 **Bad match examples:**
 ❌ AvalonBay (luxury apartments) for ELME (value-add apartments) - different customer segment

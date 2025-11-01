@@ -19694,8 +19694,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".industry { border-left-color: #f39c12; }",
             ".competitor { border-left-color: #e74c3c; }",
             ".value_chain { border-left-color: #9b59b6; }",
-            ".upstream { border-left-color: #9b59b6; }",
-            ".downstream { border-left-color: #9b59b6; }",
+            ".upstream { border-left-color: #0891b2; }",
+            ".downstream { border-left-color: #3b82f6; }",
             ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
             ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
             ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
@@ -20022,8 +20022,8 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         ".industry { border-left-color: #f39c12; }",
         ".competitor { border-left-color: #e74c3c; }",
         ".value_chain { border-left-color: #9b59b6; }",
-        ".upstream { border-left-color: #9b59b6; }",
-        ".downstream { border-left-color: #9b59b6; }",
+        ".upstream { border-left-color: #0891b2; }",
+        ".downstream { border-left-color: #3b82f6; }",
         ".company-summary { background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }",
         ".summary-title { font-weight: bold; color: #2c3e50; margin-bottom: 10px; font-size: 14px; }",
         ".summary-content { color: #34495e; line-height: 1.6; margin-bottom: 10px; white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }",
@@ -22030,7 +22030,7 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                 cur.execute("""
                     SELECT a.id, a.url, a.url_hash, a.resolved_url, a.title, a.description,
                            a.domain, a.published_at,
-                           ta.category, ta.search_keyword, ta.competitor_ticker
+                           ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
                     WHERE a.id = ANY(%s)

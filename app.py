@@ -6412,6 +6412,15 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                         )
 
                         if article_id:
+                            # DEBUG: Log feed dict for value_chain articles
+                            if feed.get("search_keyword") in ["ON Semiconductor", "Flex", "Texas Instruments", "Tesla", "Sunrun", "Sunnova Energy"]:
+                                LOG.info(f"[DEBUG VALUE_CHAIN] Article: {title[:60]}")
+                                LOG.info(f"[DEBUG VALUE_CHAIN] Feed keys: {list(feed.keys())}")
+                                LOG.info(f"[DEBUG VALUE_CHAIN] value_chain_type raw: {repr(feed.get('value_chain_type'))}")
+                                LOG.info(f"[DEBUG VALUE_CHAIN] feed_id: {feed.get('id')}, feed_name: {feed.get('name')}")
+                                LOG.info(f"[DEBUG VALUE_CHAIN] category from ticker_feeds: {feed.get('category')}")
+                                LOG.info(f"[DEBUG VALUE_CHAIN] category variable: {category}")
+
                             # Get value_chain_type from feed (upstream/downstream/None)
                             value_chain_type = feed.get("value_chain_type")
                             link_article_to_ticker(

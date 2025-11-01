@@ -15970,6 +15970,10 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                 metadata['geographic_markets'] = ai_metadata.get('geographic_markets', '')
                 metadata['subsidiaries'] = ai_metadata.get('subsidiaries', '')
 
+                # Copy value chain data from AI to metadata (upstream/downstream)
+                if ai_metadata.get('value_chain'):
+                    metadata['value_chain'] = ai_metadata.get('value_chain')
+
                 # === MINIMAL CHANGE: update using the NORMALIZED ticker so the row matches
                 update_ticker_reference_ai_data(normalized_ticker, metadata)
 

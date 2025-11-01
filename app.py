@@ -12938,6 +12938,15 @@ TIER 3 - Industry context (scrape_priority=3):
 - **Performance Reviews:** "Why [supplier] performed..." WITH operational explanations
 - **Strategic Questions:** "Can [supplier] meet demand?" WITH supporting analysis
 
+ANALYTICAL CONTENT - Include supplier analysis:
+✓ "Why [supplier] stock [moved]..." (understanding supply chain implications)
+✓ "[Supplier]'s capacity outlook..." (forward-looking supply visibility)
+✓ "Can [supplier] meet demand/sustain growth..." (supply security assessment)
+✓ "[Supplier] cost pressures from [inputs]..." (cost structure analysis)
+✓ "What [supplier]'s [expansion/constraint] means for..." (supply chain implications)
+✓ "[Supplier] vs competitors" (supplier competitive position affecting pricing power)
+✓ "Industry analysis on [supplier's sector] capacity/pricing trends" (sector-wide supply dynamics)
+
 REJECT - Never select:
 - Generic lists: "Top stocks," "Best picks," "Stocks to watch"
 - Sector roundups: "Tech movers," "Materials rally" (unless supplier is primary focus)
@@ -12948,7 +12957,7 @@ REJECT - Never select:
 - Quote pages: Stock price metadata without news
 
 DISAMBIGUATION:
-- If title leads with different company, likely not about supplier
+- If title leads with different company, REJECT IMMEDIATELY
 - If supplier name is just attribution (e.g., "According to [Supplier]..."), reject
 - Multi-company: Only select if supplier is ≥50% of focus
 - Verify context matches YOUR supplier (not different company with similar name)
@@ -13140,6 +13149,16 @@ TIER 3 - Market context (scrape_priority=3):
 - **Performance Reviews:** "Why [customer] performed..." WITH demand or operational drivers
 - **Strategic Questions:** "Can [customer] sustain growth?" WITH demand analysis
 
+ANALYTICAL CONTENT - Include customer analysis:
+✓ "Why [customer] stock [moved]..." (understanding demand drivers)
+✓ "[Customer]'s demand outlook in [end-market]..." (revenue visibility)
+✓ "Can [customer] sustain growth/maintain share..." (demand durability assessment)
+✓ "[Customer] inventory strategy..." (demand timing signals)
+✓ "What [customer]'s [expansion/contraction] means for..." (demand implications)
+✓ "[Customer] vs competitors" (customer competitive position affecting our volumes)
+✓ "Industry analysis on [customer's end-market] trends" (end-market health affecting derived demand)
+✓ "[End-market] spending patterns..." (macro demand drivers)
+
 REJECT - Never select:
 - Generic lists: "Top stocks," "Best picks," "Stocks to watch"
 - Sector roundups: "Tech movers," "Retail rally" (unless customer is primary focus)
@@ -13150,7 +13169,7 @@ REJECT - Never select:
 - Quote pages: Stock price metadata without news
 
 DISAMBIGUATION:
-- If title leads with different company, likely not about customer
+- If title leads with different company, REJECT IMMEDIATELY
 - If customer name is just attribution (e.g., "According to [Customer]..."), reject
 - Multi-company: Only select if customer is ≥50% of focus
 - Verify context matches YOUR customer (not different company with similar name)

@@ -19770,9 +19770,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             "</style></head><body>",
         ]
 
-        # Collect all industry keywords and competitors for header
+        # Collect all industry keywords, competitors, and value chain for header
         all_industry_keywords = set()
         all_competitors = []
+        all_upstream = []
+        all_downstream = []
         for ticker in articles_by_ticker.keys():
             config = get_ticker_config(ticker)
             if config:
@@ -19783,6 +19785,25 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
                     if comp_display not in all_competitors:
                         all_competitors.append(comp_display)
+
+                # Collect upstream and downstream value chain
+                value_chain = config.get("value_chain", {})
+
+                # Upstream
+                upstream = value_chain.get("upstream", [])
+                for comp in upstream:
+                    if isinstance(comp, dict) and comp.get('name'):
+                        comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                        if comp_display not in all_upstream:
+                            all_upstream.append(comp_display)
+
+                # Downstream
+                downstream = value_chain.get("downstream", [])
+                for comp in downstream:
+                    if isinstance(comp, dict) and comp.get('name'):
+                        comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                        if comp_display not in all_downstream:
+                            all_downstream.append(comp_display)
 
         total_articles = 0
         total_flagged = 0
@@ -19810,11 +19831,17 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         html.append(f"<strong>⏰ Generated:</strong> {current_time_est}<br>")
         html.append(f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>")
 
-        # Add industry keywords and competitors to header
+        # Add industry keywords, competitors, and value chain to header
         if all_industry_keywords:
             html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
         if all_competitors:
             html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
+
+        # Always show upstream/downstream (even if empty) - internal email
+        upstream_display = ', '.join(all_upstream) if all_upstream else "None"
+        downstream_display = ', '.join(all_downstream) if all_downstream else "None"
+        html.append(f"<strong>⬆️ Upstream:</strong> {upstream_display}<br>")
+        html.append(f"<strong>⬇️ Downstream:</strong> {downstream_display}<br>")
 
         html.append("</div>")
 
@@ -20098,9 +20125,11 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         f"<strong>📊 Tickers Covered:</strong> {ticker_list}<br>"
     ]
 
-    # Collect all industry keywords and competitors for header (match triage email)
+    # Collect all industry keywords, competitors, and value chain for header (match triage email)
     all_industry_keywords = set()
     all_competitors = []
+    all_upstream = []
+    all_downstream = []
     for ticker in articles_by_ticker.keys():
         config = get_ticker_config(ticker)
         if config:
@@ -20112,11 +20141,36 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
                 if comp_display not in all_competitors:
                     all_competitors.append(comp_display)
 
-    # Add industry keywords and competitors to header
+            # Collect upstream and downstream value chain
+            value_chain = config.get("value_chain", {})
+
+            # Upstream
+            upstream = value_chain.get("upstream", [])
+            for comp in upstream:
+                if isinstance(comp, dict) and comp.get('name'):
+                    comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                    if comp_display not in all_upstream:
+                        all_upstream.append(comp_display)
+
+            # Downstream
+            downstream = value_chain.get("downstream", [])
+            for comp in downstream:
+                if isinstance(comp, dict) and comp.get('name'):
+                    comp_display = f"{comp['name']} ({comp['ticker']})" if comp.get('ticker') else comp['name']
+                    if comp_display not in all_downstream:
+                        all_downstream.append(comp_display)
+
+    # Add industry keywords, competitors, and value chain to header
     if all_industry_keywords:
         html.append(f"<strong>🏭 Industry Keywords:</strong> {', '.join(sorted(all_industry_keywords))}<br>")
     if all_competitors:
         html.append(f"<strong>⚔️ Competitors:</strong> {', '.join(all_competitors)}<br>")
+
+    # Always show upstream/downstream (even if empty) - internal email
+    upstream_display = ', '.join(all_upstream) if all_upstream else "None"
+    downstream_display = ', '.join(all_downstream) if all_downstream else "None"
+    html.append(f"<strong>⬆️ Upstream:</strong> {upstream_display}<br>")
+    html.append(f"<strong>⬇️ Downstream:</strong> {downstream_display}<br>")
 
     html.append("</div>")
 

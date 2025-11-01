@@ -6541,11 +6541,11 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     elif category == "upstream":
         # Show upstream supplier company name
         vc_name = article.get('search_keyword', 'Unknown')
-        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
+        header_badges.append(f'<span class="upstream-badge">🏢 {vc_name}</span>')
     elif category == "downstream":
         # Show downstream customer company name
         vc_name = article.get('search_keyword', 'Unknown')
-        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
+        header_badges.append(f'<span class="downstream-badge">🏢 {vc_name}</span>')
     elif category == "value_chain":
         # Fallback for old value_chain category (should not be used anymore)
         vc_name = article.get('search_keyword', 'Unknown')
@@ -19762,6 +19762,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
             ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
             ".value-chain-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
+            ".upstream-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #cffafe; color: #0891b2; border: 1px solid #67e8f9; }",
+            ".downstream-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #dbeafe; color: #3b82f6; border: 1px solid #93c5fd; }",
             ".summary { margin-top: 20px; padding: 15px; background-color: #ecf0f1; border-radius: 5px; }",
             ".ticker-section { margin-bottom: 40px; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }",
             ".meta { color: #95a5a6; font-size: 11px; }",
@@ -19938,11 +19940,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     elif category == "upstream":
                         # Show upstream supplier company name
                         vc_name = article.get('company_name') or article.get('search_keyword', 'Unknown')
-                        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
+                        header_badges.append(f'<span class="upstream-badge">🏢 {vc_name}</span>')
                     elif category == "downstream":
                         # Show downstream customer company name
                         vc_name = article.get('company_name') or article.get('search_keyword', 'Unknown')
-                        header_badges.append(f'<span class="value-chain-badge">🏢 {vc_name}</span>')
+                        header_badges.append(f'<span class="downstream-badge">🏢 {vc_name}</span>')
                     elif category == "industry" and article.get('search_keyword'):
                         header_badges.append(f'<span class="industry-badge">🏭 {article["search_keyword"]}</span>')
 
@@ -20110,6 +20112,8 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
         ".value-chain-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
+        ".upstream-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #cffafe; color: #0891b2; border: 1px solid #67e8f9; }",
+        ".downstream-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #dbeafe; color: #3b82f6; border: 1px solid #93c5fd; }",
         ".description { color: #6c757d; font-size: 11px; font-style: italic; margin-top: 5px; line-height: 1.4; display: block; }",
         ".ai-summary { color: #2c5aa0; font-size: 12px; margin-top: 8px; line-height: 1.4; background-color: #f8f9ff; padding: 8px; border-radius: 4px; border-left: 3px solid #3498db; }",
         ".meta { color: #95a5a6; font-size: 11px; }",

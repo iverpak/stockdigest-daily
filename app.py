@@ -1931,13 +1931,15 @@ def link_article_to_ticker(article_id: int, ticker: str, category: str = None,
                 ON CONFLICT (ticker, article_id) DO UPDATE SET
                     search_keyword = EXCLUDED.search_keyword,
                     competitor_ticker = EXCLUDED.competitor_ticker,
-                    value_chain_type = EXCLUDED.value_chain_type
+                    value_chain_type = COALESCE(EXCLUDED.value_chain_type, ticker_articles.value_chain_type)
             """, (ticker, article_id, category, feed_id, search_keyword, competitor_ticker, value_chain_type))
         else:
             # UPDATE mode: Only update metadata, don't touch category
             cur.execute("""
                 UPDATE ticker_articles
-                SET search_keyword = %s, competitor_ticker = %s, value_chain_type = %s
+                SET search_keyword = %s,
+                    competitor_ticker = %s,
+                    value_chain_type = COALESCE(%s, ticker_articles.value_chain_type)
                 WHERE ticker = %s AND article_id = %s
             """, (search_keyword, competitor_ticker, value_chain_type, ticker, article_id))
 

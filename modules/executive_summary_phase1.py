@@ -57,14 +57,14 @@ def _build_phase1_user_content(
     Build user_content for Phase 1 (articles only, NO filings).
 
     Ports logic from _build_executive_summary_prompt() lines 14145-14250:
-    - Collect flagged articles from company/industry/competitor
-    - Add category tags [COMPANY], [INDUSTRY - keyword], [COMPETITOR]
+    - Collect flagged articles from company/industry/competitor/upstream/downstream
+    - Add category tags [COMPANY], [INDUSTRY - keyword], [COMPETITOR], [UPSTREAM], [DOWNSTREAM]
     - Sort by published_at DESC (newest first)
     - Build unified timeline (up to 50 articles)
 
     Args:
         ticker: Stock ticker
-        categories: Dict with keys: company, industry, competitor
+        categories: Dict with keys: company, industry, competitor, upstream, downstream
         config: Ticker config dict
 
     Returns:
@@ -95,6 +95,20 @@ def _build_phase1_user_content(
         if article.get("ai_summary"):
             article['_category'] = 'COMPETITOR'
             article['_category_tag'] = '[COMPETITOR]'
+            all_flagged_articles.append(article)
+
+    # Upstream articles (value chain)
+    for article in categories.get("upstream", []):
+        if article.get("ai_summary"):
+            article['_category'] = 'VALUE_CHAIN'
+            article['_category_tag'] = '[UPSTREAM]'
+            all_flagged_articles.append(article)
+
+    # Downstream articles (value chain)
+    for article in categories.get("downstream", []):
+        if article.get("ai_summary"):
+            article['_category'] = 'VALUE_CHAIN'
+            article['_category_tag'] = '[DOWNSTREAM]'
             all_flagged_articles.append(article)
 
     # Build unified timeline with category tags (if articles exist)

@@ -686,14 +686,16 @@ def generate_company_profile_email(
                 else:
                     first_col_width = "12%"  # 11+ data cols = 8% each (extreme case)
 
-                # Apply width to first cell in every row
+                # Apply inline styles to ALL cells (fixes Gmail gridlines)
                 for row in table.find_all('tr'):
                     cells = row.find_all(['td', 'th'])
-                    if cells:
-                        # Get existing style or create new
-                        existing_style = cells[0].get('style', '')
-                        # Add width to style (will override CSS)
-                        cells[0]['style'] = f"width: {first_col_width}; padding: 8px; border: 1px solid #ddd;"
+                    for cell_idx, cell in enumerate(cells):
+                        if cell_idx == 0:
+                            # First column: width + border + padding
+                            cell['style'] = f"width: {first_col_width}; padding: 8px; border: 1px solid #ddd;"
+                        else:
+                            # Other columns: border + padding (width handled by table-layout: fixed)
+                            cell['style'] = "padding: 8px; border: 1px solid #ddd;"
 
         # Convert back to HTML string
         profile_html = str(soup)

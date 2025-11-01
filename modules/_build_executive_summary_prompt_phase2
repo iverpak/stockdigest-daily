@@ -330,8 +330,8 @@ FIELD GENERATION & CRITICAL RULES
    
    Examples:
    - direct: Target company Q3 deliveries beat consensus; Goldman raised target price
-   - indirect: Competitor capacity expansion in target market; Industry regulation affecting target segment
-   - none: Competitor CEO compensation; Unrelated industry development
+   - indirect: Competitor capacity expansion in target market; Supplier pricing increase affecting costs; Customer demand signals; Industry regulation affecting target segment
+   - none: Competitor CEO compensation; Supplier HR changes; Unrelated industry development
 
 5. context: 40-50 words synthesizing 1-3 most relevant filing data points
    - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q" or "per Oct 23 call"

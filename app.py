@@ -20189,8 +20189,18 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
 
         # Split value_chain articles into upstream and downstream for separate display
         value_chain_articles = categories.get("value_chain", [])
+
+        # DEBUG: Log value_chain articles and their types
+        LOG.info(f"[DEBUG] Email #2 value_chain count: {len(value_chain_articles)}")
+        if value_chain_articles:
+            for i, a in enumerate(value_chain_articles[:5]):  # Show first 5
+                LOG.info(f"  [{i}] ID={a.get('id')} | value_chain_type='{a.get('value_chain_type')}' | title={a.get('title', '')[:50]}")
+
         upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
         downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+
+        LOG.info(f"[DEBUG] After filtering: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
+
         categories["upstream"] = upstream_articles
         categories["downstream"] = downstream_articles
 

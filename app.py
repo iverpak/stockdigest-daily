@@ -918,10 +918,12 @@ ingestion_stats = {
     "company_ingested": 0,
     "industry_ingested_by_keyword": {},
     "competitor_ingested_by_keyword": {},
+    "value_chain_ingested_by_keyword": {},
     "limits": {
         "company": 100,
         "industry_per_keyword": 50,
-        "competitor_per_keyword": 50
+        "competitor_per_keyword": 50,
+        "value_chain_per_keyword": 50
     }
 }
 
@@ -991,10 +993,12 @@ def reset_ingestion_stats():
         "company_ingested": 0,
         "industry_ingested_by_keyword": {},
         "competitor_ingested_by_keyword": {},
+        "value_chain_ingested_by_keyword": {},
         "limits": {
             "company": 50,
             "industry_per_keyword": 25,
-            "competitor_per_keyword": 25
+            "competitor_per_keyword": 25,
+            "value_chain_per_keyword": 25
         }
     }
 
@@ -6453,7 +6457,12 @@ def _check_ingestion_limit_with_existing_count(category: str, keyword: str, exis
         current_keyword_count = ingestion_stats["competitor_ingested_by_keyword"].get(keyword, 0)
         total_count = existing_count + current_keyword_count
         return total_count < ingestion_stats["limits"]["competitor_per_keyword"]
-    
+
+    elif category == "value_chain":
+        current_keyword_count = ingestion_stats["value_chain_ingested_by_keyword"].get(keyword, 0)
+        total_count = existing_count + current_keyword_count
+        return total_count < ingestion_stats["limits"]["value_chain_per_keyword"]
+
     return False
 
 # Update the database schema to include ai_summary field
@@ -15964,7 +15973,8 @@ def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = Fa
                     metadata["industry_keywords"] = ai_metadata.get("industry_keywords", [])
 
                 if not metadata["competitors"]:
-                    metadata["competitors"] = ai_metadata.get("competitors", [])
+                    # AI returns "horizontal_competitors" (new format), fallback to "competitors" (old format)
+                    metadata["competitors"] = ai_metadata.get("horizontal_competitors", ai_metadata.get("competitors", []))
 
                 # Copy geographic_markets and subsidiaries from AI to metadata
                 metadata['geographic_markets'] = ai_metadata.get('geographic_markets', '')

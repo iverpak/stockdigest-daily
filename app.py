@@ -1569,6 +1569,9 @@ def ensure_schema():
                 ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS completion_tokens INTEGER;
                 ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS generation_time_ms INTEGER;
 
+                -- Add value_chain_articles_count for upstream/downstream tracking
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS value_chain_articles_count INTEGER DEFAULT 0;
+
                 -- TRANSCRIPT SUMMARIES: Store earnings transcript and press release summaries
                 CREATE TABLE IF NOT EXISTS transcript_summaries (
                     id SERIAL PRIMARY KEY,
@@ -2046,6 +2049,7 @@ def save_executive_summary(
     company_count: int,
     industry_count: int,
     competitor_count: int,
+    value_chain_count: int = 0,  # NEW: Value chain articles count
     summary_json: Dict = None,  # NEW: Structured JSON (Phase 1)
     prompt_tokens: int = 0,     # NEW: Metadata
     completion_tokens: int = 0, # NEW: Metadata
@@ -2063,6 +2067,7 @@ def save_executive_summary(
         company_count: Number of company articles analyzed
         industry_count: Number of industry articles analyzed
         competitor_count: Number of competitor articles analyzed
+        value_chain_count: Number of value chain articles analyzed (upstream/downstream)
         summary_json: Structured JSON output (Phase 1) - stored in JSONB column
         prompt_tokens: Token count for prompt
         completion_tokens: Token count for completion
@@ -2074,9 +2079,9 @@ def save_executive_summary(
         cur.execute("""
             INSERT INTO executive_summaries
                 (ticker, summary_date, summary_text, summary_json, ai_provider, article_ids,
-                 company_articles_count, industry_articles_count, competitor_articles_count,
+                 company_articles_count, industry_articles_count, competitor_articles_count, value_chain_articles_count,
                  generation_phase, prompt_tokens, completion_tokens, generation_time_ms)
-            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, 'phase1', %s, %s, %s)
+            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, %s, 'phase1', %s, %s, %s)
             ON CONFLICT (ticker, summary_date)
             DO UPDATE SET
                 summary_text = EXCLUDED.summary_text,
@@ -2086,6 +2091,7 @@ def save_executive_summary(
                 company_articles_count = EXCLUDED.company_articles_count,
                 industry_articles_count = EXCLUDED.industry_articles_count,
                 competitor_articles_count = EXCLUDED.competitor_articles_count,
+                value_chain_articles_count = EXCLUDED.value_chain_articles_count,
                 generation_phase = EXCLUDED.generation_phase,
                 prompt_tokens = EXCLUDED.prompt_tokens,
                 completion_tokens = EXCLUDED.completion_tokens,
@@ -2093,7 +2099,7 @@ def save_executive_summary(
                 generated_at = NOW()
         """, (ticker, summary_text, json.dumps(summary_json) if summary_json else None,
               ai_provider, article_ids_json,
-              company_count, industry_count, competitor_count,
+              company_count, industry_count, competitor_count, value_chain_count,
               prompt_tokens, completion_tokens, generation_time_ms))
 
         LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, Phase 1, {len(article_ids)} articles, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
@@ -19514,7 +19520,7 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
             # CRITICAL: Save ALL flagged article IDs (not just those with ai_summary)
             # This ensures regenerate shows same articles as original Email #3
             article_ids = []
-            for category in ["company", "industry", "competitor"]:
+            for category in ["company", "industry", "competitor", "value_chain"]:
                 for article in categories.get(category, []):
                     if article.get("id"):
                         article_ids.append(article.get("id"))
@@ -19522,6 +19528,7 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
             company_count = len([a for a in categories.get("company", []) if a.get("ai_summary")])
             industry_count = len([a for a in categories.get("industry", []) if a.get("ai_summary")])
             competitor_count = len([a for a in categories.get("competitor", []) if a.get("ai_summary")])
+            value_chain_count = len([a for a in categories.get("value_chain", []) if a.get("ai_summary")])
 
             # Save final merged JSON (Phase 1 or Phase 2)
             save_executive_summary(
@@ -19532,6 +19539,7 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 company_count,
                 industry_count,
                 competitor_count,
+                value_chain_count,
                 summary_json=final_json,  # Structured JSON (Phase 1 or Phase 2)
                 prompt_tokens=prompt_tokens + phase2_prompt_tokens,  # Combined tokens
                 completion_tokens=completion_tokens + phase2_completion_tokens,  # Combined tokens
@@ -26308,7 +26316,7 @@ async def cron_ingest(
                 LOG.info(f"   Sample IDs: {flagged_articles[:5]}...")
             else:
                 # Diagnostic info when 0 articles flagged
-                total_articles = sum(len(articles_by_ticker[ticker].get(cat, [])) for cat in ['company', 'industry', 'competitor'])
+                total_articles = sum(len(articles_by_ticker[ticker].get(cat, [])) for cat in ['company', 'industry', 'competitor', 'value_chain'])
                 LOG.info(f"ℹ️ [{ticker}] AI triage selected 0 articles from {total_articles} total")
                 LOG.info(f"   This can happen when:")
                 LOG.info(f"   1. No articles matched company name in title/description")

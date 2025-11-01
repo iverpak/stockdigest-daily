@@ -20412,6 +20412,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                     WHERE ta.ticker = ANY(%s)
                         AND a.id = ANY(%s)
                     ORDER BY a.url_hash, ta.ticker,
+                        ta.value_chain_type NULLS LAST,
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (tickers, flagged_article_ids))
             else:
@@ -20437,6 +20438,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                     WHERE a.id = ANY(%s)
                         AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                     ORDER BY a.url_hash, ta.ticker,
+                        ta.value_chain_type NULLS LAST,
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (flagged_article_ids,))
             else:

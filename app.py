@@ -12288,6 +12288,11 @@ ANALYTICAL CONTENT - Include these question-based titles:
 ✓ "What's next for [Company]..." (forward-looking analysis based on recent events)
 ✓ "[Company] stock: [Question about valuation/growth/strategy]" (substantive analysis)
 
+CREDIBLE PRIMARY SOURCES - Always evaluate (never auto-reject):
+✓ PR Newswire, GlobeNewswire, Business Wire (official company announcements)
+✓ Earnings releases: "Reports Q[X] Results," "Fiscal Q[X] Results"
+✓ Material announcements: "Announces [partnership/acquisition/facility]"
+
 REJECT COMPLETELY - Never select:
 - Generic watchlists: "Top 5 stocks," "Best dividend picks," "Stocks to watch this week"
 - Sector roundups: "Tech sector movers," "Healthcare stocks rally," "Energy update"
@@ -12741,6 +12746,11 @@ ANALYTICAL CONTENT - Include competitor analysis:
 ✓ "[competitor] strategy in [market/product]..." (strategic intelligence)
 ✓ "What [competitor]'s [move] means for..." (competitive implications)
 
+CREDIBLE PRIMARY SOURCES - Always evaluate (never auto-reject):
+✓ PR Newswire, GlobeNewswire, Business Wire (official company announcements)
+✓ Earnings releases: "Reports Q[X] Results," "Fiscal Q[X] Results"
+✓ Material announcements: "Announces [partnership/acquisition/facility]"
+
 REJECT COMPLETELY - Never select:
 - Generic lists: "Top dividend stocks," "Best performers," "Stocks to watch"
 - Sector roundups: "Tech movers," "Healthcare rally" (unless target competitor is primary focus)
@@ -12946,6 +12956,11 @@ ANALYTICAL CONTENT - Include supplier analysis:
 ✓ "What [supplier]'s [expansion/constraint] means for..." (supply chain implications)
 ✓ "[Supplier] vs competitors" (supplier competitive position affecting pricing power)
 ✓ "Industry analysis on [supplier's sector] capacity/pricing trends" (sector-wide supply dynamics)
+
+CREDIBLE PRIMARY SOURCES - Always evaluate (never auto-reject):
+✓ PR Newswire, GlobeNewswire, Business Wire (official company announcements)
+✓ Earnings releases: "Reports Q[X] Results," "Fiscal Q[X] Results"
+✓ Material announcements: "Announces [partnership/acquisition/facility]"
 
 REJECT - Never select:
 - Generic lists: "Top stocks," "Best picks," "Stocks to watch"
@@ -13158,6 +13173,11 @@ ANALYTICAL CONTENT - Include customer analysis:
 ✓ "[Customer] vs competitors" (customer competitive position affecting our volumes)
 ✓ "Industry analysis on [customer's end-market] trends" (end-market health affecting derived demand)
 ✓ "[End-market] spending patterns..." (macro demand drivers)
+
+CREDIBLE PRIMARY SOURCES - Always evaluate (never auto-reject):
+✓ PR Newswire, GlobeNewswire, Business Wire (official company announcements)
+✓ Earnings releases: "Reports Q[X] Results," "Fiscal Q[X] Results"
+✓ Material announcements: "Announces [partnership/acquisition/facility]"
 
 REJECT - Never select:
 - Generic lists: "Top stocks," "Best picks," "Stocks to watch"

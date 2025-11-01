@@ -674,15 +674,17 @@ def generate_company_profile_email(
 
                 # Determine first column width based on total columns
                 if num_columns <= 3:
-                    first_col_width = "40%"  # Plenty of room for labels
+                    first_col_width = "40%"  # 2 data cols = 30% each
                 elif num_columns <= 5:
-                    first_col_width = "35%"  # Balanced
+                    first_col_width = "35%"  # 4 data cols = 16.25% each (user confirmed good)
                 elif num_columns <= 7:
-                    first_col_width = "30%"  # More room for data
-                elif num_columns <= 10:
-                    first_col_width = "25%"  # Maximum room for data
+                    first_col_width = "25%"  # 6 data cols = 12.5% each (improved)
+                elif num_columns <= 9:
+                    first_col_width = "20%"  # 8 data cols = 10% each (fixes wrapping)
+                elif num_columns <= 11:
+                    first_col_width = "15%"  # 10 data cols = 8.5% each (tight but readable)
                 else:
-                    first_col_width = "20%"  # Extreme case (11+ columns)
+                    first_col_width = "12%"  # 11+ data cols = 8% each (extreme case)
 
                 # Apply width to first cell in every row
                 for row in table.find_all('tr'):

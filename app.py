@@ -3389,7 +3389,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
 
 # 2. STORE TICKER REFERENCE - With 6 competitor fields
 def store_ticker_reference(ticker_data: dict) -> bool:
-    """Store or update ticker reference data with 3 industry keywords + 6 competitor fields"""
+    """Store or update ticker reference data with 3 industry keywords + 6 competitor fields + 8 value chain fields"""
     try:
         # Validate required fields
         required_fields = ['ticker', 'country', 'company_name']
@@ -3416,6 +3416,8 @@ def store_ticker_reference(ticker_data: dict) -> bool:
             'industry_keyword_1', 'industry_keyword_2', 'industry_keyword_3',
             'competitor_1_name', 'competitor_2_name', 'competitor_3_name',
             'competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker',
+            'upstream_1_name', 'upstream_1_ticker', 'upstream_2_name', 'upstream_2_ticker',
+            'downstream_1_name', 'downstream_1_ticker', 'downstream_2_name', 'downstream_2_ticker',
             'geographic_markets', 'subsidiaries'
         ]
         for field in text_fields:
@@ -3431,6 +3433,16 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                 if not validate_ticker_format(ticker_data[field]):
                     LOG.warning(f"Invalid competitor ticker format: {ticker_data[field]}")
                     ticker_data[field] = None  # Clear invalid ticker
+
+        # Normalize upstream/downstream tickers
+        value_chain_ticker_fields = ['upstream_1_ticker', 'upstream_2_ticker', 'downstream_1_ticker', 'downstream_2_ticker']
+        for field in value_chain_ticker_fields:
+            if ticker_data.get(field):
+                ticker_data[field] = normalize_ticker_format(ticker_data[field])
+                # Validate value chain ticker format
+                if not validate_ticker_format(ticker_data[field]):
+                    LOG.warning(f"Invalid value chain ticker format: {ticker_data[field]}")
+                    ticker_data[field] = None  # Clear invalid ticker
         
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
@@ -3441,6 +3453,10 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                     competitor_1_name, competitor_1_ticker,
                     competitor_2_name, competitor_2_ticker,
                     competitor_3_name, competitor_3_ticker,
+                    upstream_1_name, upstream_1_ticker,
+                    upstream_2_name, upstream_2_ticker,
+                    downstream_1_name, downstream_1_ticker,
+                    downstream_2_name, downstream_2_ticker,
                     geographic_markets, subsidiaries,
                     ai_generated, data_source
                 ) VALUES (
@@ -3450,6 +3466,10 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                     %(competitor_1_name)s, %(competitor_1_ticker)s,
                     %(competitor_2_name)s, %(competitor_2_ticker)s,
                     %(competitor_3_name)s, %(competitor_3_ticker)s,
+                    %(upstream_1_name)s, %(upstream_1_ticker)s,
+                    %(upstream_2_name)s, %(upstream_2_ticker)s,
+                    %(downstream_1_name)s, %(downstream_1_ticker)s,
+                    %(downstream_2_name)s, %(downstream_2_ticker)s,
                     %(geographic_markets)s, %(subsidiaries)s,
                     %(ai_generated)s, %(data_source)s
                 )
@@ -3474,6 +3494,14 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                     competitor_2_ticker = EXCLUDED.competitor_2_ticker,
                     competitor_3_name = EXCLUDED.competitor_3_name,
                     competitor_3_ticker = EXCLUDED.competitor_3_ticker,
+                    upstream_1_name = EXCLUDED.upstream_1_name,
+                    upstream_1_ticker = EXCLUDED.upstream_1_ticker,
+                    upstream_2_name = EXCLUDED.upstream_2_name,
+                    upstream_2_ticker = EXCLUDED.upstream_2_ticker,
+                    downstream_1_name = EXCLUDED.downstream_1_name,
+                    downstream_1_ticker = EXCLUDED.downstream_1_ticker,
+                    downstream_2_name = EXCLUDED.downstream_2_name,
+                    downstream_2_ticker = EXCLUDED.downstream_2_ticker,
                     geographic_markets = EXCLUDED.geographic_markets,
                     subsidiaries = EXCLUDED.subsidiaries,
                     ai_generated = EXCLUDED.ai_generated,
@@ -3501,6 +3529,14 @@ def store_ticker_reference(ticker_data: dict) -> bool:
                 'competitor_2_ticker': ticker_data.get('competitor_2_ticker'),
                 'competitor_3_name': ticker_data.get('competitor_3_name'),
                 'competitor_3_ticker': ticker_data.get('competitor_3_ticker'),
+                'upstream_1_name': ticker_data.get('upstream_1_name'),
+                'upstream_1_ticker': ticker_data.get('upstream_1_ticker'),
+                'upstream_2_name': ticker_data.get('upstream_2_name'),
+                'upstream_2_ticker': ticker_data.get('upstream_2_ticker'),
+                'downstream_1_name': ticker_data.get('downstream_1_name'),
+                'downstream_1_ticker': ticker_data.get('downstream_1_ticker'),
+                'downstream_2_name': ticker_data.get('downstream_2_name'),
+                'downstream_2_ticker': ticker_data.get('downstream_2_ticker'),
                 'geographic_markets': ticker_data.get('geographic_markets'),
                 'subsidiaries': ticker_data.get('subsidiaries'),
                 'ai_generated': ticker_data.get('ai_generated', False),

@@ -7,8 +7,10 @@ INPUT FORMAT
 You will receive articles in a UNIFIED TIMELINE, sorted newest to oldest. Each article has a category tag:
 
 - [COMPANY] = Articles directly about the target company
-- [INDUSTRY - keyword] = Fundamental value drivers for the target company (prices, costs, demand, supply, regulation)
-- [COMPETITOR] = Articles about the company's competitors
+- [COMPETITOR] = Articles about horizontal competitors
+- [UPSTREAM] = Articles about upstream suppliers
+- [DOWNSTREAM] = Articles about downstream customers
+- [INDUSTRY - keyword] = Fundamental value drivers (prices, costs, demand, supply, regulation)
 
 All article summaries are already written from the target company investor perspective.
 
@@ -1191,10 +1193,15 @@ Competitor action is material (>$10B M&A, major regulatory approval the target c
 
 If competitor news meets NONE of these tests → EXCLUDE entirely.
 
+VALUE CHAIN NEWS HANDLING:
+
+Upstream and downstream articles use different inclusion logic - they provide supply/demand intelligence by definition of the relationship.
+
+Include value chain articles unless clearly irrelevant (pure stock technical analysis, wrong entity, unrelated business units).
+
 CONSERVATIVE DEFAULTS FOR PHASE 1:
 
 When uncertain about how to handle content:
-
 - Unclear if material enough? → Include it (95% theme coverage principle - Phase 2 will calculate materiality)
 - Unclear which section? → Default to Competitive/Industry Dynamics (less alarming than Risk Factors)
 - Unclear if relevant to the target company? → Exclude (tight scope - only what articles explicitly connect)
@@ -1354,7 +1361,7 @@ DECISION FRAMEWORK:
 4. Is it analyst rating, price target, or commentary?
    → Wall Street Sentiment
 
-5. Is it competitor action or industry trend?
+5. Is it competitor action, value chain intelligence, or industry trend?
    → Competitive/Industry Dynamics (if meets relevance test - see below)
 
 6. Is it a scheduled future event?
@@ -1622,7 +1629,18 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    - Risk Factors (threat framing): Focus on risk to the target company
    - Competitive Dynamics (detail framing): Focus on transaction/development details
 
-4. INPUT COST INCREASES (SINGLE-STEP INFERENCE)
+4. VALUE CHAIN DISRUPTIONS
+   Supplier/customer issues articles explicitly frame as threats to the target company.
+   
+   - Supplier risks: Bankruptcy, shortages, price spikes affecting target's supply security
+   - Customer risks: Financial stress, insourcing, contract losses affecting target's revenue
+   - Must also meet standard risk criteria: author-flagged concern OR categorical risk event
+   
+   Examples:
+   ✓ "Supplier bankruptcy threatens supply chain per analyst report"
+   ✓ "Customer insourcing initiative may reduce orders 30% per CFO statement"
+
+5. INPUT COST INCREASES (SINGLE-STEP INFERENCE)
    When articles report increases in costs for materials/inputs the company purchases.
 
    Apply single-step inference: Higher input costs → margin pressure = risk
@@ -1761,11 +1779,12 @@ FORMAT NOTE: This section does NOT use sentiment tags in Phase 1 (analyst action
 COMPETITIVE/INDUSTRY DYNAMICS
 ═══════════════════════════════════════════════════════════════════════════════
 
-SECTION SCOPE: Competitor developments and industry trends that articles discussed with relevance to the target company.
+SECTION SCOPE: Competitor developments, supplier/customer intelligence, and industry 
+trends that articles discussed with relevance to the target company.
 
 LENGTH LIMIT: No explicit limit (use judgment - don't overwhelm with peripheral news)
 
-SOURCE: [INDUSTRY] and [COMPETITOR] articles
+SOURCE: [COMPETITOR], [UPSTREAM], [DOWNSTREAM], and [INDUSTRY] articles
 
 RELEVANCE TEST (must meet at least ONE):
 
@@ -1774,14 +1793,19 @@ Test 1: Article explicitly states the target company impact
 - Examples: "Analyst stated GM launch creates pressure on Tesla", "Article noted trend benefits all EV makers including Tesla"
 
 Test 2: Direct comparative framing
-- Article directly compares competitor metric to the target company metric
+- Article directly compares competitor/value chain metric to the target company metric
 - Example: "GM posted 18% margins vs Tesla's 12% per analyst report"
 
 Test 3: Material competitive event (meets Risk Factors Test 3 criteria)
 - >$10B M&A, major approval the target company lacks, significant capacity expansion, superior product launch
 - If meets Test 3 → Include in BOTH Risk Factors and Competitive Dynamics
 
-If competitor/industry news meets NONE of these tests → EXCLUDE entirely.
+Test 4: Value chain intelligence
+- Upstream articles provide supply chain signals (costs, capacity, disruptions)
+- Downstream articles provide demand signals (orders, end-market health, expansion)
+- These passed specialized triage - include unless clearly irrelevant
+
+If article meets NONE of these tests → EXCLUDE entirely.
 
 WHAT TO INCLUDE (if relevance test passed):
 
@@ -1792,30 +1816,33 @@ Include if articles reported AND relevance test passed:
 - Market data: Pricing changes, capacity additions, production figures
 - Executive commentary: Quotes from competitor earnings calls/statements
 - Industry trends: Market growth rates, adoption curves, demand patterns
+- Upstream suppliers: Supply capacity, pricing, disruptions, financial health, technology
+- Downstream customers: Order trends, demand signals, expansion plans, financial health, strategic shifts
 
-WHAT TO EXCLUDE (even from competitor news):
+WHAT TO EXCLUDE:
 
 Do not include even if articles mention:
-- Competitor routine financial results (unless articles provide comparative metrics with the target company)
-- Detailed stock price technical levels for competitors (support/resistance/moving averages)
-- Competitor dividend dates, ex-dividend dates, or routine corporate actions
-- Competitor internal HR changes (non-C-suite personnel moves)
-- Competitor minor facility openings/closings (<5% of competitor's capacity per articles)
+- Routine financial results (unless articles provide comparative metrics with the target company)
+- Detailed stock price technical levels (support/resistance/moving averages)
+- Dividend dates, ex-dividend dates, routine corporate actions
+- Internal HR changes (non-C-suite personnel moves)
+- Minor facility openings/closings (<5% of entity's capacity per articles)
 - Industry data points without target company connection (generic sector statistics)
-- Competitor speculation or rumors without substantive developments
+- Speculation or rumors without substantive developments
 
 SYNTHESIS OPPORTUNITIES (ARTICLE-DRIVEN ONLY):
 
 When articles provide comparative data:
 → Present comparatively: "Competitor A revenue $5B vs the target company $10B per analyst report"
+→ "Supplier pricing increased 20% affecting target company cost structure per analyst"
 
-When articles mention competitor + the target company positioning:
-→ Report both with attribution: "Competitor announced X; Article noted the target company positioned differently with Y"
+When articles mention multiple entities + the target company positioning:
+→ Report all with attribution: "Competitor announced X; Supplier noted Y; Article stated target company positioned differently with Z"
 
-When articles provide industry trend + multiple data points:
+When articles provide industry trends + multiple data points:
 → Synthesize with attribution: "Industry shipments grew 15%; the target company outpaced at 20% per reports"
 
-CRITICAL: Never pull competitor data from filings or articles not in your timeline. Use only what articles in your coverage period stated.
+CRITICAL: Never pull data from filings or articles not in your timeline. Use only what articles in your coverage period stated.
 
 ═══════════════════════════════════════════════════════════════════════════════
 UPCOMING CATALYSTS

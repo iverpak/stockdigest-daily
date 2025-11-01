@@ -236,12 +236,63 @@ def generate_executive_summary_phase1(
         }
 
         LOG.info(f"[{ticker}] Calling Claude API for Phase 1 executive summary")
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json=data,
-            timeout=180  # 3 minutes
-        )
+
+        # Retry logic for transient errors (503, 429, 500)
+        max_retries = 2
+        response = None
+        generation_time_ms = 0
+
+        for attempt in range(max_retries + 1):
+            try:
+                api_start_time = time.time()
+                response = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers=headers,
+                    json=data,
+                    timeout=180  # 3 minutes
+                )
+                generation_time_ms = int((time.time() - api_start_time) * 1000)
+
+                # Success - break retry loop
+                if response.status_code == 200:
+                    break
+
+                # Transient errors - retry with exponential backoff
+                if response.status_code in [429, 500, 503] and attempt < max_retries:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    error_preview = response.text[:200] if response.text else "No details"
+                    LOG.warning(f"[{ticker}] ⚠️ API error {response.status_code} (attempt {attempt + 1}/{max_retries + 1}): {error_preview}")
+                    LOG.warning(f"[{ticker}] 🔄 Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+
+                # Non-retryable error or max retries reached - break
+                break
+
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    LOG.warning(f"[{ticker}] ⏱️ Request timeout (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    LOG.error(f"[{ticker}] ❌ Request timeout after {max_retries + 1} attempts")
+                    return None
+
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    LOG.warning(f"[{ticker}] 🔌 Network error (attempt {attempt + 1}/{max_retries + 1}): {e}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    LOG.error(f"[{ticker}] ❌ Network error after {max_retries + 1} attempts: {e}")
+                    return None
+
+        # Check if we got a response
+        if response is None:
+            LOG.error(f"[{ticker}] ❌ No response received after {max_retries + 1} attempts")
+            return None
 
         if response.status_code == 200:
             result = response.json()
@@ -276,8 +327,6 @@ def generate_executive_summary_phase1(
                 LOG.info(f"[{ticker}] 💾 CACHE CREATED: {cache_creation} tokens (Phase 1)")
             elif cache_read > 0:
                 LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens (Phase 1) - 90% savings!")
-
-            generation_time_ms = int((time.time() - start_time) * 1000)
 
             LOG.info(f"✅ [{ticker}] Phase 1 generated JSON ({len(json_str)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 

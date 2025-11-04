@@ -323,10 +323,9 @@ FIELD GENERATION & CRITICAL RULES
    - ❌ Bad: "acquisition announced", "customer contract", "membership loss"
    - ✅ Good: "care delivery expansion", "revenue dependency", "strategic contraction"
 
-4. relevance: "direct" | "indirect" | "none"
-   - direct: Directly about target company
-   - indirect: Indirectly relevant through market/competitive/industry connection
-   - none: Not relevant to target company
+4. relevance: "direct" | "indirect" | "none" | "unclear"
+   - See RELEVANCE TAG CALCULATION section for full decision tree.
+   - Calculate AFTER generating context field using filing quantification signals.
    
    Examples:
    - direct: Target company Q3 deliveries beat consensus; Goldman raised target price
@@ -342,6 +341,7 @@ FIELD GENERATION & CRITICAL RULES
 ADDITIONAL REQUIREMENTS:
 - PRESERVE BULLET_ID: This is the merge key with Phase 1 (critical for output)
 - VALID JSON OUTPUT: All 5 sections must be present even if empty
+- CALCULATE ORDER: Generate context first, then calculate impact/sentiment/relevance using both bullet content and context
 
 ═══════════════════════════════════════════════════════════════════════════════
 CONTEXT GENERATION RULES
@@ -1126,6 +1126,103 @@ For development-stage companies (check filing for "development stage" disclosure
 - Binary outcomes (trial results, drill intercepts, first customer) → HIGH
 
 When uncertain: Use filing tone. Does management frame as critical or exploratory?
+
+═══════════════════════════════════════════════════════════════════════════════
+RELEVANCE TAG CALCULATION
+═══════════════════════════════════════════════════════════════════════════════
+
+Relevance answers: "How directly does this connect to the target company?"
+
+CRITICAL: Articles reached Phase 2 because triage identified them as competitors, upstream suppliers, downstream customers, or fundamental driver keywords. Default assumption: Some relevance exists unless proven otherwise.
+
+Evaluate using BOTH bullet content (article topic) AND context (filing connections).
+Calculate relevance AFTER generating context field. Use filing quantification as primary signal.
+
+FOUR LEVELS:
+- direct: Target company materially affected (bullet about target OR filings quantify connection)
+- indirect: Market/industry context (competitor/supplier/customer OR filings mention without quantification)
+- none: Not relevant (BOTH bullet AND context show wrong company or unrelated topic)
+- unclear: Cannot determine (rare; use when insufficient information or contradictory signals)
+
+Default to indirect when uncertain between indirect/none or direct/indirect.
+
+DIRECT (assign if ANY true):
+
+RULE 1: Bullet is ABOUT target company
+- Financial results, guidance, operations, strategic actions
+- Analyst/regulatory actions ON target company
+
+RULE 2: Context contains QUANTIFIED connection
+Look for these patterns in context:
+✓ Concentration: "X% of revenue/COGS", "Top X customer/supplier", "represents X%"
+✓ Comparison: "Competitor X units vs target Y units per filing"
+✓ Validation: "Competitor result validates target's X% metric per filing"
+✓ Exposure: "Target X% revenue from [market] per filing" (market trend → target exposure)
+✓ Connection: "Survey/policy explains target's $X guidance per filing" (trend → target metric)
+✓ Relationship: "Target acquiring [X] for $Y" or "Target $X support outstanding per filing"
+✓ Strategy: "Management highlighted/emphasized [X] as strategy/mitigation/response per filing"
+
+RULE 3: Context shows HEAD-TO-HEAD overlap
+- "Competes for target's customers/market per filing"
+- "Critical to target's product representing X% per filing"
+
+Test: Does context contain %, $, or explicit quantified relationship? YES → direct
+
+INDIRECT (assign if ANY true):
+
+DEFAULT: Bullet about known competitor/supplier/customer per triage
+- Even if context = "No relevant filing context found"
+- Triage validated relationship exists; filings just don't quantify impact
+
+RULE 1: Filings mention WITHOUT quantification
+- "Target uses [technology] per filing; filings don't quantify TAM capture"
+- "Target sources from [supplier] per filing; no dependency % disclosed"
+
+RULE 2: General market trend
+- Industry forecasts, sector analysis affecting multiple players
+- Filings acknowledge but don't isolate target-specific impact
+
+RULE 3: Relationship exists but not quantified
+- Competitor in same market, supplier to target, customer of target
+- Filings show relationship but no concentration, dependency, or competitive impact metrics
+
+Test: Filings mention topic but no %, $, or quantified impact? YES → indirect
+
+NONE (assign ONLY if BOTH bullet AND context show no connection):
+
+- Wrong entity: Context reveals different company/segment than triage assumed
+- Unrelated topic: Filings explicitly show target not in that business/market/geography
+- Triage error: Name collision, misidentified entity during scraping
+
+Critical test: Would target management care about this development? YES → At minimum indirect; NO → none
+
+UNCLEAR (use sparingly):
+
+Assign "unclear" ONLY when:
+- Insufficient information in both bullet and context to determine connection strength
+- Contradictory signals between bullet content and filing context
+
+Default to "indirect" rather than "unclear" when uncertain.
+
+DECISION PROCESS (apply in order):
+
+1. Is bullet ABOUT target company? → direct
+2. Does context contain % or $ quantifying connection to target? → direct
+3. Is bullet about known competitor/supplier/customer per triage? → indirect
+4. Does context mention topic but not quantify target impact? → indirect
+5. Do BOTH bullet AND context show no connection? → none
+6. Insufficient information or contradictory signals? → unclear
+7. When uncertain → Default to indirect
+
+CRITICAL RULES:
+
+1. Calculate relevance AFTER generating context field
+2. Look for quantification signals in context (%, $, "represents", "validates", "competes for")
+3. Events ABOUT target company = automatic direct
+4. "No filing context found" + competitor/supplier/customer bullet = indirect (not none)
+5. Assign "none" only when BOTH bullet AND context show no connection
+6. Triage already validated relationships; respect that unless proven wrong
+7. When uncertain between levels → Default to indirect
 
 ═══════════════════════════════════════════════════════════════════════════════
 SYNTHESIS REQUIREMENT - CONNECT THE DOTS

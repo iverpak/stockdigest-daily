@@ -21477,14 +21477,14 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
                 # Gray tag with keyword
                 keyword = article.get('search_keyword', '')
                 if keyword:
-                    tag_html = f'<span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{keyword.title()}]</span>'
+                    tag_html = f'<span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{keyword.title()}</span>'
 
             elif category == "competitor":
                 # Red tag with ticker or company name
                 comp_ticker = article.get('competitor_ticker')
                 comp_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
                 partner_tag = comp_ticker if comp_ticker else comp_name
-                tag_html = f'<span style="display: inline-block; background: #dc3545; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{partner_tag}]</span>'
+                tag_html = f'<span style="display: inline-block; background: #dc3545; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
 
             # Company category has no tag (articles are obviously about the target company)
 
@@ -21542,7 +21542,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             partner_ticker = article.get('competitor_ticker')
             partner_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
             partner_tag = partner_ticker if partner_ticker else partner_name
-            tag_html = f'<span style="display: inline-block; background: #f97316; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{partner_tag}]</span>'
+            tag_html = f'<span style="display: inline-block; background: #f97316; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
@@ -21587,7 +21587,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             partner_ticker = article.get('competitor_ticker')
             partner_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
             partner_tag = partner_ticker if partner_ticker else partner_name
-            tag_html = f'<span style="display: inline-block; background: #10b981; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{partner_tag}]</span>'
+            tag_html = f'<span style="display: inline-block; background: #10b981; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"

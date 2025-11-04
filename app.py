@@ -446,15 +446,20 @@ def log_cost_summary(ticker: str, company_name: str = ""):
     # Define friendly names and emojis
     function_display = {
         "triage_company": ("🎯 Triage (Company)", 1),
-        "triage_industry": ("🏭 Triage (Industry)", 2),
+        "triage_fundamental_drivers": ("🏭 Triage (Industry)", 2),
         "triage_competitor": ("🏢 Triage (Competitor)", 3),
-        "article_summary": ("📝 Article Summaries", 4),
-        "competitor_summary": ("🏆 Competitor Summaries", 5),
-        "industry_summary": ("🌐 Industry Summaries", 6),
-        "industry_scoring": ("⚖️ Industry Scoring", 7),
-        "executive_summary": ("📊 Executive Summary (OLD)", 8),
-        "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 9),
-        "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 10)
+        "triage_upstream": ("⬆️ Triage (Upstream)", 4),
+        "triage_downstream": ("⬇️ Triage (Downstream)", 5),
+        "article_summary": ("📝 Article Summaries", 6),
+        "competitor_summary": ("🏆 Competitor Summaries", 7),
+        "upstream_summary": ("⬆️ Upstream Summaries", 8),
+        "downstream_summary": ("⬇️ Downstream Summaries", 9),
+        "fundamental_driver_summary": ("🌐 Industry Summaries", 10),
+        "fundamental_driver_scoring": ("⚖️ Industry Scoring", 11),
+        "executive_summary": ("📊 Executive Summary (OLD)", 12),
+        "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 13),
+        "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 14),
+        "research_summary": ("📋 Research Summary (Transcript/PR)", 15)
     }
 
     # Sort by display order
@@ -12924,95 +12929,195 @@ async def triage_upstream_articles_claude(
     system_prompt = """You are a financial analyst selecting articles about an upstream supplier based ONLY on titles and descriptions.
 
 **YOUR TASK:**
-The user will provide target company ticker, upstream supplier name, upstream ticker, article count, and target cap. Select the highest-quality articles about that specific upstream supplier.
+The user provides target company, upstream supplier name, article count, and target cap. Select the highest-quality articles about that specific upstream supplier.
 
 **UPSTREAM CONTEXT:**
-Upstream suppliers provide inputs affecting the target company's production capacity, costs, supply security, and product quality.
+Upstream suppliers affect the target company's production costs, capacity, supply security, and input quality.
 
-PRIMARY CRITERION: Is this article SPECIFICALLY about the upstream supplier? If unclear, skip it.
+**CORE RULE:** Article must be primarily about the supplier. If uncertain or just passing mention, skip it.
 
-SELECT (choose up to target cap):
+---
 
-TIER 1 - High-priority supply intelligence (scrape_priority=1):
-- **Financial Results:** Earnings, revenue, guidance, margins WITH operational metrics (capacity, production, backlogs)
-- **Capacity & Production:** Expansions, closures, output levels, utilization rates, bottlenecks WITH scale/timeline
-- **Supply Disruptions:** Shortages, constraints, allocation, rationing, delays, outages, production halts
-- **Pricing:** Price increases, surcharges, cost pass-through WITH percentages or amounts
-- **Operational Events:** Fires, accidents, disasters, equipment failures, plant shutdowns
-- **Labor:** Strikes, work stoppages, union negotiations WITH production or wage implications
+**TIER 1 - High-Priority Supply Intelligence (scrape_priority=1)**
+
+Always flag these - critical operational developments:
+
+- **Financial Results:** Earnings, revenue, guidance WITH operational data (capacity, production, backlogs, utilization)
+- **Capacity/Production:** Expansions, closures, output changes, utilization rates WITH scale/timeline
+- **Supply Disruptions:** Shortages, allocation, rationing, delays, outages, production halts
+- **Pricing Actions:** Price increases, surcharges, cost pass-through WITH amounts or percentages
+- **Material Events:** Fires, disasters, equipment failures, plant shutdowns, strikes, work stoppages
 - **Contracts:** Supply agreements WITH dollar amounts, volumes, pricing terms, or duration
 - **Financial Stress:** Bankruptcy, restructuring, liquidity crises, covenant breaches, going concern warnings
+- **Strategic Announcements:** Partnerships, acquisitions, divestitures, joint ventures WITH deal terms
 - **Technology:** Manufacturing breakthroughs, yield improvements, quality issues, recalls, defect rates
-- **Regulatory:** Approvals, violations, fines, investigations, compliance actions WITH penalties
-- **Trade:** Tariffs, export controls, sanctions, trade restrictions affecting supply costs/availability
-- **Standards:** New compliance requirements, safety/environmental rules WITH deadlines and cost impacts
+- **Regulatory/Trade:** Tariffs, export controls, sanctions, violations, fines, investigations WITH penalties
+- **Labor:** Union negotiations, wage changes WITH production impact
 
-TIER 2 - Strategic supply intelligence (scrape_priority=2):
-- **M&A:** Acquisitions, divestitures, joint ventures affecting capacity, pricing, or technology
-- **Leadership:** CEO, CFO, operations executives WITH names and strategic implications
+**Pattern recognition:**
+✓ "After [partnership/deal/acquisition]" (even if title leads with "Valuation" or "Stock")
+✓ "Announces [expansion/closure/partnership]"
+✓ "Reports Q[X] Results" or "Fiscal Q[X] Results"
+
+---
+
+**TIER 2 - Strategic Supply Intelligence (scrape_priority=2)**
+
+Flag if room after Tier 1:
+
+- **Leadership Changes:** CEO, CFO, COO, operations executives WITH names and implications
 - **Strategic Shifts:** Vertical integration, geographic expansion, product line changes
-- **Capex:** Facility investments, R&D spending WITH amounts and capacity implications
-- **Customer Allocation:** Major customer wins/losses, capacity priorities, allocation decisions
-- **Partnerships:** Technology licensing, co-development, exclusive supply arrangements
-- **Pricing Strategies:** Pricing models, volume discounts, bundling, contract renegotiations
-- **Logistics:** Port strikes, shipping delays, freight costs, warehouse disruptions
-- **Operational Updates:** Quarterly reports, shipment volumes, inventory levels, lead times
+- **Capex Plans:** Facility investments, R&D spending WITH amounts and capacity implications
+- **Customer Dynamics:** Major customer wins/losses, allocation decisions, capacity priorities
+- **Operational Updates:** Quarterly production data, shipment volumes, inventory levels, lead times
+- **Logistics:** Port strikes, shipping delays, freight cost changes, warehouse disruptions
 
-TIER 3 - Industry context (scrape_priority=3):
-- **Analyst Coverage:** Upgrades, downgrades, reports WITH operational insights or supply implications
-- **Forecasts:** Production outlook, capacity plans, demand projections from credible sources
-- **Industry Analysis:** Competitive positioning, sector supply/demand dynamics, pricing trends
-- **Performance Reviews:** "Why [supplier] performed..." WITH operational explanations
-- **Strategic Questions:** "Can [supplier] meet demand?" WITH supporting analysis
+---
 
-ANALYTICAL CONTENT - Include supplier analysis:
-✓ "Why [supplier] stock [moved]..." (understanding supply chain implications)
-✓ "[Supplier]'s capacity outlook..." (forward-looking supply visibility)
-✓ "Can [supplier] meet demand/sustain growth..." (supply security assessment)
+**TIER 3 - Industry Context (scrape_priority=3)**
+
+Broad industry developments where supplier mentioned but not primary focus:
+
+- **Analyst Coverage:** Upgrades, downgrades, sector reports WITH operational insights
+- **Industry Analysis:** Sector supply/demand dynamics, capacity trends, pricing environment
+- **Forecasts:** Production outlook, demand projections from credible sources
+- **Performance Context:** "Why [supplier] performed..." WITH operational explanations
+
+---
+
+**ANALYTICAL CONTENT - Include Operational Analysis**
+
+Flag articles analyzing supplier operations (NOT pure stock promotion):
+
+✓ "Why [supplier] stock [moved]..." (if explains operational drivers)
+✓ "[Supplier]'s capacity outlook..." (forward supply visibility)
+✓ "Can [supplier] meet demand..." (supply security assessment)
 ✓ "[Supplier] cost pressures from [inputs]..." (cost structure analysis)
 ✓ "What [supplier]'s [expansion/constraint] means for..." (supply chain implications)
-✓ "[Supplier] vs competitors" (supplier competitive position affecting pricing power)
-✓ "Industry analysis on [supplier's sector] capacity/pricing trends" (sector-wide supply dynamics)
+✓ "[Supplier] vs competitors" (competitive position affecting pricing/capacity)
+✓ "Industry analysis on [supplier's sector]" (sector supply dynamics)
 
-CREDIBLE PRIMARY SOURCES - Always evaluate (never auto-reject):
-✓ PR Newswire, GlobeNewswire, Business Wire (official company announcements)
-✓ Earnings releases: "Reports Q[X] Results," "Fiscal Q[X] Results"
-✓ Material announcements: "Announces [partnership/acquisition/facility]"
+**Key distinction:** Analysis WITH operational context = valuable. Pure valuation/chart analysis = reject.
 
-REJECT - Never select:
-- Generic lists: "Top stocks," "Best picks," "Stocks to watch"
-- Sector roundups: "Tech movers," "Materials rally" (unless supplier is primary focus)
-- Pure stock analysis: Price predictions, technical analysis WITHOUT operational data
-- Unrelated mentions: Supplier listed among many without substantive focus
-- Historical pieces: "If you'd invested," "Past returns"
-- Promotional content: Advertorials, sponsored content, stock promotion
-- Quote pages: Stock price metadata without news
+---
 
-DISAMBIGUATION:
-- If title leads with different company, REJECT IMMEDIATELY
-- If supplier name is just attribution (e.g., "According to [Supplier]..."), reject
-- Multi-company: Only select if supplier is ≥50% of focus
-- Verify context matches YOUR supplier (not different company with similar name)
+**CREDIBLE PRIMARY SOURCES - Always Evaluate**
 
-QUALITY SIGNALS:
-- Specificity: Exact figures, dates, facility names, percentages, capacity numbers
-- Credible sources: Trade publications, regulatory filings, company announcements
-- Action verbs: "expands," "cuts," "raises," "shuts," "signs," "halts," "disrupts"
-- Data language: "data shows," "figures reveal," "announces [number]"
-- Time markers: "Q3," "October," "2024," "latest," "monthly"
+Never auto-reject official announcements:
 
-SCRAPE PRIORITY:
-1 = Financial results with ops data, capacity, disruptions, pricing, labor, contracts, stress, technology, regulatory, trade, standards
-2 = M&A, leadership, strategic shifts, capex, customer allocation, partnerships, pricing, logistics, updates
-3 = Analyst coverage, forecasts, industry analysis, performance reviews
+✓ PR Newswire, GlobeNewswire, Business Wire (company announcements)
+✓ Earnings releases regardless of source domain
+✓ Material announcements: partnerships, M&A, facility changes
 
-SELECTION STANDARD:
-- When uncertain, skip it
-- Hard news > speculation
-- Supply chain materiality: Could this affect target's costs, supply security, or quality?
-- Only select if actionable intelligence about supplier operations
+---
 
-Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "brief reason"}]"""
+**REJECT IMMEDIATELY - Never Select**
+
+Clear patterns to always skip:
+
+**Stock Price Movements:**
+❌ "Stock outperforms/underperforms on [strong/weak] trading day"
+❌ "Stock rises/falls on trading session"
+❌ EXCEPTION: Flag if operational WHY in title ("after earnings beat," "on partnership news")
+
+**Generic Lists/Promotions:**
+❌ "Top X stocks," "Best picks," "Stocks to watch," "X stocks to buy now"
+❌ "If you'd invested $X in [supplier]..." (historical retrospectives)
+
+**Distributor/Marketing:**
+❌ "Authorized distributor [X] offers/announces..."
+❌ "Mouser/Arrow/DigiKey/Distributor portfolio..."
+
+**Pure Financial Analysis:**
+❌ Technical analysis, chart patterns WITHOUT operational context
+❌ Dividend analysis, yield focus WITHOUT operational developments
+❌ Pure valuation ("Is [supplier] undervalued?") WITHOUT operational discussion
+
+**Sector Noise:**
+❌ "Tech sector rallies," "[Sector] stocks gain" (just price movements)
+❌ EXCEPTION: Flag if title contains "earnings," "announcements," "news" (promises operational content)
+
+**Wrong Focus:**
+❌ Title leads with different company name
+❌ Supplier just cited for data ("According to [supplier] research...")
+❌ Multi-company lists where supplier <50% of focus
+
+---
+
+**DISAMBIGUATION - Critical Identity Checks**
+
+Before flagging, verify:
+
+1. **Correct Company?**
+   - Is this YOUR supplier or different company with similar name?
+   - TSMC ≠ ON Semiconductor, Camtek ≠ Texas Instruments, foundry ≠ chip designer
+
+2. **Primary Focus?**
+   - Is supplier the main subject or just mentioned in passing?
+   - Multi-company articles: Only flag if supplier ≥50% of focus
+
+3. **Attribution vs Subject?**
+   - "According to [supplier]..." = just citation, reject
+   - "Supplier announces..." = actual news, flag
+
+4. **Sector Roundup Check:**
+   - Does title promise operational content ("earnings," "results," "announcements")?
+   - Or just price movements ("stocks rally," "sector gains")?
+
+---
+
+**QUALITY SIGNALS - Tiebreakers**
+
+When choosing between similar articles, prefer:
+
+- **Specificity:** Numbers, dates, facility names, percentages, capacity figures
+- **Action verbs:** "expands," "cuts," "announces," "signs," "halts," "disrupts"
+- **Data language:** "reports [number]," "data shows," "figures reveal"
+- **Time markers:** "Q3," "October 2024," "latest," "quarterly"
+- **Credible sources:** Trade publications, regulatory filings, company IR
+
+---
+
+**EDGE CASES - Handling Ambiguity**
+
+**Sector Roundup with Operational Keywords:**
+- "Semiconductor stocks mixed amid earnings" → Flag (promises operational content)
+- "Chip stocks rally on Fed news" → Reject (just price movements)
+
+**Vague Title, Quality Source:**
+- "Supplier Reports Third Quarter Performance" → Flag (earnings always have operational data)
+
+**Unknown Source, Specific Operational Focus:**
+- "Deep dive: Supplier's capacity strategy" from unknown blog → Flag (substance matters)
+
+**"After [Event]" Structure:**
+- "Valuation After Teledyne Partnership" → Flag (partnership is the news)
+- "Stock Analysis After Earnings" → Flag (earnings is the news)
+
+**When Uncertain:**
+Skip it. Better to miss borderline article than waste scrape quota on noise.
+
+---
+
+**SELECTION APPROACH**
+
+1. Prioritize Tier 1 over Tier 2 over Tier 3
+2. Within tiers, prioritize most recent and most specific
+3. When uncertain about relevance, skip it
+4. Hard news > speculation
+5. Ask: "Could this affect target's supply costs, capacity, or security?"
+
+**SCRAPE PRIORITY GUIDE:**
+- scrape_priority=1: Financial results, capacity, disruptions, pricing, events, contracts, stress, partnerships, technology, regulatory, labor
+- scrape_priority=2: Leadership, strategic shifts, capex, customer dynamics, operational updates, logistics
+- scrape_priority=3: Analyst coverage, industry analysis, forecasts, performance context
+
+Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "Q3 earnings with capacity data"}]
+
+**Output Requirements:**
+- Select up to target cap (typically 5)
+- Brief "why" (5-10 words max)
+- Only include articles with actionable supply intelligence"""
 
     # User message with ticker-specific context
     user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
@@ -13140,96 +13245,213 @@ async def triage_downstream_articles_claude(
     system_prompt = """You are a financial analyst selecting articles about a downstream customer based ONLY on titles and descriptions.
 
 **YOUR TASK:**
-The user will provide target company ticker, downstream customer name, downstream ticker, article count, and target cap. Select the highest-quality articles about that specific downstream customer.
+The user provides target company, downstream customer name, article count, and target cap. Select the highest-quality articles about that specific downstream customer.
 
 **DOWNSTREAM CONTEXT:**
-Downstream customers are buyers whose demand signals, purchasing patterns, and business health affect the target company's revenue, pricing power, and growth prospects.
+Downstream customers affect the target company's revenue, demand visibility, pricing power, and growth prospects through their purchasing patterns and business health.
 
-PRIMARY CRITERION: Is this article SPECIFICALLY about the downstream customer? If unclear, skip it.
+**CORE RULE:** Article must be primarily about the customer. If uncertain or just passing mention, skip it.
 
-SELECT (choose up to target cap):
+---
 
-TIER 1 - High-priority demand intelligence (scrape_priority=1):
-- **Financial Results:** Earnings, revenue, guidance, margins WITH demand metrics (sales, orders, inventory, backlogs)
-- **Orders & Contracts:** Purchase orders, supply agreements, contract wins/renewals WITH volumes, values, or terms
-- **Demand Signals:** "Strong demand," "weak sales," "accelerating growth," "slowing orders" WITH specifics
-- **Inventory:** Stockpiling, destocking, inventory buildup, working through excess, channel inventory
-- **Capex & Expansion:** Capital spending plans, facility expansions, capacity additions WITH budgets/timelines
+**TIER 1 - High-Priority Demand Intelligence (scrape_priority=1)**
+
+Always flag these - critical demand developments:
+
+- **Financial Results:** Earnings, revenue, guidance WITH demand metrics (sales, orders, inventory, backlogs, same-store sales)
+- **Orders/Contracts:** Purchase orders, supply agreements, contract wins/renewals WITH volumes, values, or terms
+- **Demand Signals:** "Strong demand," "accelerating growth," "weak sales," "slowing orders" WITH specifics
+- **Inventory Dynamics:** Stockpiling, destocking, inventory buildup, channel inventory, working through excess
+- **Expansion/Capex:** Facility expansions, store openings, capacity additions WITH budgets/timelines/locations
 - **Market Share:** Gains/losses, competitive position shifts, customer wins/defections
-- **Pricing:** Customer's pricing power, margin pressure, cost pass-through ability
-- **End-Market Health:** Retail sales, traffic, utilization rates, occupancy, same-store sales
-- **Product Launches:** New products incorporating target's components/services WITH launch timelines
-- **Financial Stress:** Bankruptcy, restructuring, payment delays, liquidity issues, credit downgrades
-- **Strategic Shifts:** Vertical integration, insourcing, supplier diversification threatening demand
+- **End-Market Health:** Retail traffic, utilization rates, occupancy, footfall, same-store sales trends
+- **Product Launches:** New products/services incorporating target's components WITH launch dates/volumes
+- **Financial Stress:** Bankruptcy, restructuring, payment delays, liquidity issues, credit downgrades, going concern
+- **Strategic Shifts:** Vertical integration, insourcing, supplier diversification threatening target's demand
+- **Pricing Power:** Customer's pricing actions, margin pressure, cost pass-through ability
+- **Footprint Changes:** Store closures/openings, distribution center changes, facility consolidation, geographic expansion
 - **Regulatory:** Approvals, restrictions, compliance costs affecting customer's demand for target's products
 
-TIER 2 - Strategic demand intelligence (scrape_priority=2):
-- **M&A:** Acquisitions, divestitures affecting customer's demand profile or purchasing power
-- **Leadership:** CEO, CFO, procurement executives WITH strategic implications for purchasing
-- **Geographic Expansion:** Market entries, store openings, facility launches affecting demand geography
+**Pattern recognition:**
+✓ "After [partnership/expansion/acquisition]" (even if title leads with "Valuation" or "Stock")
+✓ "Announces [store opening/facility/expansion]"
+✓ "Reports Q[X] Results" or "Fiscal Q[X] Results"
+
+---
+
+**TIER 2 - Strategic Demand Intelligence (scrape_priority=2)**
+
+Flag if room after Tier 1:
+
+- **M&A Activity:** Acquisitions, divestitures affecting customer's demand profile or purchasing power
+- **Leadership Changes:** CEO, CFO, procurement/operations executives WITH names and strategic implications
 - **Product Mix:** Portfolio changes, SKU rationalization affecting demand for target's specific products
-- **Partnerships:** Alliances, joint ventures affecting demand patterns or competitive dynamics
-- **Technology Adoption:** Upgrade cycles, platform migrations, technology shifts affecting demand
-- **Customer Base:** Customer's own customer wins/losses affecting derived demand
-- **Operational Changes:** Manufacturing shifts, distribution changes, channel strategies
-- **Pricing Strategies:** Customer's pricing actions revealing demand strength or competitive pressure
+- **Technology Adoption:** Upgrade cycles, platform migrations, technology shifts affecting purchase patterns
+- **Customer's Customers:** Customer's own customer wins/losses affecting derived demand for target
+- **Operational Changes:** Manufacturing shifts, distribution changes, channel strategy pivots
+- **Geographic Strategy:** Market entries, regional expansions, international footprint changes
+- **Partnerships:** Alliances, joint ventures affecting customer's demand patterns or competitive position
 
-TIER 3 - Market context (scrape_priority=3):
-- **Analyst Coverage:** Upgrades, downgrades, reports WITH demand outlook or growth implications
+---
+
+**TIER 3 - Market Context (scrape_priority=3)**
+
+Broad industry developments where customer mentioned but not primary focus:
+
+- **Analyst Coverage:** Upgrades, downgrades, sector reports WITH demand outlook or growth implications
+- **Industry Trends:** End-market dynamics, sector growth rates, competitive intensity, spending patterns
 - **Forecasts:** Demand projections, sales outlook, growth targets from credible sources
-- **Industry Trends:** End-market dynamics, sector growth rates, competitive intensity
-- **Performance Reviews:** "Why [customer] performed..." WITH demand or operational drivers
-- **Strategic Questions:** "Can [customer] sustain growth?" WITH demand analysis
+- **Performance Context:** "Why [customer] performed..." WITH demand or operational drivers
 
-ANALYTICAL CONTENT - Include customer analysis:
-✓ "Why [customer] stock [moved]..." (understanding demand drivers)
-✓ "[Customer]'s demand outlook in [end-market]..." (revenue visibility)
-✓ "Can [customer] sustain growth/maintain share..." (demand durability assessment)
+---
+
+**ANALYTICAL CONTENT - Include Demand Analysis**
+
+Flag articles analyzing customer demand dynamics (NOT pure stock promotion):
+
+✓ "Why [customer] stock [moved]..." (if explains demand/operational drivers)
+✓ "[Customer]'s demand outlook in [end-market]..." (revenue visibility for target)
+✓ "Can [customer] sustain growth..." (demand durability assessment)
 ✓ "[Customer] inventory strategy..." (demand timing signals)
 ✓ "What [customer]'s [expansion/contraction] means for..." (demand implications)
-✓ "[Customer] vs competitors" (customer competitive position affecting our volumes)
-✓ "Industry analysis on [customer's end-market] trends" (end-market health affecting derived demand)
+✓ "[Customer] vs competitors" (competitive position affecting target's volumes)
+✓ "Industry analysis on [customer's end-market]" (end-market health affecting derived demand)
 ✓ "[End-market] spending patterns..." (macro demand drivers)
 
-CREDIBLE PRIMARY SOURCES - Always evaluate (never auto-reject):
-✓ PR Newswire, GlobeNewswire, Business Wire (official company announcements)
-✓ Earnings releases: "Reports Q[X] Results," "Fiscal Q[X] Results"
-✓ Material announcements: "Announces [partnership/acquisition/facility]"
+**Key distinction:** Analysis WITH demand/operational context = valuable. Pure valuation/chart analysis = reject.
 
-REJECT - Never select:
-- Generic lists: "Top stocks," "Best picks," "Stocks to watch"
-- Sector roundups: "Tech movers," "Retail rally" (unless customer is primary focus)
-- Pure stock analysis: Price predictions, technical analysis WITHOUT operational data
-- Unrelated mentions: Customer listed among many without substantive focus
-- Historical pieces: "If you'd invested," "Past returns"
-- Promotional content: Advertorials, sponsored content, stock promotion
-- Quote pages: Stock price metadata without news
+---
 
-DISAMBIGUATION:
-- If title leads with different company, REJECT IMMEDIATELY
-- If customer name is just attribution (e.g., "According to [Customer]..."), reject
-- Multi-company: Only select if customer is ≥50% of focus
-- Verify context matches YOUR customer (not different company with similar name)
+**CREDIBLE PRIMARY SOURCES - Always Evaluate**
 
-QUALITY SIGNALS:
-- Specificity: Exact figures, growth rates, order sizes, volumes, percentages
-- Credible sources: Trade publications, regulatory filings, company announcements
-- Action verbs: "orders," "expands," "cuts," "launches," "increases," "reduces"
-- Data language: "data shows," "sales figures," "reports [number]"
-- Time markers: "Q3," "October," "2024," "latest," "quarterly"
+Never auto-reject official announcements:
 
-SCRAPE PRIORITY:
-1 = Financial results with demand data, orders, demand signals, inventory, capex, market share, pricing, end-market health, launches, stress, strategic shifts, regulatory
-2 = M&A, leadership, geographic expansion, product mix, partnerships, technology adoption, customer base, operational changes, pricing strategies
-3 = Analyst coverage, forecasts, industry trends, performance reviews
+✓ PR Newswire, GlobeNewswire, Business Wire (company announcements)
+✓ Earnings releases regardless of source domain
+✓ Material announcements: partnerships, M&A, facility changes, expansions
 
-SELECTION STANDARD:
-- When uncertain, skip it
-- Hard news > speculation
-- Demand materiality: Could this affect target's revenue, growth, or pricing?
-- Only select if actionable intelligence about customer demand
+---
 
-Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "brief reason"}]"""
+**REJECT IMMEDIATELY - Never Select**
+
+Clear patterns to always skip:
+
+**Stock Price Movements:**
+❌ "Stock outperforms/underperforms on [strong/weak] trading day"
+❌ "Stock rises/falls on trading session"
+❌ EXCEPTION: Flag if operational WHY in title ("after earnings beat," "on expansion news")
+
+**Generic Lists/Promotions:**
+❌ "Top X stocks," "Best picks," "Stocks to watch," "X stocks to buy now"
+❌ "If you'd invested $X in [customer]..." (historical retrospectives)
+
+**Pure Financial Analysis:**
+❌ Technical analysis, chart patterns WITHOUT operational context
+❌ Dividend analysis, yield focus WITHOUT operational developments
+❌ Pure valuation ("Is [customer] undervalued?") WITHOUT demand discussion
+
+**Sector Noise:**
+❌ "Retail sector rallies," "[Sector] stocks gain" (just price movements)
+❌ EXCEPTION: Flag if title contains "earnings," "announcements," "sales data" (promises operational content)
+
+**Wrong Focus:**
+❌ Title leads with different company name
+❌ Customer just cited for data ("According to [customer] survey...")
+❌ Multi-company lists where customer <50% of focus
+
+**Irrelevant Content:**
+❌ Articles mentioning customer tangentially (clickbait using big names)
+❌ Generic business advice articles just name-dropping customer
+❌ Historical retrospectives or "what if" scenarios
+
+---
+
+**DISAMBIGUATION - Critical Identity Checks**
+
+Before flagging, verify:
+
+1. **Correct Company?**
+   - Is this YOUR customer or different company with similar name?
+   - Amazon vs Amazon Pharmacy, Tesla vs Tesla Energy - verify context matches
+
+2. **Primary Focus?**
+   - Is customer the main subject or just mentioned in passing?
+   - Multi-company articles: Only flag if customer ≥50% of focus
+
+3. **Attribution vs Subject?**
+   - "According to [customer]..." = just citation, reject
+   - "Customer announces..." = actual news, flag
+
+4. **Sector Roundup Check:**
+   - Does title promise operational content ("earnings," "sales," "expansion announcements")?
+   - Or just price movements ("stocks rally," "sector gains")?
+
+5. **Tangential Mentions:**
+   - Benzinga-style clickbait often name-drops big companies (Tesla, Amazon) in unrelated articles
+   - If title is about "retirement planning" or "marketing hacks" but mentions customer → reject
+
+---
+
+**QUALITY SIGNALS - Tiebreakers**
+
+When choosing between similar articles, prefer:
+
+- **Specificity:** Numbers, growth rates, store counts, order sizes, volumes, percentages
+- **Action verbs:** "opens," "expands," "cuts," "launches," "orders," "increases," "reduces"
+- **Data language:** "reports [number]," "sales figures," "data shows"
+- **Time markers:** "Q3," "October 2024," "latest," "quarterly"
+- **Credible sources:** Trade publications, regulatory filings, company IR, industry analysts
+
+---
+
+**EDGE CASES - Handling Ambiguity**
+
+**Sector Roundup with Operational Keywords:**
+- "Retail stocks mixed amid holiday sales data" → Flag (promises demand data)
+- "E-commerce stocks rally on rate cut" → Reject (just price movements)
+
+**Vague Title, Quality Source:**
+- "Customer Reports Third Quarter Performance" → Flag (earnings always have demand data)
+
+**Unknown Source, Specific Demand Focus:**
+- "Deep dive: Customer's expansion strategy" from unknown blog → Flag (substance matters)
+
+**"After [Event]" Structure:**
+- "Valuation After Whole Foods Expansion" → Flag (expansion is the news)
+- "Stock Analysis After Store Opening Announcement" → Flag (expansion is the news)
+
+**Strategic Changes Affecting Footprint:**
+- "Amazonification of Whole Foods" → Flag (format/distribution strategy = demand implications)
+- "Customer's supply chain transformation" → Flag (operational changes = demand patterns)
+
+**Competitor News for Customer:**
+- Major competitor developments (earnings, bankruptcies, capacity) → REJECT
+- You have separate competitor triage - focus only on YOUR customer
+
+**When Uncertain:**
+Skip it. Better to miss borderline article than waste scrape quota on noise.
+
+---
+
+**SELECTION APPROACH**
+
+1. Prioritize Tier 1 over Tier 2 over Tier 3
+2. Within tiers, prioritize most recent and most specific
+3. When uncertain about relevance, skip it
+4. Hard news > speculation
+5. Ask: "Could this affect target's revenue, demand visibility, or growth?"
+
+**SCRAPE PRIORITY GUIDE:**
+- scrape_priority=1: Financial results, orders, demand signals, inventory, expansion, market share, end-market health, launches, financial stress, strategic shifts, pricing, footprint, regulatory
+- scrape_priority=2: M&A, leadership, product mix, technology adoption, customer's customers, operational changes, geographic strategy, partnerships
+- scrape_priority=3: Analyst coverage, industry trends, forecasts, performance context
+
+Return JSON array: [{"id": 0, "scrape_priority": 1, "why": "Q3 earnings with demand data"}]
+
+**Output Requirements:**
+- Select up to target cap (typically 5)
+- Brief "why" (5-10 words max)
+- Only include articles with actionable demand intelligence"""
 
     # User message with ticker-specific context
     user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
@@ -20088,6 +20310,17 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         flagged_article_ids: Optional list of flagged article IDs for sorting priority
     """
 
+    # CRITICAL FIX: Split value_chain into upstream/downstream BEFORE executive summary generation
+    # The executive summary module expects separate upstream/downstream categories
+    for ticker, categories in articles_by_ticker.items():
+        value_chain_articles = categories.get("value_chain", [])
+        if value_chain_articles:
+            upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
+            downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+            categories["upstream"] = upstream_articles
+            categories["downstream"] = downstream_articles
+            LOG.debug(f"[{ticker}] Split value_chain for executive summary: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
+
     # Generate summaries using Claude (primary) with OpenAI fallback
     openai_summaries = await generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name, actually uses Claude→OpenAI fallback
 
@@ -20264,7 +20497,8 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             html.append("</div>")
             html.append("</div>")
 
-        # Split value_chain articles into upstream and downstream for separate display
+        # NOTE: value_chain was already split into upstream/downstream at function start (line 20310)
+        # This code kept for backward compatibility and debugging visibility
         value_chain_articles = categories.get("value_chain", [])
 
         # DEBUG: Log value_chain articles and their types
@@ -20273,13 +20507,11 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             for i, a in enumerate(value_chain_articles[:5]):  # Show first 5
                 LOG.info(f"  [{i}] ID={a.get('id')} | value_chain_type='{a.get('value_chain_type')}' | title={a.get('title', '')[:50]}")
 
-        upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
-        downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+        # Re-confirm split (already done at function start, but kept for visibility)
+        upstream_articles = categories.get("upstream", [])
+        downstream_articles = categories.get("downstream", [])
 
         LOG.info(f"[DEBUG] After filtering: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
-
-        categories["upstream"] = upstream_articles
-        categories["downstream"] = downstream_articles
 
         # Sort articles chronologically within each category (newest first)
         for category in ["company", "industry", "competitor", "upstream", "downstream"]:
@@ -20892,13 +21124,20 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         text = re.sub(r'_([^_]+?)_', r'\1', text)
         return text
 
-    def bold_bullet_labels(text: str) -> str:
+    def bold_bullet_labels(text: str, context_only: bool = False) -> str:
         """
         Bold topic labels in bullet points.
-        Transforms: "Topic Label: Details" → "<strong>Topic Label:</strong> Details"
-        Also bolds "Context:" when it appears in 10-K enrichment lines.
+
+        Args:
+            text: Text to process
+            context_only: If True, ONLY bold "Context:" (for paragraphs).
+                         If False, bold all "Label: Detail" patterns (for bullets).
+
+        Transforms:
+            - Bullets: "Topic Label: Details" → "<strong>Topic Label:</strong> Details"
+            - Paragraphs: Only "Context:" → "<strong>Context:</strong>"
+
         Also strips markdown bold syntax (**text**) that AI sometimes adds despite instructions.
-        Note: Bullets are stripped during parsing, so pattern matches at start of text.
         """
         import re
 
@@ -20907,21 +21146,24 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         # We strip these first, then apply our own HTML <strong> tags
         text = strip_markdown_formatting(text)
 
-        # Then apply HTML bold tags to topic label (text before colon)
-        # Match pattern: start of text followed by 2-130 chars, then colon
-        # Capture the topic label (everything before the colon, including the colon)
-        # 130-char limit prevents bolding entire sentences while capturing longer contextual labels
-        pattern = r'^([^:]{2,130}?:)(\s)'
-        replacement = r'<strong>\1</strong>\2'
-        text = re.sub(pattern, replacement, text)
+        if context_only:
+            # For paragraphs: ONLY bold "Context:" (Phase 2 enrichment marker)
+            text = text.replace('Context:', '<strong>Context:</strong>')
+        else:
+            # For bullets: Bold all topic labels (text before colon)
+            # Match pattern: start of text followed by 2-130 chars, then colon
+            # Capture the topic label (everything before the colon, including the colon)
+            # 130-char limit prevents bolding entire sentences while capturing longer contextual labels
+            pattern = r'^([^:]{2,130}?:)(\s)'
+            replacement = r'<strong>\1</strong>\2'
+            text = re.sub(pattern, replacement, text)
 
-        # Bold "Context:" when it appears (10-K enrichment lines)
-        # Match exact string "Context:" (case-sensitive)
-        text = text.replace('Context:', '<strong>Context:</strong>')
+            # Also bold "Context:" when it appears (10-K enrichment lines in bullets)
+            text = text.replace('Context:', '<strong>Context:</strong>')
 
         return text
 
-    def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
+    def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False, context_only: bool = False) -> str:
         """Build section with consistent styling
 
         Args:
@@ -20929,6 +21171,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             content: List of bullet points or paragraphs
             use_bullets: If True, format as bullet list
             bold_labels: If True, bold topic labels in format "Topic: Details"
+            context_only: If True with bold_labels, ONLY bold "Context:" (for paragraphs)
         """
         if not content:
             return ""
@@ -20940,8 +21183,8 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             # Bullet list format
             bullet_html = ""
             for item in content:
-                # Apply label bolding if requested
-                processed_item = bold_bullet_labels(item) if bold_labels else item
+                # Apply label bolding if requested (bullets never use context_only)
+                processed_item = bold_bullet_labels(item, context_only=False) if bold_labels else item
                 bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{processed_item}</li>'
 
             return f'''
@@ -20956,7 +21199,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             # Paragraph format (used by Bottom Line, Upside, Downside scenarios)
             # Apply bold labels if requested, otherwise strip markdown
             if bold_labels:
-                content_filtered = [bold_bullet_labels(line) for line in content if line.strip()]
+                content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
             else:
                 content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
             text = "<br>".join(content_filtered)
@@ -20975,14 +21218,14 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     if is_quiet_day:
         # Quiet day: render ONLY bottom line section (3 lines)
         return build_section("📌 Bottom Line" if not strip_emojis else "Bottom Line",
-                           bottom_line_content, use_bullets=False, bold_labels=True)
+                           bottom_line_content, use_bullets=False, bold_labels=True, context_only=True)
 
     # Material news day: build sections
     html = ""
 
-    # Bottom Line first (paragraph format)
+    # Bottom Line first (paragraph format, context_only=True to avoid bolding colons in prose)
     html += build_section("📌 Bottom Line" if not strip_emojis else "Bottom Line",
-                         sections.get("bottom_line", []), use_bullets=False, bold_labels=True)
+                         sections.get("bottom_line", []), use_bullets=False, bold_labels=True, context_only=True)
 
     # Standard sections (bullet format)
     html += build_section("🔴 Major Developments" if not strip_emojis else "Major Developments",
@@ -20999,12 +21242,12 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                          sections.get("upcoming_catalysts", []), use_bullets=True, bold_labels=True)
 
     # Three new top-level sections (Oct 2025 - upgraded from sub-sections)
-    # Upside/Downside are PARAGRAPHS (use_bullets=False, bold_labels=True for Context)
-    # Key Variables are BULLETS (use_bullets=True, bold_labels=True)
+    # Upside/Downside are PARAGRAPHS (context_only=True to avoid bolding colons in prose)
+    # Key Variables are BULLETS (full bolding for "Label: Detail" patterns)
     html += build_section("📈 Upside Scenario" if not strip_emojis else "Upside Scenario",
-                         sections.get("upside_scenario", []), use_bullets=False, bold_labels=True)
+                         sections.get("upside_scenario", []), use_bullets=False, bold_labels=True, context_only=True)
     html += build_section("📉 Downside Scenario" if not strip_emojis else "Downside Scenario",
-                         sections.get("downside_scenario", []), use_bullets=False, bold_labels=True)
+                         sections.get("downside_scenario", []), use_bullets=False, bold_labels=True, context_only=True)
     html += build_section("🔍 Key Variables to Monitor" if not strip_emojis else "Key Variables to Monitor",
                          sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
@@ -21049,24 +21292,42 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
         text = re.sub(r'_([^_]+?)_', r'\1', text)
         return text
 
-    def bold_bullet_labels(text: str) -> str:
+    def bold_bullet_labels(text: str, context_only: bool = False) -> str:
         """
         Bold topic labels in format 'Topic Label: Details'
-        Also bolds 'Context:' when it appears in 10-K enrichment lines.
+
+        Args:
+            text: Text to process
+            context_only: If True, ONLY bold "Context:" (for paragraphs).
+                         If False, bold all "Label: Detail" patterns (for bullets).
         """
         import re
         text = strip_markdown_formatting(text)
-        pattern = r'^([^:]{2,130}?:)(\s)'
-        replacement = r'<strong>\1</strong>\2'
-        text = re.sub(pattern, replacement, text)
 
-        # Bold "Context:" when it appears (10-K enrichment lines)
-        text = text.replace('Context:', '<strong>Context:</strong>')
+        if context_only:
+            # For paragraphs: ONLY bold "Context:" (Phase 2 enrichment marker)
+            text = text.replace('Context:', '<strong>Context:</strong>')
+        else:
+            # For bullets: Bold all topic labels (text before colon)
+            pattern = r'^([^:]{2,130}?:)(\s)'
+            replacement = r'<strong>\1</strong>\2'
+            text = re.sub(pattern, replacement, text)
+
+            # Also bold "Context:" when it appears (10-K enrichment lines in bullets)
+            text = text.replace('Context:', '<strong>Context:</strong>')
 
         return text
 
-    def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False) -> str:
-        """Build section with consistent styling (always strips emojis for research reports)"""
+    def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False, context_only: bool = False) -> str:
+        """Build section with consistent styling (always strips emojis for research reports)
+
+        Args:
+            title: Section title
+            content: List of bullet points or paragraphs
+            use_bullets: If True, format as bullet list
+            bold_labels: If True, bold topic labels in format "Topic: Details"
+            context_only: If True with bold_labels, ONLY bold "Context:" (for paragraphs)
+        """
         if not content:
             return ""
 
@@ -21077,7 +21338,8 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
             # Bullet list format
             bullet_html = ""
             for item in content:
-                processed_item = bold_bullet_labels(item) if bold_labels else item
+                # Apply label bolding if requested (bullets never use context_only)
+                processed_item = bold_bullet_labels(item, context_only=False) if bold_labels else item
                 bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{processed_item}</li>'
 
             return f'''
@@ -21092,7 +21354,7 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
             # Paragraph format (used by Bottom Line, Upside, Downside scenarios)
             # Apply bold labels if requested, otherwise strip markdown
             if bold_labels:
-                content_filtered = [bold_bullet_labels(line) for line in content if line.strip()]
+                content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
             else:
                 content_filtered = [strip_markdown_formatting(line) for line in content if line.strip()]
             text = "<br>".join(content_filtered)
@@ -21130,9 +21392,9 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
     # Build HTML in order
     html = ""
 
-    # 1. Bottom Line (always, paragraph format)
+    # 1. Bottom Line (always, paragraph format, context_only=True to avoid bolding colons in prose)
     if "bottom_line" in sections:
-        html += build_section("📌 Bottom Line", sections["bottom_line"], use_bullets=False, bold_labels=True)
+        html += build_section("📌 Bottom Line", sections["bottom_line"], use_bullets=False, bold_labels=True, context_only=True)
 
     # 2-10. Conditional sections (bullet format with bold labels)
     if "financial_results" in sections:
@@ -21167,9 +21429,10 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
         html += build_qa_section(sections["qa_highlights"])
 
     # 12-14. Top-level Upside/Downside/Variables sections (Oct 2025 - promoted from sub-sections)
-    # Upside/Downside are PARAGRAPHS (bold_labels=True for Context), Variables are BULLETS
-    html += build_section("📈 Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=True)
-    html += build_section("📉 Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=True)
+    # Upside/Downside are PARAGRAPHS (context_only=True to avoid bolding colons in prose)
+    # Key Variables are BULLETS (full bolding for "Label: Detail" patterns)
+    html += build_section("📈 Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=True, context_only=True)
+    html += build_section("📉 Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=True, context_only=True)
     html += build_section("🔍 Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
     return html

@@ -31,13 +31,14 @@ When to use escape hatch "No relevant filing context found for this development"
 - Better to have no context than forced/tangential context
 
 YOUR TASK:
-For each bullet in Phase 1, generate 5 enrichment fields:
+For each bullet in Phase 1, generate 5 enrichment fields (6 for competitive_industry_dynamics bullets):
 
+- context: 40-50 word synthesis from filings
 - impact: "high impact" | "medium impact" | "low impact"
 - sentiment: "bullish" | "bearish" | "neutral" | "mixed"
 - reason: 2-4 words describing impact type
 - relevance: "direct" | "indirect" | "none" | "unclear"
-- context: 40-50 word synthesis from filings
+- entity: "Competitor" | "Market" | "Upstream" | "Downstream" (ONLY for competitive_industry_dynamics bullets)
 
 WORKFLOW:
 1. Read Phase 1 bullet + filing_hints
@@ -47,6 +48,7 @@ WORKFLOW:
 5. Calculate sentiment (bullish/bearish/neutral)
 6. Generate reason (2-4 words)
 7. Calculate relevance (direct/indirect/none/unclear)
+8. Calculate entity (Competitor/Market/Upstream/Downstream) - ONLY for competitive_industry_dynamics bullets
 
 WHICH BULLETS TO PROCESS:
 
@@ -127,25 +129,25 @@ Return a flat dictionary containing bullet enrichments (keyed by bullet_id) and 
 STRUCTURE:
 {
   "BULLET_ID_1": {
+    "context": "Customer represents 28% of Q2 revenue per 10-Q; management called relationship 'strategic and expanding' on Aug 7 call",
     "impact": "high impact",
     "sentiment": "bullish",
     "reason": "delivery outperformance",
-    "relevance": "direct",
-    "context": "Customer represents 28% of Q2 revenue per 10-Q; management called relationship 'strategic and expanding' on Aug 7 call"
+    "relevance": "direct"
   },
   "BULLET_ID_2": {
+    "context": "Customer represented 0.3% of Q2 revenue per 10-Q; top 10 customers represent 45% of revenue per 10-K",
     "impact": "medium impact",
     "sentiment": "neutral",
     "reason": "routine churn",
-    "relevance": "direct",
-    "context": "Customer represented 0.3% of Q2 revenue per 10-Q; top 10 customers represent 45% of revenue per 10-K"
+    "relevance": "direct"
   },
   "BULLET_ID_3": {
+    "context": "No relevant filing context found for this development",
     "impact": "low impact",
     "sentiment": "neutral",
     "reason": "organizational change",
-    "relevance": "none",
-    "context": "No relevant filing context found for this development"
+    "relevance": "none"
   },
   
   "bottom_line_context": "Q3 revenue $10.5B (+15% YoY) with Segment A representing 62% at 18% operating margin per Q3 10-Q; raised FY guidance to $42B from $40B marking third consecutive quarterly increase per Oct 23 call",
@@ -158,7 +160,9 @@ CRITICAL RULES:
 BULLET ENRICHMENT (TASK 1):
 1. Flat dictionary structure (NOT nested in "sections" or "enrichments")
 2. Keys are bullet_id values extracted from Phase 1 input
-3. Values are objects with EXACTLY 5 fields: impact, sentiment, reason, relevance, context
+3. Values are objects with EXACTLY 5 fields for most sections OR 6 fields for competitive_industry_dynamics:
+   - Standard sections: impact, sentiment, reason, relevance, context
+   - Competitive/industry: impact, sentiment, reason, relevance, entity, context
 4. Do NOT include Phase 1 fields (topic_label, content, filing_hints)
 5. Do NOT wrap output in any additional keys
 6. Process bullets from these 5 sections only: major_developments, financial_performance, risk_factors, competitive_industry_dynamics, upcoming_catalysts
@@ -173,12 +177,13 @@ SCENARIO SYNTHESIS (TASK 2):
 FINAL OUTPUT STRUCTURE:
 {
   "bullet_id_1": {
+    "context": "40-50 word context...",  ← Context first
     "impact": "high impact",
     "sentiment": "bullish",
     "reason": "value driver type",
-    "relevance": "direct",
-    "context": "40-50 word context..."
-  },
+    "relevance": "direct"
+  }
+},
   "bullet_id_2": {...},
   ...
   "bottom_line_context": "50-75 word synthesis from enriched bullet contexts that quantify/explain topics mentioned in Phase 1 bottom_line paragraph",
@@ -293,10 +298,11 @@ Most bullets need BOTH:
 Example output for this bullet:
 {
   "customer_renewal": {
+    "context": "Customer represents 28% of Q2 revenue per 10-Q (increased from 22% in FY2024); management called relationship 'strategic' on Aug 7 call",
     "impact": "high impact",
     "sentiment": "bullish",
     "reason": "customer concentration",
-    "context": "Customer represents 28% of Q2 revenue per 10-Q (increased from 22% in FY2024); management called relationship 'strategic' on Aug 7 call"
+    "relevance": "direct"
   }
 }
 
@@ -306,27 +312,33 @@ If no filing data: Still output bullet with context: "No relevant filing context
 FIELD GENERATION & CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-5 FIELDS TO GENERATE FOR EACH BULLET:
+5 FIELDS TO GENERATE FOR EACH BULLET (6 fields for competitive_industry_dynamics):
 
-1. impact: "high impact" | "medium impact" | "low impact"
+1. context: 40-50 words synthesizing 1-3 most relevant filing data points
+   - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q" or "per Oct 23 call"
+   - Target company filings ONLY (10-K, 10-Q, Transcript)
+   - Add NEW data not already in bullet
+   - See detailed rules below
+
+2. impact: "high impact" | "medium impact" | "low impact"
    - High: >5% revenue/EBIT/assets OR top 3 customer/supplier OR categorical event
    - Medium: 1-5% OR top 4-10
    - Low: <1%
 
-2. sentiment: "bullish" | "bearish" | "neutral" | "mixed"
+3. sentiment: "bullish" | "bearish" | "neutral" | "mixed"
    - bullish: Positive for company prospects/financials
    - bearish: Negative for company prospects/financials
    - neutral: No clear directional impact
    - mixed: Has both positive and negative elements (e.g., margin improvement but revenue decline)
    - Single-step inference from article + filing economics
 
-3. reason: 2-4 words describing impact type
+4. reason: 2-4 words describing impact type
    - Describe impact type, not just topic
    - Examples: "customer concentration", "margin compression", "delivery outperformance", "regulatory risk", "strategic optimization"
    - ❌ Bad: "acquisition announced", "customer contract", "membership loss"
    - ✅ Good: "care delivery expansion", "revenue dependency", "strategic contraction"
 
-4. relevance: "direct" | "indirect" | "none" | "unclear"
+5. relevance: "direct" | "indirect" | "none" | "unclear"
    - See RELEVANCE TAG CALCULATION section for full decision tree.
    - Calculate AFTER generating context field using filing quantification signals.
    
@@ -335,16 +347,18 @@ FIELD GENERATION & CRITICAL RULES
    - indirect: Competitor capacity expansion in target market; Supplier pricing increase affecting costs; Customer demand signals; Industry regulation affecting target segment
    - none: Competitor CEO compensation; Supplier HR changes; Unrelated industry development
 
-5. context: 40-50 words synthesizing 1-3 most relevant filing data points
-   - Natural prose with citations: "per FY2024 10-K" or "per Q2 2025 10-Q" or "per Oct 23 call"
-   - Target company filings ONLY (10-K, 10-Q, Transcript)
-   - Add NEW data not already in bullet
-   - See detailed rules below
+6. entity: "Competitor" | "Market" | "Upstream" | "Downstream" (ONLY for competitive_industry_dynamics)
+   Classify the external entity type based on bullet content and filing relationship.
+   See ENTITY TAG CLASSIFICATION section below for decision rules.
+   OMIT this field for all other sections (major_developments, financial_performance, risk_factors, upcoming_catalysts).
 
 ADDITIONAL REQUIREMENTS:
 - PRESERVE BULLET_ID: This is the merge key with Phase 1 (critical for output)
-- VALID JSON OUTPUT: All 5 sections must be present even if empty
-- CALCULATE ORDER: Generate context first, then calculate impact/sentiment/relevance using both bullet content and context
+- CALCULATE ORDER: Generate context first, then calculate impact/sentiment/relevance/entity using both bullet content and context
+- VALID JSON OUTPUT: All required fields must be present
+  * Standard sections: 5 fields (impact, sentiment, reason, relevance, context)
+  * Competitive/industry: 6 fields (impact, sentiment, reason, relevance, entity, context)
+- ENTITY FIELD: Only include for competitive_industry_dynamics bullets; omit for all other sections
 
 ═══════════════════════════════════════════════════════════════════════════════
 CONTEXT GENERATION RULES
@@ -1228,6 +1242,49 @@ CRITICAL RULES:
 7. When uncertain between levels → Default to indirect
 
 ═══════════════════════════════════════════════════════════════════════════════
+ENTITY TAG CLASSIFICATION (Competitive/Industry Dynamics Only)
+═══════════════════════════════════════════════════════════════════════════════
+
+Entity answers: "What type of external entity is this bullet about?"
+
+CRITICAL: This field is ONLY generated for bullets in the competitive_industry_dynamics section.
+For all other sections, OMIT the entity field entirely.
+
+FOUR ENTITY TYPES:
+- Competitor: Companies competing with target (direct or adjacent markets)
+- Market: Industry trends, regulations, surveys, forecasts, sector-wide developments
+- Upstream: Suppliers, component manufacturers, input providers to target
+- Downstream: Customers, distributors, installers, end-users of target's products
+
+DECISION PROCESS:
+
+1. Is bullet about a competing company? → Competitor
+2. Is bullet about industry trends, regulations, or market-wide data? → Market
+3. Is bullet about a company supplying inputs to target? → Upstream
+4. Is bullet about a customer/distributor of target's products? → Downstream
+
+EXAMPLES:
+
+Competitor: "Airbus deliveries", "SolarEdge VPP milestone", "Generac sales decline"
+Market: "Defense spending increases", "LiFePO4 market forecast", "ITC consumer survey", "Global aircraft orders"
+Upstream: "ON Semiconductor results", "GE Aerospace guidance", "Spirit AeroSystems losses"
+Downstream: "United Airlines demand", "Dealer inventory levels", "Installer network expansion"
+
+AMBIGUOUS CASES:
+
+Defense contractors vs Boeing → Competitor (compete for contracts, not suppliers)
+Airlines vs Boeing → Downstream (customers buying aircraft)
+Airlines vs Enphase → Market (end-market signal, not direct customers)
+Surveys/forecasts → Market (industry-wide data)
+
+CRITICAL RULES:
+
+1. Entity field ONLY for competitive_industry_dynamics bullets
+2. Choose ONE entity type based on PRIMARY relationship in bullet
+3. When uncertain between Competitor/Market → Use "Market" if trend affects multiple players
+4. Use filing context to inform classification if bullet is ambiguous
+
+═══════════════════════════════════════════════════════════════════════════════
 SYNTHESIS REQUIREMENT - CONNECT THE DOTS
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1492,42 +1549,55 @@ INPUT (Phase 1 excerpt):
 YOUR OUTPUT (Phase 2):
 {
   "customer_renewal": {
+    "context": "Customer represents 28% of Q2 2025 revenue per 10-Q (increased from 22% in FY2024 per 10-K); management called relationship 'strategic and expanding' on Aug 7, 2025 call",
     "impact": "high impact",
     "sentiment": "bullish",
     "reason": "customer concentration",
-    "context": "Customer represents 28% of Q2 2025 revenue per 10-Q (increased from 22% in FY2024 per 10-K); management called relationship 'strategic and expanding' on Aug 7, 2025 call"
+    "relevance": "direct"
   },
   "ev_investment": {
+    "context": "Investment targets Model e segment (lost $1.2B Q2, -127% margin per Q2 2025 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% EBITDA at 13.5% margin per 10-K",
     "impact": "high impact",
     "sentiment": "bearish",
     "reason": "capital misallocation",
-    "context": "Investment targets Model e segment (lost $1.2B Q2, -127% margin per Q2 2025 10-Q; lost $5.1B FY2024, -131.8% margin per 10-K); Ford Pro generates 88% EBITDA at 13.5% margin per 10-K"
+    "relevance": "direct"
   },
   "q3_results": {
+    "context": "Q2 EBITDA was $2.1B (4.3% margin) per Q2 2025 10-Q vs $1.8B (3.9% margin) in Q1 2025 per Q1 10-Q; FY2025 guidance $6.5B-$7.5B Adjusted EBITDA per Aug 7, 2025 call",
     "impact": "medium impact",
     "sentiment": "bullish",
     "reason": "financial outperformance",
-    "context": "Q2 EBITDA was $2.1B (4.3% margin) per Q2 2025 10-Q vs $1.8B (3.9% margin) in Q1 2025 per Q1 10-Q; FY2025 guidance $6.5B-$7.5B Adjusted EBITDA per Aug 7, 2025 call"
+    "relevance": "direct"
+  },
+  "competitor_deliveries": {
+    "context": "Competitor 507 deliveries 9m 2025 vs Ford 440 deliveries YTD Q3 2025 per Q3 10-Q; competitor backlog 8,665 aircraft vs Ford 5,900+ commercial airplanes per Q3 10-Q",
+    "impact": "medium impact",
+    "sentiment": "neutral",
+    "reason": "competitive benchmark",
+    "relevance": "direct",
+    "entity": "Competitor"
   }
 }
 
 EXAMPLE 2 - Bullet with no filing data:
 {
   "ceo_controversy": {
+    "context": "No relevant filing context found for this development",
     "impact": "medium impact",
     "sentiment": "neutral",
     "reason": "public relations matter",
-    "context": "No relevant filing context found for this development"
+    "relevance": "direct"
   }
 }
 
 EXAMPLE 3 - Risk materialization:
 {
   "nhtsa_investigation": {
+    "context": "NHTSA investigation matches autonomous driving risk disclosed in FY2024 10-K RISK FACTORS; affects 2.9M vehicles (62% of installed base per 10-K fleet data)",
     "impact": "high impact",
     "sentiment": "bearish",
     "reason": "risk materialization",
-    "context": "NHTSA investigation matches autonomous driving risk disclosed in FY2024 10-K RISK FACTORS; affects 2.9M vehicles (62% of installed base per 10-K fleet data)"
+    "relevance": "direct"
   }
 }
 
@@ -1594,7 +1664,9 @@ DO NOT return:
 ONLY return:
 ✅ Valid JSON object starting with {
 ✅ Flat dictionary keyed by bullet_id
-✅ Each value has EXACTLY 5 fields: impact, sentiment, reason, relevance, context
+✅ Each value has EXACTLY 5 fields (standard sections) OR 6 fields (competitive_industry_dynamics)
+   - Standard: context, impact, sentiment, reason, relevance
+   - Competitive/industry: context, impact, sentiment, reason, relevance, entity
 ✅ Parseable by JSON.parse()
 
 Your output must start with { and end with }. Nothing before or after.

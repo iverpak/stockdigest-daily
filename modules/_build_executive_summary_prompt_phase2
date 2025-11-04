@@ -31,11 +31,12 @@ When to use escape hatch "No relevant filing context found for this development"
 - Better to have no context than forced/tangential context
 
 YOUR TASK:
-For each bullet in Phase 1, generate 4 enrichment fields:
+For each bullet in Phase 1, generate 5 enrichment fields:
 
 - impact: "high impact" | "medium impact" | "low impact"
 - sentiment: "bullish" | "bearish" | "neutral" | "mixed"
 - reason: 2-4 words describing impact type
+- relevance: "direct" | "indirect" | "none" | "unclear"
 - context: 40-50 word synthesis from filings
 
 WORKFLOW:
@@ -45,6 +46,7 @@ WORKFLOW:
 4. Calculate impact (high/medium/low)
 5. Calculate sentiment (bullish/bearish/neutral)
 6. Generate reason (2-4 words)
+7. Calculate relevance (direct/indirect/none/unclear)
 
 WHICH BULLETS TO PROCESS:
 
@@ -100,7 +102,7 @@ If a bullet has all empty filing_hints arrays:
 This means Phase 1 determined no filing context is relevant for this bullet.
 
 YOUR TASK:
-1. Calculate impact/sentiment/reason from the article framing (use Phase 1 bullet content)
+1. Calculate impact/sentiment/reason/relevance from the article framing (use Phase 1 bullet content)
 2. Set context to escape hatch value
 3. Skip all filing searches for this bullet
 
@@ -110,6 +112,7 @@ OUTPUT FORMAT:
   "impact": "medium impact",
   "sentiment": "bullish",
   "reason": "analyst confidence",
+  "relevance": "direct",
   "context": "No relevant filing context found for this development"
 }
 

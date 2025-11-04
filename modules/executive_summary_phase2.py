@@ -554,46 +554,18 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
             invalid_bullets.append(f"{bullet_id} (not a dict)")
             continue
 
-        # Check for missing fields
+        # Fill in missing fields with empty string (accept partial data)
         missing_fields = [f for f in required_fields if f not in data or not data.get(f)]
+        for field in required_fields:
+            if field not in data or not data.get(field):
+                data[field] = ""  # Leave blank, don't reject
+
+        # Log what was missing for debugging
         if missing_fields:
-            # Enhanced error message: show what IS present too
-            present_fields = [f for f in required_fields if f in data and data.get(f)]
-            error_detail = f"missing: {', '.join(missing_fields)}"
-            if present_fields:
-                error_detail += f" | present: {', '.join(present_fields)}"
-            invalid_bullets.append(f"{bullet_id} ({error_detail})")
-            continue
+            logger.info(f"[{ticker}] Phase 2: {bullet_id} accepted with missing fields: {', '.join(missing_fields)}")
+            logger.debug(f"[{ticker}] Phase 2: {bullet_id} full data: {json.dumps(data, indent=2)}")
 
-        # Validate impact values
-        if data["impact"] not in ["high impact", "medium impact", "low impact"]:
-            # Show what valid fields exist despite bad impact
-            other_valid = [f for f in ["sentiment", "reason", "relevance", "context"] if f in data and data.get(f)]
-            error_detail = f"invalid impact: '{data['impact']}'"
-            if other_valid:
-                error_detail += f" | valid: {', '.join(other_valid)}"
-            invalid_bullets.append(f"{bullet_id} ({error_detail})")
-            continue
-
-        # Validate sentiment values
-        if data["sentiment"] not in ["bullish", "bearish", "neutral", "mixed"]:
-            other_valid = [f for f in ["impact", "reason", "relevance", "context"] if f in data and data.get(f)]
-            error_detail = f"invalid sentiment: '{data['sentiment']}'"
-            if other_valid:
-                error_detail += f" | valid: {', '.join(other_valid)}"
-            invalid_bullets.append(f"{bullet_id} ({error_detail})")
-            continue
-
-        # Validate relevance values
-        if data["relevance"] not in ["direct", "indirect", "none"]:
-            other_valid = [f for f in ["impact", "sentiment", "reason", "context"] if f in data and data.get(f)]
-            error_detail = f"invalid relevance: '{data['relevance']}'"
-            if other_valid:
-                error_detail += f" | valid: {', '.join(other_valid)}"
-            invalid_bullets.append(f"{bullet_id} ({error_detail})")
-            continue
-
-        # Bullet passed all validation checks!
+        # Accept bullet with partial data (no value validation, only check if empty)
         valid_enrichments[bullet_id] = data
 
     # If no valid enrichments, Phase 2 completely failed

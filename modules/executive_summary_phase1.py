@@ -492,9 +492,15 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
             return True
 
     # Helper function to format bullets for Email #3 (user-facing)
-    def format_bullet_for_email3(bullet: Dict) -> str:
-        """Format bullet with (impact, sentiment, reason) and Context for user-facing email"""
+    def format_bullet_for_email3(bullet: Dict, section_name: str = "") -> str:
+        """Format bullet with [entity, relevance] tag (for competitive_industry_dynamics) and (impact, sentiment, reason) for user-facing email"""
         topic = bullet['topic_label']
+
+        # Add [entity, relevance] tag for competitive_industry_dynamics ONLY
+        if section_name == "competitive_industry_dynamics" and bullet.get('entity') and bullet.get('relevance'):
+            entity = bullet['entity']
+            relevance = bullet['relevance']
+            topic = f"[{entity}, {relevance}] {topic}"
 
         # Add (impact, sentiment, reason) if Phase 2 enriched
         if bullet.get('impact'):
@@ -560,7 +566,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
     # Competitive/Industry → competitive_industry (template key) - WITH FILTER
     if "competitive_industry_dynamics" in json_sections:
         sections["competitive_industry"] = [
-            format_bullet_for_email3(b)
+            format_bullet_for_email3(b, "competitive_industry_dynamics")
             for b in json_sections["competitive_industry_dynamics"]
             if should_include_in_email3(b, "competitive_industry_dynamics")
         ]
@@ -642,13 +648,30 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
             sections["bottom_line"] = [content]
 
     # Helper function to format bullets with filing hints and Phase 2 metadata
-    def format_bullet_with_hints(bullet: Dict) -> str:
-        """Format bullet with topic label, content, Phase 2 metadata, filing hints, and ID"""
-        main_text = f"{bullet['topic_label']}: {bullet['content']}"
+    def format_bullet_with_hints(bullet: Dict, section_name: str = "") -> str:
+        """Format bullet with [entity, relevance] tag (for competitive_industry_dynamics), topic label, content, Phase 2 metadata, filing hints, and ID"""
+        topic_label = bullet['topic_label']
+
+        # Add [entity, relevance] tag for competitive_industry_dynamics ONLY
+        if section_name == "competitive_industry_dynamics" and bullet.get('entity') and bullet.get('relevance'):
+            entity = bullet['entity']
+            relevance = bullet['relevance']
+            topic_label = f"[{entity}, {relevance}] {topic_label}"
+
+        main_text = f"{topic_label}: {bullet['content']}"
 
         # Phase 2 enrichments (if present)
         if bullet.get('impact'):
-            main_text += f"<br>  Impact: {bullet['impact']} | Sentiment: {bullet['sentiment']} | Reason: {bullet['reason']} | Relevance: {bullet.get('relevance', 'direct')}"
+            enrichment_parts = [
+                f"Impact: {bullet['impact']}",
+                f"Sentiment: {bullet['sentiment']}",
+                f"Reason: {bullet['reason']}"
+            ]
+            # Only show Entity in metadata for competitive_industry_dynamics
+            if section_name == "competitive_industry_dynamics":
+                enrichment_parts.append(f"Entity: {bullet.get('entity', 'N/A')}")
+            enrichment_parts.append(f"Relevance: {bullet.get('relevance', 'direct')}")
+            main_text += f"<br>  {' | '.join(enrichment_parts)}"
 
         if bullet.get('context'):
             main_text += f"<br>  Context: {bullet['context']}"
@@ -705,7 +728,7 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
     # Competitive/Industry → competitive_industry
     if "competitive_industry_dynamics" in json_sections:
         sections["competitive_industry"] = [
-            format_bullet_with_hints(b) for b in json_sections["competitive_industry_dynamics"]
+            format_bullet_with_hints(b, "competitive_industry_dynamics") for b in json_sections["competitive_industry_dynamics"]
         ]
 
     # Upcoming Catalysts

@@ -510,7 +510,7 @@ def generate_executive_summary_phase2(
         return None
 
 
-def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
+def validate_phase2_json(enrichments: Dict, phase1_json: Dict = None, ticker: str = "") -> Tuple[bool, str, Dict]:
     """
     Validate Phase 2 enrichments structure with partial acceptance.
 
@@ -520,17 +520,20 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
     Expected structure:
     {
         "bullet_id_1": {
+            "context": "prose paragraph combining filing excerpts",
             "impact": "high impact|medium impact|low impact",
             "sentiment": "bullish|bearish|neutral",
             "reason": "brief reason string",
             "relevance": "direct|indirect|none",
-            "context": "prose paragraph combining filing excerpts"
+            "entity": "Competitor|Market|Upstream|Downstream" (ONLY for competitive_industry_dynamics)
         },
         "bullet_id_2": { ... }
     }
 
     Args:
         enrichments: Dict keyed by bullet_id
+        phase1_json: Optional Phase 1 JSON to determine bullet sections
+        ticker: Optional ticker for logging
 
     Returns:
         Tuple of (is_valid: bool, error_message: str, valid_enrichments: Dict)
@@ -544,7 +547,15 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
     if not enrichments:
         return False, "Enrichments dict is empty", {}
 
-    required_fields = ["impact", "sentiment", "reason", "relevance", "context"]
+    # Build bullet_id to section mapping
+    bullet_sections = {}
+    if phase1_json and "sections" in phase1_json:
+        for section_name, section_data in phase1_json["sections"].items():
+            if isinstance(section_data, list):
+                for bullet in section_data:
+                    if isinstance(bullet, dict) and "bullet_id" in bullet:
+                        bullet_sections[bullet["bullet_id"]] = section_name
+
     valid_enrichments = {}
     invalid_bullets = []
 
@@ -554,11 +565,28 @@ def validate_phase2_json(enrichments: Dict) -> Tuple[bool, str, Dict]:
             invalid_bullets.append(f"{bullet_id} (not a dict)")
             continue
 
+        # Determine which section this bullet belongs to
+        section_name = bullet_sections.get(bullet_id, "unknown")
+        is_competitive_industry = (section_name == "competitive_industry_dynamics")
+
+        # Set required fields based on section
+        if is_competitive_industry:
+            required_fields = ["context", "impact", "sentiment", "reason", "relevance", "entity"]
+        else:
+            required_fields = ["context", "impact", "sentiment", "reason", "relevance"]
+
         # Fill in missing fields with empty string (accept partial data)
         missing_fields = [f for f in required_fields if f not in data or not data.get(f)]
         for field in required_fields:
             if field not in data or not data.get(field):
                 data[field] = ""  # Leave blank, don't reject
+
+        # Validate entity values if present and not empty (for competitive_industry_dynamics only)
+        if is_competitive_industry and data.get("entity"):
+            valid_entities = ["Competitor", "Market", "Upstream", "Downstream"]
+            if data["entity"] not in valid_entities:
+                logger.warning(f"[{ticker}] Phase 2: {bullet_id} has invalid entity '{data['entity']}', setting to empty")
+                data["entity"] = ""
 
         # Log what was missing for debugging
         if missing_fields:

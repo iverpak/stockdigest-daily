@@ -19709,7 +19709,11 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 
                 if phase2_result:
                     # Validate enrichments structure (with partial acceptance)
-                    is_valid, error_msg, valid_enrichments = validate_phase2_json(phase2_result.get("enrichments", {}))
+                    is_valid, error_msg, valid_enrichments = validate_phase2_json(
+                        phase2_result.get("enrichments", {}),
+                        phase1_json=json_output,
+                        ticker=ticker
+                    )
 
                     if is_valid:
                         # Replace enrichments with filtered valid ones

@@ -711,6 +711,7 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
                 bullet["reason"] = enrichment.get("reason")
                 bullet["relevance"] = enrichment.get("relevance")
                 bullet["context"] = enrichment.get("context")
+                bullet["entity"] = enrichment.get("entity")
 
     # Merge scenario contexts into paragraph sections
     if scenario_contexts:

@@ -16560,6 +16560,77 @@ def get_or_create_formal_domain_name(domain: str) -> str:
     """Wrapper for backward compatibility"""
     return domain_resolver.get_formal_name(domain)
 
+
+def replace_domains_with_formal_names(text: str) -> str:
+    """
+    Replace domain URLs with formal publication names (case-insensitive).
+
+    Examples:
+        "per carboncredits.com (Nov 3)" → "per Carbon Credits (Nov 3)"
+        "reported by reuters.com" → "reported by Reuters"
+        "finance.yahoo.com article" → "Yahoo Finance article"
+
+    Args:
+        text: Text containing domain URLs
+
+    Returns:
+        Text with domains replaced by formal publication names
+    """
+    import re
+
+    if not text or not isinstance(text, str):
+        return text
+
+    # Match domain.tld patterns (including subdomains like finance.yahoo.com)
+    # Common TLDs: .com, .org, .net, .io, .edu, .gov, .in, .ca, .au, .co.uk
+    pattern = r'\b([a-z0-9]+(?:[-\.][a-z0-9]+)*\.(?:com|org|net|io|edu|gov|in|ca|au|co\.uk))\b'
+
+    def replace_match(match):
+        domain_url = match.group(1).lower()  # Normalize to lowercase
+        formal_name = get_or_create_formal_domain_name(domain_url)
+        return formal_name
+
+    # Case-insensitive replacement
+    cleaned_text = re.sub(pattern, replace_match, text, flags=re.IGNORECASE)
+
+    return cleaned_text
+
+
+def clean_executive_summary_domains(json_output):
+    """
+    Recursively replace domain URLs with formal publication names in all text fields.
+
+    Applies to Phase 1 JSON (before Phase 2 context is added).
+
+    Args:
+        json_output: Phase 1 JSON structure (dict, list, or primitive)
+
+    Returns:
+        Cleaned JSON structure with domains replaced by formal names
+    """
+    if isinstance(json_output, dict):
+        cleaned = {}
+        for key, value in json_output.items():
+            if isinstance(value, str):
+                # Replace domains in string fields
+                cleaned[key] = replace_domains_with_formal_names(value)
+            elif isinstance(value, (dict, list)):
+                # Recurse into nested structures
+                cleaned[key] = clean_executive_summary_domains(value)
+            else:
+                # Leave non-string primitives unchanged
+                cleaned[key] = value
+        return cleaned
+
+    elif isinstance(json_output, list):
+        # Clean each item in list
+        return [clean_executive_summary_domains(item) for item in json_output]
+
+    else:
+        # Primitive value (int, bool, None, etc.)
+        return json_output
+
+
 def cleanup_domain_data():
     """One-time script to clean up existing domain data"""
     
@@ -19674,6 +19745,12 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
 
                 LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 1 - {model_used}) [{ticker}]: Generated valid JSON ({len(json_string)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
+
+                # Clean domain URLs in Phase 1 content (before Phase 2 adds context)
+                LOG.info(f"[{ticker}] Cleaning domain URLs to formal publication names in Phase 1 content")
+                json_output = clean_executive_summary_domains(json_output)
+                # Update stored JSON string with cleaned version
+                ai_analysis_summary = json.dumps(json_output, indent=2)
 
         # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
         final_json = json_output  # Default to Phase 1 JSON

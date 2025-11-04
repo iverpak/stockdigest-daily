@@ -59,6 +59,18 @@
                                         <span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{{ article.search_keyword|title }}</span>
                                         {% endif %}
 
+                                        {# Upstream badge - orange #}
+                                        {% if article.category == 'value_chain' and article.value_chain_type == 'upstream' %}
+                                        {% set partner_tag = article.competitor_ticker if article.competitor_ticker else article.search_keyword %}
+                                        <span style="display: inline-block; background: #f97316; color: #ffffff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{{ partner_tag }}]</span>
+                                        {% endif %}
+
+                                        {# Downstream badge - green #}
+                                        {% if article.category == 'value_chain' and article.value_chain_type == 'downstream' %}
+                                        {% set partner_tag = article.competitor_ticker if article.competitor_ticker else article.search_keyword %}
+                                        <span style="display: inline-block; background: #10b981; color: #ffffff; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{{ partner_tag }}]</span>
+                                        {% endif %}
+
                                         <a href="{{ article.resolved_url }}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{% if article.is_quality %}<span style="color: #f59e0b;">★</span> {% endif %}{{ article.title }}{% if article.is_paywall %} <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>{% endif %}</a>
                                     </div>
                                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{{ article.domain_name }} • {{ article.date_str }} • {{ article.time_str }} EST</div>

@@ -21471,12 +21471,29 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             # Assume article is flagged if it's in the list (this function only gets flagged articles)
             star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
 
+            # Build category-specific inline tag
+            tag_html = ""
+            if category == "industry":
+                # Gray tag with keyword
+                keyword = article.get('search_keyword', '')
+                if keyword:
+                    tag_html = f'<span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{keyword.title()}]</span>'
+
+            elif category == "competitor":
+                # Red tag with ticker or company name
+                comp_ticker = article.get('competitor_ticker')
+                comp_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
+                partner_tag = comp_ticker if comp_ticker else comp_name
+                tag_html = f'<span style="display: inline-block; background: #dc3545; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{partner_tag}]</span>'
+
+            # Company category has no tag (articles are obviously about the target company)
+
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
             article_links += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''
@@ -21493,91 +21510,96 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     html += build_category_section("INDUSTRY", articles_by_category.get('industry', []), "industry")
     html += build_category_section("COMPETITORS", articles_by_category.get('competitor', []), "competitor")
 
-    # Value Chain section (grouped by upstream/downstream)
+    # UPSTREAM section (separate top-level section)
     value_chain_articles = articles_by_category.get('value_chain', [])
-    if value_chain_articles:
-        upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
-        downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+    upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
 
-        value_chain_html = ""
-        if upstream_articles or downstream_articles:
-            value_chain_html += '<div style="margin-bottom: 16px;">'
-            value_chain_html += '<h3 style="margin: 0 0 12px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">VALUE CHAIN ({0})</h3>'.format(len(value_chain_articles))
+    if upstream_articles:
+        upstream_html = '<div style="margin-bottom: 16px;">'
+        upstream_html += '<h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">UPSTREAM ({0})</h3>'.format(len(upstream_articles))
 
-            # Upstream subsection
-            if upstream_articles:
-                value_chain_html += '<div style="margin-bottom: 12px;"><h4 style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #6b7280;">⬆️ Upstream</h4>'
-                for article in upstream_articles:
-                    is_paywalled = is_paywall_article(article.get('domain', ''))
-                    paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
+        for article in upstream_articles:
+            is_paywalled = is_paywall_article(article.get('domain', ''))
+            paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
-                    is_new = False
-                    if article.get('published_at'):
-                        published_at = article['published_at']
-                        if published_at.tzinfo is None:
-                            published_at = published_at.replace(tzinfo=timezone.utc)
-                        age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-                        is_new = age_hours < 24
-                    new_badge = '🆕 ' if is_new else ''
+            is_new = False
+            if article.get('published_at'):
+                published_at = article['published_at']
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+                is_new = age_hours < 24
+            new_badge = '🆕 ' if is_new else ''
 
-                    domain = article.get('domain', '')
-                    is_quality = domain.lower() in [
-                        'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
-                        'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
-                    ]
-                    star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
+            domain = article.get('domain', '')
+            is_quality = domain.lower() in [
+                'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
+                'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
+            ]
+            star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
 
-                    domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
-                    company_name = article.get('search_keyword', 'Unknown')
+            # Orange tag with ticker or company name
+            partner_ticker = article.get('competitor_ticker')
+            partner_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
+            partner_tag = partner_ticker if partner_ticker else partner_name
+            tag_html = f'<span style="display: inline-block; background: #f97316; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{partner_tag}]</span>'
 
-                    value_chain_html += f'''
-                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                            <div style="font-size: 11px; color: #9b59b6; font-weight: 600; margin-bottom: 2px;">[{company_name}]</div>
-                            <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
-                        </div>
-                    '''
-                value_chain_html += '</div>'
+            domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+            date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
-            # Downstream subsection
-            if downstream_articles:
-                value_chain_html += '<div style="margin-bottom: 12px;"><h4 style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #6b7280;">⬇️ Downstream</h4>'
-                for article in downstream_articles:
-                    is_paywalled = is_paywall_article(article.get('domain', ''))
-                    paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
+            upstream_html += f'''
+                <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                </div>
+            '''
+        upstream_html += '</div>'
+        html += upstream_html
 
-                    is_new = False
-                    if article.get('published_at'):
-                        published_at = article['published_at']
-                        if published_at.tzinfo is None:
-                            published_at = published_at.replace(tzinfo=timezone.utc)
-                        age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-                        is_new = age_hours < 24
-                    new_badge = '🆕 ' if is_new else ''
+    # DOWNSTREAM section (separate top-level section)
+    downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
 
-                    domain = article.get('domain', '')
-                    is_quality = domain.lower() in [
-                        'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
-                        'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
-                    ]
-                    star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
+    if downstream_articles:
+        downstream_html = '<div style="margin-bottom: 16px;">'
+        downstream_html += '<h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">DOWNSTREAM ({0})</h3>'.format(len(downstream_articles))
 
-                    domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-                    date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
-                    company_name = article.get('search_keyword', 'Unknown')
+        for article in downstream_articles:
+            is_paywalled = is_paywall_article(article.get('domain', ''))
+            paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
-                    value_chain_html += f'''
-                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                            <div style="font-size: 11px; color: #9b59b6; font-weight: 600; margin-bottom: 2px;">[{company_name}]</div>
-                            <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
-                        </div>
-                    '''
-                value_chain_html += '</div>'
+            is_new = False
+            if article.get('published_at'):
+                published_at = article['published_at']
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+                is_new = age_hours < 24
+            new_badge = '🆕 ' if is_new else ''
 
-            value_chain_html += '</div>'
-            html += value_chain_html
+            domain = article.get('domain', '')
+            is_quality = domain.lower() in [
+                'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
+                'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
+            ]
+            star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
+
+            # Green tag with ticker or company name
+            partner_ticker = article.get('competitor_ticker')
+            partner_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
+            partner_tag = partner_ticker if partner_ticker else partner_name
+            tag_html = f'<span style="display: inline-block; background: #10b981; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">[{partner_tag}]</span>'
+
+            domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
+            date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
+
+            downstream_html += f'''
+                <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                </div>
+            '''
+        downstream_html += '</div>'
+        html += downstream_html
 
     return html
 
@@ -34104,7 +34126,7 @@ def process_hourly_alerts():
                     cur.execute("""
                         SELECT DISTINCT ON (a.id)
                             a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
-                            ta.ticker, ta.category, ta.search_keyword, ta.competitor_ticker
+                            ta.ticker, ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type
                         FROM articles a
                         JOIN ticker_articles ta ON a.id = ta.article_id
                         WHERE ta.ticker = ANY(%s)
@@ -34160,6 +34182,7 @@ def process_hourly_alerts():
                         'category_display': category_display,
                         'search_keyword': article.get('search_keyword'),  # For industry badge
                         'competitor_ticker': article.get('competitor_ticker'),  # For competitor badge
+                        'value_chain_type': article.get('value_chain_type'),  # For upstream/downstream badge
                         'title': article['title'],
                         'resolved_url': article.get('resolved_url') or article.get('url', '#'),
                         'domain_name': domain_name,

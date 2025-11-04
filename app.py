@@ -32208,6 +32208,10 @@ async def regenerate_email_api(request: Request):
 
         LOG.info(f"✅ [{ticker}] Phase 1 validation passed")
 
+        # Clean domain URLs in Phase 1 content (before Phase 2 adds context)
+        LOG.info(f"[{ticker}] Cleaning domain URLs to formal publication names in Phase 1 content")
+        json_output = clean_executive_summary_domains(json_output)
+
         # Track Phase 1 cost
         phase1_usage = {
             "input_tokens": prompt_tokens,
@@ -32244,7 +32248,11 @@ async def regenerate_email_api(request: Request):
 
             if phase2_result:
                 # Validate enrichments structure (with partial acceptance)
-                is_valid_p2, error_msg_p2, valid_enrichments_p2 = validate_phase2_json(phase2_result.get("enrichments", {}))
+                is_valid_p2, error_msg_p2, valid_enrichments_p2 = validate_phase2_json(
+                    phase2_result.get("enrichments", {}),
+                    phase1_json=json_output,
+                    ticker=ticker
+                )
 
                 if is_valid_p2:
                     # Replace enrichments with filtered valid ones

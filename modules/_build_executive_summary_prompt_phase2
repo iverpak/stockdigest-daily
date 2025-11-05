@@ -14,6 +14,7 @@ INPUT:
 - 10-K summary (17 sections)
 - 10-Q summary (12 sections)
 - Transcript summary (14 sections)
+- Entity relationships: Competitors, Upstream suppliers, Downstream customers (used for entity classification in competitive_industry_dynamics section)
 
 GUIDING PRINCIPLE: ONLY INCLUDE RELEVANT CONTEXT
 
@@ -1245,44 +1246,52 @@ CRITICAL RULES:
 ENTITY TAG CLASSIFICATION (Competitive/Industry Dynamics Only)
 ═══════════════════════════════════════════════════════════════════════════════
 
-Entity answers: "What type of external entity is this bullet about?"
+Entity answers: "What type of external entity or trend is this bullet about?"
 
 CRITICAL: This field is ONLY generated for bullets in the competitive_industry_dynamics section.
 For all other sections, OMIT the entity field entirely.
 
+ENTITY RELATIONSHIP REFERENCE (From Feed Configuration):
+
+Competitors: {competitor_list}
+Upstream Suppliers: {upstream_list}
+Downstream Customers: {downstream_list}
+
 FOUR ENTITY TYPES:
-- Competitor: Companies competing with target (direct or adjacent markets)
-- Market: Industry trends, regulations, surveys, forecasts, sector-wide developments
-- Upstream: Suppliers, component manufacturers, input providers to target
-- Downstream: Customers, distributors, installers, end-users of target's products
+
+- Competitor: Companies competing with target; bullet discusses their competitive actions, performance, or strategy
+- Market: Industry trends, regulations, forecasts, sector-wide developments affecting multiple players
+- Upstream: Suppliers/manufacturers; bullet discusses supply chain impact on target's operations
+- Downstream: Customers/distributors; bullet discusses demand signals or purchasing behavior affecting target's sales
+
+CLASSIFICATION APPROACH:
+
+Classify based on bullet's ANALYTICAL PURPOSE (content-based, not source-based):
+- What is the bullet analyzing? (competitive action, market trend, supply signal, demand signal)
+- Use relationship reference as guide, but override when bullet content indicates different purpose
+- A competitor mentioned in market trend analysis → still classify as Market
+- A downstream customer taking competitive action → may classify as Competitor
 
 DECISION PROCESS:
 
-1. Is bullet about a competing company? → Competitor
-2. Is bullet about industry trends, regulations, or market-wide data? → Market
-3. Is bullet about a company supplying inputs to target? → Upstream
-4. Is bullet about a customer/distributor of target's products? → Downstream
-
-EXAMPLES:
-
-Competitor: "Airbus deliveries", "SolarEdge VPP milestone", "Generac sales decline"
-Market: "Defense spending increases", "LiFePO4 market forecast", "ITC consumer survey", "Global aircraft orders"
-Upstream: "ON Semiconductor results", "GE Aerospace guidance", "Spirit AeroSystems losses"
-Downstream: "United Airlines demand", "Dealer inventory levels", "Installer network expansion"
-
-AMBIGUOUS CASES:
-
-Defense contractors vs Boeing → Competitor (compete for contracts, not suppliers)
-Airlines vs Boeing → Downstream (customers buying aircraft)
-Airlines vs Enphase → Market (end-market signal, not direct customers)
-Surveys/forecasts → Market (industry-wide data)
+1. Is bullet analyzing a competitor's competitive moves/performance? → Competitor
+2. Is bullet providing industry/market context or policy affecting multiple players? → Market
+3. Is bullet signaling supply chain impact on target? → Upstream
+4. Is bullet signaling customer demand affecting target? → Downstream
 
 CRITICAL RULES:
 
-1. Entity field ONLY for competitive_industry_dynamics bullets
-2. Choose ONE entity type based on PRIMARY relationship in bullet
-3. When uncertain between Competitor/Market → Use "Market" if trend affects multiple players
-4. Use filing context to inform classification if bullet is ambiguous
+1. Focus on bullet's purpose, not just who is mentioned
+2. When uncertain between Competitor/Market → Use "Market" if trend affects multiple players
+3. Override relationship reference when bullet content indicates different analytical purpose
+4. Default to Market for industry-wide trends, regulations, or third-party research
+
+EXAMPLES:
+
+Competitor: "Airbus delivered 507 aircraft" (competitive performance), "SolarEdge VPP milestone" (competitive action)
+Market: "Defense spending increases 8%" (policy trend), "LiFePO4 market forecast $30B" (industry forecast), "Global aircraft orders down 46%" (industry metric)
+Upstream: "Spirit AeroSystems losses threaten production" (supply chain risk), "ON Semi chip shortage easing" (supply signal)
+Downstream: "United Airlines deferred deliveries" (customer demand), "FedEx reported strong results" (customer health)
 
 ═══════════════════════════════════════════════════════════════════════════════
 SYNTHESIS REQUIREMENT - CONNECT THE DOTS

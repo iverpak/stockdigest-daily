@@ -20211,19 +20211,52 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                 # Map upstream/downstream to value_chain triage data
                 triage_category = "value_chain" if category in ["upstream", "downstream"] else category
                 category_triage = triage_data.get(triage_category, [])
-                selected_article_data = {item["id"]: item for item in category_triage}
+
+                # Build flagged article database ID set (fixes index space mismatch for upstream/downstream)
+                flagged_article_ids = set()
+                article_scores = {}  # Map article DB ID -> {openai_score, claude_score}
+
+                if category in ["upstream", "downstream"]:
+                    # For upstream/downstream: map indices from COMBINED value_chain list
+                    all_value_chain_articles = categories.get("value_chain", [])
+                    for item in category_triage:
+                        article_idx = item["id"]
+                        if article_idx < len(all_value_chain_articles):
+                            article = all_value_chain_articles[article_idx]
+                            article_db_id = article.get("id")
+                            if article_db_id:
+                                flagged_article_ids.add(article_db_id)
+                                article_scores[article_db_id] = {
+                                    "openai_score": item.get("openai_score", 0),
+                                    "claude_score": item.get("claude_score", 0)
+                                }
+                else:
+                    # For company/industry/competitor: indices match directly
+                    for item in category_triage:
+                        article_idx = item["id"]
+                        if article_idx < len(articles):
+                            article = articles[article_idx]
+                            article_db_id = article.get("id")
+                            if article_db_id:
+                                flagged_article_ids.add(article_db_id)
+                                article_scores[article_db_id] = {
+                                    "openai_score": item.get("openai_score", 0),
+                                    "claude_score": item.get("claude_score", 0)
+                                }
 
                 # Chronological sorting - newest to oldest within category
                 enhanced_articles = []
                 for idx, article in enumerate(articles):
                     domain = normalize_domain(article.get("domain", ""))
-                    is_ai_selected = idx in selected_article_data
+                    article_db_id = article.get("id")
+                    is_ai_selected = article_db_id in flagged_article_ids
                     is_quality_domain = domain in QUALITY_DOMAINS
                     is_problematic = domain in PROBLEMATIC_SCRAPE_DOMAINS
 
-                    # Extract OpenAI and Claude scores from triage data
-                    openai_score = selected_article_data[idx].get("openai_score", 0) if is_ai_selected else 0
-                    claude_score = selected_article_data[idx].get("claude_score", 0) if is_ai_selected else 0
+                    # Extract OpenAI and Claude scores from article_scores dict
+                    scores = article_scores.get(article_db_id, {})
+                    openai_score = scores.get("openai_score", 0)
+                    claude_score = scores.get("claude_score", 0)
 
                     enhanced_articles.append({
                         "article": article,

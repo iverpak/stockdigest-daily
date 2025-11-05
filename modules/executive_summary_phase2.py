@@ -48,6 +48,76 @@ def get_phase2_system_prompt() -> str:
         raise
 
 
+def format_entity_references(config: Dict) -> Dict[str, str]:
+    """
+    Extract and format competitor/upstream/downstream entities from ticker config.
+
+    Formats entities as: "Company Name (TICKER)" or "Company Name" if no ticker.
+    Used to populate entity reference section in Phase 2 prompt.
+
+    Args:
+        config: Ticker configuration dict from ticker_reference
+
+    Returns:
+        dict with keys: 'competitors', 'upstream', 'downstream'
+        Each value is comma-separated string or 'None' if empty.
+
+    Example output:
+        {
+            'competitors': 'SolarEdge Technologies (SEDG), Generac Holdings (GNRC)',
+            'upstream': 'ON Semiconductor (ON), Texas Instruments (TXN)',
+            'downstream': 'Sunrun Inc. (RUN), Tesla, Inc. (TSLA)'
+        }
+    """
+    if not config:
+        return {
+            'competitors': 'None',
+            'upstream': 'None',
+            'downstream': 'None'
+        }
+
+    competitors = []
+    upstream = []
+    downstream = []
+
+    # Extract competitors
+    for comp in config.get("competitors", []):
+        if isinstance(comp, dict):
+            name = comp.get("name", "")
+            ticker_sym = comp.get("ticker", "")
+            if name and ticker_sym:
+                competitors.append(f"{name} ({ticker_sym})")
+            elif name:
+                competitors.append(name)
+
+    # Extract upstream
+    value_chain = config.get("value_chain", {})
+    for comp in value_chain.get("upstream", []):
+        if isinstance(comp, dict):
+            name = comp.get("name", "")
+            ticker_sym = comp.get("ticker", "")
+            if name and ticker_sym:
+                upstream.append(f"{name} ({ticker_sym})")
+            elif name:
+                upstream.append(name)
+
+    # Extract downstream
+    for comp in value_chain.get("downstream", []):
+        if isinstance(comp, dict):
+            name = comp.get("name", "")
+            ticker_sym = comp.get("ticker", "")
+            if name and ticker_sym:
+                downstream.append(f"{name} ({ticker_sym})")
+            elif name:
+                downstream.append(name)
+
+    return {
+        'competitors': ', '.join(competitors) if competitors else 'None',
+        'upstream': ', '.join(upstream) if upstream else 'None',
+        'downstream': ', '.join(downstream) if downstream else 'None'
+    }
+
+
 def _fetch_available_filings(ticker: str, db_func) -> Dict[str, Dict]:
     """
     Fetch latest 10-K, 10-Q, and Transcript from database.
@@ -274,6 +344,19 @@ def generate_executive_summary_phase2(
     try:
         # Load system prompt (static, cached)
         system_prompt = get_phase2_system_prompt()
+
+        # Format entity references from config
+        entity_refs = format_entity_references(config)
+
+        # Inject entity references into prompt template
+        # Note: Using .replace() instead of .format() to avoid conflicts with JSON examples in prompt
+        system_prompt = system_prompt.replace('{competitor_list}', entity_refs['competitors'])
+        system_prompt = system_prompt.replace('{upstream_list}', entity_refs['upstream'])
+        system_prompt = system_prompt.replace('{downstream_list}', entity_refs['downstream'])
+
+        # Log entity references for debugging
+        LOG.debug(f"[{ticker}] Entity references: Competitors={entity_refs['competitors']}, "
+                  f"Upstream={entity_refs['upstream']}, Downstream={entity_refs['downstream']}")
 
         # Build user content (Phase 1 JSON + filings)
         user_content = _build_phase2_user_content(ticker, phase1_json, filings)

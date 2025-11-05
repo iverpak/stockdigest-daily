@@ -21567,7 +21567,10 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
                 partner_tag = comp_ticker if comp_ticker else comp_name
                 tag_html = f'<span style="display: inline-block; background: #dc3545; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
 
-            # Company category has no tag (articles are obviously about the target company)
+            elif category == "company":
+                # Blue tag with ticker
+                ticker = article.get('ticker', 'N/A')
+                tag_html = f'<span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{ticker}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"

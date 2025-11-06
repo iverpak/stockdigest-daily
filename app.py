@@ -12631,7 +12631,7 @@ Select UP TO {target_cap} most important articles about fundamental market drive
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "temperature": 0.4,
+            "temperature": 0.1,  # Consistent determinism across all triage functions
             "system": [
                 {
                     "type": "text",
@@ -12826,7 +12826,7 @@ Select the {target_cap} most important articles about {competitor_name} from the
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "temperature": 0.4,
+            "temperature": 0.1,  # Consistent determinism across all triage functions
             "system": [
                 {
                     "type": "text",
@@ -13141,7 +13141,7 @@ Select the {target_cap} highest-quality articles about {upstream_company_name} f
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "temperature": 0.4,
+            "temperature": 0.1,  # Consistent determinism across all triage functions
             "system": [
                 {
                     "type": "text",
@@ -13475,7 +13475,7 @@ Select the {target_cap} highest-quality articles about {downstream_company_name}
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "temperature": 0.4,
+            "temperature": 0.1,  # Consistent determinism across all triage functions
             "system": [
                 {
                     "type": "text",
@@ -15538,7 +15538,7 @@ Return ONLY valid JSON with no additional commentary."""
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
-            "temperature": 0.5,
+            "temperature": 0.2,  # Low temperature for consistent metadata inference
             "system": [
                 {
                     "type": "text",

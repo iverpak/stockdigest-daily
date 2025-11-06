@@ -5513,10 +5513,10 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
             else:
                 # ✅ Check for retail platform content BEFORE adding to AI queue
                 # Industry articles already checked at Line 5081 (before relevance gate)
-                # Only need to check company/competitor articles here
+                # Check company/competitor/value_chain articles here
                 article_category = categories[i] if i < len(categories) else categories[0]
 
-                if article_category in ("company", "competitor"):
+                if article_category in ("company", "competitor", "value_chain"):
                     is_retail, keyword = is_retail_platform_content(result["scraped_content"])
 
                     if is_retail:

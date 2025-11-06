@@ -1847,45 +1847,51 @@ CRITICAL: Never pull data from filings or articles not in your timeline. Use onl
 ═══════════════════════════════════════════════════════════════════════════════
 UPCOMING CATALYSTS
 ═══════════════════════════════════════════════════════════════════════════════
-
-SECTION SCOPE: Scheduled future events that articles mentioned.
-
-LENGTH LIMIT: 1-3 bullets max
-
+SECTION SCOPE: Future events with timing that articles mentioned.
+LENGTH LIMIT: 1-3 bullets max (scale to content: 0 events → [], 1-2 events → 1-2 bullets, 3+ events → top 3)
 SOURCE: [COMPANY] articles only
 
 WHAT TO INCLUDE:
-
-Include if articles mentioned:
+Include if articles mentioned with timing:
 - Earnings dates: Quarterly or annual earnings release dates
 - Investor events: Investor days, analyst days, shareholder meetings
-- Regulatory deadlines: FDA decision dates, approval timelines
-- Product launches: Scheduled release dates
+- Regulatory deadlines: FDA decision dates, approval timelines, certification targets
+- Product launches: Scheduled release dates, expected launch timeframes
 - Shareholder votes: Proxy votes, merger approvals
 - Contract decisions: Award announcements, RFP deadlines
+- Operational milestones: Production ramps, facility openings with timeframes
+- M&A timelines
 
 REQUIRED DETAILS:
-
 For each catalyst:
-✓ Event name: "Q3 Earnings", "Annual Shareholder Meeting"
-✓ Date/timing: Exact date if known, otherwise timeframe
-✓ What will be disclosed/decided: Specific items expected
+✓ Event name: "Q3 Earnings", "Production Ramp to 42/month", "FDA Decision"
+✓ Date/timing: Exact date if known, otherwise timeframe from article
+✓ What will be disclosed/decided: Specific outcomes or metrics expected
 
 Format:
 "Event name: Date/timing - What will be disclosed/decided per source (article date)"
 
 Examples:
 ✓ "Q3 2025 Earnings: October 22 (Wednesday) after market close - Q3 results including revenue, EPS, gross margins, Q4 guidance, and robotaxi/FSD progress per multiple sources (Oct 22)"
-✓ "Annual Shareholder Meeting: November 6 - Vote on CEO Musk's pay package increasing stake to 29% from 13% per ISS recommendation (Oct 20)"
+✓ "737 Production Increase: Q4 2025 start - Ramp from 38 to 42 aircraft/month following FAA approval per earnings call (Oct 29)"
+✓ "Spirit Acquisition Close: Pending U.S. approval - $4.7B transaction completion following EU approval October 13 per earnings call (Oct 29)"
 
 WHAT TO EXCLUDE:
-
 Do not include:
-- Vague future possibilities ("may announce", "could happen")
-- Unscheduled events without timeframe
-- Events articles didn't explicitly mention
+- Vague future possibilities ("may announce", "could happen", "considering")
+- Events without any timeframe (no date, quarter, year, or status mentioned)
+- Pure speculation not grounded in article statements
 
-Only include events articles specifically flagged as upcoming/scheduled.
+TIMING REQUIREMENTS:
+Include if articles mentioned:
+✓ Specific dates: "October 22", "November 6"
+✓ Quarters/years: "Q4 2025", "2026", "mid-2027"
+✓ Relative timing: "starting in Q4", "expected 2026", "targeted next year"
+✓ Status-based: "pending approval", "awaiting decision", "under review"
+
+Exclude if:
+❌ No timing mentioned: Article discusses event but gives no timeframe
+❌ Vague/speculative: "may", "could", "might", "possible"
 
 ═══════════════════════════════════════════════════════════════════════════════
 FILING HINTS - STRATEGIC SECTION SELECTION

@@ -736,6 +736,35 @@ def strip_escape_hatch_context(phase2_result: Dict) -> Dict:
     return phase2_result
 
 
+def sort_bullets_by_impact(bullets: List[Dict]) -> List[Dict]:
+    """
+    Sort bullets by impact level: high → medium → low → missing.
+
+    Uses stable sort to preserve original order within same impact level.
+    Un-enriched bullets (missing impact field) sink to bottom.
+
+    Args:
+        bullets: List of bullet dicts
+
+    Returns:
+        Sorted list of bullets
+    """
+    impact_order = {
+        'high impact': 0,
+        'medium impact': 1,
+        'low impact': 2
+    }
+
+    def get_sort_key(bullet):
+        impact = bullet.get('impact')
+        if impact is None:
+            return 999  # Un-enriched bullets go to bottom
+        return impact_order.get(impact, 999)  # Unknown impact values go to bottom
+
+    # Stable sort preserves original order for ties
+    return sorted(bullets, key=get_sort_key)
+
+
 def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
     """
     Merge Phase 2 enrichments and scenario contexts into Phase 1 JSON.
@@ -743,13 +772,14 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
     Takes Phase 1 JSON structure and:
     1. Adds impact, sentiment, reason, relevance, context fields to each bullet
     2. Adds context field to paragraph sections (bottom_line, upside_scenario, downside_scenario)
+    3. Sorts enriched bullet sections by impact (high → medium → low → missing)
 
     Args:
         phase1_json: Complete Phase 1 JSON output
         phase2_result: Phase 2 result dict with 'enrichments' and 'scenario_contexts' keys
 
     Returns:
-        Merged JSON with Phase 2 fields added to bullets and scenarios
+        Merged JSON with Phase 2 fields added to bullets and scenarios, sorted by impact
     """
     merged = copy.deepcopy(phase1_json)
     enrichments = phase2_result.get("enrichments", {})
@@ -812,5 +842,21 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
         if "downside_scenario_context" in scenario_contexts and scenario_contexts["downside_scenario_context"]:
             if "downside_scenario" in merged.get("sections", {}):
                 merged["sections"]["downside_scenario"]["context"] = scenario_contexts["downside_scenario_context"]
+
+    # Sort enriched bullet sections by impact (high → medium → low → missing)
+    # Only sort sections that receive Phase 2 enrichments with impact field
+    enriched_sections = [
+        "major_developments",
+        "financial_performance",
+        "risk_factors",
+        "wall_street_sentiment",
+        "competitive_industry_dynamics"
+    ]
+
+    for section_name in enriched_sections:
+        if section_name in merged.get("sections", {}):
+            section_content = merged["sections"][section_name]
+            if isinstance(section_content, list) and len(section_content) > 0:
+                merged["sections"][section_name] = sort_bullets_by_impact(section_content)
 
     return merged

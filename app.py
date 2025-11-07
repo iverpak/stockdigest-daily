@@ -15548,7 +15548,7 @@ Return ONLY valid JSON with no additional commentary."""
         data = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 4096,
-            "temperature": 0.2,  # Low temperature for consistent metadata inference
+            "temperature": 0.0,  # Zero temperature for deterministic metadata generation
             "system": [
                 {
                     "type": "text",
@@ -21834,7 +21834,7 @@ def generate_email_html_core(
             # Excludes: spam, skipped retail, failed scrapes
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
+                       ta.category, ta.ticker, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id

@@ -961,6 +961,15 @@ You are reporting what analysts/authors stated, not making recommendations yours
 KEY VARIABLES TO MONITOR
 ═══════════════════════════════════════════════════════════════════════════════
 
+INFERENCE DISCIPLINE: Key Variables uses TIER 0 ONLY (Facts + Attribution).
+
+Before creating each variable, ask:
+□ Did article explicitly discuss this as material/important? (If NO → exclude variable)
+□ Did article provide the timeline period? (If NO → omit timeline)
+□ Can I attribute both variable AND timeline to source? (If NO → omit timeline)
+
+Variables describe forward-looking uncertainties that articles established as material, not what you infer should be monitored.
+
 CONTENT SUFFICIENCY CHECK - Run this before generating variables:
 
 Count forward-looking themes in articles:
@@ -982,34 +991,55 @@ Format as bullet objects (NO filing_hints for this section):
 {
   "bullet_id": "q4_delivery_guidance",
   "topic_label": "Q4 delivery guidance",
-  "content": "Management outlook for fourth quarter deliveries and full-year performance following Q3 record; sustainability of demand after tax credit expiration - Timeline: Q4 2024 and FY2025 results"
+  "content": "Management guidance for Q4 deliveries and FY performance following Q3 record, with post-tax-credit demand sustainability as key uncertainty per earnings call - Timeline: Q4 2024 and FY2025 results per management guidance"
 }
 
 Structure:
-- Topic Label: 2-5 words describing the catalyst/metric
-- Content: Variable description - Timeline: [Date/period from articles]
+- Topic Label: 2-5 words describing the variable
+- Content: [Variable description] + [why it matters/what's uncertain] per [source] - Timeline: [period per attribution] (optional - only if article provided)
 - NO filing_hints (these are forward-looking monitoring variables)
 
-CRITICAL: Timeline must be FORWARD-LOOKING (future periods to monitor)
+FORMATTING RULES:
 
-If articles discuss past event → Extract FUTURE monitoring period:
-❌ WRONG: "Timeline: October 22 earnings call" (already happened)
-✅ CORRECT: "Timeline: Q4 2025 and FY2025 results"
+✅ CORRECT (descriptive - state what IS uncertain/material):
+"Customer leasing activity pace with Q3 strengthening trend per Prologis report"
+"Industrial Business Indicator trajectory following Q3 expansion above 50 threshold per FreightWaves"
+"Demand normalization as tariff pull-forward effects dissipate per management commentary"
+"U.S. e-commerce revenue growth toward $2.9T projection per Bloomberg - Timeline: By 2030 per projection"
 
-If articles discuss future event → Use that date:
-✅ "Timeline: FDA decision expected Q2 2025"
+❌ WRONG (prescriptive - tell what to DO):
+"Monitoring customer leasing activity to assess..."
+"Tracking IBI readings to determine..."
+"Assessing whether demand normalizes..."
 
-If no specific date → Use estimated horizon based on article context:
-✅ "Timeline: 2025-2026" or "Timeline: Next 12-18 months" or "Timeline: Q4 2025 and beyond"
-❌ AVOID: "Timeline: Upcoming quarters" (too vague)
+Remove all monitoring/tracking/assessing verbs from your voice.
 
-Sources: Analyst commentary, management focus, article emphasis about what to watch
+TIMELINE RULES - TIER 0 ONLY:
 
-Examples of good topic labels:
-- "Q4 delivery guidance"
-- "Regulatory approval timeline"
-- "Margin trajectory"
-- "Product launch impact"
+Include timeline ONLY if article explicitly stated forward monitoring period. If article silent on timeline → omit timeline entirely.
+
+✅ INCLUDE timeline if article states:
+- "Management will monitor Q4 results"
+- "Analyst tracking for FY2026 performance"
+- "Projected to reach $X by 2030"
+- "Expected decision in Q2 2025"
+- "Guidance covers next 12-18 months per management"
+
+❌ EXCLUDE timeline if:
+- Article discusses metric/trend but gives no forward period
+- You're inferring "this probably matters for Q4" (inference)
+- You're estimating "likely 2025-2026 horizon" (inference)
+
+FORMAT:
+With timeline: "[Variable description] per [source] - Timeline: [period] per [attribution]"
+Without timeline: "[Variable description] per [source]"
+
+Examples:
+✅ "U.S. e-commerce revenue trajectory toward $2.9T per Bloomberg Intelligence - Timeline: By 2030 per Bloomberg projection"
+✅ "Customer leasing activity pace with Q3 strengthening trend per FreightWaves report" (no timeline - article didn't provide one)
+✅ "FDA approval decision for new device per company filing - Timeline: Q2 2025 per regulatory submission schedule"
+
+CRITICAL: If you cannot cite article text stating the forward period → omit timeline entirely.
 
 ═══════════════════════════════════════════════════════════════════════════════
 INTELLIGENCE SYNTHESIS APPROACH

@@ -11,7 +11,7 @@ import secrets
 import uuid
 import openai
 import google.generativeai as genai
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from contextlib import contextmanager
 from urllib.parse import urlparse, parse_qs, unquote, quote
@@ -2110,6 +2110,30 @@ def save_executive_summary(
               prompt_tokens, completion_tokens, generation_time_ms))
 
         LOG.info(f"✅ Saved executive summary for {ticker} on {datetime.now().date()} ({ai_provider}, Phase 1, {len(article_ids)} articles, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
+
+def get_latest_summary_date(ticker: str) -> date:
+    """
+    Get the summary_date of the most recently generated executive summary.
+    Used by Regen and Quality Review to target the latest production run.
+
+    Returns:
+        date: The summary_date of the most recent executive summary
+
+    Raises:
+        ValueError: If no executive summary found for ticker
+    """
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT summary_date
+            FROM executive_summaries
+            WHERE ticker = %s
+            ORDER BY generated_at DESC
+            LIMIT 1
+        """, (ticker,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError(f"No executive summary found for {ticker}")
+        return row['summary_date']
 
 # ------------------------------------------------------------------------------
 # Feed Name Utilities
@@ -32132,23 +32156,14 @@ async def regenerate_email_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Use today's date if not specified
+        # Determine target date: explicit parameter or latest from database
         if date_str:
             target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            LOG.info(f"🔄 [{ticker}] Using explicit date parameter: {target_date}")
         else:
-            # Use EST timezone with 12pm cutoff for regeneration window
-            # Allows regenerating yesterday's summaries until 12pm EST today
-            eastern = pytz.timezone('America/Toronto')
-            now_est = datetime.now(eastern)
-
-            if now_est.hour < 12:
-                # Before 12pm EST - use yesterday's date
-                target_date = (now_est - timedelta(days=1)).date()
-                LOG.info(f"🔄 [{ticker}] Before 12pm EST cutoff - using yesterday's date: {target_date}")
-            else:
-                # 12pm EST or later - use today's date
-                target_date = now_est.date()
-                LOG.info(f"🔄 [{ticker}] After 12pm EST cutoff - using today's date: {target_date}")
+            # Query for most recent summary date (no time-of-day dependency)
+            target_date = get_latest_summary_date(ticker)
+            LOG.info(f"🔄 [{ticker}] Using latest summary date from database: {target_date}")
 
         LOG.info(f"🔄 [{ticker}] Regenerating Email #3 for {target_date}")
 
@@ -32515,22 +32530,14 @@ async def review_quality_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Use today's date if not specified (same logic as regenerate)
+        # Determine target date: explicit parameter or latest from database
         if date_str:
             target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            LOG.info(f"🔍 [{ticker}] Using explicit date parameter: {target_date}")
         else:
-            # Use EST timezone with 12pm cutoff
-            eastern = pytz.timezone('America/Toronto')
-            now_est = datetime.now(eastern)
-
-            if now_est.hour < 12:
-                # Before 12pm EST - use yesterday's date
-                target_date = (now_est - timedelta(days=1)).date()
-                LOG.info(f"🔍 [{ticker}] Before 12pm EST cutoff - reviewing yesterday's summary: {target_date}")
-            else:
-                # 12pm EST or later - use today's date
-                target_date = now_est.date()
-                LOG.info(f"🔍 [{ticker}] After 12pm EST cutoff - reviewing today's summary: {target_date}")
+            # Query for most recent summary date (no time-of-day dependency)
+            target_date = get_latest_summary_date(ticker)
+            LOG.info(f"🔍 [{ticker}] Using latest summary date from database: {target_date}")
 
         LOG.info(f"🔍 [{ticker}] Starting quality review for {target_date}")
 
@@ -32661,22 +32668,14 @@ async def review_all_quality_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Use today's date if not specified (same logic as Phase 1)
+        # Determine target date: explicit parameter or latest from database
         if date_str:
             target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            LOG.info(f"🔍 [{ticker}] Using explicit date parameter: {target_date}")
         else:
-            # Use EST timezone with 12pm cutoff
-            eastern = pytz.timezone('America/Toronto')
-            now_est = datetime.now(eastern)
-
-            if now_est.hour < 12:
-                # Before 12pm EST - use yesterday's date
-                target_date = (now_est - timedelta(days=1)).date()
-                LOG.info(f"🔍 [{ticker}] Before 12pm EST cutoff - reviewing yesterday's summary: {target_date}")
-            else:
-                # 12pm EST or later - use today's date
-                target_date = now_est.date()
-                LOG.info(f"🔍 [{ticker}] After 12pm EST cutoff - reviewing today's summary: {target_date}")
+            # Query for most recent summary date (no time-of-day dependency)
+            target_date = get_latest_summary_date(ticker)
+            LOG.info(f"🔍 [{ticker}] Using latest summary date from database: {target_date}")
 
         LOG.info(f"🔍 [{ticker}] Starting comprehensive quality review (Phase 1 + Phase 2) for {target_date}")
 

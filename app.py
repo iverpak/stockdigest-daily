@@ -20686,6 +20686,22 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
 
         html.append("</div>")
 
+    # Add Article IDs footer for debugging and transparency
+    if flagged_article_ids:
+        article_ids_str = str(flagged_article_ids)  # Converts to "[1451, 1084, ...]"
+        html.append(f"""
+        <div style='margin-top: 30px; padding: 15px; background-color: #f0f9ff;
+                    border-left: 4px solid #3b82f6; border-radius: 5px;'>
+            <p style='margin: 0; font-size: 13px; font-weight: bold; color: #1e40af;'>
+                📊 All Article IDs Used in This Run ({len(flagged_article_ids)}):
+            </p>
+            <p style='margin: 8px 0 0 0; font-size: 12px; font-family: monospace;
+                      color: #374151; word-break: break-all; line-height: 1.6;'>
+                {article_ids_str}
+            </p>
+        </div>
+    """)
+
     html.append("""
         <div style='margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 11px; color: #6c757d;'>
             <strong>🤖 Enhanced AI Features:</strong><br>

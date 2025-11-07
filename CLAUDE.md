@@ -128,7 +128,7 @@ python app.py alerts          # Hourly (9 AM - 10 PM EST) - Real-time article al
 **Integration:**
 - Button in `/admin/queue` for each ticker
 - Runs after Email #3 generation (manual trigger)
-- 12pm EST cutoff logic (before 12pm = yesterday's summary, after 12pm = today's)
+- Always targets latest summary from database (no time-of-day dependency)
 - Fetches executive summary from database using `summary_date` + `ticker`
 
 **Benefits:**
@@ -1651,7 +1651,12 @@ python app.py check_filings
 - `build_articles_html(articles_by_category)` - Line 11818 (Helper: Render article links as HTML)
 - `parse_executive_summary_sections()` - Line 11733 (Parse AI summary into 6 sections)
 - `generate_email_html_core()` - Line 12278 (Core Email #3 generation - shared by test and production)
-- `save_executive_summary()` - Line 1050 (Executive summary database storage)
+- `save_executive_summary()` - Line 2051 (Executive summary database storage)
+- `get_latest_summary_date(ticker)` - Line 2114 (Query for most recent summary - NEW Nov 2025)
+  - Used by Regenerate and Quality Review endpoints
+  - Queries: `ORDER BY generated_at DESC LIMIT 1`
+  - Returns: Most recent `summary_date` for ticker
+  - Eliminates time-of-day dependency (no 12pm cutoff)
 - `generate_openai_executive_summary()` - Line 10069 (Executive summary AI prompt)
 
 **Unsubscribe System (NEW - Oct 2025):**
@@ -1659,12 +1664,14 @@ python app.py check_filings
 - `get_or_create_unsubscribe_token(email)` - Line 13085 (Get existing or create new token)
 - `/unsubscribe` endpoint handler - Line 12981 (Token validation + unsubscribe processing)
 
-**Regenerate Email #3 (NEW - Oct 2025):**
-- `POST /api/regenerate-email` - Line 20921 (Backend endpoint for regenerating Email #3)
-  - Fetches existing flagged articles from today
-  - Regenerates executive summary using Claude/OpenAI
+**Regenerate Email #3 (NEW - Oct 2025, Updated Nov 2025):**
+- `POST /api/regenerate-email` - Line 32131 (Backend endpoint for regenerating Email #3)
+  - Queries database for latest summary date (no time-of-day dependency)
+  - Fetches existing flagged articles from that summary (preserves original article IDs)
+  - Regenerates executive summary using Claude/OpenAI (Phase 1 + Phase 2)
+  - Updates executive_summaries table with new JSON (both summary_text and summary_json)
   - Updates email_queue with new HTML
-  - Sends preview to admin
+  - Sends preview to admin (Email #2 + Email #3)
 
 **Hourly Alerts System (NEW - Oct 2025):**
 - `process_hourly_alerts()` - Line 22479 (Main orchestrator, runs 9 AM - 10 PM EST)
@@ -1676,13 +1683,13 @@ python app.py check_filings
 - `review_quality_phase1()` - modules/quality_review.py (Phase 1: Article verification)
 - `review_quality_phase2()` - modules/quality_review_phase2.py (Phase 2: Filing context verification)
 - `generate_quality_review_email_html()` - modules/quality_review.py (Email report generation)
-- `POST /api/review-quality` - Line 32498 (Phase 1 endpoint)
-- `POST /api/review-all-quality` - Line 32642 (Phase 1 + Phase 2 endpoint)
+- `POST /api/review-quality` - Line 32513 (Phase 1 endpoint)
+- `POST /api/review-all-quality` - Line 32658 (Phase 1 + Phase 2 endpoint)
 - **Key Features:**
   - Gemini 2.5 Flash verification
   - 6 error types with severity levels (critical, serious, minor)
   - Sentence-by-sentence analysis with status badges
-  - 12pm EST cutoff logic for date selection
+  - Database-driven date selection (queries for latest summary)
 
 **Job Queue System:**
 - `process_digest_phase()` - Line 11626 (Main digest phase orchestrator)

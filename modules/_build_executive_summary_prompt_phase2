@@ -514,7 +514,76 @@ TEMPORAL NOTES (flag only when material):
 ✓ "increased to 28% per Q2 10-Q vs 22% in FY2024 10-K" - material change
 
 ═══════════════════════════════════════════════════════════════════════════════
-RULE #6: INFERENCE DISCIPLINE
+RULE #6: SOURCE VERIFICATION (MANDATORY)
+═══════════════════════════════════════════════════════════════════════════════
+
+CRITICAL: Verify every statement exists in the document you're citing.
+
+VERIFICATION PROCESS (apply before citing):
+
+STEP 1: Locate the statement
+- Search the specific filing for the exact statement or close paraphrase
+- Note: filing_hints suggest WHERE to look, not WHAT to cite
+
+STEP 2: Confirm document match
+- Does this exact statement appear in the document I'm about to cite?
+- If NO → Search other filings for actual source
+- If found elsewhere → Cite the actual source document
+
+STEP 3: Handle multi-document matches
+- If statement appears in multiple documents:
+  
+  FOR QUANTIFIED DATA (tables, metrics, percentages):
+  → Cite the document with the data table (10-Q > 10-K > Transcript)
+  
+  FOR MANAGEMENT VIEWS (commentary, explanations, outlook):
+  → Cite most recent source (Transcript > 10-Q > 10-K)
+  
+  FOR BOTH DATA + COMMENTARY:
+  → Cite each source separately: "X per 10-Q; management stated Y per transcript"
+
+- Accuracy > recency: Never cite wrong document just because it's newer
+
+STEP 4: Pre-citation checklist
+□ I found this statement in the document I'm citing (not just similar topics)
+□ I verified it's NOT only in a different filing
+□ Citation includes correct period (FY2024 10-K vs Q3 2025 10-Q vs Oct 23 call)
+□ If from 10-Q, I specified whether YTD (9-month) or quarterly (3-month):
+   - Quarterly data → Label as "Q3 2025" (e.g., "$12.4M Q3 2025")
+   - Cumulative data → Label as "YTD Q3 2025" (e.g., "$31.8M YTD Q3 2025")
+□ If citing multiple facts to one source, I verified ALL facts exist in that source
+□ If facts come from multiple sources, I either:
+   - Cited each source separately ("X per 10-Q; Y per transcript"), OR
+   - Used combined citation ("X and Y per 10-Q and transcript")
+
+COMMON ERRORS TO AVOID:
+
+❌ WRONG: filing_hints suggested 10-K → automatically cite "per 10-K"
+✅ CORRECT: filing_hints suggested 10-K → search 10-K → statement not found → search Q3 10-Q → found → cite "per Q3 2025 10-Q"
+
+❌ WRONG: "Customers repositioning supply chains per FY2024 10-K" (statement only in Q3 10-Q)
+✅ CORRECT: "Customers repositioning supply chains per Q3 2025 10-Q" (actual source)
+
+❌ WRONG: Topic discussed in 10-K → cite 10-K even if using Q3 10-Q data
+✅ CORRECT: Topic discussed in 10-K, data from Q3 10-Q → cite Q3 10-Q for that data
+
+❌ WRONG: "Rent change 49% and occupancy 95.3% (+20 bps sequential) per Q3 10-Q"
+   (Mixes transcript data with 10-Q citation)
+✅ CORRECT: "Occupancy 95.3% per Q3 10-Q; rent change 49% with +20 bps 
+   sequential gain per transcript"
+
+EXAMPLE VERIFICATION:
+
+filing_hints: {"10-K": ["STRATEGIC PRIORITIES"]}
+Statement to verify: "Long-term trends like e-commerce growth continue driving demand"
+
+Example Process:
+1. Search FY2024 10-K STRATEGIC PRIORITIES → Not found verbatim
+2. Search Q3 2025 10-Q Management Commentary → Found exact match
+3. Decision: Cite "per Q3 2025 10-Q" (actual source, not suggested source)
+
+═══════════════════════════════════════════════════════════════════════════════
+RULE #7: INFERENCE DISCIPLINE
 ═══════════════════════════════════════════════════════════════════════════════
 
 THREE ALLOWED TIERS:
@@ -545,7 +614,7 @@ FORBIDDEN WORDS (unless quoting management):
 ❌ WRONG: "AMD partnerships represent competitive pressure"
 
 ═══════════════════════════════════════════════════════════════════════════════
-RULE #7: ANTI-FABRICATION
+RULE #8: ANTI-FABRICATION
 ═══════════════════════════════════════════════════════════════════════════════
 
 Never cite numbers that don't explicitly appear in filings with matching labels.
@@ -573,6 +642,7 @@ Before outputting context, verify:
 □ Transcript citations include date ("per Oct 23 call")
 □ No interpretive language unless quoting management
 □ No fabrication - all numbers match filing labels exactly
+□ For 10-Q metrics: Quarterly figures labeled "Q3 2025", cumulative figures labeled "YTD Q3 2025"
 
 ═══════════════════════════════════════════════════════════════════════════════
 11 INTEGRATION QUESTIONS - WHAT TO LOOK FOR
@@ -711,6 +781,10 @@ SPECIAL CASE: New product launches (<18 months old)
 YTD USAGE RULES:
 ✅ ALLOWED: Forward calculations only - "YTD 1,218K implies Q4 needs 571K to match FY2024"
 ❌ BANNED: YTD as comparison denominator - Never "2.9M = 238% of YTD deliveries"
+
+YTD DATA LABELING (MANDATORY):
+When using 10-Q cumulative data (9 months): ALWAYS label as "YTD Q3 2025" not "Q3 2025"
+When using 10-Q quarterly data (3 months): Label as "Q3 2025"
 
 COMPARISON HIERARCHY (always use in this order):
 1. Quarter-over-quarter (Q/Q): "Q3 16.1% vs Q2 15.2%" - shows recent trend

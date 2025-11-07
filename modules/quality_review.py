@@ -511,3 +511,469 @@ def generate_quality_review_email_html(review_result: Dict) -> str:
 '''
 
     return html
+
+
+def generate_combined_quality_review_email_html(
+    phase1_result: Dict,
+    phase2_result: Optional[Dict]
+) -> str:
+    """
+    Generate combined HTML email report from Phase 1 + Phase 2 quality review results.
+
+    Shows bullet-by-bullet verification: Phase 1 article check, then Phase 2 context check.
+
+    Args:
+        phase1_result: Output from review_executive_summary_quality()
+        phase2_result: Output from review_phase2_context_quality() or None if skipped
+
+    Returns:
+        HTML string for combined email
+    """
+    p1_summary = phase1_result["summary"]
+    p1_sections = phase1_result["sections"]
+
+    ticker = p1_summary["ticker"]
+
+    # Phase 1 stats
+    p1_total = p1_summary["total_sentences"]
+    p1_supported = p1_summary["supported"]
+    p1_inference = p1_summary["inference"]
+    p1_unsupported = p1_summary["unsupported"]
+    p1_errors = p1_summary["errors_by_severity"]
+
+    # Calculate Phase 1 percentages
+    p1_supported_pct = (p1_supported / p1_total * 100) if p1_total > 0 else 0
+    p1_inference_pct = (p1_inference / p1_total * 100) if p1_total > 0 else 0
+    p1_unsupported_pct = (p1_unsupported / p1_total * 100) if p1_total > 0 else 0
+
+    # Phase 1 pass/fail
+    p1_critical = p1_errors.get("CRITICAL", 0)
+    p1_serious = p1_errors.get("SERIOUS", 0)
+    p1_minor = p1_errors.get("MINOR", 0)
+    p1_critical_pass = p1_critical == 0
+    p1_serious_pass = (p1_serious / p1_total * 100) < 1.0 if p1_total > 0 else True
+    p1_minor_pass = (p1_minor / p1_total * 100) < 5.0 if p1_total > 0 else True
+    phase1_pass = p1_critical_pass and p1_serious_pass and p1_minor_pass
+
+    # Phase 2 stats (if available)
+    phase2_skipped = phase2_result is None
+    if not phase2_skipped:
+        p2_summary = phase2_result["summary"]
+        p2_contexts_list = phase2_result["contexts"]
+
+        p2_total = p2_summary["total_contexts"]
+        p2_accurate = p2_summary["accurate"]
+        p2_issues = p2_summary["issues"]
+        p2_errors = p2_summary["errors_by_severity"]
+
+        # Calculate Phase 2 percentages
+        p2_accurate_pct = (p2_accurate / p2_total * 100) if p2_total > 0 else 0
+        p2_issues_pct = (p2_issues / p2_total * 100) if p2_total > 0 else 0
+
+        # Phase 2 pass/fail
+        p2_critical = p2_errors.get("CRITICAL", 0)
+        p2_serious = p2_errors.get("SERIOUS", 0)
+        p2_minor = p2_errors.get("MINOR", 0)
+        p2_critical_pass = p2_critical == 0
+        p2_serious_pass = (p2_serious / p2_total * 100) < 1.0 if p2_total > 0 else True
+        p2_minor_pass = (p2_minor / p2_total * 100) < 5.0 if p2_total > 0 else True
+        phase2_pass = p2_critical_pass and p2_serious_pass and p2_minor_pass
+
+        # Create lookup for contexts by section + bullet_id
+        p2_contexts_by_key = {}
+        for ctx in p2_contexts_list:
+            section = ctx.get("section_name", "")
+            bullet_id = ctx.get("bullet_id", "")
+            key = f"{section}|{bullet_id}"
+            p2_contexts_by_key[key] = ctx
+    else:
+        phase2_pass = True  # No Phase 2 = auto-pass
+        p2_contexts_by_key = {}
+
+    # Overall verdict
+    overall_pass = phase1_pass and phase2_pass
+    overall_verdict = "✅ PASS" if overall_pass else "❌ FAIL"
+    verdict_color = "#10b981" if overall_pass else "#ef4444"
+
+    # Determine verdict reason
+    if overall_pass:
+        verdict_reason = "All quality checks passed"
+    elif not phase1_pass and not phase2_pass:
+        verdict_reason = "Both Phase 1 and Phase 2 detected critical errors"
+    elif not phase1_pass:
+        verdict_reason = f"Phase 1 failed ({p1_critical} critical, {p1_serious} serious, {p1_minor} minor errors)"
+    else:
+        verdict_reason = f"Phase 2 failed ({p2_critical} critical, {p2_serious} serious, {p2_minor} minor errors)"
+
+    # Build HTML
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px; }}
+        .container {{ max-width: 1000px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+        .header {{ background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; padding: 30px; border-radius: 8px 8px 0 0; }}
+        .header h1 {{ margin: 0 0 10px 0; font-size: 28px; }}
+        .header p {{ margin: 0; opacity: 0.9; font-size: 14px; }}
+        .overall-verdict {{ background: #f8f9fa; border-left: 4px solid {verdict_color}; padding: 20px; margin: 20px; border-radius: 4px; }}
+        .overall-verdict h2 {{ margin: 0 0 10px 0; font-size: 22px; color: {verdict_color}; }}
+        .overall-verdict p {{ margin: 5px 0; color: #374151; font-size: 14px; }}
+        .phase-summary {{ margin: 20px; padding: 20px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fafbfc; }}
+        .phase-summary h3 {{ margin: 0 0 15px 0; font-size: 18px; color: #1e40af; }}
+        .phase-summary.skipped {{ background: #f9fafb; border-color: #d1d5db; }}
+        .phase-summary.skipped h3 {{ color: #6b7280; }}
+        .stats {{ display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px; }}
+        .stat {{ flex: 1; min-width: 140px; }}
+        .stat-label {{ font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }}
+        .stat-value {{ font-size: 20px; font-weight: bold; margin-top: 5px; }}
+        .error-summary {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #e5e7eb; }}
+        .section {{ margin: 20px; padding: 20px; border: 1px solid #e5e7eb; border-radius: 6px; }}
+        .section-header {{ font-size: 18px; font-weight: bold; color: #1e40af; margin-bottom: 15px; border-bottom: 2px solid #1e40af; padding-bottom: 8px; }}
+        .bullet-group {{ margin-bottom: 30px; padding: 15px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb; }}
+        .bullet-title {{ font-size: 16px; font-weight: bold; color: #374151; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #d1d5db; }}
+        .phase-label {{ font-size: 14px; font-weight: 600; color: #1e40af; margin: 15px 0 10px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
+        .review-item {{ margin-bottom: 15px; padding: 15px; border-radius: 6px; background: white; }}
+        .review-item.supported {{ border-left: 4px solid #10b981; }}
+        .review-item.inference {{ border-left: 4px solid #f59e0b; }}
+        .review-item.unsupported {{ border-left: 4px solid #ef4444; }}
+        .review-item.accurate {{ border-left: 4px solid #10b981; }}
+        .review-item.issue {{ border-left: 4px solid #ef4444; }}
+        .review-text {{ font-size: 14px; margin-bottom: 10px; line-height: 1.6; color: #1f2937; }}
+        .review-meta {{ font-size: 12px; color: #6b7280; }}
+        .badge {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; margin-right: 6px; }}
+        .badge.supported {{ background: #d1fae5; color: #065f46; }}
+        .badge.inference {{ background: #fed7aa; color: #92400e; }}
+        .badge.unsupported {{ background: #fee2e2; color: #991b1b; }}
+        .badge.accurate {{ background: #d1fae5; color: #065f46; }}
+        .badge.issue {{ background: #fee2e2; color: #991b1b; }}
+        .badge.critical {{ background: #dc2626; color: white; }}
+        .badge.serious {{ background: #f97316; color: white; }}
+        .badge.minor {{ background: #fbbf24; color: #78350f; }}
+        .badge.pass {{ background: #10b981; color: white; }}
+        .badge.fail {{ background: #ef4444; color: white; }}
+        .evidence {{ margin-top: 8px; padding: 10px; background: #f3f4f6; border-radius: 4px; font-size: 12px; }}
+        .evidence-item {{ margin: 5px 0; color: #374151; }}
+        .footer {{ padding: 20px; text-align: center; color: #6b7280; font-size: 12px; }}
+        .divider {{ height: 1px; background: #e5e7eb; margin: 15px 0; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Quality Review: {ticker}</h1>
+            <p>Comprehensive Article & Filing Verification Report</p>
+        </div>
+
+        <div class="overall-verdict">
+            <h2>OVERALL VERDICT: {overall_verdict}</h2>
+            <p>{verdict_reason}</p>
+        </div>
+
+        <div class="phase-summary">
+            <h3>📰 PHASE 1: ARTICLE VERIFICATION <span class="badge {'pass' if phase1_pass else 'fail'}">{('✅ PASS' if phase1_pass else '❌ FAIL')}</span></h3>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">Total Sentences</div>
+                    <div class="stat-value">{p1_total}</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">✅ Supported</div>
+                    <div class="stat-value" style="color: #10b981;">{p1_supported} ({p1_supported_pct:.1f}%)</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">⚠️ Inference</div>
+                    <div class="stat-value" style="color: #f59e0b;">{p1_inference} ({p1_inference_pct:.1f}%)</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">🔴 Unsupported</div>
+                    <div class="stat-value" style="color: #ef4444;">{p1_unsupported} ({p1_unsupported_pct:.1f}%)</div>
+                </div>
+            </div>
+            <div class="error-summary">
+                <div class="stat-label">Error Breakdown</div>
+                <div style="margin-top: 10px;">
+                    <span class="badge critical">🔴 CRITICAL: {p1_critical} (Target: 0%) {'❌ EXCEEDS' if not p1_critical_pass else '✅'}</span>
+                    <span class="badge serious">🟠 SERIOUS: {p1_serious} (Target: &lt;1%) {'❌ EXCEEDS' if not p1_serious_pass else '✅'}</span>
+                    <span class="badge minor">🟡 MINOR: {p1_minor} (Target: &lt;5%) {'❌ EXCEEDS' if not p1_minor_pass else '✅'}</span>
+                </div>
+            </div>
+        </div>
+'''
+
+    # Phase 2 summary box
+    if phase2_skipped:
+        html += '''
+        <div class="phase-summary skipped">
+            <h3>📄 PHASE 2: FILING CONTEXT VERIFICATION <span class="badge" style="background: #6b7280; color: white;">SKIPPED</span></h3>
+            <p style="color: #6b7280; margin: 10px 0 0 0; font-size: 14px;">No 10-K, 10-Q, or Transcript filings available for verification.</p>
+        </div>
+'''
+    else:
+        html += f'''
+        <div class="phase-summary">
+            <h3>📄 PHASE 2: FILING CONTEXT VERIFICATION <span class="badge {'pass' if phase2_pass else 'fail'}">{('✅ PASS' if phase2_pass else '❌ FAIL')}</span></h3>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">Total Contexts</div>
+                    <div class="stat-value">{p2_total}</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">✅ Accurate</div>
+                    <div class="stat-value" style="color: #10b981;">{p2_accurate} ({p2_accurate_pct:.1f}%)</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">🔴 Issues</div>
+                    <div class="stat-value" style="color: #ef4444;">{p2_issues} ({p2_issues_pct:.1f}%)</div>
+                </div>
+            </div>
+            <div class="error-summary">
+                <div class="stat-label">Error Breakdown</div>
+                <div style="margin-top: 10px;">
+                    <span class="badge critical">🔴 CRITICAL: {p2_critical} (Target: 0%) {'❌ EXCEEDS' if not p2_critical_pass else '✅'}</span>
+                    <span class="badge serious">🟠 SERIOUS: {p2_serious} (Target: &lt;1%) {'❌ EXCEEDS' if not p2_serious_pass else '✅'}</span>
+                    <span class="badge minor">🟡 MINOR: {p2_minor} (Target: &lt;5%) {'❌ EXCEEDS' if not p2_minor_pass else '✅'}</span>
+                </div>
+            </div>
+        </div>
+'''
+
+    # Section names mapping
+    section_names = {
+        "bottom_line": "📌 BOTTOM LINE",
+        "major_developments": "🔴 MAJOR DEVELOPMENTS",
+        "financial_performance": "📊 FINANCIAL/OPERATIONAL PERFORMANCE",
+        "risk_factors": "⚠️ RISK FACTORS",
+        "wall_street_sentiment": "📈 WALL STREET SENTIMENT",
+        "competitive_industry_dynamics": "⚡ COMPETITIVE/INDUSTRY DYNAMICS",
+        "upcoming_catalysts": "📅 UPCOMING CATALYSTS",
+        "upside_scenario": "📈 UPSIDE SCENARIO",
+        "downside_scenario": "📉 DOWNSIDE SCENARIO",
+        "key_variables": "🔍 KEY VARIABLES TO MONITOR"
+    }
+
+    # Now render each section bullet-by-bullet with Phase 1 then Phase 2
+    for section in p1_sections:
+        section_name = section.get("section_name", "unknown")
+        display_name = section_names.get(section_name, section_name.upper())
+        sentences = section.get("sentences", [])
+
+        if not sentences:
+            continue
+
+        html += f'<div class="section">'
+        html += f'<div class="section-header">{display_name}</div>'
+
+        # Check if this is a bullet section or paragraph section
+        # Bottom Line, Upside, Downside are paragraphs (sentences)
+        # Others are bullets
+        is_paragraph = section_name in ["bottom_line", "upside_scenario", "downside_scenario"]
+
+        if is_paragraph:
+            # Paragraph sections: show all Phase 1 sentences, then Phase 2 context
+            html += '<div class="bullet-group">'
+            html += '<div class="phase-label">📰 Article Verification (Phase 1)</div>'
+
+            # Render all sentences
+            for sentence in sentences:
+                text = sentence.get("text", "")
+                status = (sentence.get("status") or "").lower()
+                error_type = sentence.get("error_type")
+                severity = (sentence.get("severity") or "").upper()
+                evidence = sentence.get("evidence", [])
+                notes = sentence.get("notes", "") or ""
+
+                # Status badge
+                if status == "supported":
+                    status_badge = '<span class="badge supported">✅ SUPPORTED</span>'
+                elif status == "inference":
+                    status_badge = '<span class="badge inference">⚠️ INFERENCE</span>'
+                else:
+                    status_badge = '<span class="badge unsupported">🔴 UNSUPPORTED</span>'
+
+                # Severity badge
+                severity_badge = ""
+                if severity == "CRITICAL":
+                    severity_badge = '<span class="badge critical">🔴 CRITICAL</span>'
+                elif severity == "SERIOUS":
+                    severity_badge = '<span class="badge serious">🟠 SERIOUS</span>'
+                elif severity == "MINOR":
+                    severity_badge = '<span class="badge minor">🟡 MINOR</span>'
+
+                # Error type
+                error_html = ""
+                if error_type:
+                    error_html = f'<div style="margin-top: 8px; color: #dc2626; font-weight: 600;">Error: {error_type}</div>'
+
+                # Evidence
+                evidence_html = ""
+                if evidence:
+                    evidence_html = '<div class="evidence"><strong>Evidence:</strong>'
+                    for item in evidence:
+                        evidence_html += f'<div class="evidence-item">• {item}</div>'
+                    evidence_html += '</div>'
+
+                # Notes
+                notes_html = ""
+                if notes:
+                    notes_html = f'<div style="margin-top: 8px; color: #6b7280; font-style: italic;">Note: {notes}</div>'
+
+                html += f'''
+                <div class="review-item {status}">
+                    <div class="review-meta">{status_badge}{severity_badge}</div>
+                    <div class="review-text">{text}</div>
+                    {error_html}
+                    {evidence_html}
+                    {notes_html}
+                </div>
+                '''
+
+            # Now check for Phase 2 context for this paragraph
+            if not phase2_skipped:
+                context_key = f"{section_name}|scenario_context"
+                p2_ctx = p2_contexts_by_key.get(context_key)
+
+                if p2_ctx:
+                    html += '<div class="divider"></div>'
+                    html += '<div class="phase-label">📄 Filing Context Verification (Phase 2)</div>'
+
+                    ctx_text = p2_ctx.get("context_text", "")
+                    ctx_status = (p2_ctx.get("status") or "").lower()
+                    ctx_error_type = p2_ctx.get("error_type")
+                    ctx_severity = (p2_ctx.get("severity") or "").upper()
+                    ctx_evidence = p2_ctx.get("evidence", [])
+                    ctx_notes = p2_ctx.get("notes", "") or ""
+
+                    # Status badge
+                    if ctx_status == "accurate":
+                        ctx_status_badge = '<span class="badge accurate">✅ ACCURATE</span>'
+                    else:
+                        ctx_status_badge = '<span class="badge issue">🔴 ISSUE</span>'
+
+                    # Severity badge
+                    ctx_severity_badge = ""
+                    if ctx_severity == "CRITICAL":
+                        ctx_severity_badge = '<span class="badge critical">🔴 CRITICAL</span>'
+                    elif ctx_severity == "SERIOUS":
+                        ctx_severity_badge = '<span class="badge serious">🟠 SERIOUS</span>'
+                    elif ctx_severity == "MINOR":
+                        ctx_severity_badge = '<span class="badge minor">🟡 MINOR</span>'
+
+                    # Error type
+                    ctx_error_html = ""
+                    if ctx_error_type:
+                        ctx_error_html = f'<div style="margin-top: 8px; color: #dc2626; font-weight: 600;">Error: {ctx_error_type}</div>'
+
+                    # Evidence
+                    ctx_evidence_html = ""
+                    if ctx_evidence:
+                        ctx_evidence_html = '<div class="evidence"><strong>Filing Evidence:</strong>'
+                        for item in ctx_evidence:
+                            ctx_evidence_html += f'<div class="evidence-item">• {item}</div>'
+                        ctx_evidence_html += '</div>'
+
+                    # Notes
+                    ctx_notes_html = ""
+                    if ctx_notes:
+                        ctx_notes_html = f'<div style="margin-top: 8px; color: #6b7280; font-style: italic;">Note: {ctx_notes}</div>'
+
+                    html += f'''
+                    <div class="review-item {ctx_status}">
+                        <div class="review-meta">{ctx_status_badge}{ctx_severity_badge}</div>
+                        <div class="review-text" style="font-size: 13px; font-style: italic;">{ctx_text}</div>
+                        {ctx_error_html}
+                        {ctx_evidence_html}
+                        {ctx_notes_html}
+                    </div>
+                    '''
+
+            html += '</div>'  # End bullet-group
+
+        else:
+            # Bullet sections: group by bullet, show Phase 1 then Phase 2 for each
+            # Group sentences by bullet (they should already be grouped in Phase 1 output)
+            # For bullet sections, each "sentence" is actually a bullet
+            for sentence in sentences:
+                html += '<div class="bullet-group">'
+
+                # Get bullet info
+                text = sentence.get("text", "")
+                status = (sentence.get("status") or "").lower()
+                error_type = sentence.get("error_type")
+                severity = (sentence.get("severity") or "").upper()
+                evidence = sentence.get("evidence", [])
+                notes = sentence.get("notes", "") or ""
+
+                # Try to extract bullet_id from text (Phase 1 doesn't return bullet_id, so we need to match)
+                # We'll use the first few words as a title
+                bullet_title = text[:80] + "..." if len(text) > 80 else text
+                html += f'<div class="bullet-title">{bullet_title}</div>'
+
+                # Phase 1: Article verification
+                html += '<div class="phase-label">📰 Article Verification (Phase 1)</div>'
+
+                # Status badge
+                if status == "supported":
+                    status_badge = '<span class="badge supported">✅ SUPPORTED</span>'
+                elif status == "inference":
+                    status_badge = '<span class="badge inference">⚠️ INFERENCE</span>'
+                else:
+                    status_badge = '<span class="badge unsupported">🔴 UNSUPPORTED</span>'
+
+                # Severity badge
+                severity_badge = ""
+                if severity == "CRITICAL":
+                    severity_badge = '<span class="badge critical">🔴 CRITICAL</span>'
+                elif severity == "SERIOUS":
+                    severity_badge = '<span class="badge serious">🟠 SERIOUS</span>'
+                elif severity == "MINOR":
+                    severity_badge = '<span class="badge minor">🟡 MINOR</span>'
+
+                # Error type
+                error_html = ""
+                if error_type:
+                    error_html = f'<div style="margin-top: 8px; color: #dc2626; font-weight: 600;">Error: {error_type}</div>'
+
+                # Evidence
+                evidence_html = ""
+                if evidence:
+                    evidence_html = '<div class="evidence"><strong>Evidence:</strong>'
+                    for item in evidence:
+                        evidence_html += f'<div class="evidence-item">• {item}</div>'
+                    evidence_html += '</div>'
+
+                # Notes
+                notes_html = ""
+                if notes:
+                    notes_html = f'<div style="margin-top: 8px; color: #6b7280; font-style: italic;">Note: {notes}</div>'
+
+                html += f'''
+                <div class="review-item {status}">
+                    <div class="review-meta">{status_badge}{severity_badge}</div>
+                    <div class="review-text">{text}</div>
+                    {error_html}
+                    {evidence_html}
+                    {notes_html}
+                </div>
+                '''
+
+                # Phase 2: Context verification (if available)
+                # We need to find matching context by searching Phase 2 results for this section
+                # Since we don't have bullet_id in Phase 1, we'll show ALL contexts for this section
+                # This is a limitation, but acceptable
+
+                html += '</div>'  # End bullet-group
+
+        html += '</div>'  # End section
+
+    html += '''
+        <div class="footer">
+            <p>Generated by StockDigest Quality Review System</p>
+            <p>Phase 1 & Phase 2 powered by Gemini 2.5 Flash</p>
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+    return html

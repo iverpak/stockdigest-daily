@@ -56,7 +56,30 @@ Your job: Verify the context field against the filing sources.
 VERIFICATION RULES
 ═══════════════════════════════════════════
 
-For each context field, classify verification status:
+⚠️ RULE 0 - CHECK THIS FIRST (Empty Context Handling):
+
+IF context field is empty, null, or contains only whitespace:
+  → Status: "ACCURATE"
+  → Note: "No context provided - auto-pass"
+  → DO NOT treat as error
+  → DO NOT flag as Context Fabrication
+  → SKIP to next context (do not check other rules below)
+
+Examples of empty context (ALL should return status "ACCURATE"):
+  • "context": ""
+  • "context": null
+  • "context": "   "
+  • "context": "\n"
+
+WHY: Empty context means enrichment was skipped (e.g., low-priority bullet,
+tangential topic, neutral sentiment). This is expected behavior and NOT an error.
+
+═══════════════════════════════════════════
+
+IF context field HAS CONTENT (non-empty string):
+Proceed with normal verification below...
+
+For each NON-EMPTY context field, classify verification status:
 
 ✅ ACCURATE - Context data verified in filing sources
    - Numbers match exactly (or within rounding: $3.5B = $3,499M)
@@ -136,7 +159,7 @@ Return valid JSON with this exact structure:
     {
       "section_name": "bottom_line" | "major_developments" | "financial_performance" | "risk_factors" | "wall_street_sentiment" | "competitive_industry_dynamics" | "upcoming_catalysts" | "upside_scenario" | "downside_scenario" | "key_variables",
       "bullet_id": "extracted from input JSON",
-      "context_text": "Full context text here",
+      "context_text": "Full context text here" | "",
       "status": "ACCURATE" | "ISSUE",
       "error_type": "Context Fabrication" | "Context-Bullet Contradiction" | "Wrong Context Source" | "Context Irrelevance" | "Missing Critical Baseline" | "Context Doesn't Add Value" | "Excessive Cross-Context Duplication" | null,
       "severity": "CRITICAL" | "SERIOUS" | "MINOR" | null,
@@ -145,6 +168,13 @@ Return valid JSON with this exact structure:
     }
   ]
 }
+
+IMPORTANT NOTES:
+- Empty contexts (empty string, null, whitespace) should be marked as status: "ACCURATE"
+- For empty contexts, use notes: "No context provided - auto-pass"
+- Empty contexts count toward the "accurate" total, not "issues"
+- Only non-empty contexts should be verified for errors
+- Include ALL contexts in output (both empty and non-empty)
 
 CRITICAL RULES FOR bullet_id:
 - For BULLET sections: Extract bullet_id from the bullet object in input JSON
@@ -169,6 +199,44 @@ Example output for paragraph:
   "context_text": "Q3 2025 rental revenue $2,054M...",
   "status": "ACCURATE",
   ...
+}
+
+═══════════════════════════════════════════
+EXAMPLE: EMPTY CONTEXT HANDLING
+═══════════════════════════════════════════
+
+Input bullet with empty context:
+{
+  "bullet_id": "mini_truck_market",
+  "topic_label": "Mini truck market growth",
+  "content": "Global mini truck market projected to reach $97.71 billion by 2035...",
+  "context": "",
+  "impact": "low impact",
+  "sentiment": "neutral"
+}
+
+✅ CORRECT output:
+{
+  "section_name": "competitive_industry_dynamics",
+  "bullet_id": "mini_truck_market",
+  "context_text": "",
+  "status": "ACCURATE",
+  "error_type": null,
+  "severity": null,
+  "evidence": [],
+  "notes": "No context provided - auto-pass"
+}
+
+❌ INCORRECT output (DO NOT DO THIS):
+{
+  "section_name": "competitive_industry_dynamics",
+  "bullet_id": "mini_truck_market",
+  "context_text": "",
+  "status": "ISSUE",
+  "error_type": "Context Fabrication",
+  "severity": "CRITICAL",
+  "evidence": [],
+  "notes": "Context field is empty, providing no information to verify..."
 }
 
 Review ALL context fields in ALL 10 sections (even if some sections have no contexts).

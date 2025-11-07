@@ -417,11 +417,11 @@ def generate_quality_review_email_html(review_result: Dict) -> str:
 
         for sentence in sentences:
             text = sentence.get("text", "")
-            status = sentence.get("status", "").lower()
+            status = (sentence.get("status") or "").lower()
             error_type = sentence.get("error_type")
-            severity = sentence.get("severity", "").upper()
+            severity = (sentence.get("severity") or "").upper()
             evidence = sentence.get("evidence", [])
-            notes = sentence.get("notes", "")
+            notes = sentence.get("notes", "") or ""
 
             # Status badge
             if status == "supported":

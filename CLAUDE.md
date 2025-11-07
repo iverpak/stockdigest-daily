@@ -64,10 +64,79 @@ python app.py alerts          # Hourly (9 AM - 10 PM EST) - Real-time article al
 **Admin Dashboard:**
 - `/admin` - Stats overview and navigation (4 cards: Users, Queue, Settings, Test)
 - `/admin/users` - Beta user approval interface with bulk selection (Oct 2025)
-- `/admin/queue` - Email queue management with 8 smart buttons + ♻️ Regenerate Email #3 button per ticker (Oct 2025)
+- `/admin/queue` - Email queue management with 8 smart buttons + ♻️ Regenerate Email #3 button + 🔍 Quality Review button per ticker (Nov 2025)
 - `/admin/settings` - System configuration: Lookback window + GitHub CSV backup (Oct 2025)
 - `/admin/test` - Web-based test runner (replaces PowerShell setup_job_queue.ps1) (Oct 2025)
 - `/admin/research` - **NEW (Oct 18, 2025):** Research tools for company profiles, transcripts, and press releases with modal viewer and bulk management
+
+### Quality Review System (NEW - November 2025)
+
+**Purpose:** AI-powered quality assurance to detect hallucinations, fabrications, and errors in executive summaries before sending to users.
+
+**Two-Phase Architecture:**
+
+**Phase 1: Article Verification**
+- Verifies every sentence in executive summary is supported by article summaries
+- Uses Gemini 2.5 Flash with comprehensive verification rules
+- Detects 6 error types with severity levels
+
+**Phase 2: Filing Context Verification**
+- Verifies scenario contexts (Bottom Line, Upside, Downside) against 10-K/10-Q/Transcript
+- Checks attribution accuracy ("per 10-K" must match 10-K content)
+- Validates enrichment metadata (impact, sentiment, entity tags)
+
+**Error Types Detected:**
+
+🔴 **Critical Errors (Target: 0%):**
+1. **Fabricated Number** - Specific numbers not found in any source article
+2. **Fabricated Claim** - Events or facts not mentioned in sources
+3. **Attribution Errors:**
+   - WRONG: Incorrect source attribution
+   - VAGUE: Too generic to verify ("per analyst" without firm name)
+   - SPLIT: Multiple sources combined with single attribution
+4. **Directional Error** - Opposite direction (e.g., "beat" vs "miss")
+
+🟠 **Serious Errors (Target: <1%):**
+5. **Company Confusion** - Competitor/supplier facts attributed to target company
+
+🟡 **Minor Errors (Target: <5%):**
+6. **Inference as Fact** - Conclusions stated without attribution
+
+**API Endpoints:**
+- **`POST /api/review-quality`** - Phase 1 only (article verification)
+  - Parameters: `ticker`, `token`, `date` (optional, defaults to today with 12pm cutoff)
+  - Processing: 5-10 seconds
+  - Returns: Verification results + sends email report
+
+- **`POST /api/review-all-quality`** - Phase 1 + Phase 2 (comprehensive review)
+  - Same parameters as Phase 1
+  - Processing: 10-15 seconds (includes filing context verification)
+  - Email subject: "🔍 Quality Review: {ticker} - ✅ PASS" or "❌ FAIL (X critical errors)"
+
+**Email Report Format:**
+- **Summary Card:** Total sentences, supported/unsupported counts, critical error count
+- **Phase 1 Results:** Sentence-by-sentence verification with status badges (✅ SUPPORTED | ⚠️ INFERENCE | 🔴 UNSUPPORTED)
+- **Phase 2 Results:** Context verification for scenarios + enrichment metadata validation
+- **Error Details:** Grouped by type with specific evidence and recommendations
+- **Pass/Fail Status:** Overall assessment based on critical error count
+
+**Key Functions:**
+- `review_quality_phase1()` - Phase 1 verification logic (modules/quality_review.py)
+- `review_quality_phase2()` - Phase 2 filing context verification (modules/quality_review_phase2.py)
+- `generate_quality_review_email_html()` - Email template generation (modules/quality_review.py)
+
+**Integration:**
+- Button in `/admin/queue` for each ticker
+- Runs after Email #3 generation (manual trigger)
+- 12pm EST cutoff logic (before 12pm = yesterday's summary, after 12pm = today's)
+- Fetches executive summary from database using `summary_date` + `ticker`
+
+**Benefits:**
+✅ Catches hallucinations before user emails are sent
+✅ Detects subtle errors (directional mistakes, vague attributions)
+✅ Validates Phase 2 filing context against actual 10-K/10-Q content
+✅ Detailed email report for rapid error correction
+✅ <10-15 second processing time (fast feedback loop)
 
 **Safety Systems:**
 - Startup recovery (requeues jobs stuck >3min at startup)
@@ -94,6 +163,7 @@ and automatically requeues the job for retry. Runs every 60 seconds, 3-minute th
 - **AI-powered content analysis**: Claude API (primary) with OpenAI fallback, prompt caching enabled (v2023-06-01)
 - **Multi-source content scraping**: 2-tier fallback (newspaper3k → Scrapfly) - Playwright commented out for reliability
 - **3-Email QA workflow**: Automated quality assurance pipeline with triage, content review, and user-facing reports
+- **Quality Review System**: AI-powered post-generation verification (Gemini 2.5 Flash) detects hallucinations and errors (NEW - Nov 2025)
 - **Beta landing page**: Professional signup page with live ticker validation and smart Canadian ticker suggestions
 
 ### Key Components
@@ -254,6 +324,22 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 - `POST /admin/wipe-database`: Complete database reset
 - `GET /admin/ticker-metadata/{ticker}`: Retrieve ticker configuration
 - **`POST /admin/export-user-csv`**: Export beta users to CSV for daily processing
+
+**Quality Review Endpoints (NEW - November 2025):**
+- **`POST /api/review-quality`**: Phase 1 quality review (article verification only)
+  - Verifies executive summary against article summaries
+  - Parameters: `ticker`, `token`, `date` (optional)
+  - Processing: 5-10 seconds
+  - Sends email report with detailed findings
+- **`POST /api/review-all-quality`**: Comprehensive quality review (Phase 1 + Phase 2)
+  - Phase 1: Article verification
+  - Phase 2: Filing context verification (10-K/10-Q/Transcript)
+  - Parameters: `ticker`, `token`, `date` (optional)
+  - Processing: 10-15 seconds
+  - Sends combined email report with both phases
+- **12pm EST Cutoff Logic:** If `date` not specified:
+  - Before 12pm EST → Reviews yesterday's summary
+  - 12pm EST or later → Reviews today's summary
 
 **Company Profiles & Research Summaries (UPDATED - Oct 19, 2025):**
 
@@ -1586,6 +1672,18 @@ python app.py check_filings
 - `link_article_to_ticker_minimal()` - Line 22790 (Link articles without AI scoring)
 - `templates/email_hourly_alert.html` - Cumulative alert email template
 
+**Quality Review System (NEW - Nov 2025):**
+- `review_quality_phase1()` - modules/quality_review.py (Phase 1: Article verification)
+- `review_quality_phase2()` - modules/quality_review_phase2.py (Phase 2: Filing context verification)
+- `generate_quality_review_email_html()` - modules/quality_review.py (Email report generation)
+- `POST /api/review-quality` - Line 32498 (Phase 1 endpoint)
+- `POST /api/review-all-quality` - Line 32642 (Phase 1 + Phase 2 endpoint)
+- **Key Features:**
+  - Gemini 2.5 Flash verification
+  - 6 error types with severity levels (critical, serious, minor)
+  - Sentence-by-sentence analysis with status badges
+  - 12pm EST cutoff logic for date selection
+
 **Job Queue System:**
 - `process_digest_phase()` - Line 11626 (Main digest phase orchestrator)
 
@@ -1625,9 +1723,9 @@ python app.py check_filings
 - Monthly: ~$47.70 (30 runs)
 - Yearly: ~$572
 
-## Executive Summary AI Prompt (v3.3)
+## Executive Summary AI Prompt (v3.4)
 
-**Latest Update:** October 2025 - Phase 2 Scenario Context Integration
+**Latest Update:** November 2025 - Entity Tags, Retail Filter, Quality Review System
 
 **Reporting Philosophy Changes:**
 - ❌ ~~"Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals"~~
@@ -1655,7 +1753,38 @@ python app.py check_filings
 - Competitive/Industry section can expand when needed (most important section)
 - All explicit `{ticker}` references preserved in prompts
 
-### Phase 2: Scenario Context Enrichment (NEW - October 2025)
+### November 2025 Enhancements
+
+**1. Entity Tags & Category Labeling**
+- **Entity Reference Lists:** Phase 2 prompt now includes entity reference lists (customers, suppliers, partners, competitors)
+- **Inline Category Tags:** All bullets in competitive/industry section now include inline tags: `[CUSTOMER]`, `[SUPPLIER]`, `[PARTNER]`, `[COMPETITOR]`
+- **Domain URL Replacement:** Post-processing automatically replaces domain URLs with formal publication names
+  - Example: `"reuters.com"` → `"Reuters"`, `"wsj.com"` → `"The Wall Street Journal"`
+  - Function: `post_process_executive_summary()` in app.py
+- **Tag Formatting:** All brackets removed from category tags for cleaner display
+- **Benefits:** Easier to identify relationships, better context for readers
+
+**2. Retail Filter Extension**
+- Upstream/downstream articles now filtered using same retail spam logic as company articles
+- Prevents low-quality retail spam from polluting industry/competitor sections
+- Blue ticker badges added to company articles in Email #3 for visual distinction
+
+**3. AI Temperature Standardization**
+- All AI functions now use consistent temperature settings across Claude and OpenAI
+- Ensures reproducible outputs and consistent quality
+- Applied to: triage, summaries, executive summary generation
+
+**4. Value Chain Intelligence Enhancement**
+- Better tracking of `value_chain_type` field (prevents NULL overwrites)
+- Improved email formatting for value chain relationships
+- Enhanced upstream/downstream flagging logic in Email #1
+
+**5. Email #3 Improvements**
+- Ticker badges with color coding for article categories
+- Impact-based sorting (high impact articles appear first)
+- Metadata temperature fixes (consistent AI behavior)
+
+### Phase 2: Scenario Context Enrichment (October 2025)
 
 **Purpose:** Enrich Phase 1 executive summary scenarios (Bottom Line, Upside, Downside) with synthesized context from the latest 10-K filing.
 

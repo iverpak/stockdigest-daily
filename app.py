@@ -28285,11 +28285,11 @@ async def commit_csv_to_github_endpoint():
 
 @APP.post("/admin/update-domain-names")
 async def update_domain_formal_names(request: Request):
-    """Batch update domain formal names using Claude API"""
+    """Batch update domain formal names using Gemini 2.5 Flash in batches of 500"""
     require_admin(request)
 
     try:
-        LOG.info("=== BATCH UPDATING DOMAIN FORMAL NAMES ===")
+        LOG.info("=== BATCH UPDATING DOMAIN FORMAL NAMES (Gemini 2.5 Flash) ===")
 
         # Step 1: Fetch all domains from database
         with db() as conn, conn.cursor() as cur:
@@ -28299,12 +28299,39 @@ async def update_domain_formal_names(request: Request):
         if not domains:
             return {"status": "error", "message": "No domains found in database"}
 
-        LOG.info(f"Found {len(domains)} domains to process")
+        total_domains = len(domains)
+        LOG.info(f"Found {total_domains} domains to process")
 
-        # Step 2: Build Claude API prompt
-        domain_list = "\n".join([f"- {domain}" for domain in domains])
+        if not GEMINI_API_KEY:
+            return {"status": "error", "message": "GEMINI_API_KEY not configured"}
 
-        prompt = f"""You are a domain name expert. Below is a list of domain names. For EACH domain, provide ONLY the formal brand/publication name as it should appear in professional contexts.
+        # Configure Gemini
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        # Process in batches of 500
+        BATCH_SIZE = 500
+        total_batches = (total_domains + BATCH_SIZE - 1) // BATCH_SIZE
+
+        total_updated = 0
+        total_errors = 0
+        batch_results = []
+
+        import json
+        import re
+        from datetime import datetime
+
+        for batch_num in range(total_batches):
+            batch_start = batch_num * BATCH_SIZE
+            batch_end = min(batch_start + BATCH_SIZE, total_domains)
+            batch_domains = domains[batch_start:batch_end]
+
+            LOG.info(f"=== Processing Batch {batch_num + 1}/{total_batches} ({len(batch_domains)} domains) ===")
+
+            # Build prompt for this batch
+            domain_list = "\n".join([f"- {domain}" for domain in batch_domains])
+
+            prompt = f"""You are a domain name expert. Below is a list of domain names. For EACH domain, provide ONLY the formal brand/publication name as it should appear in professional contexts.
 
 Rules:
 1. Return EXACTLY one name per domain
@@ -28325,92 +28352,130 @@ Domains:
 {domain_list}
 """
 
-        # Step 3: Call Claude API
-        LOG.info("Calling Claude API...")
+            # Call Gemini API
+            try:
+                start_time = datetime.now()
 
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+                generation_config = {
+                    "temperature": 0.0,
+                    "max_output_tokens": 8192
+                }
 
-        message = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=8192,
-            messages=[{"role": "user", "content": prompt}]
-        )
+                response = model.generate_content(
+                    prompt,
+                    generation_config=generation_config
+                )
 
-        response_text = message.content[0].text
-        LOG.info("Claude API response received")
-        LOG.info(f"Response preview (first 200 chars): {response_text[:200]}")
+                end_time = datetime.now()
+                generation_time = (end_time - start_time).total_seconds()
 
-        # Step 4: Extract JSON from response
-        import json
-        import re
+                response_text = response.text
+                LOG.info(f"Batch {batch_num + 1}: Gemini response received ({generation_time:.1f}s)")
+                LOG.info(f"Response preview (first 200 chars): {response_text[:200]}")
 
-        json_content = None
+                # Extract JSON from response
+                json_content = None
 
-        # Try to extract JSON from code block first
-        if '```json' in response_text:
-            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
-            if json_match:
-                json_content = json_match.group(1).strip()
-                LOG.info("Extracted JSON from ```json code block")
-            else:
-                LOG.warning("Found ```json marker but couldn't extract content")
+                # Try to extract JSON from code block first
+                if '```json' in response_text:
+                    json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+                    if json_match:
+                        json_content = json_match.group(1).strip()
+                        LOG.info("Extracted JSON from ```json code block")
+                elif '{' in response_text:
+                    # Try to find raw JSON object
+                    json_match = re.search(r'\{[\s\S]*\}', response_text)
+                    if json_match:
+                        json_content = json_match.group(0).strip()
+                        LOG.info("Extracted raw JSON object")
 
-        # If no code block, try to find raw JSON object
-        if not json_content and '{' in response_text:
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                json_content = json_match.group(0).strip()
-                LOG.info("Extracted raw JSON object")
-            else:
-                LOG.warning("Found '{' but couldn't extract JSON object")
-
-        # Validate we have content
-        if not json_content or not json_content.strip():
-            LOG.error(f"No valid JSON content extracted. Full response:\n{response_text}")
-            return {"status": "error", "message": "Could not extract valid JSON from Claude response", "raw_response": response_text[:500]}
-
-        LOG.info(f"JSON content length: {len(json_content)} chars")
-        LOG.info(f"JSON content preview: {json_content[:200]}")
-
-        # Parse JSON
-        try:
-            domain_mappings = json.loads(json_content)
-        except json.JSONDecodeError as e:
-            LOG.error(f"JSON parsing failed: {e}")
-            LOG.error(f"JSON content that failed to parse:\n{json_content[:1000]}")
-            return {"status": "error", "message": f"Invalid JSON from Claude: {str(e)}", "json_preview": json_content[:500]}
-
-        # Step 5: Update database
-        LOG.info("Updating database...")
-        update_count = 0
-        error_count = 0
-
-        with db() as conn, conn.cursor() as cur:
-            for domain in domains:
-                formal_name = domain_mappings.get(domain)
-
-                if not formal_name:
-                    LOG.warning(f"Missing formal name for: {domain}")
-                    error_count += 1
+                if not json_content or not json_content.strip():
+                    LOG.error(f"Batch {batch_num + 1}: No valid JSON content extracted")
+                    batch_results.append({
+                        "batch": batch_num + 1,
+                        "status": "error",
+                        "message": "Could not extract JSON from Gemini response",
+                        "domains_processed": 0
+                    })
+                    total_errors += len(batch_domains)
                     continue
 
-                cur.execute("""
-                    UPDATE domain_names
-                    SET formal_name = %s
-                    WHERE domain = %s
-                """, (formal_name, domain))
+                # Parse JSON
+                try:
+                    domain_mappings = json.loads(json_content)
+                except json.JSONDecodeError as e:
+                    LOG.error(f"Batch {batch_num + 1}: JSON parsing failed: {e}")
+                    batch_results.append({
+                        "batch": batch_num + 1,
+                        "status": "error",
+                        "message": f"Invalid JSON: {str(e)}",
+                        "domains_processed": 0
+                    })
+                    total_errors += len(batch_domains)
+                    continue
 
-                update_count += 1
-                LOG.info(f"✅ {domain} → {formal_name}")
+                # Update database for this batch
+                batch_updated = 0
+                batch_errors = 0
 
-        LOG.info(f"Update complete: {update_count} updated, {error_count} errors")
+                with db() as conn, conn.cursor() as cur:
+                    for domain in batch_domains:
+                        formal_name = domain_mappings.get(domain)
+
+                        if not formal_name:
+                            LOG.warning(f"Missing formal name for: {domain}")
+                            batch_errors += 1
+                            continue
+
+                        cur.execute("""
+                            UPDATE domain_names
+                            SET formal_name = %s
+                            WHERE domain = %s
+                        """, (formal_name, domain))
+
+                        batch_updated += 1
+                        # Only log first 5 and last 5 per batch to avoid spam
+                        if batch_updated <= 5 or batch_updated > len(batch_domains) - 5:
+                            LOG.info(f"✅ {domain} → {formal_name}")
+                        elif batch_updated == 6:
+                            LOG.info(f"... ({len(batch_domains) - 10} more domains) ...")
+
+                total_updated += batch_updated
+                total_errors += batch_errors
+
+                batch_results.append({
+                    "batch": batch_num + 1,
+                    "status": "success",
+                    "updated": batch_updated,
+                    "errors": batch_errors,
+                    "generation_time": f"{generation_time:.1f}s"
+                })
+
+                LOG.info(f"✅ Batch {batch_num + 1}/{total_batches} complete: {batch_updated} updated, {batch_errors} errors")
+
+            except Exception as batch_error:
+                LOG.error(f"Batch {batch_num + 1} failed: {batch_error}")
+                batch_results.append({
+                    "batch": batch_num + 1,
+                    "status": "error",
+                    "message": str(batch_error),
+                    "domains_processed": 0
+                })
+                total_errors += len(batch_domains)
+
+        LOG.info(f"=== UPDATE COMPLETE ===")
+        LOG.info(f"Total domains: {total_domains}")
+        LOG.info(f"Updated: {total_updated}")
+        LOG.info(f"Errors: {total_errors}")
 
         return {
             "status": "success",
-            "total_domains": len(domains),
-            "updated": update_count,
-            "errors": error_count
+            "total_domains": total_domains,
+            "total_batches": total_batches,
+            "batch_size": BATCH_SIZE,
+            "updated": total_updated,
+            "errors": total_errors,
+            "batches": batch_results
         }
 
     except Exception as e:

@@ -15330,11 +15330,21 @@ Select direct business competitors competing for the same customers in the same 
 **Selection Criteria:**
 - Must compete in SAME CUSTOMER SEGMENT and price point (not just same industry)
 - GEOGRAPHIC PRIORITY: For regional companies, prioritize competitors in same primary market
+- SCALE MATCHING: Select competitors of comparable size to ensure news about competitor materially affects target company
+  - For mega-caps ($50B+): Prefer competitors >$5B market cap
+  - For large-caps ($10-50B): Prefer competitors >$2B market cap  
+  - For mid-caps ($2-10B): Prefer competitors >$500M market cap
+  - For small-caps (<$2B): More flexibility on scale (limited peer set)
+- INFORMATION VALUE: Prioritize competitors whose news provides actionable signals
+  - Prefer competitors that institutional analysts actively cover alongside target company (cross-read for sector insights)
+  - Prefer sector bellwethers whose results/guidance signal broader market trends
+  - Prefer competitors with higher disclosure frequency or newsflow (quarterly reports, production updates, operational KPIs)
+  - If choosing between similar competitors, select the one with more predictive value for target company's performance
 - Prioritize in order: (1) Direct peer (similar scale/model), (2) Adjacent competitor, (3) Bellwether (larger sector leader)
 - Return 0-3 based on availability - quality over quantity
 - Strongly prefer publicly traded companies with valid tickers
 - Only include private if industry-dominant with significant newsflow (≥5 major articles/month)
-- Exclude: Subsidiaries, companies acquired in last 2 years
+- Exclude: Subsidiaries, companies that do not currently trade independently on major stock exchanges, companies in active bankruptcy proceedings
 
 **Bad match examples:**
 ❌ AvalonBay (luxury apartments) for ELME (value-add apartments) - different customer segment

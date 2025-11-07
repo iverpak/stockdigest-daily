@@ -958,9 +958,65 @@ def generate_combined_quality_review_email_html(
                 '''
 
                 # Phase 2: Context verification (if available)
-                # We need to find matching context by searching Phase 2 results for this section
-                # Since we don't have bullet_id in Phase 1, we'll show ALL contexts for this section
-                # This is a limitation, but acceptable
+                if not phase2_skipped:
+                    # Find all Phase 2 contexts for this section
+                    section_contexts = [ctx for ctx in p2_contexts_by_key.values()
+                                       if ctx.get("section_name") == section_name]
+
+                    if section_contexts:
+                        html += '<div class="divider"></div>'
+                        html += '<div class="phase-label">📄 Filing Context Verification (Phase 2)</div>'
+
+                        for p2_ctx in section_contexts:
+                            ctx_text = p2_ctx.get("context_text", "")
+                            ctx_status = (p2_ctx.get("status") or "").lower()
+                            ctx_error_type = p2_ctx.get("error_type")
+                            ctx_severity = (p2_ctx.get("severity") or "").upper()
+                            ctx_evidence = p2_ctx.get("evidence", [])
+                            ctx_notes = p2_ctx.get("notes", "") or ""
+
+                            # Status badge
+                            if ctx_status == "accurate":
+                                ctx_status_badge = '<span class="badge accurate">✅ ACCURATE</span>'
+                            else:
+                                ctx_status_badge = '<span class="badge issue">🔴 ISSUE</span>'
+
+                            # Severity badge
+                            ctx_severity_badge = ""
+                            if ctx_severity == "CRITICAL":
+                                ctx_severity_badge = '<span class="badge critical">🔴 CRITICAL</span>'
+                            elif ctx_severity == "SERIOUS":
+                                ctx_severity_badge = '<span class="badge serious">🟠 SERIOUS</span>'
+                            elif ctx_severity == "MINOR":
+                                ctx_severity_badge = '<span class="badge minor">🟡 MINOR</span>'
+
+                            # Error type
+                            ctx_error_html = ""
+                            if ctx_error_type:
+                                ctx_error_html = f'<div style="margin-top: 8px; color: #dc2626; font-weight: 600;">Error: {ctx_error_type}</div>'
+
+                            # Evidence
+                            ctx_evidence_html = ""
+                            if ctx_evidence:
+                                ctx_evidence_html = '<div class="evidence"><strong>Filing Evidence:</strong>'
+                                for item in ctx_evidence:
+                                    ctx_evidence_html += f'<div class="evidence-item">• {item}</div>'
+                                ctx_evidence_html += '</div>'
+
+                            # Notes
+                            ctx_notes_html = ""
+                            if ctx_notes:
+                                ctx_notes_html = f'<div style="margin-top: 8px; color: #6b7280; font-style: italic;">Note: {ctx_notes}</div>'
+
+                            html += f'''
+                            <div class="review-item {ctx_status}">
+                                <div class="review-meta">{ctx_status_badge}{ctx_severity_badge}</div>
+                                <div class="review-text" style="font-size: 13px; font-style: italic;">{ctx_text}</div>
+                                {ctx_error_html}
+                                {ctx_evidence_html}
+                                {ctx_notes_html}
+                            </div>
+                            '''
 
                 html += '</div>'  # End bullet-group
 

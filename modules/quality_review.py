@@ -170,6 +170,10 @@ Return valid JSON with this exact structure:
       "sentences": [
         {
           "bullet_id": "market_inflection_point",
+          "topic_label": "Market inflection point",
+          "impact": "high impact",
+          "sentiment": "bullish",
+          "reason": "demand inflection",
           "text": "Full bullet text here",
           "status": "SUPPORTED" | "INFERENCE" | "UNSUPPORTED",
           "error_type": null,
@@ -182,11 +186,27 @@ Return valid JSON with this exact structure:
   ]
 }
 
-CRITICAL RULES FOR bullet_id:
-- For BULLET sections: Extract bullet_id from input JSON (e.g., phase1_json["sections"]["major_developments"][0]["bullet_id"])
-- For PARAGRAPH sections: Use section_name as bullet_id (e.g., "bottom_line", "upside_scenario", "downside_scenario")
+CRITICAL RULES FOR OUTPUT FIELDS:
+
+For BULLET sections, extract these fields from input JSON:
+- bullet_id: From bullet object (e.g., "market_inflection_point")
+- topic_label: From bullet object (e.g., "Market inflection point")
+- impact: From bullet object (e.g., "high impact") - added by Phase 2 enrichment
+- sentiment: From bullet object (e.g., "bullish") - added by Phase 2 enrichment
+- reason: From bullet object (e.g., "demand inflection") - added by Phase 2 enrichment
+- text: The full "content" field from bullet object
+- Then verify the text against article summaries and add: status, error_type, severity, evidence, notes
+
+For PARAGRAPH sections:
+- bullet_id: Use section_name (e.g., "bottom_line")
+- topic_label: NOT APPLICABLE (paragraphs don't have topic_label, leave empty)
+- impact, sentiment, reason: NOT APPLICABLE (paragraphs don't have these, leave empty)
+- text: The full "content" field from section object
+- Then verify the text against article summaries and add: status, error_type, severity, evidence, notes
+
+IMPORTANT:
 - Each "sentences" array entry represents ONE bullet or ONE paragraph (not sentence-by-sentence breakdown)
-- The "text" field should contain the full content field from input JSON
+- Extract fields directly from input JSON structure - don't generate new values
 
 Review ALL 10 sections in this order:
 1. bottom_line (paragraph)
@@ -945,8 +965,30 @@ def generate_combined_quality_review_email_html(
                 notes = sentence.get("notes", "") or ""
                 bullet_id = sentence.get("bullet_id")  # Extract bullet_id from Phase 1 output
 
-                # Use first 80 chars as display title
-                bullet_title = text[:80] + "..." if len(text) > 80 else text
+                # Extract enrichment fields for display
+                topic_label = sentence.get("topic_label", "")
+                impact = sentence.get("impact", "")
+                sentiment = sentence.get("sentiment", "")
+                reason = sentence.get("reason", "")
+
+                # Build bullet title: topic_label (impact, sentiment, reason)
+                if topic_label:
+                    enrichment_tags = []
+                    if impact:
+                        enrichment_tags.append(impact)
+                    if sentiment:
+                        enrichment_tags.append(sentiment)
+                    if reason:
+                        enrichment_tags.append(reason)
+
+                    if enrichment_tags:
+                        bullet_title = f"{topic_label} ({', '.join(enrichment_tags)})"
+                    else:
+                        bullet_title = topic_label
+                else:
+                    # Fallback if topic_label not provided (shouldn't happen with updated prompt)
+                    bullet_title = text[:80] + "..." if len(text) > 80 else text
+
                 html += f'<div class="bullet-title">{bullet_title}</div>'
 
                 # Phase 1: Article verification

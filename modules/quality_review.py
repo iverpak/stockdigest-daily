@@ -56,11 +56,18 @@ When status is UNSUPPORTED, identify the error type:
    - Example: "Stock buyback announced" but no article discusses buyback
    - Check: All events/actions must have evidence
 
-3. Wrong Attribution
-   - Source attribution is incorrect or missing in sources
-   - Example: "per CFO" but articles only cite analyst reports
-   - Example: "per Goldman" but Goldman never mentioned
-   - Check: Attribution source must exist in articles
+3. Attribution Errors
+   - WRONG: Source attribution is incorrect or contradicts sources
+     • Example: "per CFO" but articles only cite analyst reports
+     • Example: "per Goldman" but Goldman never mentioned
+   - VAGUE: Attribution too generic to verify
+     • Example: "per analyst" (which analyst? which firm?)
+     • Example: "per reports" (which publication?)
+     • Example: "per management" (which executive?)
+   - SPLIT: Multiple claims from different sources with single attribution
+     • Example: "Costs stabilized with drivers identified per Source A"
+       (stabilization from Source B, drivers from Source A - only one shown)
+   - Check: Attribution must be specific and match sources
 
 4. Directional Error
    - Opposite direction from what articles state
@@ -89,6 +96,25 @@ When status is UNSUPPORTED, identify the error type:
    - Should say: "per management" or "per analyst" or "per [source]"
    - Check: Opinion/interpretation needs attribution
 
+🔴 CRITICAL ERRORS (Target: 0%):
+
+7. Confidence Upgrade
+   - AI upgraded article's uncertainty to more confident language
+   - Article hedge words that must be preserved:
+     • WEAK: "may", "could", "possible", "exploring", "considering"
+     • SPECULATIVE: "sources say", "rumored", "reportedly"
+   - Forbidden upgrades:
+     • "may" → "will" / "plans to" / "expects"
+     • "exploring" → "pursuing" / "negotiating" / "evaluating"
+     • "sources say considering" → "announced" / "confirmed"
+     • "analyst sees possible" → "analyst projects" / "forecasts"
+     • "could potentially" → "will" / "expects to"
+   - Examples:
+     • Article: "Company may launch product" → Summary: "Company will launch" ❌
+     • Article: "Exploring strategic alternatives" → Summary: "Pursuing acquisition" ❌
+     • Article: "Analyst sees possible upside" → Summary: "Analyst projects upside" ❌
+   - Check: Preserve exact confidence level from articles - no upgrades
+
 ═══════════════════════════════════════════
 SPECIAL INSTRUCTIONS
 ═══════════════════════════════════════════
@@ -114,7 +140,7 @@ Return valid JSON with this exact structure:
         {
           "text": "Full sentence text here",
           "status": "SUPPORTED" | "INFERENCE" | "UNSUPPORTED",
-          "error_type": "Fabricated Number" | "Fabricated Claim" | "Wrong Attribution" | "Directional Error" | "Company Confusion" | "Inference as Fact" | null,
+          "error_type": "Fabricated Number" | "Fabricated Claim" | "Attribution Errors" | "Directional Error" | "Company Confusion" | "Inference as Fact" | "Confidence Upgrade" | null,
           "severity": "CRITICAL" | "SERIOUS" | "MINOR" | null,
           "evidence": ["Article X mentions...", "Article Y states..."],
           "notes": "Explanation of verification result"

@@ -629,6 +629,7 @@
                                 ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
                                 ${ticker.status !== 'processing' ? `
                                     <button class="btn btn-warning btn-sm" onclick="regenerateEmail('${ticker.ticker}')" title="Regenerate executive summary and Email #3">♻️ Regenerate Email #3</button>
+                                    <button class="btn btn-info btn-sm" onclick="reviewQuality('${ticker.ticker}')" title="Review summary quality against articles">🔍 Review</button>
                                     <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail1('${ticker.ticker}')">
                                         <span class="btn-wrapped-line1">QA:</span>
                                         <span class="btn-wrapped-line2">Article</span>
@@ -1076,6 +1077,42 @@
                 }
             } catch (error) {
                 alert('Failed to regenerate email: ' + error.message);
+            }
+        }
+
+        async function reviewQuality(ticker) {
+            if (!confirm(`🔍 Review Quality for ${ticker}?\n\nThis will:\n• Verify every sentence against article summaries\n• Detect fabricated numbers, claims, and errors\n• Email detailed quality report to your inbox\n\nEstimated time: 5-10 seconds\n\nContinue?`)) return;
+
+            try {
+                // Show loading state
+                const btn = event.target;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '⏳ Reviewing...';
+                btn.disabled = true;
+
+                const response = await fetch('/api/review-quality', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, ticker})
+                });
+
+                const result = await response.json();
+
+                // Restore button
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+
+                if (result.status === 'success') {
+                    const summary = result.summary;
+                    const criticalErrors = summary.errors_by_severity.CRITICAL || 0;
+                    const passStatus = criticalErrors === 0 ? '✅ PASS' : '❌ FAIL';
+
+                    alert(`${passStatus} Quality Review Complete: ${ticker}\n\n📊 Summary:\n• ${summary.supported} supported (${(summary.supported/summary.total_sentences*100).toFixed(1)}%)\n• ${summary.unsupported} unsupported\n• ${criticalErrors} critical errors\n\n📧 Detailed report sent to your inbox!`);
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to review quality: ' + error.message);
             }
         }
 

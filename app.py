@@ -32495,6 +32495,150 @@ async def regenerate_email_api(request: Request):
         return {"status": "error", "message": str(e)}
 
 
+@APP.post("/api/review-quality")
+async def review_quality_api(request: Request):
+    """
+    Review executive summary quality against article summaries.
+
+    Uses Gemini 2.5 Flash to verify every sentence is supported by articles.
+    Sends email report with detailed findings.
+    """
+    body = await request.json()
+    token = body.get('token')
+    ticker = body.get('ticker')
+    date_str = body.get('date')  # Optional, defaults to today
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        # Use today's date if not specified (same logic as regenerate)
+        if date_str:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        else:
+            # Use EST timezone with 12pm cutoff
+            eastern = pytz.timezone('America/Toronto')
+            now_est = datetime.now(eastern)
+
+            if now_est.hour < 12:
+                # Before 12pm EST - use yesterday's date
+                target_date = (now_est - timedelta(days=1)).date()
+                LOG.info(f"🔍 [{ticker}] Before 12pm EST cutoff - reviewing yesterday's summary: {target_date}")
+            else:
+                # 12pm EST or later - use today's date
+                target_date = now_est.date()
+                LOG.info(f"🔍 [{ticker}] After 12pm EST cutoff - reviewing today's summary: {target_date}")
+
+        LOG.info(f"🔍 [{ticker}] Starting quality review for {target_date}")
+
+        # Fetch executive summary
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT summary_json, article_ids
+                FROM executive_summaries
+                WHERE ticker = %s AND summary_date = %s
+                ORDER BY generated_at DESC LIMIT 1
+            """, (ticker, target_date))
+
+            summary_row = cur.fetchone()
+
+        if not summary_row:
+            return {
+                "status": "error",
+                "message": f"No executive summary found for {ticker} on {target_date}"
+            }
+
+        # Parse Phase 1 JSON
+        if summary_row['summary_json']:
+            phase1_json = summary_row['summary_json']
+        else:
+            # Legacy: parse from summary_text if summary_json not available
+            phase1_json = json.loads(summary_row.get('summary_text', '{}'))
+
+        if not phase1_json:
+            return {"status": "error", "message": "Executive summary JSON is empty"}
+
+        # Get article IDs
+        article_ids_json = summary_row.get('article_ids')
+        if isinstance(article_ids_json, str):
+            article_ids = json.loads(article_ids_json)
+        elif isinstance(article_ids_json, list):
+            article_ids = article_ids_json
+        else:
+            return {"status": "error", "message": "No article IDs found"}
+
+        LOG.info(f"[{ticker}] Found {len(article_ids)} article IDs for review")
+
+        # Fetch article summaries
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ta.ai_summary
+                FROM ticker_articles ta
+                WHERE ta.ticker = %s
+                AND ta.article_id = ANY(%s)
+                AND ta.ai_summary IS NOT NULL
+                ORDER BY ta.article_id
+            """, (ticker, article_ids))
+
+            rows = cur.fetchall()
+
+        article_summaries = [row['ai_summary'] for row in rows if row['ai_summary']]
+
+        if not article_summaries:
+            return {
+                "status": "error",
+                "message": "No article summaries found for verification"
+            }
+
+        LOG.info(f"[{ticker}] Found {len(article_summaries)} article summaries for verification")
+
+        # Perform quality review using Gemini
+        from modules.quality_review import (
+            review_executive_summary_quality,
+            generate_quality_review_email_html
+        )
+
+        review_result = review_executive_summary_quality(
+            ticker=ticker,
+            phase1_json=phase1_json,
+            article_summaries=article_summaries,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if not review_result:
+            return {"status": "error", "message": "Quality review failed"}
+
+        # Generate HTML report
+        report_html = generate_quality_review_email_html(review_result)
+
+        # Send email
+        summary = review_result["summary"]
+        total = summary["total_sentences"]
+        unsupported = summary["unsupported"]
+        critical = summary["errors_by_severity"].get("CRITICAL", 0)
+
+        subject = f"🔍 Quality Review: {ticker} - {total} sentences ({critical} critical errors)" if critical > 0 else f"🔍 Quality Review: {ticker} - {total} sentences (✅ PASS)"
+
+        send_email(subject, report_html)
+
+        LOG.info(f"✅ [{ticker}] Quality review email sent successfully")
+
+        return {
+            "status": "success",
+            "message": f"Quality review complete. Email sent to admin.",
+            "summary": summary
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to review quality for {ticker}: {e}")
+        import traceback
+        LOG.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+
 @APP.post("/api/retry-failed-and-cancelled")
 async def retry_failed_and_cancelled_api(request: Request):
     """Retry all failed and cancelled tickers (non-ready only) - uses existing job queue"""

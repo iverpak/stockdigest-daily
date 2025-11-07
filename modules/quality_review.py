@@ -127,6 +127,23 @@ SPECIAL INSTRUCTIONS
 - If uncertain, mark as UNSUPPORTED and explain why
 
 ═══════════════════════════════════════════
+INPUT STRUCTURE
+═══════════════════════════════════════════
+
+You will receive a merged Phase 1 + Phase 2 executive summary JSON.
+
+BULLET SECTIONS (major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts, key_variables):
+- Each section contains an array of bullet objects
+- Each bullet has: bullet_id, topic_label, content, context (if enriched), impact, sentiment, etc.
+- Extract the bullet_id from each bullet object
+- Verify the content field (the main bullet text) against article summaries
+
+PARAGRAPH SECTIONS (bottom_line, upside_scenario, downside_scenario):
+- Each section is an object with: content, context (if enriched)
+- Use section_name as the identifier (e.g., "bottom_line")
+- Verify the content field (the full paragraph) as ONE UNIT against article summaries
+
+═══════════════════════════════════════════
 OUTPUT FORMAT
 ═══════════════════════════════════════════
 
@@ -138,7 +155,8 @@ Return valid JSON with this exact structure:
       "section_name": "bottom_line",
       "sentences": [
         {
-          "text": "Full sentence text here",
+          "bullet_id": "bottom_line",
+          "text": "Full paragraph text here",
           "status": "SUPPORTED" | "INFERENCE" | "UNSUPPORTED",
           "error_type": "Fabricated Number" | "Fabricated Claim" | "Attribution Errors" | "Directional Error" | "Company Confusion" | "Inference as Fact" | "Confidence Upgrade" | null,
           "severity": "CRITICAL" | "SERIOUS" | "MINOR" | null,
@@ -146,9 +164,29 @@ Return valid JSON with this exact structure:
           "notes": "Explanation of verification result"
         }
       ]
+    },
+    {
+      "section_name": "major_developments",
+      "sentences": [
+        {
+          "bullet_id": "market_inflection_point",
+          "text": "Full bullet text here",
+          "status": "SUPPORTED" | "INFERENCE" | "UNSUPPORTED",
+          "error_type": null,
+          "severity": null,
+          "evidence": ["Article X mentions..."],
+          "notes": "All facts verified"
+        }
+      ]
     }
   ]
 }
+
+CRITICAL RULES FOR bullet_id:
+- For BULLET sections: Extract bullet_id from input JSON (e.g., phase1_json["sections"]["major_developments"][0]["bullet_id"])
+- For PARAGRAPH sections: Use section_name as bullet_id (e.g., "bottom_line", "upside_scenario", "downside_scenario")
+- Each "sentences" array entry represents ONE bullet or ONE paragraph (not sentence-by-sentence breakdown)
+- The "text" field should contain the full content field from input JSON
 
 Review ALL 10 sections in this order:
 1. bottom_line (paragraph)
@@ -782,6 +820,7 @@ def generate_combined_quality_review_email_html(
                 severity = (sentence.get("severity") or "").upper()
                 evidence = sentence.get("evidence", [])
                 notes = sentence.get("notes", "") or ""
+                bullet_id = sentence.get("bullet_id")  # Extract bullet_id (will be section_name for paragraphs)
 
                 # Status badge
                 if status == "supported":
@@ -829,8 +868,9 @@ def generate_combined_quality_review_email_html(
                 '''
 
             # Now check for Phase 2 context for this paragraph
-            if not phase2_skipped:
-                context_key = f"{section_name}|scenario_context"
+            # Use bullet_id from Phase 1 output (which should be section_name for paragraphs)
+            if not phase2_skipped and bullet_id:
+                context_key = f"{section_name}|{bullet_id}"
                 p2_ctx = p2_contexts_by_key.get(context_key)
 
                 if p2_ctx:
@@ -903,9 +943,9 @@ def generate_combined_quality_review_email_html(
                 severity = (sentence.get("severity") or "").upper()
                 evidence = sentence.get("evidence", [])
                 notes = sentence.get("notes", "") or ""
+                bullet_id = sentence.get("bullet_id")  # Extract bullet_id from Phase 1 output
 
-                # Try to extract bullet_id from text (Phase 1 doesn't return bullet_id, so we need to match)
-                # We'll use the first few words as a title
+                # Use first 80 chars as display title
                 bullet_title = text[:80] + "..." if len(text) > 80 else text
                 html += f'<div class="bullet-title">{bullet_title}</div>'
 
@@ -958,10 +998,10 @@ def generate_combined_quality_review_email_html(
                 '''
 
                 # Phase 2: Context verification (if available)
-                if not phase2_skipped:
-                    # Find all Phase 2 contexts for this section
+                if not phase2_skipped and bullet_id:
+                    # Find Phase 2 context for THIS SPECIFIC BULLET using bullet_id
                     section_contexts = [ctx for ctx in p2_contexts_by_key.values()
-                                       if ctx.get("section_name") == section_name]
+                                       if ctx.get("bullet_id") == bullet_id]
 
                     if section_contexts:
                         html += '<div class="divider"></div>'

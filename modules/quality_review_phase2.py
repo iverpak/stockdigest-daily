@@ -23,15 +23,34 @@ Your task: Verify every context field in the executive summary is accurately sou
 WHAT YOU'RE VERIFYING
 ═══════════════════════════════════════════
 
+You will receive a merged Phase 1 + Phase 2 executive summary JSON from production.
+
 Context fields appear in two places:
-1. BULLET CONTEXTS - After each bullet in sections (Major Developments, Financial Performance, etc.)
-2. SCENARIO CONTEXTS - After Bottom Line, Upside Scenario, Downside Scenario paragraphs
+1. BULLET CONTEXTS - Each bullet object has a "context" field added by Phase 2 enrichment
+2. SCENARIO CONTEXTS - Each paragraph section object has a "context" field added by Phase 2 enrichment
 
-Format:
-  Main Bullet: "Company announced $3.4B acquisition..."
-  Context: "Amedisys operates in home health (40% of revenue) with $2.1B revenue per 10-K..."
+INPUT STRUCTURE:
 
-Your job: Verify the Context field against the filing sources.
+BULLET SECTIONS (major_developments, financial_performance, risk_factors, competitive_industry_dynamics, upcoming_catalysts):
+- Each section contains an array of bullet objects
+- Each bullet has: bullet_id, topic_label, content, context (Phase 2 enrichment), impact, sentiment, etc.
+- Extract the bullet_id from each bullet object
+- Verify the context field against filing sources
+
+PARAGRAPH SECTIONS (bottom_line, upside_scenario, downside_scenario):
+- Each section is an object with: content, context (Phase 2 enrichment)
+- Use section_name as the identifier (e.g., "bottom_line")
+- Verify the context field against filing sources
+
+Example bullet object:
+{
+  "bullet_id": "market_inflection_point",
+  "topic_label": "Market inflection point",
+  "content": "Company announced $3.4B acquisition...",
+  "context": "Amedisys operates in home health (40% of revenue) with $2.1B revenue per 10-K..."
+}
+
+Your job: Verify the context field against the filing sources.
 
 ═══════════════════════════════════════════
 VERIFICATION RULES
@@ -116,7 +135,7 @@ Return valid JSON with this exact structure:
   "contexts": [
     {
       "section_name": "bottom_line" | "major_developments" | "financial_performance" | "risk_factors" | "wall_street_sentiment" | "competitive_industry_dynamics" | "upcoming_catalysts" | "upside_scenario" | "downside_scenario" | "key_variables",
-      "bullet_id": "string (or 'scenario_context' for Bottom Line/Upside/Downside)",
+      "bullet_id": "extracted from input JSON",
       "context_text": "Full context text here",
       "status": "ACCURATE" | "ISSUE",
       "error_type": "Context Fabrication" | "Context-Bullet Contradiction" | "Wrong Context Source" | "Context Irrelevance" | "Missing Critical Baseline" | "Context Doesn't Add Value" | "Excessive Cross-Context Duplication" | null,
@@ -125,6 +144,31 @@ Return valid JSON with this exact structure:
       "notes": "Explanation of verification result"
     }
   ]
+}
+
+CRITICAL RULES FOR bullet_id:
+- For BULLET sections: Extract bullet_id from the bullet object in input JSON
+  Example: input["sections"]["major_developments"][0]["bullet_id"] → "market_inflection_point"
+- For PARAGRAPH sections: Use section_name as bullet_id
+  Example: "bottom_line", "upside_scenario", "downside_scenario"
+- Each context verification should have exactly ONE bullet_id that matches the source bullet/paragraph
+
+Example output for bullet:
+{
+  "section_name": "major_developments",
+  "bullet_id": "market_inflection_point",  ← Extracted from input JSON
+  "context_text": "Q3 leasing 62M sqft...",
+  "status": "ACCURATE",
+  ...
+}
+
+Example output for paragraph:
+{
+  "section_name": "bottom_line",
+  "bullet_id": "bottom_line",  ← Use section_name
+  "context_text": "Q3 2025 rental revenue $2,054M...",
+  "status": "ACCURATE",
+  ...
 }
 
 Review ALL context fields in ALL 10 sections (even if some sections have no contexts).

@@ -32639,6 +32639,201 @@ async def review_quality_api(request: Request):
         return {"status": "error", "message": str(e)}
 
 
+@APP.post("/api/review-all-quality")
+async def review_all_quality_api(request: Request):
+    """
+    Comprehensive quality review: Phase 1 (articles) + Phase 2 (filings).
+
+    Phase 1: Verifies executive summary against article summaries
+    Phase 2: Verifies filing context against 10-K, 10-Q, Transcript
+
+    Sends combined email report with both phases.
+    """
+    body = await request.json()
+    token = body.get('token')
+    ticker = body.get('ticker')
+    date_str = body.get('date')  # Optional, defaults to today
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    if not ticker:
+        return {"status": "error", "message": "Ticker required"}
+
+    try:
+        # Use today's date if not specified (same logic as Phase 1)
+        if date_str:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        else:
+            # Use EST timezone with 12pm cutoff
+            eastern = pytz.timezone('America/Toronto')
+            now_est = datetime.now(eastern)
+
+            if now_est.hour < 12:
+                # Before 12pm EST - use yesterday's date
+                target_date = (now_est - timedelta(days=1)).date()
+                LOG.info(f"🔍 [{ticker}] Before 12pm EST cutoff - reviewing yesterday's summary: {target_date}")
+            else:
+                # 12pm EST or later - use today's date
+                target_date = now_est.date()
+                LOG.info(f"🔍 [{ticker}] After 12pm EST cutoff - reviewing today's summary: {target_date}")
+
+        LOG.info(f"🔍 [{ticker}] Starting comprehensive quality review (Phase 1 + Phase 2) for {target_date}")
+
+        # Fetch executive summary
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT summary_json, article_ids
+                FROM executive_summaries
+                WHERE ticker = %s AND summary_date = %s
+                ORDER BY generated_at DESC LIMIT 1
+            """, (ticker, target_date))
+
+            summary_row = cur.fetchone()
+
+        if not summary_row:
+            return {
+                "status": "error",
+                "message": f"No executive summary found for {ticker} on {target_date}"
+            }
+
+        # Parse executive summary JSON
+        if summary_row['summary_json']:
+            executive_summary = summary_row['summary_json']
+        else:
+            # Legacy: parse from summary_text if summary_json not available
+            executive_summary = json.loads(summary_row.get('summary_text', '{}'))
+
+        if not executive_summary:
+            return {"status": "error", "message": "Executive summary JSON is empty"}
+
+        # Get article IDs
+        article_ids_json = summary_row.get('article_ids')
+        if isinstance(article_ids_json, str):
+            article_ids = json.loads(article_ids_json)
+        elif isinstance(article_ids_json, list):
+            article_ids = article_ids_json
+        else:
+            return {"status": "error", "message": "No article IDs found"}
+
+        LOG.info(f"[{ticker}] Found {len(article_ids)} article IDs for review")
+
+        # Fetch article summaries for Phase 1
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ta.ai_summary
+                FROM ticker_articles ta
+                WHERE ta.ticker = %s
+                AND ta.article_id = ANY(%s)
+                AND ta.ai_summary IS NOT NULL
+                ORDER BY ta.article_id
+            """, (ticker, article_ids))
+
+            rows = cur.fetchall()
+
+        article_summaries = [row['ai_summary'] for row in rows if row['ai_summary']]
+
+        if not article_summaries:
+            return {
+                "status": "error",
+                "message": "No article summaries found for verification"
+            }
+
+        LOG.info(f"[{ticker}] Found {len(article_summaries)} article summaries for Phase 1 verification")
+
+        # ============================================================
+        # PHASE 1: Article Verification
+        # ============================================================
+        from modules.quality_review import review_executive_summary_quality
+
+        phase1_result = review_executive_summary_quality(
+            ticker=ticker,
+            phase1_json=executive_summary,
+            article_summaries=article_summaries,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if not phase1_result:
+            return {"status": "error", "message": "Phase 1 quality review failed"}
+
+        LOG.info(f"✅ [{ticker}] Phase 1 (articles) review complete")
+
+        # ============================================================
+        # PHASE 2: Filing Context Verification
+        # ============================================================
+        from modules.executive_summary_phase2 import _fetch_available_filings
+        from modules.quality_review_phase2 import review_phase2_context_quality
+
+        # Fetch available filings (10-K, 10-Q, Transcript)
+        filings = _fetch_available_filings(ticker, db)
+
+        phase2_result = None
+        if filings:
+            LOG.info(f"[{ticker}] Found {len(filings)} filing(s) for Phase 2 verification: {list(filings.keys())}")
+
+            phase2_result = review_phase2_context_quality(
+                ticker=ticker,
+                executive_summary=executive_summary,
+                filings=filings,
+                gemini_api_key=GEMINI_API_KEY
+            )
+
+            if phase2_result:
+                LOG.info(f"✅ [{ticker}] Phase 2 (filings) review complete")
+            else:
+                LOG.warning(f"⚠️ [{ticker}] Phase 2 review failed, continuing with Phase 1 only")
+        else:
+            LOG.info(f"ℹ️ [{ticker}] No filings available - skipping Phase 2")
+
+        # ============================================================
+        # Generate Combined Report
+        # ============================================================
+        from modules.quality_review import generate_combined_quality_review_email_html
+
+        report_html = generate_combined_quality_review_email_html(
+            phase1_result=phase1_result,
+            phase2_result=phase2_result
+        )
+
+        # Determine subject line
+        p1_summary = phase1_result["summary"]
+        p1_critical = p1_summary["errors_by_severity"].get("CRITICAL", 0)
+
+        if phase2_result:
+            p2_summary = phase2_result["summary"]
+            p2_critical = p2_summary["errors_by_severity"].get("CRITICAL", 0)
+            total_critical = p1_critical + p2_critical
+
+            if total_critical > 0:
+                subject = f"🔍 Quality Review: {ticker} - ❌ FAIL ({p1_critical} Phase 1 + {p2_critical} Phase 2 critical errors)"
+            else:
+                subject = f"🔍 Quality Review: {ticker} - ✅ PASS"
+        else:
+            if p1_critical > 0:
+                subject = f"🔍 Quality Review: {ticker} - ❌ FAIL ({p1_critical} critical errors, Phase 2 skipped)"
+            else:
+                subject = f"🔍 Quality Review: {ticker} - ✅ PASS (Phase 2 skipped)"
+
+        # Send email
+        send_email(subject, report_html)
+
+        LOG.info(f"✅ [{ticker}] Combined quality review email sent successfully")
+
+        return {
+            "status": "success",
+            "message": f"Quality review complete. Email sent to admin.",
+            "phase1_summary": p1_summary,
+            "phase2_summary": phase2_result["summary"] if phase2_result else None,
+            "phase2_skipped": phase2_result is None
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to review quality for {ticker}: {e}")
+        import traceback
+        LOG.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+
 @APP.post("/api/retry-failed-and-cancelled")
 async def retry_failed_and_cancelled_api(request: Request):
     """Retry all failed and cancelled tickers (non-ready only) - uses existing job queue"""

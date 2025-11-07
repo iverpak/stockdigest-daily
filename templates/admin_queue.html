@@ -629,7 +629,7 @@
                                 ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
                                 ${ticker.status !== 'processing' ? `
                                     <button class="btn btn-warning btn-sm" onclick="regenerateEmail('${ticker.ticker}')" title="Regenerate executive summary and Email #3">♻️ Regenerate Email #3</button>
-                                    <button class="btn btn-info btn-sm" onclick="reviewQuality('${ticker.ticker}')" title="Review summary quality against articles">🔍 Review</button>
+                                    <button class="btn btn-info btn-sm" onclick="reviewQuality('${ticker.ticker}')" title="Review summary quality against articles and filings">🔍 Review All</button>
                                     <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail1('${ticker.ticker}')">
                                         <span class="btn-wrapped-line1">QA:</span>
                                         <span class="btn-wrapped-line2">Article</span>
@@ -1081,7 +1081,7 @@
         }
 
         async function reviewQuality(ticker) {
-            if (!confirm(`🔍 Review Quality for ${ticker}?\n\nThis will:\n• Verify every sentence against article summaries\n• Detect fabricated numbers, claims, and errors\n• Email detailed quality report to your inbox\n\nEstimated time: 5-10 seconds\n\nContinue?`)) return;
+            if (!confirm(`🔍 Comprehensive Quality Review for ${ticker}?\n\nThis will:\n• Phase 1: Verify every sentence against article summaries\n• Phase 2: Verify filing context against 10-K/10-Q/Transcript\n• Detect fabricated numbers, claims, and context errors\n• Email detailed combined report to your inbox\n\nEstimated time: 10-15 seconds\n\nContinue?`)) return;
 
             try {
                 // Show loading state
@@ -1090,7 +1090,7 @@
                 btn.innerHTML = '⏳ Reviewing...';
                 btn.disabled = true;
 
-                const response = await fetch('/api/review-quality', {
+                const response = await fetch('/api/review-all-quality', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({token, ticker})
@@ -1103,11 +1103,33 @@
                 btn.disabled = false;
 
                 if (result.status === 'success') {
-                    const summary = result.summary;
-                    const criticalErrors = summary.errors_by_severity.CRITICAL || 0;
-                    const passStatus = criticalErrors === 0 ? '✅ PASS' : '❌ FAIL';
+                    const p1Summary = result.phase1_summary;
+                    const p2Summary = result.phase2_summary;
+                    const phase2Skipped = result.phase2_skipped;
 
-                    alert(`${passStatus} Quality Review Complete: ${ticker}\n\n📊 Summary:\n• ${summary.supported} supported (${(summary.supported/summary.total_sentences*100).toFixed(1)}%)\n• ${summary.unsupported} unsupported\n• ${criticalErrors} critical errors\n\n📧 Detailed report sent to your inbox!`);
+                    const p1Critical = p1Summary.errors_by_severity.CRITICAL || 0;
+                    const p2Critical = phase2Skipped ? 0 : (p2Summary.errors_by_severity.CRITICAL || 0);
+                    const totalCritical = p1Critical + p2Critical;
+                    const passStatus = totalCritical === 0 ? '✅ PASS' : '❌ FAIL';
+
+                    let message = `${passStatus} Comprehensive Quality Review Complete: ${ticker}\n\n`;
+                    message += `📰 Phase 1 (Articles):\n`;
+                    message += `• ${p1Summary.supported} supported (${(p1Summary.supported/p1Summary.total_sentences*100).toFixed(1)}%)\n`;
+                    message += `• ${p1Summary.unsupported} unsupported\n`;
+                    message += `• ${p1Critical} critical errors\n\n`;
+
+                    if (phase2Skipped) {
+                        message += `📄 Phase 2 (Filings): SKIPPED (no filings available)\n\n`;
+                    } else {
+                        message += `📄 Phase 2 (Filings):\n`;
+                        message += `• ${p2Summary.accurate} accurate contexts (${(p2Summary.accurate/p2Summary.total_contexts*100).toFixed(1)}%)\n`;
+                        message += `• ${p2Summary.issues} issues\n`;
+                        message += `• ${p2Critical} critical errors\n\n`;
+                    }
+
+                    message += `📧 Detailed combined report sent to your inbox!`;
+
+                    alert(message);
                 } else {
                     alert('Error: ' + result.message);
                 }

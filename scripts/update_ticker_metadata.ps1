@@ -2,7 +2,7 @@
 # Supports test mode (first 10 batches) and full run mode
 
 param(
-    [switch]$TestMode = $false,
+    [switch]$TestMode = $true,
     [int]$MaxBatches = 0
 )
 

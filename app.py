@@ -28361,13 +28361,36 @@ Domains:
                     "max_output_tokens": 8192
                 }
 
+                # Safety settings - lower thresholds for domain name processing
+                # Some domains (adult, gambling, etc.) might trigger safety filters
+                safety_settings = [
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                ]
+
                 response = model.generate_content(
                     prompt,
-                    generation_config=generation_config
+                    generation_config=generation_config,
+                    safety_settings=safety_settings
                 )
 
                 end_time = datetime.now()
                 generation_time = (end_time - start_time).total_seconds()
+
+                # Check finish_reason before accessing response.text
+                if not response.candidates:
+                    LOG.error(f"Batch {batch_num + 1}: No candidates in response")
+                    raise ValueError("No candidates returned by Gemini")
+
+                finish_reason = response.candidates[0].finish_reason
+                if finish_reason != 1:  # 1 = STOP (normal completion), 2 = SAFETY, 3 = RECITATION, etc.
+                    LOG.error(f"Batch {batch_num + 1}: Response blocked with finish_reason={finish_reason}")
+                    LOG.error(f"Finish reasons: 1=STOP, 2=SAFETY, 3=RECITATION, 4=OTHER")
+                    if hasattr(response.candidates[0], 'safety_ratings'):
+                        LOG.error(f"Safety ratings: {response.candidates[0].safety_ratings}")
+                    raise ValueError(f"Response blocked (finish_reason={finish_reason})")
 
                 response_text = response.text
                 LOG.info(f"Batch {batch_num + 1}: Gemini response received ({generation_time:.1f}s)")

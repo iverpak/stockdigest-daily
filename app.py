@@ -11,6 +11,7 @@ import secrets
 import uuid
 import openai
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from contextlib import contextmanager
@@ -28361,14 +28362,15 @@ Domains:
                     "max_output_tokens": 8192
                 }
 
-                # Safety settings - lower thresholds for domain name processing
+                # Safety settings - disable all safety filters for domain name processing
                 # Some domains (adult, gambling, etc.) might trigger safety filters
-                safety_settings = [
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                ]
+                # Using Python SDK enum format (not REST API dict format)
+                safety_settings = {
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
 
                 response = model.generate_content(
                     prompt,

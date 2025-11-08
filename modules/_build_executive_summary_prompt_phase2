@@ -544,7 +544,24 @@ STEP 3: Handle multi-document matches
 
 - Accuracy > recency: Never cite wrong document just because it's newer
 
-STEP 4: Pre-citation checklist
+STEP 4: Period verification (CRITICAL)
+□ Does my citation period match what the filing ACTUALLY describes?
+
+FORMULA: Event date in filing → Determines fiscal period cited
+
+Examples:
+- "Declared Dec 11, 2024" → "Q4 2024" (declaration date sets period)
+- "Paid Jan 17, 2025" → Still "Q4 2024" (payment date irrelevant)
+- "Q3 2025 call discussing Q2 results" → "Q2 2025" (results period, not call date)
+- "Filed Feb 2025 for FY 2024" → "FY2024" (fiscal year covered, not filing date)
+
+❌ NEVER cite future periods for past events
+❌ NEVER use call/filing date as the financial period
+✅ ALWAYS extract the actual period the data describes
+
+Reason: Declaration date (Dec 2024) determines fiscal period (Q4 2024), not payment date (Jan 2025)
+
+STEP 5: Pre-citation checklist
 □ I found this statement in the document I'm citing (not just similar topics)
 □ I verified it's NOT only in a different filing
 □ Citation includes correct period (FY2024 10-K vs Q3 2025 10-Q vs Oct 23 call)

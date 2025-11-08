@@ -28513,7 +28513,325 @@ Domains:
         LOG.error(f"Domain name update failed: {e}")
         LOG.error(f"Error details: {traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
+@APP.post("/admin/update-ticker-metadata-csv")
+async def update_ticker_metadata_csv(request: Request):
+    """Batch update ticker metadata using Gemini 2.5 Pro"""
+    require_admin(request)
 
+    try:
+        body = await request.json()
+        csv_file = body.get("csv_file", "ticker_reference_1.csv")
+        batch_size = body.get("batch_size", 8)
+        max_batches = body.get("max_batches")  # Optional - for testing
+
+        LOG.info(f"=== BATCH UPDATING TICKER METADATA (Gemini 2.5 Pro) ===")
+        LOG.info(f"CSV File: {csv_file}")
+        LOG.info(f"Batch Size: {batch_size}")
+        if max_batches:
+            LOG.info(f"Test Mode: Processing first {max_batches} batches only")
+
+        # Read CSV file
+        csv_path = os.path.join("data", csv_file)
+        if not os.path.exists(csv_path):
+            return {"status": "error", "message": f"CSV file not found: {csv_path}"}
+
+        # Read all rows
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            all_rows = list(reader)
+            fieldnames = reader.fieldnames
+
+        LOG.info(f"Loaded {len(all_rows)} rows from CSV")
+
+        # Filter rows that need processing (industry_keyword_1 is empty)
+        rows_to_process = [
+            row for row in all_rows
+            if not row.get('industry_keyword_1') or row.get('industry_keyword_1').strip() == ''
+        ]
+
+        total_to_process = len(rows_to_process)
+        LOG.info(f"Found {total_to_process} rows needing metadata")
+
+        if total_to_process == 0:
+            return {"status": "success", "message": "All rows already have metadata"}
+
+        if not GEMINI_API_KEY:
+            return {"status": "error", "message": "GEMINI_API_KEY not configured"}
+
+        # Configure Gemini
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.5-pro-latest')
+
+        # Calculate batches
+        total_batches = (total_to_process + batch_size - 1) // batch_size
+        if max_batches:
+            total_batches = min(total_batches, max_batches)
+
+        total_updated = 0
+        total_errors = 0
+        batch_results = []
+
+        import json
+        import re
+        from datetime import datetime
+
+        # Reuse Claude metadata prompt (proven and comprehensive)
+        system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
+
+CRITICAL REQUIREMENTS:
+- All competitors and value chain companies must be currently publicly traded with valid ticker symbols
+- Fundamental driver keywords must capture QUANTIFIABLE market forces that move the stock (NOT industry labels)
+- Industry keywords MUST be in Title Case (e.g., "Loan Growth", "EV Adoption", "Copper Prices")
+- Benchmarks must be sector-specific, not generic market indices
+- All information must be factually accurate
+- The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
+- If any field is unknown, output an empty array for lists and omit optional fields
+
+For EACH ticker in the list, return a JSON object with metadata.
+
+Return response as a JSON array where each element is a ticker's metadata:
+[
+  {
+    "ticker": "AAPL",
+    "company_name": "Apple Inc.",
+    "industry_keywords": ["smartphone sales", "services revenue", "premium device pricing"],
+    "horizontal_competitors": [
+      {"name": "Samsung", "ticker": ""},
+      {"name": "Google", "ticker": "GOOGL"}
+    ],
+    "value_chain": {
+      "upstream": [{"name": "TSMC", "ticker": "TSM"}],
+      "downstream": []
+    },
+    "geographic_markets": "United States (major), China (major), Europe (major)",
+    "subsidiaries": "Apple Retail, Apple Services, Beats Electronics"
+  },
+  ...
+]
+
+IMPORTANT: Return ONLY valid JSON array, no markdown code blocks."""
+
+        for batch_num in range(total_batches):
+            batch_start = batch_num * batch_size
+            batch_end = min(batch_start + batch_size, total_to_process)
+            batch_rows = rows_to_process[batch_start:batch_end]
+
+            LOG.info(f"=== Processing Batch {batch_num + 1}/{total_batches} ({len(batch_rows)} tickers) ===")
+
+            # Build prompt with ticker list
+            ticker_info = []
+            for row in batch_rows:
+                ticker = row['ticker']
+                company_name = row.get('company_name', ticker)
+                industry = row.get('industry', '')
+                sector = row.get('sector', '')
+                ticker_info.append(f"- {ticker}: {company_name} (Industry: {industry}, Sector: {sector})")
+
+            ticker_list = "\n".join(ticker_info)
+
+            user_prompt = f"""Generate metadata for these {len(batch_rows)} tickers:
+
+{ticker_list}
+
+Return ONLY a valid JSON array with metadata for each ticker."""
+
+            # Call Gemini API
+            try:
+                start_time = datetime.now()
+
+                generation_config = {
+                    "temperature": 0.0,
+                    "max_output_tokens": 8192
+                }
+
+                # Safety settings
+                safety_settings = {
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+
+                response = model.generate_content(
+                    f"{system_prompt}\n\n{user_prompt}",
+                    generation_config=generation_config,
+                    safety_settings=safety_settings
+                )
+
+                end_time = datetime.now()
+                generation_time = (end_time - start_time).total_seconds()
+
+                # Check finish_reason
+                if not response.candidates:
+                    LOG.error(f"Batch {batch_num + 1}: No candidates in response")
+                    raise ValueError("No candidates returned by Gemini")
+
+                finish_reason = response.candidates[0].finish_reason
+                if finish_reason != 1:
+                    LOG.error(f"Batch {batch_num + 1}: Response blocked with finish_reason={finish_reason}")
+                    raise ValueError(f"Response blocked (finish_reason={finish_reason})")
+
+                response_text = response.text
+                LOG.info(f"Batch {batch_num + 1}: Gemini response received ({generation_time:.1f}s)")
+
+                # Extract JSON from response
+                json_content = None
+
+                # Try to extract JSON array from code block first
+                if '```json' in response_text:
+                    json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+                    if json_match:
+                        json_content = json_match.group(1).strip()
+                        LOG.info(f"Batch {batch_num + 1}: Extracted JSON from code block")
+
+                # Fallback: try to find raw JSON array
+                if not json_content and '[' in response_text:
+                    json_match = re.search(r'\[[\s\S]*\]', response_text)
+                    if json_match:
+                        json_content = json_match.group(0).strip()
+                        LOG.info(f"Batch {batch_num + 1}: Extracted raw JSON array")
+
+                if not json_content:
+                    LOG.error(f"Batch {batch_num + 1}: No valid JSON content extracted")
+                    batch_results.append({
+                        "batch": batch_num + 1,
+                        "status": "error",
+                        "message": "Could not extract JSON from Gemini response",
+                        "tickers_processed": 0
+                    })
+                    total_errors += len(batch_rows)
+                    continue
+
+                # Parse JSON array
+                try:
+                    metadata_array = json.loads(json_content)
+                except json.JSONDecodeError as e:
+                    LOG.error(f"Batch {batch_num + 1}: JSON parsing failed: {e}")
+                    batch_results.append({
+                        "batch": batch_num + 1,
+                        "status": "error",
+                        "message": f"Invalid JSON: {str(e)}",
+                        "tickers_processed": 0
+                    })
+                    total_errors += len(batch_rows)
+                    continue
+
+                # Update CSV rows with metadata
+                batch_updated = 0
+                batch_errors = 0
+
+                for i, row in enumerate(batch_rows):
+                    ticker = row['ticker']
+
+                    # Find matching metadata in response
+                    metadata = None
+                    for meta in metadata_array:
+                        if meta.get('ticker') == ticker:
+                            metadata = meta
+                            break
+
+                    if not metadata:
+                        LOG.warning(f"Missing metadata for: {ticker}")
+                        batch_errors += 1
+                        continue
+
+                    # Update row with metadata
+                    keywords = metadata.get('industry_keywords', [])
+                    if keywords and len(keywords) > 0:
+                        row['industry_keyword_1'] = keywords[0] if len(keywords) > 0 else ''
+                        row['industry_keyword_2'] = keywords[1] if len(keywords) > 1 else ''
+                        row['industry_keyword_3'] = keywords[2] if len(keywords) > 2 else ''
+
+                    competitors = metadata.get('horizontal_competitors', [])
+                    if competitors and len(competitors) > 0:
+                        if len(competitors) > 0:
+                            row['competitor_1_name'] = competitors[0].get('name', '')
+                            row['competitor_1_ticker'] = competitors[0].get('ticker', '')
+                        if len(competitors) > 1:
+                            row['competitor_2_name'] = competitors[1].get('name', '')
+                            row['competitor_2_ticker'] = competitors[1].get('ticker', '')
+                        if len(competitors) > 2:
+                            row['competitor_3_name'] = competitors[2].get('name', '')
+                            row['competitor_3_ticker'] = competitors[2].get('ticker', '')
+
+                    value_chain = metadata.get('value_chain', {})
+                    upstream = value_chain.get('upstream', [])
+                    downstream = value_chain.get('downstream', [])
+
+                    if upstream and len(upstream) > 0:
+                        if len(upstream) > 0:
+                            row['upstream_1_name'] = upstream[0].get('name', '')
+                            row['upstream_1_ticker'] = upstream[0].get('ticker', '')
+                        if len(upstream) > 1:
+                            row['upstream_2_name'] = upstream[1].get('name', '')
+                            row['upstream_2_ticker'] = upstream[1].get('ticker', '')
+
+                    if downstream and len(downstream) > 0:
+                        if len(downstream) > 0:
+                            row['downstream_1_name'] = downstream[0].get('name', '')
+                            row['downstream_1_ticker'] = downstream[0].get('ticker', '')
+                        if len(downstream) > 1:
+                            row['downstream_2_name'] = downstream[1].get('name', '')
+                            row['downstream_2_ticker'] = downstream[1].get('ticker', '')
+
+                    row['geographic_markets'] = metadata.get('geographic_markets', '')
+                    row['subsidiaries'] = metadata.get('subsidiaries', '')
+                    row['ai_generated'] = 'TRUE'
+                    row['ai_enhanced_at'] = datetime.now().isoformat()
+
+                    batch_updated += 1
+
+                # Write entire CSV to disk after each batch (enables resume!)
+                with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(all_rows)
+
+                total_updated += batch_updated
+                total_errors += batch_errors
+
+                batch_results.append({
+                    "batch": batch_num + 1,
+                    "status": "success",
+                    "updated": batch_updated,
+                    "errors": batch_errors,
+                    "generation_time": f"{generation_time:.1f}s"
+                })
+
+                LOG.info(f"✅ Batch {batch_num + 1}/{total_batches} complete: {batch_updated} updated, {batch_errors} errors")
+                LOG.info(f"   CSV saved to disk (resume-safe)")
+
+            except Exception as batch_error:
+                LOG.error(f"Batch {batch_num + 1} failed: {batch_error}")
+                LOG.error(f"   Stacktrace: {traceback.format_exc()}")
+                batch_results.append({
+                    "batch": batch_num + 1,
+                    "status": "error",
+                    "message": str(batch_error),
+                    "tickers_processed": 0
+                })
+                total_errors += len(batch_rows)
+
+        LOG.info(f"=== UPDATE COMPLETE ===")
+        LOG.info(f"Total processed: {total_to_process}")
+        LOG.info(f"Updated: {total_updated}")
+        LOG.info(f"Errors: {total_errors}")
+
+        return {
+            "status": "success",
+            "csv_file": csv_file,
+            "total_to_process": total_to_process,
+            "total_batches": total_batches,
+            "batch_size": batch_size,
+            "updated": total_updated,
+            "errors": total_errors,
+            "batches": batch_results
+        }
+
+    except Exception as e:
+        LOG.error(f"Ticker metadata update failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
 @APP.post("/admin/safe-incremental-commit")
 async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
     """Safely commit individual tickers as they complete processing"""

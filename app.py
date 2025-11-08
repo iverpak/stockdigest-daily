@@ -28960,7 +28960,7 @@ Return ONLY a valid JSON array with metadata for each ticker."""
 
                 generation_config = {
                     "temperature": 0.0,
-                    "max_output_tokens": 8192
+                    "max_output_tokens": 16384
                 }
 
                 # Safety settings
@@ -29171,6 +29171,104 @@ Return ONLY a valid JSON array with metadata for each ticker."""
         LOG.error(f"Ticker metadata update failed: {e}")
         LOG.error(f"Error details: {traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
+
+@APP.post("/admin/commit-ticker-csv")
+async def commit_ticker_csv(request: Request):
+    """Commit ticker_reference_1.csv to GitHub (preserves work-in-progress)"""
+    require_admin(request)
+
+    try:
+        body = await request.json()
+        csv_file = body.get("csv_file", "ticker_reference_1.csv")
+        skip_render = body.get("skip_render", True)  # Default to skip render
+
+        LOG.info(f"=== COMMITTING {csv_file} TO GITHUB ===")
+
+        # Read CSV file from disk
+        csv_path = os.path.join("data", csv_file)
+        if not os.path.exists(csv_path):
+            return {"status": "error", "message": f"CSV file not found: {csv_path}"}
+
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            csv_content = f.read()
+
+        LOG.info(f"Read {len(csv_content)} characters from {csv_path}")
+
+        # Prepare commit message
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        skip_prefix = "[skip render] " if skip_render else ""
+        commit_message = f"{skip_prefix}Ticker metadata batch update - {timestamp}"
+
+        # Use GitHub API to commit (similar to commit_csv_to_github but for ticker_reference_1.csv)
+        if not GITHUB_TOKEN or not GITHUB_REPO:
+            return {
+                "status": "error",
+                "message": "GitHub integration not configured"
+            }
+
+        # GitHub API URL for this specific file
+        github_path = f"data/{csv_file}"
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{github_path}"
+
+        headers = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+
+        # Get current file SHA
+        LOG.info(f"Getting current file SHA from GitHub: {github_path}")
+        response = requests.get(api_url, headers=headers, timeout=30)
+
+        file_sha = None
+        if response.status_code == 200:
+            current_file = response.json()
+            file_sha = current_file["sha"]
+            LOG.info(f"Found existing file, SHA: {file_sha[:8]}")
+        elif response.status_code == 404:
+            LOG.info("File doesn't exist on GitHub, will create new file")
+        else:
+            return {
+                "status": "error",
+                "message": f"Failed to get current file info: {response.status_code}"
+            }
+
+        # Encode content to base64
+        encoded_content = base64.b64encode(csv_content.encode('utf-8')).decode('utf-8')
+
+        commit_data = {
+            "message": commit_message,
+            "content": encoded_content,
+        }
+
+        if file_sha:
+            commit_data["sha"] = file_sha
+
+        # Commit to GitHub
+        LOG.info(f"Committing to GitHub: {commit_message}")
+        commit_response = requests.put(api_url, headers=headers, json=commit_data, timeout=120)
+
+        if commit_response.status_code in [200, 201]:
+            LOG.info(f"✅ Successfully committed {csv_file} to GitHub")
+            return {
+                "status": "success",
+                "message": f"Committed {csv_file} to GitHub",
+                "commit_message": commit_message,
+                "github_path": github_path,
+                "skip_render": skip_render
+            }
+        else:
+            LOG.error(f"GitHub commit failed: {commit_response.status_code} - {commit_response.text}")
+            return {
+                "status": "error",
+                "message": f"GitHub commit failed: {commit_response.status_code}"
+            }
+
+    except Exception as e:
+        LOG.error(f"Commit ticker CSV failed: {e}")
+        LOG.error(f"Error details: {traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/admin/safe-incremental-commit")
 async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
     """Safely commit individual tickers as they complete processing"""

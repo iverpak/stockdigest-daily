@@ -28404,13 +28404,19 @@ Domains:
                     json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
                     if json_match:
                         json_content = json_match.group(1).strip()
-                        LOG.info("Extracted JSON from ```json code block")
-                elif '{' in response_text:
-                    # Try to find raw JSON object
+                        LOG.info(f"Batch {batch_num + 1}: Extracted JSON from ```json code block ({len(json_content)} chars)")
+                    else:
+                        LOG.warning(f"Batch {batch_num + 1}: Found ```json marker but regex failed to extract")
+                        LOG.warning(f"Response length: {len(response_text)}, First 500 chars: {response_text[:500]}")
+
+                # Fallback: try to find raw JSON object if code block extraction failed
+                if not json_content and '{' in response_text:
                     json_match = re.search(r'\{[\s\S]*\}', response_text)
                     if json_match:
                         json_content = json_match.group(0).strip()
-                        LOG.info("Extracted raw JSON object")
+                        LOG.info(f"Batch {batch_num + 1}: Extracted raw JSON object ({len(json_content)} chars)")
+                    else:
+                        LOG.warning(f"Batch {batch_num + 1}: Found '{{' but regex failed to extract")
 
                 if not json_content or not json_content.strip():
                     LOG.error(f"Batch {batch_num + 1}: No valid JSON content extracted")

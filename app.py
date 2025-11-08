@@ -28560,7 +28560,7 @@ async def update_ticker_metadata_csv(request: Request):
 
         # Configure Gemini
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-pro-latest')
+        model = genai.GenerativeModel('gemini-2.5-pro')
 
         # Calculate batches
         total_batches = (total_to_process + batch_size - 1) // batch_size

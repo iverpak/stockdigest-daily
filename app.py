@@ -28310,8 +28310,8 @@ async def update_domain_formal_names(request: Request):
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
-        # Process in batches of 500
-        BATCH_SIZE = 500
+        # Process in batches of 50 (smaller batches reduce impact of SAFETY blocks)
+        BATCH_SIZE = 50
         total_batches = (total_domains + BATCH_SIZE - 1) // BATCH_SIZE
 
         total_updated = 0

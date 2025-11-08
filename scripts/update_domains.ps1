@@ -1,4 +1,4 @@
-# Script to update domain formal names using Gemini 2.5 Flash (batches of 500)
+# Script to update domain formal names using Gemini 2.5 Flash (batches of 50)
 
 $APP_URL = "https://stockdigest.app"
 $ADMIN_TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
@@ -6,7 +6,7 @@ $ADMIN_TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Updating Domain Formal Names" -ForegroundColor Cyan
-Write-Host "Using: Gemini 2.5 Flash (batches of 500)" -ForegroundColor Cyan
+Write-Host "Using: Gemini 2.5 Flash (batches of 50)" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 

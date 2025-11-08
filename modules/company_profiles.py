@@ -299,10 +299,10 @@ ITEM_CODE_MAP = {
 
 def get_cik_for_ticker(ticker: str) -> str:
     """
-    Get CIK (Central Index Key) for ticker.
+    Get CIK (Central Index Key) for ticker using FMP API.
 
     1. Check sec_8k_filings table for cached CIK
-    2. If not found, lookup from SEC API
+    2. If not found, lookup from FMP API (most reliable)
     3. Return CIK for use in SEC Edgar queries
 
     Args:
@@ -312,9 +312,8 @@ def get_cik_for_ticker(ticker: str) -> str:
         CIK string (e.g., '0000320193')
 
     Raises:
-        ValueError: If ticker not found in SEC system
+        ValueError: If ticker not found or FMP API fails
     """
-    import re
     import requests
 
     # Check cache first
@@ -335,30 +334,36 @@ def get_cik_for_ticker(ticker: str) -> str:
     except Exception as e:
         LOG.warning(f"[{ticker}] Could not check CIK cache: {e}")
 
-    # Lookup from SEC
-    LOG.info(f"[{ticker}] Looking up CIK from SEC.gov...")
+    # Lookup from FMP API (most reliable - returns current, active CIK)
+    LOG.info(f"[{ticker}] Looking up CIK from FMP API...")
 
     try:
-        url = f"https://www.sec.gov/cgi-bin/browse-edgar?company={ticker}&action=getcompany"
-        headers = {
-            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
-        }
+        # Get FMP API key from environment
+        fmp_api_key = os.environ.get('FMP_API_KEY')
+        if not fmp_api_key:
+            raise ValueError("FMP_API_KEY not configured")
 
-        response = requests.get(url, headers=headers, timeout=10)
+        # FMP profile endpoint provides CIK
+        url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={fmp_api_key}"
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
 
-        # Parse CIK from HTML (format: "CIK=0000320193")
-        match = re.search(r'CIK=(\d{10})', response.text)
-        if match:
-            cik = match.group(1)
-            LOG.info(f"[{ticker}] ✅ Found CIK: {cik}")
-            return cik
+        data = response.json()
 
-        raise ValueError(f"CIK not found in SEC response for {ticker}")
+        if not data or len(data) == 0:
+            raise ValueError(f"Ticker {ticker} not found in FMP database")
+
+        cik = data[0].get('cik')
+
+        if not cik:
+            raise ValueError(f"CIK not available for ticker {ticker}")
+
+        LOG.info(f"[{ticker}] ✅ Found CIK from FMP: {cik}")
+        return cik
 
     except Exception as e:
         LOG.error(f"[{ticker}] CIK lookup failed: {e}")
-        raise ValueError(f"Could not find CIK for ticker {ticker}. This ticker may not be registered with the SEC.")
+        raise ValueError(f"Could not find CIK for ticker {ticker}. Error: {str(e)}")
 
 
 def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:

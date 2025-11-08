@@ -89,7 +89,15 @@ from modules.company_profiles import (
     generate_sec_filing_profile_with_gemini,
     generate_company_profile_email,
     save_company_profile_to_database,
-    GEMINI_INVESTOR_DECK_PROMPT
+    GEMINI_INVESTOR_DECK_PROMPT,
+    # 8-K SEC filing functions
+    ITEM_CODE_MAP,
+    get_cik_for_ticker,
+    parse_sec_8k_filing_list,
+    get_8k_html_url,
+    quick_parse_8k_header,
+    extract_8k_content,
+    generate_8k_summary_with_gemini
 )
 
 # ============================================================================
@@ -1667,6 +1675,50 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_press_releases_ticker ON press_releases(ticker);
                 CREATE INDEX IF NOT EXISTS idx_press_releases_date ON press_releases(report_date DESC);
                 CREATE INDEX IF NOT EXISTS idx_press_releases_ticker_date ON press_releases(ticker, report_date DESC);
+
+                -- SEC 8-K FILINGS: Store AI-generated 8-K summaries from SEC Edgar
+                CREATE TABLE IF NOT EXISTS sec_8k_filings (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) NOT NULL,
+                    company_name VARCHAR(255),
+
+                    -- SEC Edgar metadata
+                    cik VARCHAR(20),                         -- SEC CIK number (cached for future lookups)
+                    accession_number VARCHAR(50) NOT NULL,   -- SEC unique ID (e.g., "0001193125-25-012345")
+
+                    -- Filing identification
+                    filing_date DATE NOT NULL,
+                    filing_title VARCHAR(200) NOT NULL,      -- "Results of Operations | Apple announces Q1 2024 results"
+                    item_codes VARCHAR(100),                 -- "2.02, 9.01"
+                    sec_html_url TEXT NOT NULL,              -- Direct link to 8-K HTML on SEC.gov
+
+                    -- AI Summary
+                    summary_text TEXT NOT NULL,              -- Gemini-generated summary
+
+                    -- AI metadata
+                    ai_provider VARCHAR(20) NOT NULL,        -- 'gemini'
+                    ai_model VARCHAR(50),                    -- 'gemini-2.5-flash'
+
+                    -- Job tracking
+                    job_id VARCHAR(50),
+                    processing_duration_seconds INTEGER,
+
+                    -- Future automation support
+                    monitored BOOLEAN DEFAULT FALSE,
+                    last_checked_at TIMESTAMPTZ,
+
+                    -- Timestamps
+                    generated_at TIMESTAMPTZ DEFAULT NOW(),
+
+                    -- Unique constraint: ticker + accession number (allows re-processing with ON CONFLICT DO UPDATE)
+                    CONSTRAINT sec_8k_unique UNIQUE(ticker, accession_number)
+                );
+
+                -- Indexes for sec_8k_filings
+                CREATE INDEX IF NOT EXISTS idx_8k_ticker ON sec_8k_filings(ticker);
+                CREATE INDEX IF NOT EXISTS idx_8k_date ON sec_8k_filings(filing_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_8k_cik ON sec_8k_filings(cik);
+                CREATE INDEX IF NOT EXISTS idx_8k_ticker_date ON sec_8k_filings(ticker, filing_date DESC);
 
                 -- COMPANY PROFILES: Store AI-generated 10-K company profiles
                 -- SEC FILINGS: Unified table for 10-K, 10-Q, and investor presentations
@@ -23590,6 +23642,144 @@ async def process_press_release_phase(job: dict):
         )
 
 
+async def process_8k_summary_phase(job: dict):
+    """Process 8-K summary generation (5-10 min, Gemini 2.5 Flash)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread
+        start_heartbeat_thread(job_id)
+
+        cik = config.get('cik')
+        accession_number = config.get('accession_number')
+        filing_date = config.get('filing_date')
+        filing_title = config.get('filing_title')
+        sec_html_url = config.get('sec_html_url')
+        item_codes = config.get('item_codes')
+
+        # Progress: 10% - Extracting 8-K content
+        update_job_status(job_id, progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 8-K content from SEC.gov...")
+
+        content = extract_8k_content(sec_html_url)
+
+        if not content or len(content) < 500:
+            raise ValueError(f"Extracted content too short ({len(content)} chars)")
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters")
+
+        # Progress: 30% - Generating summary with Gemini (this takes 5-10 min)
+        update_job_status(job_id, progress=30)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with Gemini 2.5 Flash (5-10 min)...")
+
+        ticker_config = get_ticker_config(ticker)
+
+        summary_text = generate_8k_summary_with_gemini(
+            ticker=ticker,
+            content=content,
+            config=ticker_config,
+            filing_date=filing_date,
+            item_codes=item_codes,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if not summary_text:
+            raise ValueError("Gemini summary generation failed")
+
+        # Progress: 80% - Saving to database
+        update_job_status(job_id, progress=80)
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO sec_8k_filings (
+                    ticker, company_name, cik, accession_number,
+                    filing_date, filing_title, item_codes, sec_html_url,
+                    summary_text, ai_provider, ai_model
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, accession_number)
+                DO UPDATE SET
+                    summary_text = EXCLUDED.summary_text,
+                    ai_model = EXCLUDED.ai_model,
+                    generated_at = NOW()
+            """, (
+                ticker,
+                ticker_config.get('company_name', ticker),
+                cik,
+                accession_number,
+                filing_date,
+                filing_title,
+                item_codes,
+                sec_html_url,
+                summary_text,
+                'gemini',
+                'gemini-2.5-flash'
+            ))
+            conn.commit()
+
+        # Progress: 95% - Sending email
+        if config.get('send_email', True):
+            update_job_status(job_id, progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+
+            try:
+                # Get real-time stock data
+                stock_data = get_filing_stock_data(ticker)
+
+                # Generate email (reuse company profile email template)
+                email_data = generate_company_profile_email(
+                    ticker=ticker,
+                    company_name=ticker_config.get('company_name', ticker),
+                    industry=ticker_config.get('industry', 'N/A'),
+                    fiscal_year=None,  # Not applicable for 8-K
+                    filing_date=filing_date,
+                    profile_markdown=summary_text,
+                    stock_price=stock_data['stock_price'],
+                    price_change_pct=stock_data['price_change_pct'],
+                    price_change_color=stock_data['price_change_color'],
+                    ytd_return_pct=stock_data['ytd_return_pct'],
+                    ytd_return_color=stock_data['ytd_return_color'],
+                    market_status=stock_data['market_status'],
+                    return_label=stock_data['return_label'],
+                    filing_type="8-K"
+                )
+
+                # Override subject line for 8-K
+                subject = f"📋 8-K Filing: {ticker} - {filing_title[:80]}"
+
+                send_email(subject=subject, html_body=email_data['html'], to=DIGEST_TO)
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+                # Continue - summary was saved successfully
+
+        # Mark complete
+        update_job_status(job_id, status='completed', progress=100)
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] 8-K summary generation complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] 8-K summary generation failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
+
+
 async def process_presentation_phase(job: dict):
     """Process investor presentation analysis (5-15 min, Gemini 2.5 Pro with multimodal vision)"""
     job_id = job['job_id']
@@ -23843,6 +24033,11 @@ async def process_ticker_job(job: dict):
     # ROUTE: If this is a press release generation job, handle separately
     if phase == 'press_release_generation':
         await process_press_release_phase(job)
+        return
+
+    # ROUTE: If this is an 8-K summary generation job, handle separately
+    if phase == '8k_summary_generation':
+        await process_8k_summary_phase(job)
         return
 
     # ROUTE: If this is an investor presentation job, handle separately
@@ -25386,6 +25581,120 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
     except Exception as e:
         LOG.error(f"FMP validation failed for {ticker}: {e}", exc_info=True)
         return {"valid": False, "error": f"Failed to validate ticker: {str(e)}"}
+
+
+@APP.get("/api/sec-validate-ticker")
+async def validate_ticker_for_8k(ticker: str):
+    """
+    Validate ticker and fetch last 10 8-K filings from SEC Edgar.
+
+    Query params:
+        ticker: Stock ticker (AAPL, TSLA, etc.)
+
+    Returns:
+        {
+            "valid": true,
+            "company_name": "...",
+            "cik": "0000320193",
+            "available_8ks": [
+                {
+                    "filing_date": "Jan 30, 2025",
+                    "accession_number": "0001193125-25-012345",
+                    "sec_html_url": "https://www.sec.gov/...",
+                    "title": "Results of Operations | Apple announces Q1 2024 results",
+                    "item_codes": "2.02, 9.01",
+                    "has_summary": false
+                },
+                ...
+            ]
+        }
+    """
+    try:
+        # Validate ticker exists in database
+        config = get_ticker_config(ticker)
+        if not config or not config.get('has_full_config', True):
+            return {"valid": False, "error": "Ticker not found in database"}
+
+        company_name = config.get("company_name", ticker)
+
+        LOG.info(f"[{ticker}] Fetching 8-K filings from SEC Edgar...")
+
+        # Get CIK (cached or lookup from SEC)
+        try:
+            cik = get_cik_for_ticker(ticker)
+        except ValueError as e:
+            return {
+                "valid": False,
+                "error": str(e)
+            }
+
+        # Fetch last 10 8-K filings from SEC Edgar
+        filings = parse_sec_8k_filing_list(cik, count=10)
+
+        if not filings:
+            return {
+                "valid": True,
+                "company_name": company_name,
+                "cik": cik,
+                "available_8ks": [],
+                "warning": "No 8-K filings found for this ticker"
+            }
+
+        # Process each filing: Get HTML URL, quick parse title + item codes
+        enriched_filings = []
+
+        for i, filing in enumerate(filings):
+            try:
+                # Get main 8-K HTML URL from documents index page
+                sec_html_url = get_8k_html_url(filing['documents_url'])
+
+                # Quick parse header (title + item codes) with rate limiting
+                parsed = quick_parse_8k_header(sec_html_url, rate_limit_delay=0.15)
+
+                # Check if summary already exists in database
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id FROM sec_8k_filings
+                        WHERE ticker = %s AND accession_number = %s
+                    """, (ticker, filing['accession_number']))
+                    has_summary = cur.fetchone() is not None
+
+                enriched_filings.append({
+                    'filing_date': filing['filing_date'],
+                    'accession_number': filing['accession_number'],
+                    'sec_html_url': sec_html_url,
+                    'title': parsed['title'],
+                    'item_codes': parsed['item_codes'],
+                    'has_summary': has_summary
+                })
+
+                LOG.info(f"[{ticker}] [{i+1}/{len(filings)}] Parsed: {parsed['title'][:50]}...")
+
+            except Exception as e:
+                LOG.error(f"[{ticker}] Failed to parse filing {filing['accession_number']}: {e}")
+                # Add entry with error
+                enriched_filings.append({
+                    'filing_date': filing['filing_date'],
+                    'accession_number': filing['accession_number'],
+                    'sec_html_url': None,
+                    'title': "Error parsing filing",
+                    'item_codes': "Unknown",
+                    'has_summary': False,
+                    'error': str(e)
+                })
+
+        LOG.info(f"[{ticker}] ✅ Successfully parsed {len(enriched_filings)} 8-K filings")
+
+        return {
+            "valid": True,
+            "company_name": company_name,
+            "cik": cik,
+            "available_8ks": enriched_filings
+        }
+
+    except Exception as e:
+        LOG.error(f"SEC 8-K validation failed for {ticker}: {e}", exc_info=True)
+        return {"valid": False, "error": f"Failed to fetch 8-Ks: {str(e)}"}
 
 
 class BetaSignupRequest(BaseModel):
@@ -30088,6 +30397,196 @@ async def debug_transcript_summary(ticker: str, token: str):
     except Exception as e:
         LOG.error(f"Failed to fetch research summary: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
+
+# ==============================================================================
+# 8-K SEC FILING ENDPOINTS
+# ==============================================================================
+
+@APP.post("/api/admin/generate-8k-summary")
+async def generate_8k_summary_api(request: Request):
+    """
+    Generate AI summary for specific 8-K filing (uses job queue).
+
+    Body: {
+        "ticker": "AAPL",
+        "cik": "0000320193",
+        "accession_number": "0001193125-25-012345",
+        "filing_date": "Jan 30, 2025",
+        "filing_title": "Results of Operations | Apple announces...",
+        "sec_html_url": "https://www.sec.gov/...",
+        "item_codes": "2.02, 9.01",
+        "token": "..."
+    }
+
+    Returns: {"status": "success", "job_id": "..."}
+    """
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    ticker = body.get('ticker')
+    cik = body.get('cik')
+    accession_number = body.get('accession_number')
+    filing_date = body.get('filing_date')
+    filing_title = body.get('filing_title')
+    sec_html_url = body.get('sec_html_url')
+    item_codes = body.get('item_codes')
+
+    try:
+        LOG.info(f"📋 Creating 8-K summary job for {ticker} ({filing_date})")
+
+        # Get ticker config
+        config = get_ticker_config(ticker)
+        if not config:
+            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+
+        # Build job config
+        job_config = {
+            "ticker": ticker,
+            "cik": cik,
+            "accession_number": accession_number,
+            "filing_date": filing_date,
+            "filing_title": filing_title,
+            "sec_html_url": sec_html_url,
+            "item_codes": item_codes,
+            "send_email": True
+        }
+
+        # Create job in ticker_processing_jobs table
+        with db() as conn, conn.cursor() as cur:
+            batch_id = str(uuid.uuid4())
+
+            # Create batch
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                VALUES (%s, %s, 1, %s)
+                RETURNING batch_id
+            """, (batch_id, 'processing', json.dumps(job_config)))
+
+            # Create job
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, ticker, status, phase, progress, config
+                )
+                VALUES (%s, %s, %s, %s, 0, %s)
+                RETURNING job_id
+            """, (batch_id, ticker, 'queued', '8k_summary_generation', json.dumps(job_config)))
+
+            job_id = cur.fetchone()['job_id']
+            conn.commit()
+
+        LOG.info(f"✅ Created 8-K summary job {job_id} for {ticker}")
+
+        return {
+            "status": "success",
+            "message": f"8-K summary job created for {ticker}",
+            "job_id": job_id,
+            "ticker": ticker,
+            "filing_date": filing_date
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to create 8-K summary job: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@APP.get("/api/admin/8k-filings")
+def get_all_8k_filings(token: str = Query(...)):
+    """
+    Get all generated 8-K summaries for Research Library.
+
+    Returns: [
+        {
+            "ticker": "AAPL",
+            "filing_date": "2025-01-30",
+            "filing_title": "Results of Operations | Apple announces...",
+            "item_codes": "2.02, 9.01",
+            "accession_number": "0001193125-25-012345",
+            "ai_model": "gemini-2.5-flash",
+            "processing_duration_seconds": 180,
+            "generated_at": "..."
+        },
+        ...
+    ]
+    """
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ticker,
+                    company_name,
+                    filing_date,
+                    filing_title,
+                    item_codes,
+                    accession_number,
+                    sec_html_url,
+                    summary_text,
+                    ai_provider,
+                    ai_model,
+                    processing_duration_seconds,
+                    generated_at
+                FROM sec_8k_filings
+                ORDER BY filing_date DESC, generated_at DESC
+            """)
+
+            filings = cur.fetchall()
+
+            return {
+                "status": "success",
+                "filings": filings
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to get 8-K filings: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/api/admin/delete-8k-filing")
+async def delete_8k_filing_api(request: Request):
+    """
+    Delete 8-K filing(s) by ticker.
+
+    Body: {"ticker": "AAPL", "token": "..."}
+
+    Deletes ALL 8-K filings for the specified ticker.
+    """
+    body = await request.json()
+    token = body.get('token')
+    ticker = body.get('ticker')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Delete all 8-K filings for this ticker
+            cur.execute("""
+                DELETE FROM sec_8k_filings
+                WHERE ticker = %s
+                RETURNING accession_number
+            """, (ticker,))
+
+            deleted = cur.fetchall()
+            conn.commit()
+
+            count = len(deleted)
+            LOG.info(f"🗑️ Deleted {count} 8-K filing(s) for {ticker}")
+
+            return {
+                "status": "success",
+                "message": f"Deleted {count} 8-K filing(s) for {ticker}"
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to delete 8-K filings: {e}")
+        return {"status": "error", "message": str(e)}
+
 
 @APP.post("/api/admin/generate-company-profile")
 async def generate_company_profile_api(request: Request):

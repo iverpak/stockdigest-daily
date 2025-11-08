@@ -263,6 +263,507 @@ def fetch_sec_html_text(url: str) -> str:
 
 
 # ==============================================================================
+# SEC 8-K FILING PROCESSING
+# ==============================================================================
+
+# Complete mapping of SEC 8-K item codes to descriptions
+ITEM_CODE_MAP = {
+    '1.01': 'Entry into Material Agreement',
+    '1.02': 'Termination of Material Agreement',
+    '1.03': 'Bankruptcy or Receivership',
+    '1.04': 'Mine Safety - Reporting of Shutdowns and Patterns of Violations',
+    '2.01': 'Completion of Acquisition or Disposition',
+    '2.02': 'Results of Operations and Financial Condition',
+    '2.03': 'Creation of Direct Financial Obligation',
+    '2.04': 'Triggering Events That Accelerate Obligations',
+    '2.05': 'Costs Associated with Exit Activities',
+    '2.06': 'Material Impairments',
+    '3.01': 'Notice of Delisting',
+    '3.02': 'Unregistered Sales of Equity Securities',
+    '3.03': 'Material Modification to Rights of Security Holders',
+    '4.01': 'Changes in Registrant\'s Certifying Accountant',
+    '4.02': 'Non-Reliance on Previously Issued Financial Statements',
+    '5.01': 'Changes in Control of Registrant',
+    '5.02': 'Departure/Appointment of Directors or Officers',
+    '5.03': 'Amendments to Articles or Bylaws',
+    '5.04': 'Temporary Suspension of Trading',
+    '5.05': 'Amendments to Code of Ethics',
+    '5.06': 'Change in Shell Company Status',
+    '5.07': 'Submission of Matters to Vote',
+    '5.08': 'Shareholder Director Nominations',
+    '7.01': 'Regulation FD Disclosure',
+    '8.01': 'Other Events',
+    '9.01': 'Financial Statements and Exhibits',
+}
+
+
+def get_cik_for_ticker(ticker: str) -> str:
+    """
+    Get CIK (Central Index Key) for ticker.
+
+    1. Check sec_8k_filings table for cached CIK
+    2. If not found, lookup from SEC API
+    3. Return CIK for use in SEC Edgar queries
+
+    Args:
+        ticker: Stock ticker (e.g., 'AAPL', 'TSLA')
+
+    Returns:
+        CIK string (e.g., '0000320193')
+
+    Raises:
+        ValueError: If ticker not found in SEC system
+    """
+    import re
+    import requests
+
+    # Check cache first
+    try:
+        from app import db
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT cik FROM sec_8k_filings
+                WHERE ticker = %s AND cik IS NOT NULL
+                LIMIT 1
+            """, (ticker,))
+            row = cur.fetchone()
+
+            if row and row['cik']:
+                LOG.info(f"[{ticker}] Found cached CIK: {row['cik']}")
+                return row['cik']
+    except Exception as e:
+        LOG.warning(f"[{ticker}] Could not check CIK cache: {e}")
+
+    # Lookup from SEC
+    LOG.info(f"[{ticker}] Looking up CIK from SEC.gov...")
+
+    try:
+        url = f"https://www.sec.gov/cgi-bin/browse-edgar?company={ticker}&action=getcompany"
+        headers = {
+            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+        }
+
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        # Parse CIK from HTML (format: "CIK=0000320193")
+        match = re.search(r'CIK=(\d{10})', response.text)
+        if match:
+            cik = match.group(1)
+            LOG.info(f"[{ticker}] ✅ Found CIK: {cik}")
+            return cik
+
+        raise ValueError(f"CIK not found in SEC response for {ticker}")
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] CIK lookup failed: {e}")
+        raise ValueError(f"Could not find CIK for ticker {ticker}. This ticker may not be registered with the SEC.")
+
+
+def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
+    """
+    Scrape SEC Edgar for last N 8-K filings.
+
+    Args:
+        cik: SEC CIK number (e.g., '0000320193')
+        count: Number of filings to retrieve (default 10)
+
+    Returns:
+        List of filing dicts with:
+        - filing_date: 'Jan 30, 2025'
+        - accession_number: '0001193125-25-012345'
+        - documents_url: Full URL to documents page
+    """
+    import requests
+    import re
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+
+    LOG.info(f"Fetching last {count} 8-K filings for CIK {cik}...")
+
+    try:
+        url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=8-K&count={count}"
+        headers = {
+            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+        }
+
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        table = soup.find('table', class_='tableFile2')
+
+        if not table:
+            LOG.warning(f"No 8-K filings table found for CIK {cik}")
+            return []
+
+        filings = []
+        rows = table.find_all('tr')[1:]  # Skip header row
+
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) >= 4:
+                filing_date = cols[3].text.strip()  # "Jan 30, 2025"
+
+                # Find Documents link
+                documents_link = cols[1].find('a', string='Documents')
+                if not documents_link:
+                    continue
+
+                documents_url = urljoin("https://www.sec.gov", documents_link['href'])
+
+                # Extract accession number from URL (format: accession_number=0001193125-25-012345)
+                match = re.search(r'accession_number=([\d\-]+)', documents_url)
+                accession = match.group(1) if match else None
+
+                if accession:
+                    filings.append({
+                        'filing_date': filing_date,
+                        'accession_number': accession,
+                        'documents_url': documents_url
+                    })
+
+        LOG.info(f"✅ Found {len(filings)} 8-K filings")
+        return filings[:count]
+
+    except Exception as e:
+        LOG.error(f"Failed to parse 8-K filing list: {e}")
+        raise
+
+
+def get_8k_html_url(documents_url: str) -> str:
+    """
+    Parse documents index page to find main 8-K HTML file.
+
+    Args:
+        documents_url: URL to SEC documents index page
+
+    Returns:
+        Full URL to main 8-K HTML file
+
+    Raises:
+        ValueError: If main 8-K file not found
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+
+    LOG.info(f"Parsing documents page: {documents_url}")
+
+    try:
+        headers = {
+            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+        }
+
+        response = requests.get(documents_url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        table = soup.find('table', class_='tableFile')
+
+        if not table:
+            raise ValueError("Documents table not found on index page")
+
+        # Find the main 8-K document (usually first .htm file with "8-K" in description)
+        for row in table.find_all('tr')[1:]:  # Skip header
+            cols = row.find_all('td')
+            if len(cols) >= 4:
+                doc_type = cols[3].text.strip().lower()
+                description = cols[1].text.strip()
+
+                # Look for HTML document with "8-K" in description
+                if 'text/html' in doc_type.lower() and '8-k' in description.lower():
+                    link = cols[2].find('a')
+                    if link and 'href' in link.attrs:
+                        html_url = urljoin(documents_url, link['href'])
+                        LOG.info(f"✅ Found main 8-K HTML: {html_url}")
+                        return html_url
+
+        # Fallback: First .htm file
+        for row in table.find_all('tr')[1:]:
+            cols = row.find_all('td')
+            if len(cols) >= 4:
+                doc_type = cols[3].text.strip().lower()
+                if 'text/html' in doc_type:
+                    link = cols[2].find('a')
+                    if link and 'href' in link.attrs:
+                        html_url = urljoin(documents_url, link['href'])
+                        LOG.warning(f"Using fallback HTML file: {html_url}")
+                        return html_url
+
+        raise ValueError("Could not find main 8-K HTML file in documents list")
+
+    except Exception as e:
+        LOG.error(f"Failed to get 8-K HTML URL: {e}")
+        raise
+
+
+def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> Dict:
+    """
+    Quick parse 8-K header (first 3KB) to extract title and item codes.
+
+    Only fetches first 3KB of file for speed. Use for display in UI before
+    user decides to generate full summary.
+
+    Args:
+        sec_html_url: Full URL to 8-K HTML on SEC.gov
+        rate_limit_delay: Delay in seconds before request (default 0.15s = 6.67 req/sec)
+
+    Returns:
+        {
+            'title': "Results of Operations | Apple announces Q1 2024 results",
+            'item_codes': "2.02, 9.01",
+            'item_description': "Results of Operations and Financial Condition"
+        }
+    """
+    import re
+    import time
+    import requests
+
+    # Rate limit protection
+    time.sleep(rate_limit_delay)
+
+    LOG.info(f"Quick parsing 8-K header: {sec_html_url}")
+
+    try:
+        headers = {
+            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)',
+            'Range': 'bytes=0-3000'  # Only fetch first 3KB
+        }
+
+        response = requests.get(sec_html_url, headers=headers, timeout=10)
+        text = response.text
+
+        # Extract item codes (format: "Item 2.02" or "Item 2.02.")
+        items = re.findall(r'Item\s+(\d+\.\d+)', text, re.IGNORECASE)
+        item_codes = ', '.join(sorted(set(items[:3])))  # Dedupe and limit to first 3
+
+        # Get item description for primary item
+        item_description = "Other Events"  # Default
+        if items:
+            primary_item = items[0]
+            item_description = ITEM_CODE_MAP.get(primary_item, "Other Events")
+
+        # Extract title from content
+        # Look for patterns like "announces", "reports", "completes", etc.
+        title_match = re.search(
+            r'(announces?|reports?|completes?|enters?|acquires?|appoints?)[^\.]{10,200}',
+            text,
+            re.IGNORECASE
+        )
+        parsed_title = title_match.group(0).strip() if title_match else ""
+
+        # Option C: Both item description AND parsed title
+        if parsed_title:
+            full_title = f"{item_description} | {parsed_title}"
+        else:
+            full_title = item_description
+
+        # Truncate to fit VARCHAR(200)
+        full_title = full_title[:200]
+
+        LOG.info(f"✅ Parsed: Items={item_codes}, Title={full_title[:50]}...")
+
+        return {
+            'title': full_title,
+            'item_codes': item_codes if item_codes else "Unknown",
+            'item_description': item_description
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to quick parse 8-K header: {e}")
+        # Return defaults on error
+        return {
+            'title': "8-K Filing",
+            'item_codes': "Unknown",
+            'item_description': "Other Events"
+        }
+
+
+def extract_8k_content(sec_html_url: str) -> str:
+    """
+    Extract 8-K content for AI summarization.
+
+    Prioritizes Exhibit 99.1 (press releases, material announcements) and
+    includes main 8-K body as context.
+
+    Args:
+        sec_html_url: Full URL to 8-K HTML on SEC.gov
+
+    Returns:
+        Clean text content for Gemini summarization
+
+    Raises:
+        ValueError: If content too short or empty
+    """
+    import re
+    import requests
+    from urllib.parse import urljoin
+
+    LOG.info(f"Extracting 8-K content from: {sec_html_url}")
+
+    try:
+        # Fetch main 8-K HTML
+        html = fetch_sec_html_text(sec_html_url)
+
+        # Look for Exhibit 99.1 link (most common for material events)
+        exhibit_99_1 = None
+
+        # Pattern 1: ex99-1.htm, ex991.htm, etc.
+        exhibit_match = re.search(
+            r'href="([^"]+ex99-?1[^"]*\.htm)"',
+            html,
+            re.IGNORECASE
+        )
+
+        if exhibit_match:
+            exhibit_relative_url = exhibit_match.group(1)
+            exhibit_url = urljoin(sec_html_url, exhibit_relative_url)
+
+            LOG.info(f"Found Exhibit 99.1 link: {exhibit_url}")
+
+            try:
+                exhibit_99_1 = fetch_sec_html_text(exhibit_url)
+                LOG.info(f"✅ Fetched Exhibit 99.1 ({len(exhibit_99_1)} chars)")
+            except Exception as e:
+                LOG.warning(f"Failed to fetch Exhibit 99.1: {e}")
+
+        # Build content
+        if exhibit_99_1 and len(exhibit_99_1) > 500:
+            # Exhibit 99.1 found and substantial - use it as primary content
+            content = f"EXHIBIT 99.1:\n\n{exhibit_99_1}\n\n---\n\nMAIN 8-K BODY:\n\n{html}"
+            LOG.info(f"Using Exhibit 99.1 + main body ({len(content)} total chars)")
+        else:
+            # No Exhibit 99.1 or too short - use main body only
+            content = html
+            LOG.info(f"Using main 8-K body only ({len(content)} chars)")
+
+        # Validate minimum length
+        if len(content) < 500:
+            raise ValueError(
+                f"8-K content too short ({len(content)} chars) - may be empty or malformed"
+            )
+
+        LOG.info(f"✅ Extracted {len(content)} characters for summarization")
+        return content
+
+    except Exception as e:
+        LOG.error(f"Failed to extract 8-K content: {e}")
+        raise
+
+
+def generate_8k_summary_with_gemini(
+    ticker: str,
+    content: str,
+    config: Dict,
+    filing_date: str,
+    item_codes: str,
+    gemini_api_key: str
+) -> str:
+    """
+    Generate 8-K summary using Gemini 2.5 Flash.
+
+    Simple, broad extraction prompt - focuses on "extract everything material".
+
+    Args:
+        ticker: Stock ticker (e.g., 'AAPL', 'TSLA')
+        content: Full 8-K content (Exhibit 99.1 + main body)
+        config: Ticker configuration dict with company_name, etc.
+        filing_date: Filing date string (e.g., "Jan 30, 2025")
+        item_codes: Item codes string (e.g., "2.02, 9.01")
+        gemini_api_key: Gemini API key
+
+    Returns:
+        Markdown-formatted summary (800-1,500 words)
+
+    Raises:
+        Exception: If generation fails
+    """
+    import time
+    from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+    company_name = config.get('company_name', ticker)
+
+    LOG.info(f"[{ticker}] Generating 8-K summary with Gemini 2.5 Flash...")
+
+    # Build prompt
+    prompt = f"""You are analyzing an SEC 8-K filing for {ticker} ({company_name}).
+
+Extract ALL material information from this filing. Preserve tables and charts in markdown format.
+
+Structure your summary:
+
+## Filing Overview
+- Filing Date: {filing_date}
+- Item Codes: {item_codes}
+- Event Type: [Describe the primary event]
+
+## Key Details
+[Extract all material facts, figures, and developments]
+
+## Financial Impact
+[Any disclosed financial impacts, terms, or projections]
+
+## Tables & Charts
+[Preserve any financial tables or data in markdown format]
+
+## Business Implications
+[What does this mean for the company?]
+
+Target: 800-1,500 words depending on complexity.
+Be thorough - capture everything material.
+
+---
+
+8-K CONTENT:
+
+{content}
+"""
+
+    try:
+        start_time = time.time()
+
+        # Configure Gemini
+        genai.configure(api_key=gemini_api_key)
+
+        # Use Gemini 2.5 Flash (fast, cost-effective)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        # Safety settings (same as 10-K/10-Q)
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        # Generate summary
+        response = model.generate_content(
+            prompt,
+            safety_settings=safety_settings,
+            generation_config={
+                'temperature': 0.3,  # Consistent outputs
+                'max_output_tokens': 16000,  # Same as 10-K
+            }
+        )
+
+        summary_text = response.text
+        elapsed = time.time() - start_time
+
+        # Count words
+        word_count = len(summary_text.split())
+
+        LOG.info(f"[{ticker}] ✅ Generated 8-K summary ({word_count} words, {elapsed:.1f}s)")
+
+        return summary_text
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Gemini 8-K summary generation failed: {e}")
+        raise
+
+
+# ==============================================================================
 # GEMINI AI PROFILE GENERATION
 # ==============================================================================
 

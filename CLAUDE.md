@@ -517,6 +517,135 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
 8. **NEW:** View all profiles in "View All Profiles" section below form
 9. **NEW:** Click "View" to see profile in modal, "Email" to send to admin, "Delete" to remove
 
+**8-K SEC Filings Analysis (NEW - Nov 8, 2025):**
+
+StockDigest provides direct SEC Edgar scraping for 8-K filings (material event disclosures), bypassing FMP delays to access official SEC filings in real-time.
+
+**Key Features:**
+- ✅ Direct SEC Edgar scraping (no FMP dependencies)
+- ✅ Last 10 8-Ks per ticker with quick preview (3KB header fetch)
+- ✅ Smart content extraction (Exhibit 99.1 → main body fallback)
+- ✅ Complete item code mapping (all 23 SEC item codes)
+- ✅ CIK lookup with database caching
+- ✅ Rate-limited (0.15s between requests = 6.67 req/sec, well under SEC's 10 req/sec limit)
+- ✅ Gemini 2.5 Flash summary generation (800-1,500 words)
+- ✅ Same email template as 10-K/10-Q (consistent branding)
+
+**Material Event Item Codes (Most Common):**
+- **Item 2.02:** Results of Operations and Financial Condition (earnings releases)
+- **Item 1.01:** Entry into Material Agreement (debt deals, partnerships)
+- **Item 2.01:** Completion of Acquisition or Disposition (M&A closings)
+- **Item 8.01:** Other Events (catch-all for major announcements)
+- **Item 5.02:** Departure/Appointment of Directors/Officers (C-suite changes)
+
+**API Endpoints:**
+
+**`GET /api/sec-validate-ticker?ticker=AAPL`** - Fetch last 10 8-Ks from SEC Edgar
+- Returns: List of 8-Ks with quick-parsed titles and item codes
+- Processing: ~1.5 seconds (10 × 0.15s rate limit delay)
+- Example response:
+  ```json
+  {
+    "valid": true,
+    "company_name": "Apple Inc.",
+    "cik": "0000320193",
+    "available_8ks": [
+      {
+        "filing_date": "Jan 30, 2025",
+        "accession_number": "0001193125-25-012345",
+        "sec_html_url": "https://www.sec.gov/...",
+        "title": "Results of Operations | Apple announces Q1 2024 results",
+        "item_codes": "2.02, 9.01",
+        "has_summary": false
+      }
+    ]
+  }
+  ```
+
+**`POST /api/admin/generate-8k-summary`** - Generate AI summary (uses job queue)
+- Parameters: `ticker`, `cik`, `accession_number`, `filing_date`, `filing_title`, `sec_html_url`, `item_codes`, `token`
+- Processing: 5-10 minutes (Gemini 2.5 Flash)
+- Returns: `job_id` for status polling
+
+**`GET /api/admin/8k-filings?token=XXX`** - List all generated summaries
+- Returns: Array of 8-K filings with ticker, date, title, items, summary text
+- Sorted by filing date DESC
+
+**`POST /api/admin/delete-8k-filing`** - Delete 8-K filing(s)
+- Parameters: `ticker`, `token`
+- Deletes ALL 8-K filings for ticker
+
+**Key Functions (modules/company_profiles.py):**
+
+**SEC Edgar Integration:**
+- `get_cik_for_ticker(ticker)` - Lookup CIK from SEC API, cache in database
+- `parse_sec_8k_filing_list(cik, count=10)` - Scrape last N 8-Ks from SEC Edgar
+- `get_8k_html_url(documents_url)` - Parse documents index page for main HTML
+- `quick_parse_8k_header(sec_html_url)` - Fast 3KB fetch for title + item codes
+- `extract_8k_content(sec_html_url)` - Extract Exhibit 99.1 + main body
+
+**AI Generation:**
+- `generate_8k_summary_with_gemini(ticker, content, config, filing_date, item_codes, gemini_api_key)`
+  - Simple, broad extraction prompt: "Extract ALL material information"
+  - Preserves tables and charts in markdown
+  - Target: 800-1,500 words depending on complexity
+  - Max output tokens: 16,000 (same as 10-K)
+
+**Job Queue Worker:**
+- `process_8k_summary_phase(job)` - Handles `8k_summary_generation` jobs
+- Phase routing: Integrated into main job worker
+- Progress: 10% (extract) → 30% (Gemini) → 80% (save) → 95% (email) → 100%
+- Email: Reuses 10-K/10-Q template with 8-K specific subject
+
+**User Workflow:**
+1. Navigate to `/admin/research` → Enter ticker → Click "Load Research Options"
+2. Scroll to "8-K SEC Releases" section → Shows last 10 filings from SEC Edgar
+3. Each filing displays: Date, Title (item description | parsed title), Items
+4. Click "Generate Summary (5-10 min)" → Job queued
+5. Receive email when complete with stock price card + markdown summary
+6. View in Research Library → "8-K Filings" dropdown
+
+**Database Schema:**
+```sql
+CREATE TABLE sec_8k_filings (
+    id SERIAL PRIMARY KEY,
+    ticker VARCHAR(20) NOT NULL,
+    company_name VARCHAR(255),
+    cik VARCHAR(20),                     -- Cached CIK for future lookups
+    accession_number VARCHAR(50) NOT NULL,  -- SEC unique ID
+    filing_date DATE NOT NULL,
+    filing_title VARCHAR(200) NOT NULL,  -- "Results of Operations | Apple announces..."
+    item_codes VARCHAR(100),             -- "2.02, 9.01"
+    sec_html_url TEXT NOT NULL,
+    summary_text TEXT NOT NULL,          -- Gemini-generated summary
+    ai_provider VARCHAR(20) NOT NULL,    -- 'gemini'
+    ai_model VARCHAR(50),                -- 'gemini-2.5-flash'
+    job_id VARCHAR(50),
+    processing_duration_seconds INTEGER,
+    monitored BOOLEAN DEFAULT FALSE,     -- Future automation support
+    last_checked_at TIMESTAMPTZ,
+    generated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT sec_8k_unique UNIQUE(ticker, accession_number)
+);
+```
+
+**Rate Limiting & SEC.gov Compliance:**
+- User-Agent: "StockDigest/1.0 (stockdigest.research@gmail.com)"
+- Max 10 requests/second per IP (SEC requirement)
+- Implementation: 0.15s delay between requests (conservative 6.67 req/sec)
+- Respects robots.txt
+
+**Cost Analysis:**
+- Gemini API: ~$0.24 per summary (16K tokens output @ $0.015/1K)
+- SEC Edgar: FREE (public data)
+- Processing time: 5-10 minutes per summary
+
+**Future Automation (Infrastructure Ready):**
+- `monitored` field for tracking active tickers
+- `last_checked_at` for cron monitoring
+- Pattern ready: Copy FMP press release automation logic
+- Planned: Hourly check for Item 2.02 (earnings) only
+
 **Database Schema:**
 - **`sec_filings`**: Unified storage for 10-K, 10-Q, and investor presentations (UPDATED Oct 19, 2025)
   - ticker, filing_type ('10-K', '10-Q', 'PRESENTATION'), fiscal_year, fiscal_quarter

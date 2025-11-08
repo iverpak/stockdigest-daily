@@ -28822,6 +28822,77 @@ Domains:
         LOG.error(f"Domain name update failed: {e}")
         LOG.error(f"Error details: {traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
+def _commit_ticker_csv_to_github(csv_file: str, batch_num: int) -> bool:
+    """Helper function to commit ticker CSV to GitHub during batch processing.
+
+    Args:
+        csv_file: Name of the CSV file (e.g., "ticker_reference_1.csv")
+        batch_num: Current batch number for logging
+
+    Returns:
+        True if commit succeeded, False otherwise
+    """
+    try:
+        csv_path = os.path.join("data", csv_file)
+
+        # Read CSV content
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            csv_content = f.read()
+
+        # Prepare commit message
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        commit_message = f"[skip render] Ticker metadata batch update - {timestamp}"
+
+        # Check GitHub config
+        if not GITHUB_TOKEN or not GITHUB_REPO:
+            LOG.error("GitHub integration not configured")
+            return False
+
+        # GitHub API setup
+        github_path = f"data/{csv_file}"
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{github_path}"
+
+        headers = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+
+        # Get current file SHA
+        response = requests.get(api_url, headers=headers, timeout=30)
+
+        file_sha = None
+        if response.status_code == 200:
+            current_file = response.json()
+            file_sha = current_file["sha"]
+        elif response.status_code != 404:
+            LOG.error(f"Failed to get file SHA: {response.status_code}")
+            return False
+
+        # Encode and commit
+        encoded_content = base64.b64encode(csv_content.encode('utf-8')).decode('utf-8')
+
+        commit_data = {
+            "message": commit_message,
+            "content": encoded_content,
+        }
+
+        if file_sha:
+            commit_data["sha"] = file_sha
+
+        commit_response = requests.put(api_url, headers=headers, json=commit_data, timeout=120)
+
+        if commit_response.status_code in [200, 201]:
+            LOG.info(f"✅ Successfully committed batch {batch_num} to GitHub")
+            return True
+        else:
+            LOG.error(f"GitHub commit failed: {commit_response.status_code}")
+            return False
+
+    except Exception as e:
+        LOG.error(f"Exception during GitHub commit: {e}")
+        return False
+
 @APP.post("/admin/update-ticker-metadata-csv")
 async def update_ticker_metadata_csv(request: Request):
     """Batch update ticker metadata using Gemini 2.5 Pro"""
@@ -28832,10 +28903,12 @@ async def update_ticker_metadata_csv(request: Request):
         csv_file = body.get("csv_file", "ticker_reference_1.csv")
         batch_size = body.get("batch_size", 5)
         max_batches = body.get("max_batches")  # Optional - for testing
+        commit_frequency = body.get("commit_frequency", 20)  # Commit every N batches
 
         LOG.info(f"=== BATCH UPDATING TICKER METADATA (Gemini 2.5 Pro) ===")
         LOG.info(f"CSV File: {csv_file}")
         LOG.info(f"Batch Size: {batch_size}")
+        LOG.info(f"Auto-commit frequency: Every {commit_frequency} batches")
         if max_batches:
             LOG.info(f"Test Mode: Processing first {max_batches} batches only")
 
@@ -29449,6 +29522,18 @@ Return ONLY a valid JSON array with metadata for each ticker."""
                 LOG.info(f"✅ Batch {batch_num + 1}/{total_batches} complete: {batch_updated} updated, {batch_errors} errors")
                 LOG.info(f"   CSV saved to disk (resume-safe)")
 
+                # Auto-commit to GitHub every N batches
+                if (batch_num + 1) % commit_frequency == 0:
+                    LOG.info(f"🔄 Auto-committing batch {batch_num + 1} to GitHub...")
+                    commit_start = datetime.now()
+                    commit_success = _commit_ticker_csv_to_github(csv_file, batch_num + 1)
+                    commit_duration = (datetime.now() - commit_start).total_seconds()
+
+                    if commit_success:
+                        LOG.info(f"   ✅ Commit successful (took {commit_duration:.1f}s)")
+                    else:
+                        LOG.warning(f"   ⚠️ Commit failed (continuing anyway, took {commit_duration:.1f}s)")
+
             except Exception as batch_error:
                 LOG.error(f"Batch {batch_num + 1} failed: {batch_error}")
                 LOG.error(f"   Stacktrace: {traceback.format_exc()}")
@@ -29459,6 +29544,17 @@ Return ONLY a valid JSON array with metadata for each ticker."""
                     "tickers_processed": 0
                 })
                 total_errors += len(batch_rows)
+
+        # Final commit to ensure all changes are saved to GitHub
+        LOG.info(f"🔄 Final commit to GitHub...")
+        final_commit_start = datetime.now()
+        final_commit_success = _commit_ticker_csv_to_github(csv_file, total_batches)
+        final_commit_duration = (datetime.now() - final_commit_start).total_seconds()
+
+        if final_commit_success:
+            LOG.info(f"✅ Final commit successful (took {final_commit_duration:.1f}s)")
+        else:
+            LOG.warning(f"⚠️ Final commit failed (took {final_commit_duration:.1f}s)")
 
         LOG.info(f"=== UPDATE COMPLETE ===")
         LOG.info(f"Total processed: {total_to_process}")

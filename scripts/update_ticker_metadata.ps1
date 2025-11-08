@@ -1,5 +1,5 @@
 # Script to update ticker metadata using Gemini 2.5 Pro (batches of 5)
-# Supports test mode (first 100 batches) and full run mode
+# Supports test mode (first 400 batches) and full run mode
 
 param(
     [switch]$TestMode = $true,
@@ -14,7 +14,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Updating Ticker Metadata" -ForegroundColor Cyan
 Write-Host "Using: Gemini 2.5 Pro (batches of 5)" -ForegroundColor Cyan
 if ($TestMode -or $MaxBatches -gt 0) {
-    $batchLimit = if ($MaxBatches -gt 0) { $MaxBatches } else { 100 }
+    $batchLimit = if ($MaxBatches -gt 0) { $MaxBatches } else { 400 }
     Write-Host "Mode: TEST (first $batchLimit batches only)" -ForegroundColor Yellow
 } else {
     Write-Host "Mode: FULL RUN (all batches)" -ForegroundColor Green
@@ -34,7 +34,7 @@ try {
 
     # Add max_batches if in test mode
     if ($TestMode) {
-        $requestBody.max_batches = 100
+        $requestBody.max_batches = 400
     } elseif ($MaxBatches -gt 0) {
         $requestBody.max_batches = $MaxBatches
     }

@@ -28960,7 +28960,7 @@ Return ONLY a valid JSON array with metadata for each ticker."""
 
                 generation_config = {
                     "temperature": 0.0,
-                    "max_output_tokens": 16384
+                    "max_output_tokens": 32768
                 }
 
                 # Safety settings

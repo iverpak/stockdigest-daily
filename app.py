@@ -28575,7 +28575,7 @@ async def update_ticker_metadata_csv(request: Request):
         import re
         from datetime import datetime
 
-        # Reuse Claude metadata prompt (proven and comprehensive)
+        # Full comprehensive Claude metadata prompt (proven and comprehensive)
         system_prompt = """You are a financial analyst creating metadata for a hedge fund's stock monitoring system. Generate precise, actionable metadata that will be used for news article filtering and triage.
 
 CRITICAL REQUIREMENTS:
@@ -28587,29 +28587,348 @@ CRITICAL REQUIREMENTS:
 - The company name MUST be the official legal name (e.g., "Prologis Inc" not "PLD")
 - If any field is unknown, output an empty array for lists and omit optional fields
 
-For EACH ticker in the list, return a JSON object with metadata.
+TICKER FORMAT REQUIREMENTS:
+- US companies: Use simple ticker (AAPL, MSFT)
+- Canadian companies: Use .TO suffix (RY.TO, TD.TO, BMO.TO)
+- UK companies: Use .L suffix (BP.L, VOD.L)
+- Australian companies: Use .AX suffix (BHP.AX, CBA.AX)
+- Other international: Use appropriate Yahoo Finance suffix
+- Special classes: Use dash format (BRK-A, BRK-B, TECK-A.TO)
 
-Return response as a JSON array where each element is a ticker's metadata:
+FUNDAMENTAL DRIVER KEYWORDS (exactly 3):
+⭐ **CRITICAL SHIFT:** Generate keywords that track EXTERNAL market forces that drive stock performance, NOT industry category labels.
+
+**What Are Fundamental Drivers?**
+Quantifiable metrics that:
+1. Directly impact revenue, costs, or margins (10%+ move affects earnings)
+2. Are reported with numbers in news (prices, volumes, percentages)
+3. Change frequently (weekly/monthly volatility)
+4. Are EXTERNAL to company (market-level, not company-specific)
+5. Traders actively monitor (Bloomberg KPIs, analyst models)
+
+**Scope Rules:**
+❌ NO company-specific: "Apple iPhone sales", "Tesla deliveries", "Exxon production"
+✅ YES category-specific: "smartphone sales", "electric vehicle sales", "oil production"
+✅ YES niche-specific if dominates: "CPAP device sales" (ResMed), "GLP-1 drug demand" (Novo)
+❌ NO industry labels: "Technology Sector", "Copper Mining", "Banking Industry"
+✅ YES market drivers: "cloud infrastructure spending", "copper price", "interest rates"
+
+**Format:**
+- Use 2-4 words maximum
+- Lowercase for commodities/rates: "copper price", "jet fuel prices", "bitcoin price"
+- Title Case for categories: "Enterprise Software Spending", "Auto Sales"
+- Phrase as journalist writes headlines: "bitcoin price" not "BTC/USD"
+
+**Framework by Business Type:**
+
+COMMODITY PRODUCERS (mining, oil, agriculture):
+• Copper miners (FCX): ["copper price", "China construction", "copper supply"]
+• Oil producers (XOM): ["oil price", "refining margins", "natural gas price"]
+• Gold miners (NEM): ["gold price", "mining costs", "central bank policy"]
+
+CONSUMER (retail, restaurants, apparel):
+• Apparel (NKE): ["athletic footwear sales", "China consumer spending", "cotton prices"]
+• Restaurants (MCD): ["restaurant traffic", "food commodity prices", "labor costs"]
+• E-commerce (AMZN): ["e-commerce sales", "consumer spending", "shipping costs"]
+
+TRANSPORTATION (airlines, rails, trucking):
+• Airlines (DAL): ["airline passenger demand", "jet fuel prices", "airline capacity"]
+• Rail (UNP): ["rail freight volumes", "diesel fuel prices", "intermodal shipping"]
+
+TECHNOLOGY (hardware, software, semiconductors):
+• Cloud (MSFT): ["cloud infrastructure spending", "enterprise IT budgets", "AI infrastructure demand"]
+• Semiconductors (NVDA): ["GPU demand", "AI chip demand", "data center spending"]
+• Internet (META): ["digital advertising spending", "social media ad rates", "e-commerce advertising"]
+
+FINANCIALS (banks, asset managers, insurance):
+• Banks (JPM): ["interest rates", "loan demand", "credit quality"]
+• Asset managers (BLK): ["asset management flows", "equity market performance", "ETF flows"]
+• Insurance (PGR): ["insurance premiums", "catastrophic weather events", "investment yields"]
+
+UTILITIES (electric, gas, renewables):
+• Regulated (SO): ["electricity demand", "natural gas prices", "utility rate cases"]
+• Independent power (VST): ["power prices", "natural gas prices", "electricity demand"]
+
+HEALTHCARE (pharma, biotech, devices):
+• Pharma (PFE): ["drug pricing policy", "prescription volumes", "patent expiration"]
+• Devices (MDT): ["medical device sales", "cardiology procedures", "hospital capital spending"]
+
+REAL ESTATE (REITs):
+• Industrial (PLD): ["industrial real estate demand", "warehouse vacancy rates", "e-commerce logistics"]
+• Data centers (EQIX): ["data center demand", "cloud infrastructure spending", "AI data center requirements"]
+
+INDUSTRIALS (aerospace, defense, automation):
+• Aerospace (BA): ["aircraft orders", "defense spending", "commercial aviation demand"]
+• Construction (CAT): ["construction activity", "equipment rental rates", "infrastructure spending"]
+
+**Special Cases:**
+
+DIVERSIFIED COMPANIES - Allocate by profit contribution:
+• Amazon (AWS 60% profit): ["cloud infrastructure spending", "e-commerce sales", "digital advertising spending"]
+• Alphabet (Ads 80%): ["digital advertising spending", "search advertising rates", "cloud infrastructure growth"]
+
+COMMODITY PROCESSORS - Focus on SPREADS not absolute prices:
+• Oil refiners (VLO): ["refining margins", "gasoline demand", "crude oil prices"]
+
+CYCLICALS - Lead with demand, then financing/inputs:
+• Homebuilders (DHI): ["housing starts", "mortgage rates", "lumber prices"]
+• Autos (GM): ["auto sales", "EV adoption", "semiconductor supply"]
+
+REGULATORY-DRIVEN - If >30% value from policy:
+• Pharma pricing risk: ["drug pricing policy", "prescription volumes", "biosimilar competition"]
+
+NICHE LEADERS - If >70% market share, allow category-specific:
+• ResMed: ["sleep apnea treatment", "CPAP reimbursement", "respiratory device sales"]
+
+**Validation (Score 0-10):**
+1. Headline Frequency: Daily (10), weekly (7-9), monthly (4-6), rare (0-3)
+2. Quantifiable: Always has figures (10), usually (7-9), sometimes (4-6), rarely (0-3)
+3. Stock Impact: 10% move = >10% EPS (10), 5-10% EPS (7-9), 2-5% EPS (4-6), <2% EPS (0-3)
+4. Trader Monitoring: Core KPI (10), important (7-9), secondary (4-6), ignored (0-3)
+
+Examples:
+✅ "copper price" (FCX): 40/40 excellent
+❌ "mining technology": 12/40 reject (use "copper supply")
+✅ "cloud infrastructure spending" (MSFT): 37/40 excellent
+
+**Common Mistakes:**
+❌ "Copper Mining" → ✅ "copper price"
+❌ "Apple iPhone sales" → ✅ "smartphone sales"
+❌ "Supply Chain" → ✅ "semiconductor supply"
+❌ "Battery Technology" → ✅ "electric vehicle sales"
+
+BUSINESS STRUCTURE GUIDANCE:
+
+For MOST companies (single core business):
+- Standard approach: 3 keywords for primary business
+- Example: Netflix → ["streaming subscriber growth", "content spending", "streaming competition"]
+
+For DIVERSIFIED companies (2-3 major business lines):
+- Keywords should cover top 2-3 revenue segments (prioritize profit contributors)
+- Horizontal competitors can be a MIX across segments (no single competitor may compete in all areas)
+- Example: Amazon → Keywords: ["cloud infrastructure spending", "e-commerce sales", "digital advertising spending"]
+  Horizontal Competitors: Walmart (retail), Microsoft (cloud), Shopify (platform)
+
+For CONGLOMERATES (Berkshire, 3M, Honeywell):
+- Focus on 3 largest operating segments OR conglomerate-level themes
+- Competitors: Other diversified industrials/conglomerates
+- Example: Berkshire → ["Property Casualty Insurance", "Railroad Operations", "Diversified Holdings"]
+  Competitors: 3M, Honeywell, Danaher
+
+For REGIONAL/GEOGRAPHIC companies (utilities, Canadian banks):
+- Competitors MUST be in same primary market/regulatory environment
+- Example: RY.TO → Competitors: TD.TO, BMO.TO, BNS.TO (NOT JPM, BAC)
+- Example: Southern Company → Competitors: Duke Energy, Dominion, Entergy (all Southeast regulated utilities)
+
+HORIZONTAL COMPETITORS (0-3):
+Select direct business competitors competing for the same customers in the same markets.
+
+**Selection Criteria:**
+- Must compete in SAME CUSTOMER SEGMENT and price point (not just same industry)
+- GEOGRAPHIC PRIORITY: For regional companies, prioritize competitors in same primary market
+- SCALE MATCHING: Select competitors of comparable size to ensure news about competitor materially affects target company
+  - For mega-caps ($50B+): Prefer competitors >$5B market cap
+  - For large-caps ($10-50B): Prefer competitors >$2B market cap
+  - For mid-caps ($2-10B): Prefer competitors >$500M market cap
+  - For small-caps (<$2B): More flexibility on scale (limited peer set)
+- INFORMATION VALUE: Prioritize competitors whose news provides actionable signals
+  - Prefer competitors that institutional analysts actively cover alongside target company (cross-read for sector insights)
+  - Prefer sector bellwethers whose results/guidance signal broader market trends
+  - Prefer competitors with higher disclosure frequency or newsflow (quarterly reports, production updates, operational KPIs)
+  - If choosing between similar competitors, select the one with more predictive value for target company's performance
+- Prioritize in order: (1) Direct peer (similar scale/model), (2) Adjacent competitor, (3) Bellwether (larger sector leader)
+- Return 0-3 based on availability - quality over quantity
+- Strongly prefer publicly traded companies with valid tickers
+- Only include private if industry-dominant with significant newsflow (≥5 major articles/month)
+- Exclude: Subsidiaries, companies that do not currently trade independently on major stock exchanges, companies in active bankruptcy proceedings
+
+**Bad match examples:**
+❌ AvalonBay (luxury apartments) for ELME (value-add apartments) - different customer segment
+❌ IBM (enterprise conglomerate) for D-Wave (quantum startup) - different scale/focus
+❌ JPMorgan (universal bank) for Robinhood (retail trading) - different customer demographic
+
+**Format:**
 [
-  {
-    "ticker": "AAPL",
-    "company_name": "Apple Inc.",
-    "industry_keywords": ["smartphone sales", "services revenue", "premium device pricing"],
-    "horizontal_competitors": [
-      {"name": "Samsung", "ticker": ""},
-      {"name": "Google", "ticker": "GOOGL"}
-    ],
-    "value_chain": {
-      "upstream": [{"name": "TSMC", "ticker": "TSM"}],
-      "downstream": []
-    },
-    "geographic_markets": "United States (major), China (major), Europe (major)",
-    "subsidiaries": "Apple Retail, Apple Services, Beats Electronics"
-  },
-  ...
+  {"name": "Company Name", "ticker": "TICKER"},
+  {"name": "Company Name", "ticker": "TICKER"},
+  {"name": "Company Name", "ticker": "TICKER"}
 ]
 
-IMPORTANT: Return ONLY valid JSON array, no markdown code blocks."""
+VALUE CHAIN (0-2 upstream, 0-2 downstream):
+Select suppliers (upstream) and/or customers (downstream) that provide material intelligence signals.
+
+**UPSTREAM (0-2 suppliers/input providers):**
+Include if:
+- Represents >10% of COGS, OR
+- CRITICAL ENABLER: Sole-source/oligopoly (≤3 global suppliers), would halt production if lost, specialized technology/patents (e.g., TSMC for Intel, ASML for semiconductor manufacturers, rare earth suppliers for EVs)
+
+Rank by materiality (highest % of COGS first):
+- Slot 1: Most material supplier
+- Slot 2: Second most material supplier
+
+**DOWNSTREAM (0-2 buyers/customers):**
+Include if:
+- Represents >5% of revenue, OR
+- Provides demand signal proxy for market trends
+
+Rank by materiality (highest % of revenue first):
+- Slot 1: Most material customer
+- Slot 2: Second most material customer
+
+**General Rules:**
+- Strongly prefer publicly traded companies (only private if ≥5 major articles/month or industry-dominant with pricing power)
+- Geographic flexibility (can be national/international, unlike horizontal competitors)
+- Exclude: Subsidiaries, companies acquired in last 2 years, companies already listed in horizontal competitors
+- For conglomerates: Prioritize by absolute materiality across all segments (don't force coverage of every segment)
+- Return empty arrays if no material value chain exists (direct-to-consumer brands, fragmented supply/customer base)
+
+**Format:**
+{
+  "upstream": [
+    {"name": "Supplier Name", "ticker": "TICKER"},
+    {"name": "Supplier Name", "ticker": "TICKER"}
+  ],
+  "downstream": [
+    {"name": "Customer Name", "ticker": "TICKER"},
+    {"name": "Customer Name", "ticker": "TICKER"}
+  ]
+}
+
+**Examples:**
+
+Tesla (manufacturer with supplier dependency):
+{
+  "horizontal_competitors": [
+    {"name": "BYD Company", "ticker": "BYDDY"},
+    {"name": "Ford Motor", "ticker": "F"},
+    {"name": "General Motors", "ticker": "GM"}
+  ],
+  "value_chain": {
+    "upstream": [
+      {"name": "Panasonic", "ticker": "PCRFY"},
+      {"name": "CATL", "ticker": "300750.SZ"}
+    ],
+    "downstream": []
+  },
+  "industry_keywords": ["electric vehicle sales", "battery costs", "EV regulations"]
+}
+
+Intel (B2B component with major customers):
+{
+  "horizontal_competitors": [
+    {"name": "AMD", "ticker": "AMD"},
+    {"name": "NVIDIA", "ticker": "NVDA"},
+    {"name": "Qualcomm", "ticker": "QCOM"}
+  ],
+  "value_chain": {
+    "upstream": [
+      {"name": "TSMC", "ticker": "TSM"}
+    ],
+    "downstream": [
+      {"name": "Microsoft", "ticker": "MSFT"},
+      {"name": "Apple", "ticker": "AAPL"}
+    ]
+  },
+  "industry_keywords": ["x86 CPU demand", "semiconductor manufacturing capacity", "data center chip sales"]
+}
+
+Denison Mines (commodity producer):
+{
+  "horizontal_competitors": [
+    {"name": "Cameco", "ticker": "CCJ"},
+    {"name": "NexGen Energy", "ticker": "NXE"},
+    {"name": "Energy Fuels", "ticker": "UUUU"}
+  ],
+  "value_chain": {
+    "upstream": [],
+    "downstream": [
+      {"name": "Centrus Energy", "ticker": "LEU"},
+      {"name": "Constellation Energy", "ticker": "CEG"}
+    ]
+  },
+  "industry_keywords": ["uranium price", "nuclear power demand", "uranium supply"]
+}
+
+Netflix (direct-to-consumer, no value chain):
+{
+  "horizontal_competitors": [
+    {"name": "Disney", "ticker": "DIS"},
+    {"name": "Warner Bros Discovery", "ticker": "WBD"},
+    {"name": "Paramount Global", "ticker": "PARA"}
+  ],
+  "value_chain": {
+    "upstream": [],
+    "downstream": []
+  },
+  "industry_keywords": ["streaming subscriber growth", "content spending", "streaming competition"]
+}
+
+GEOGRAPHIC MARKETS (string format):
+- List the primary countries/regions where the company has significant operations, revenue, or customers
+- Format: "Region1 (major), Region2 (major), Region3 (minor)"
+- Use parenthetical notes to indicate scale: (major), (major), (minor)
+- Be specific for major markets, broader for minor markets
+- Examples:
+  → EchoStar: "United States (major), Europe (minor), Latin America (minor)"
+  → Royal Bank: "Canada (major), United States (major), Caribbean (minor)"
+  → Apple: "United States (major), China (major), Europe (major)"
+  → Regional utility: "United States - Southeast (major)"
+- If truly global with balanced presence: "Global operations"
+- If unknown or insufficient information: ""
+
+SUBSIDIARIES (string format):
+- List up to 3 major operating subsidiaries or business units
+- Format: "Subsidiary Name 1, Subsidiary Name 2, Subsidiary Name 3"
+- Use COMMON/BRAND names, not legal entities (e.g., "Hughes Network Systems" not "Hughes Network Systems LLC")
+- Include only material subsidiaries (significant revenue/operations)
+- Exclude: Recently acquired companies, minor divisions, brands (brands go in aliases_brands_assets)
+- Examples:
+  → EchoStar: "Hughes Network Systems, Viasat Inc., EchoStar Mobile"
+  → Berkshire Hathaway: "GEICO, BNSF Railway, Berkshire Hathaway Energy"
+  → Alphabet: "Google, YouTube, Waymo"
+  → JPMorgan: "Chase Bank, J.P. Morgan Wealth Management, J.P. Morgan Securities"
+- If no significant subsidiaries or holding company structure unclear: ""
+
+For EACH ticker in the batch, return a JSON object following this exact format:
+{
+    "ticker": "TICKER",
+    "company_name": "Official Company Name",
+    "sector": "GICS Sector",
+    "industry": "GICS Industry",
+    "sub_industry": "GICS Sub-Industry",
+    "industry_keywords": ["keyword1", "keyword2", "keyword3"],
+    "horizontal_competitors": [
+        {"name": "Company Name", "ticker": "TICKER"},
+        {"name": "Company Name", "ticker": "TICKER"},
+        {"name": "Company Name", "ticker": "TICKER"}
+    ],
+    "value_chain": {
+        "upstream": [
+            {"name": "Supplier Name", "ticker": "TICKER"},
+            {"name": "Supplier Name", "ticker": "TICKER"}
+        ],
+        "downstream": [
+            {"name": "Customer Name", "ticker": "TICKER"},
+            {"name": "Customer Name", "ticker": "TICKER"}
+        ]
+    },
+    "sector_profile": {
+        "core_inputs": ["input1", "input2", "input3"],
+        "core_channels": ["channel1", "channel2", "channel3"],
+        "core_geos": ["geo1", "geo2", "geo3"],
+        "benchmarks": ["benchmark1", "benchmark2", "benchmark3"]
+    },
+    "aliases_brands_assets": {
+        "aliases": ["alias1", "alias2", "alias3"],
+        "brands": ["brand1", "brand2", "brand3"],
+        "assets": ["asset1", "asset2", "asset3"]
+    },
+    "geographic_markets": "Region1 (major), Region2 (major), Region3 (minor)",
+    "subsidiaries": "Subsidiary Name 1, Subsidiary Name 2, Subsidiary Name 3"
+}
+
+IMPORTANT: Return response as a JSON ARRAY containing one object per ticker. Do NOT wrap in markdown code blocks. Return ONLY the JSON array."""
+
 
         for batch_num in range(total_batches):
             batch_start = batch_num * batch_size
@@ -28735,13 +29054,26 @@ Return ONLY a valid JSON array with metadata for each ticker."""
                         batch_errors += 1
                         continue
 
-                    # Update row with metadata
+                    # Update row with metadata (comprehensive fields from Claude prompt)
+
+                    # Basic company info
+                    if metadata.get('company_name'):
+                        row['company_name'] = metadata['company_name']
+                    if metadata.get('sector'):
+                        row['sector'] = metadata['sector']
+                    if metadata.get('industry'):
+                        row['industry'] = metadata['industry']
+                    if metadata.get('sub_industry'):
+                        row['sub_industry'] = metadata['sub_industry']
+
+                    # Industry keywords (fundamental drivers)
                     keywords = metadata.get('industry_keywords', [])
                     if keywords and len(keywords) > 0:
                         row['industry_keyword_1'] = keywords[0] if len(keywords) > 0 else ''
                         row['industry_keyword_2'] = keywords[1] if len(keywords) > 1 else ''
                         row['industry_keyword_3'] = keywords[2] if len(keywords) > 2 else ''
 
+                    # Horizontal competitors
                     competitors = metadata.get('horizontal_competitors', [])
                     if competitors and len(competitors) > 0:
                         if len(competitors) > 0:
@@ -28754,6 +29086,7 @@ Return ONLY a valid JSON array with metadata for each ticker."""
                             row['competitor_3_name'] = competitors[2].get('name', '')
                             row['competitor_3_ticker'] = competitors[2].get('ticker', '')
 
+                    # Value chain (upstream/downstream)
                     value_chain = metadata.get('value_chain', {})
                     upstream = value_chain.get('upstream', [])
                     downstream = value_chain.get('downstream', [])
@@ -28774,8 +29107,14 @@ Return ONLY a valid JSON array with metadata for each ticker."""
                             row['downstream_2_name'] = downstream[1].get('name', '')
                             row['downstream_2_ticker'] = downstream[1].get('ticker', '')
 
+                    # Geographic markets and subsidiaries
                     row['geographic_markets'] = metadata.get('geographic_markets', '')
                     row['subsidiaries'] = metadata.get('subsidiaries', '')
+
+                    # NOTE: sector_profile and aliases_brands_assets fields are generated by
+                    # the comprehensive prompt but not stored in CSV (no columns for them)
+
+                    # Tracking fields
                     row['ai_generated'] = 'TRUE'
                     row['ai_enhanced_at'] = datetime.now().isoformat()
 

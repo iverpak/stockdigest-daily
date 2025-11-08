@@ -1,4 +1,4 @@
-# Script to update ticker metadata using Gemini 2.5 Pro (batches of 8)
+# Script to update ticker metadata using Gemini 2.5 Pro (batches of 5)
 # Supports test mode (first 10 batches) and full run mode
 
 param(
@@ -12,7 +12,7 @@ $ADMIN_TOKEN = "a77774hhwef88f99sd9g883h23nsndfs9d8cnns9adh7asc9xcibjweorn"
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Updating Ticker Metadata" -ForegroundColor Cyan
-Write-Host "Using: Gemini 2.5 Pro (batches of 8)" -ForegroundColor Cyan
+Write-Host "Using: Gemini 2.5 Pro (batches of 5)" -ForegroundColor Cyan
 if ($TestMode -or $MaxBatches -gt 0) {
     $batchLimit = if ($MaxBatches -gt 0) { $MaxBatches } else { 10 }
     Write-Host "Mode: TEST (first $batchLimit batches only)" -ForegroundColor Yellow
@@ -29,7 +29,7 @@ try {
     # Build request body
     $requestBody = @{
         csv_file = "ticker_reference_1.csv"
-        batch_size = 8
+        batch_size = 5
     }
 
     # Add max_batches if in test mode

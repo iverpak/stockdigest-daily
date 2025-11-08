@@ -28521,7 +28521,7 @@ async def update_ticker_metadata_csv(request: Request):
     try:
         body = await request.json()
         csv_file = body.get("csv_file", "ticker_reference_1.csv")
-        batch_size = body.get("batch_size", 8)
+        batch_size = body.get("batch_size", 5)
         max_batches = body.get("max_batches")  # Optional - for testing
 
         LOG.info(f"=== BATCH UPDATING TICKER METADATA (Gemini 2.5 Pro) ===")

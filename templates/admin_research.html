@@ -1507,9 +1507,18 @@
                     }
                     document.getElementById('modal-title').textContent = title;
 
-                    // Get content
-                    const content = doc.profile_markdown || doc.summary_text || 'No content available';
-                    document.getElementById('modal-content').innerHTML = markdownToHtml(content);
+                    // Get content (8-K uses raw_content which is already HTML)
+                    let contentHtml;
+                    if (docInfo.type === '8k_filings') {
+                        // 8-K content is already HTML, use directly
+                        contentHtml = doc.raw_content || 'No content available';
+                    } else {
+                        // Other types use markdown, convert it
+                        const content = doc.profile_markdown || doc.summary_text || 'No content available';
+                        contentHtml = markdownToHtml(content);
+                    }
+
+                    document.getElementById('modal-content').innerHTML = contentHtml;
                     document.getElementById('profile-modal').style.display = 'block';
                 }
             } catch (error) {

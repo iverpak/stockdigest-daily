@@ -930,10 +930,20 @@ def extract_8k_html_content(exhibit_url: str) -> str:
         # Extract body content (or full soup if no body tag)
         body = soup.find('body')
         if body:
-            html_content = str(body)
+            content_element = body
         else:
             # No body tag - use everything
-            html_content = str(soup)
+            content_element = soup
+
+        # Convert relative image URLs to absolute SEC.gov URLs
+        # Example: <img src="pld-ex99_1s1.jpg"> → <img src="https://www.sec.gov/.../pld-ex99_1s1.jpg">
+        from urllib.parse import urljoin
+        for img in content_element.find_all('img'):
+            if 'src' in img.attrs and not img['src'].startswith('http'):
+                # Convert relative path to absolute URL
+                img['src'] = urljoin(exhibit_url, img['src'])
+
+        html_content = str(content_element)
 
         # Validate minimum length
         if len(html_content) < 500:

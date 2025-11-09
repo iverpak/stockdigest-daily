@@ -17,7 +17,8 @@ import pytz
 import markdown
 from jinja2 import Environment, FileSystemLoader
 
-LOG = logging.getLogger(__name__)
+# Use same logger as app.py so logs are visible in Render
+LOG = logging.getLogger("quantbrief")
 
 # Initialize Jinja2 template environment
 template_env = Environment(loader=FileSystemLoader('templates'))

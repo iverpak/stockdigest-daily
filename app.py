@@ -23708,16 +23708,32 @@ async def process_8k_summary_phase(job: dict):
 
                 try:
                     from jinja2 import Environment, FileSystemLoader
+                    from datetime import datetime
 
                     # Load template
                     template_env = Environment(loader=FileSystemLoader('templates'))
                     raw_email_template = template_env.get_template('email_8k_raw_content.html')
 
+                    # Format date nicely (Oct 30, 2025)
+                    try:
+                        date_obj = datetime.strptime(filing_date, '%Y-%m-%d')
+                        formatted_date = date_obj.strftime('%b %d, %Y')  # "Oct 30, 2025"
+                    except:
+                        formatted_date = filing_date
+
+                    # Map exhibit type to friendly name
+                    type_display = {
+                        'earnings_release': 'Earnings Release',
+                        'investor_presentation': 'Investor Presentation',
+                        'press_release': 'Press Release',
+                        'other': 'SEC Filing'
+                    }.get(exhibit_type, 'SEC Filing')
+
                     # Render email (pass HTML directly, template uses |safe)
                     email_html = raw_email_template.render(
                         ticker=ticker,
                         company_name=ticker_config.get('company_name', ticker),
-                        filing_date=filing_date,
+                        filing_date=formatted_date,
                         item_codes=item_codes,
                         exhibit_number=exhibit_num,
                         exhibit_description=exhibit_desc,
@@ -23726,8 +23742,8 @@ async def process_8k_summary_phase(job: dict):
                         raw_content_html=raw_content
                     )
 
-                    # Subject line includes exhibit number and description
-                    subject = f"📄 8-K Filing: {ticker} - Exhibit {exhibit_num} - {exhibit_desc[:60]} - {filing_date}"
+                    # Cleaner subject line with formatted date and type
+                    subject = f"📄 8-K: {ticker} - Exhibit {exhibit_num} ({type_display}) - {formatted_date}"
 
                     send_email(subject=subject, html_body=email_html, to=DIGEST_TO)
                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent for Exhibit {exhibit_num}")

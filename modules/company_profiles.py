@@ -607,8 +607,6 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
         rows = table.find_all('tr')[1:]  # Skip header
         exhibits = []
 
-        LOG.info(f"[EXHIBIT_DEBUG] Found {len(rows)} rows in documents table")
-
         # Find ALL exhibit files (any number: 1.1, 4.1, 10.1, 99.1, etc.)
         for i, row in enumerate(rows):
             cols = row.find_all('td')
@@ -617,8 +615,6 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
                 doc_type = cols[1].text.strip()  # Column 1: Type (EXHIBIT 1.1, EX-99.1, etc.)
                 filename = cols[2].text.strip()  # Column 2: Filename
                 size_text = cols[3].text.strip()  # Column 3: Size
-
-                LOG.info(f"[EXHIBIT_DEBUG] Row {i}: Type='{doc_type}', Filename='{filename}'")
 
                 # Match ANY exhibit (not just 99.*) that's HTML (skip images, XML, TXT)
                 doc_type_upper = doc_type.upper()
@@ -772,22 +768,9 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
         response = requests.get(sec_html_url, headers=headers, timeout=10)
         text = response.text
 
-        LOG.info(f"[8K_HEADER_DEBUG] Fetched {len(text)} bytes, status={response.status_code}")
-        LOG.info(f"[8K_HEADER_DEBUG] First 500 chars: {text[:500]}")
-
-        # Check if this is iXBRL (inline XBRL) - structured data format
-        is_ixbrl = '<?xml version' in text[:200] or 'xmlns:ix=' in text[:500]
-        if is_ixbrl:
-            LOG.info("[8K_HEADER_DEBUG] Detected iXBRL format - using defaults (full extraction will parse properly)")
-            return {
-                'title': "8-K Filing",
-                'item_codes': "See filing",
-                'item_description': "Material Events"
-            }
-
         # Extract item codes (format: "Item 2.02" or "Item 2.02.")
+        # Works for both regular HTML and iXBRL formats
         items = re.findall(r'Item\s+(\d+\.\d+)', text, re.IGNORECASE)
-        LOG.info(f"[8K_HEADER_DEBUG] Found {len(items)} item codes: {items}")
         item_codes = ', '.join(sorted(set(items[:3])))  # Dedupe and limit to first 3
 
         # Get item description for primary item
@@ -804,7 +787,6 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
             re.IGNORECASE
         )
         parsed_title = title_match.group(0).strip() if title_match else ""
-        LOG.info(f"[8K_HEADER_DEBUG] Title match: {bool(title_match)}, parsed_title: '{parsed_title[:100] if parsed_title else 'NONE'}'...")
 
         # Option C: Both item description AND parsed title
         if parsed_title:

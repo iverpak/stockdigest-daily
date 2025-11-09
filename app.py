@@ -23748,14 +23748,15 @@ async def process_8k_summary_phase(job: dict):
                         ticker, company_name, cik, accession_number,
                         filing_date, filing_title, item_codes, sec_html_url,
                         exhibit_number, exhibit_description, exhibit_type,
-                        raw_content, char_count, summary_text, job_id, generated_at
+                        raw_content, char_count, summary_text, ai_provider, job_id, generated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (ticker, accession_number, exhibit_number)
                     DO UPDATE SET
                         raw_content = EXCLUDED.raw_content,
                         char_count = EXCLUDED.char_count,
                         exhibit_type = EXCLUDED.exhibit_type,
+                        ai_provider = EXCLUDED.ai_provider,
                         generated_at = NOW()
                 """, (
                     ticker,
@@ -23772,6 +23773,7 @@ async def process_8k_summary_phase(job: dict):
                     raw_content,
                     char_count,
                     summary_text,
+                    'none',  # ai_provider (no AI processing for raw exhibits)
                     job_id
                 ))
                 conn.commit()

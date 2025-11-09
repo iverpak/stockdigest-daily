@@ -647,8 +647,14 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
                         except:
                             size_bytes = 0
 
-                        # Get description from column 0 (usually has exhibit description)
-                        description = cols[0].text.strip() or f"Exhibit {exhibit_num}"
+                        # Get description from column 0 or filename
+                        # Note: Column 0 is often just a sequence number, use filename as fallback
+                        desc_from_col = cols[0].text.strip()
+                        if desc_from_col and len(desc_from_col) > 5 and not desc_from_col.isdigit():
+                            description = desc_from_col
+                        else:
+                            # Use filename without extension as description
+                            description = filename.replace('.htm', '').replace('_', ' ').title()
 
                         exhibits.append({
                             'exhibit_number': exhibit_num,

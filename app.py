@@ -22345,7 +22345,8 @@ def generate_email_html_core_editorial(
         """, (ticker,))
         result = cur.fetchone()
         if result and result['article_ids']:
-            flagged_article_ids = result['article_ids']
+            # Parse JSON string to Python list for SQL query
+            flagged_article_ids = json.loads(result['article_ids'])
 
     with db() as conn, conn.cursor() as cur:
         if flagged_article_ids and len(flagged_article_ids) > 0:

@@ -492,27 +492,27 @@ def get_8k_html_url(documents_url: str) -> str:
                 if i < 3:
                     LOG.info(f"[8K_DOC_DEBUG] Row {i} cols: [0]='{cols[0].text.strip()[:50]}', [1]='{cols[1].text.strip()[:50]}', [2]='{cols[2].text.strip()[:50]}', [3]='{cols[3].text.strip()[:50]}'")
 
-                doc_type = cols[3].text.strip().lower()
-                description = cols[1].text.strip()
+                doc_type = cols[1].text.strip()  # Column 1: Type (8-K, EX-99.1, GRAPHIC, etc.)
+                filename = cols[2].text.strip()  # Column 2: Filename (aapl-20251030.htm, etc.)
 
-                LOG.info(f"[8K_DOC_DEBUG] Row {i}: doc_type='{doc_type}', description='{description[:50]}', has_html={'text/html' in doc_type}, has_8k={'8-k' in description.lower()}")
+                LOG.info(f"[8K_DOC_DEBUG] Row {i}: doc_type='{doc_type}', filename='{filename[:50]}', is_htm={'.htm' in filename.lower()}, is_8k={'8-k' in doc_type.lower()}")
 
-                # Look for HTML document with "8-K" in description
-                if 'text/html' in doc_type.lower() and '8-k' in description.lower():
+                # Look for main 8-K HTML file (type='8-K' and filename ends with .htm)
+                if '8-k' in doc_type.lower() and '.htm' in filename.lower():
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:
                         html_url = urljoin(documents_url, link['href'])
                         LOG.info(f"✅ Found main 8-K HTML: {html_url}")
                         return html_url
 
-        # Fallback: First .htm file
-        LOG.info(f"[8K_DOC_DEBUG] No match found, trying fallback (first HTML file)...")
+        # Fallback: First .htm file (any type)
+        LOG.info(f"[8K_DOC_DEBUG] No match found, trying fallback (first .htm file)...")
         for i, row in enumerate(rows):
             cols = row.find_all('td')
             if len(cols) >= 4:
-                doc_type = cols[3].text.strip().lower()
-                LOG.info(f"[8K_DOC_DEBUG] Fallback row {i}: doc_type='{doc_type}', has_html={'text/html' in doc_type}")
-                if 'text/html' in doc_type:
+                filename = cols[2].text.strip()
+                LOG.info(f"[8K_DOC_DEBUG] Fallback row {i}: filename='{filename[:50]}', is_htm={'.htm' in filename.lower()}")
+                if '.htm' in filename.lower():
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:
                         html_url = urljoin(documents_url, link['href'])

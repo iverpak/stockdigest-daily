@@ -411,8 +411,8 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
             if len(cols) >= 4:
                 filing_date = cols[3].text.strip()  # "Jan 30, 2025"
 
-                # Find Documents link
-                documents_link = cols[1].find('a', string='Documents')
+                # Find Documents link (using id='documentsbutton' to handle &nbsp; in text)
+                documents_link = cols[1].find('a', id='documentsbutton')
                 if not documents_link:
                     continue
 

@@ -656,12 +656,17 @@ def extract_8k_content(sec_html_url: str) -> str:
         # Look for Exhibit 99.1 link (most common for material events)
         exhibit_99_1 = None
 
+        LOG.info(f"[8K_EXTRACT_DEBUG] Searching for Exhibit 99.1 link in {len(html)} chars of HTML")
+        LOG.info(f"[8K_EXTRACT_DEBUG] First 1000 chars: {html[:1000]}")
+
         # Pattern 1: ex99-1.htm, ex991.htm, etc.
         exhibit_match = re.search(
             r'href="([^"]+ex99-?1[^"]*\.htm)"',
             html,
             re.IGNORECASE
         )
+
+        LOG.info(f"[8K_EXTRACT_DEBUG] Exhibit regex match: {bool(exhibit_match)}")
 
         if exhibit_match:
             exhibit_relative_url = exhibit_match.group(1)

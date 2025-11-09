@@ -818,25 +818,31 @@
                 const displayTitle = item.title && item.title.length > 80 ? item.title.substring(0, 80) + '...' : (item.title || '8-K Filing');
 
                 if (item.has_summary) {
+                    // Build action buttons for generated 8-K (match library pattern)
+                    const docId = JSON.stringify({
+                        ticker: ticker,
+                        type: '8k_filings',
+                        accession_number: item.accession_number
+                    }).replace(/"/g, '&quot;');
+
                     return `
-                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
-                            <div style="display: flex; justify-content: space-between; align-items: start;">
-                                <div style="flex: 1;">
-                                    <p style="font-weight: 600; margin: 0 0 4px 0;">${item.filing_date}</p>
-                                    <p style="margin: 0 0 4px 0; font-size: 14px; color: #374151;">
-                                        ${displayTitle}
-                                    </p>
-                                    <p style="margin: 0; font-size: 13px; color: #6b7280;">
-                                        Items: ${item.item_codes || 'Unknown'}
-                                    </p>
-                                    <p style="margin: 4px 0 0 0; color: #059669; font-size: 13px;">✅ Summary Generated</p>
-                                </div>
-                                <div style="display: flex; gap: 8px; align-items: center;">
-                                    <a href="/admin/research?token=${token}&tab=library&type=8k_filings&ticker=${ticker}"
-                                       style="background: #1e40af; color: white; padding: 6px 12px; border-radius: 4px; text-decoration: none; font-size: 14px;">
-                                        View in Library →
-                                    </a>
-                                </div>
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.filing_date}</strong>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <button onclick='viewDocument(${docId}); event.stopPropagation();'
+                                        style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+                                    View
+                                </button>
+                                <button onclick='emailDocument(${docId}); event.stopPropagation();'
+                                        style="background: #059669; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+                                    Email
+                                </button>
+                                <button onclick='deleteDocument(${docId}); event.stopPropagation();'
+                                        style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+                                    Delete
+                                </button>
                             </div>
                         </div>
                     `;
@@ -853,22 +859,14 @@
                     `;
                 } else {
                     return `
-                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
-                            <div style="display: flex; justify-content: space-between; align-items: start;">
-                                <div style="flex: 1;">
-                                    <p style="font-weight: 600; margin: 0 0 4px 0;">${item.filing_date}</p>
-                                    <p style="margin: 0 0 4px 0; font-size: 14px; color: #374151;">
-                                        ${displayTitle}
-                                    </p>
-                                    <p style="margin: 0; font-size: 13px; color: #6b7280;">
-                                        Items: ${item.item_codes || 'Unknown'}
-                                    </p>
-                                </div>
-                                <button onclick="generate8K('${ticker}', '${cik || ''}', '${item.accession_number}', '${item.filing_date}', \`${(item.title || '').replace(/`/g, '\\`')}\`, '${item.sec_html_url || ''}', '${item.item_codes || ''}', '${item.exhibit_99_1_url || ''}')"
-                                        style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
-                                    Generate Summary (5-10 min)
-                                </button>
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${item.filing_date}</strong>
                             </div>
+                            <button onclick="generate8K('${ticker}', '${cik || ''}', '${item.accession_number}', '${item.filing_date}', \`${(item.title || '').replace(/`/g, '\\`')}\`, '${item.sec_html_url || ''}', '${item.item_codes || ''}', '${item.exhibit_99_1_url || ''}')"
+                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                Generate
+                            </button>
                         </div>
                     `;
                 }
@@ -1547,6 +1545,9 @@
             } else if (type === 'press_releases') {
                 filename = `${currentProfile.ticker}_PressRelease_${currentProfile.report_date}.md`;
                 content = currentProfile.summary_text;
+            } else if (type === '8k_filings') {
+                filename = `${currentProfile.ticker}_8K_${currentProfile.filing_date}.md`;
+                content = currentProfile.summary_text;
             }
 
             const blob = new Blob([content], { type: 'text/markdown' });
@@ -1663,7 +1664,7 @@
                     body = { token, ticker: docInfo.ticker, report_date: docInfo.report_date, pr_title: docInfo.pr_title, report_type: 'press_release' };
                 } else if (docInfo.type === '8k_filings') {
                     endpoint = '/api/admin/delete-8k-filing';
-                    body = { token, ticker: docInfo.ticker };
+                    body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number };
                 }
 
                 const response = await fetch(endpoint, {
@@ -1710,13 +1711,15 @@
                         ticker: docInfo.ticker,
                         type: docInfo.type === 'transcripts' ? 'transcript' :
                               docInfo.type === 'press_releases' ? 'press_release' :
-                              docInfo.type === 'presentations' ? 'presentation' : docInfo.type,
+                              docInfo.type === 'presentations' ? 'presentation' :
+                              docInfo.type === '8k_filings' ? '8k_filing' : docInfo.type,
                         presentation_date: docInfo.presentation_date,
                         quarter: docInfo.quarter,
                         year: docInfo.year,
                         report_date: docInfo.report_date,
                         pr_title: docInfo.pr_title,         // Include for press release identification
-                        ai_provider: docInfo.ai_provider    // Include for transcript disambiguation
+                        ai_provider: docInfo.ai_provider,   // Include for transcript disambiguation
+                        accession_number: docInfo.accession_number  // Include for 8-K identification
                     };
                 }
 

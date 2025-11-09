@@ -863,9 +863,9 @@
                             <div>
                                 <strong>${item.filing_date}</strong>
                             </div>
-                            <button onclick="generate8K('${ticker}', '${cik || ''}', '${item.accession_number}', '${item.filing_date}', \`${(item.title || '').replace(/`/g, '\\`')}\`, '${item.sec_html_url || ''}', '${item.item_codes || ''}', '${item.exhibit_99_1_url || ''}')"
+                            <button onclick="generate8K('${ticker}', '${cik || ''}', '${item.accession_number}', '${item.filing_date}', \`${(item.title || '').replace(/`/g, '\\`')}\`, '${item.sec_html_url || ''}', '${item.item_codes || ''}')"
                                     style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
-                                Generate
+                                Generate (< 1 min)
                             </button>
                         </div>
                     `;
@@ -874,8 +874,8 @@
         }
 
         // 8-K generation function
-        async function generate8K(ticker, cik, accessionNumber, filingDate, filingTitle, secHtmlUrl, itemCodes, exhibitUrl) {
-            alert(`Starting 8-K summary generation for ${ticker} (${filingDate}). This will take 5-10 minutes...`);
+        async function generate8K(ticker, cik, accessionNumber, filingDate, filingTitle, documentsUrl, itemCodes) {
+            alert(`Starting 8-K exhibit processing for ${ticker} (${filingDate}). Processing all EX-99.* exhibits...`);
 
             try {
                 const response = await fetch('/api/admin/generate-8k-summary', {
@@ -888,16 +888,15 @@
                         accession_number: accessionNumber,
                         filing_date: filingDate,
                         filing_title: filingTitle,
-                        sec_html_url: secHtmlUrl,
-                        item_codes: itemCodes,
-                        exhibit_99_1_url: exhibitUrl
+                        documents_url: documentsUrl,
+                        item_codes: itemCodes
                     })
                 });
 
                 const result = await response.json();
 
                 if (result.status === 'success') {
-                    alert(`✅ 8-K summary job created! Job ID: ${result.job_id}\n\nProcessing will take 5-10 minutes. You'll receive an email when complete.`);
+                    alert(`✅ 8-K exhibit processing job created! Job ID: ${result.job_id}\n\nProcessing all EX-99.* exhibits (~1 min). You'll receive separate emails for each exhibit.`);
                 } else {
                     alert(`❌ Failed to create job: ${result.message}`);
                 }

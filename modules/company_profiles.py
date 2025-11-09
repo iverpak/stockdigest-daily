@@ -11,7 +11,7 @@ import PyPDF2
 import logging
 import traceback
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import pytz
 import markdown

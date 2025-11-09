@@ -826,23 +826,27 @@
                     }).replace(/"/g, '&quot;');
 
                     return `
-                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <strong>${item.filing_date}</strong>
-                            </div>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <button onclick='viewDocument(${docId}); event.stopPropagation();'
-                                        style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
-                                    View
-                                </button>
-                                <button onclick='emailDocument(${docId}); event.stopPropagation();'
-                                        style="background: #059669; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
-                                    Email
-                                </button>
-                                <button onclick='deleteDocument(${docId}); event.stopPropagation();'
-                                        style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
-                                    Delete
-                                </button>
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
+                            <div style="display: flex; justify-content: space-between; align-items: start; gap: 12px;">
+                                <div style="flex: 1; min-width: 0;">
+                                    <div style="font-weight: 600; margin-bottom: 4px;">${item.filing_date} ✅</div>
+                                    <div style="font-size: 13px; color: #6b7280; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis;">${displayTitle}</div>
+                                    <div style="font-size: 12px; color: #9ca3af;">Items: ${item.item_codes || 'Unknown'}</div>
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
+                                    <button onclick='viewDocument(${docId}); event.stopPropagation();'
+                                            style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                                        View
+                                    </button>
+                                    <button onclick='emailDocument(${docId}); event.stopPropagation();'
+                                            style="background: #059669; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                                        Email
+                                    </button>
+                                    <button onclick='deleteDocument(${docId}); event.stopPropagation();'
+                                            style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                                        Delete
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -859,14 +863,18 @@
                     `;
                 } else {
                     return `
-                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <strong>${item.filing_date}</strong>
+                        <div style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
+                            <div style="display: flex; justify-content: space-between; align-items: start; gap: 12px;">
+                                <div style="flex: 1; min-width: 0;">
+                                    <div style="font-weight: 600; margin-bottom: 4px;">${item.filing_date}</div>
+                                    <div style="font-size: 13px; color: #6b7280; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis;">${displayTitle}</div>
+                                    <div style="font-size: 12px; color: #9ca3af;">Items: ${item.item_codes || 'Unknown'}</div>
+                                </div>
+                                <button onclick="generate8K('${ticker}', '${cik || ''}', '${item.accession_number}', '${item.filing_date}', \`${(item.title || '').replace(/`/g, '\\`')}\`, '${item.documents_url || ''}', '${item.item_codes || ''}')"
+                                        style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600; white-space: nowrap; flex-shrink: 0;">
+                                    Generate (&lt; 1 min)
+                                </button>
                             </div>
-                            <button onclick="generate8K('${ticker}', '${cik || ''}', '${item.accession_number}', '${item.filing_date}', \`${(item.title || '').replace(/`/g, '\\`')}\`, '${item.documents_url || ''}', '${item.item_codes || ''}')"
-                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
-                                Generate (< 1 min)
-                            </button>
                         </div>
                     `;
                 }

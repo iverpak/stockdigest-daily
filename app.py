@@ -1692,8 +1692,11 @@ def ensure_schema():
                     item_codes VARCHAR(100),                 -- "2.02, 9.01"
                     sec_html_url TEXT NOT NULL,              -- Direct link to 8-K HTML on SEC.gov
 
+                    -- Raw content (Exhibit 99.1 or main body)
+                    raw_content TEXT,                        -- Raw extracted content before AI processing
+
                     -- AI Summary
-                    summary_text TEXT NOT NULL,              -- Gemini-generated summary
+                    summary_text TEXT NOT NULL,              -- Gemini-generated summary (noise filtered, 90% retention)
 
                     -- AI metadata
                     ai_provider VARCHAR(20) NOT NULL,        -- 'gemini'
@@ -23666,22 +23669,58 @@ async def process_8k_summary_phase(job: dict):
         LOG.info(f"[8K_WORKER_DEBUG] Worker received exhibit_99_1_url from config: {exhibit_99_1_url}")
         LOG.info(f"[8K_WORKER_DEBUG] Worker received sec_html_url from config: {sec_html_url}")
 
-        content = extract_8k_content(sec_html_url, exhibit_99_1_url)
+        raw_content = extract_8k_content(sec_html_url, exhibit_99_1_url)
 
-        if not content or len(content) < 500:
-            raise ValueError(f"Extracted content too short ({len(content)} chars)")
+        if not raw_content or len(raw_content) < 500:
+            raise ValueError(f"Extracted content too short ({len(raw_content)} chars)")
 
-        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(content)} characters")
-
-        # Progress: 30% - Generating summary with Gemini (this takes 5-10 min)
-        update_job_status(job_id, progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with Gemini 2.5 Flash (5-10 min)...")
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(raw_content)} characters")
 
         ticker_config = get_ticker_config(ticker)
 
+        # Progress: 30% - Send Email #1 (Raw Content QA)
+        if config.get('send_email', True):
+            update_job_status(job_id, progress=30)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #1 (Raw Content)...")
+
+            try:
+                from modules.company_profiles import format_8k_raw_content_to_html
+                from jinja2 import Environment, FileSystemLoader
+
+                # Format raw content to HTML
+                raw_content_html = format_8k_raw_content_to_html(raw_content)
+
+                # Load template
+                template_env = Environment(loader=FileSystemLoader('templates'))
+                raw_email_template = template_env.get_template('email_8k_raw_content.html')
+
+                # Render email
+                email_html = raw_email_template.render(
+                    ticker=ticker,
+                    company_name=ticker_config.get('company_name', ticker),
+                    filing_date=filing_date,
+                    item_codes=item_codes,
+                    exhibit_url=exhibit_99_1_url or sec_html_url,
+                    char_count=f"{len(raw_content):,}",
+                    raw_content_html=raw_content_html
+                )
+
+                subject = f"📄 8-K Raw Content: {ticker} - {item_codes} - {filing_date}"
+
+                send_email(subject=subject, html_body=email_html, to=DIGEST_TO)
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #1 sent to {DIGEST_TO}")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send Email #1: {email_error}")
+                # Continue - raw content extraction was successful
+
+        # Progress: 40% - Generating formatted version with Gemini (this takes 5-10 min)
+        update_job_status(job_id, progress=40)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating formatted version with Gemini 2.5 Flash (5-10 min)...")
+
         summary_text = generate_8k_summary_with_gemini(
             ticker=ticker,
-            content=content,
+            content=raw_content,
             config=ticker_config,
             filing_date=filing_date,
             item_codes=item_codes,
@@ -23689,22 +23728,23 @@ async def process_8k_summary_phase(job: dict):
         )
 
         if not summary_text:
-            raise ValueError("Gemini summary generation failed")
+            raise ValueError("Gemini formatting failed")
 
         # Progress: 80% - Saving to database
         update_job_status(job_id, progress=80)
-        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving to database (raw + formatted)...")
 
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO sec_8k_filings (
                     ticker, company_name, cik, accession_number,
                     filing_date, filing_title, item_codes, sec_html_url,
-                    summary_text, ai_provider, ai_model
+                    raw_content, summary_text, ai_provider, ai_model
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ticker, accession_number)
                 DO UPDATE SET
+                    raw_content = EXCLUDED.raw_content,
                     summary_text = EXCLUDED.summary_text,
                     ai_model = EXCLUDED.ai_model,
                     generated_at = NOW()
@@ -23717,16 +23757,17 @@ async def process_8k_summary_phase(job: dict):
                 filing_title,
                 item_codes,
                 sec_html_url,
+                raw_content,  # NEW: Store raw content
                 summary_text,
                 'gemini',
                 'gemini-2.5-flash'
             ))
             conn.commit()
 
-        # Progress: 95% - Sending email
+        # Progress: 95% - Send Email #2 (Formatted Summary)
         if config.get('send_email', True):
             update_job_status(job_id, progress=95)
-            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #2 (Formatted Summary)...")
 
             try:
                 # Get real-time stock data
@@ -23751,13 +23792,13 @@ async def process_8k_summary_phase(job: dict):
                 )
 
                 # Override subject line for 8-K
-                subject = f"📋 8-K Filing: {ticker} - {filing_title[:80]}"
+                subject = f"📰 8-K Formatted: {ticker} - {filing_title[:80]}"
 
                 send_email(subject=subject, html_body=email_data['html'], to=DIGEST_TO)
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent to {DIGEST_TO}")
 
             except Exception as email_error:
-                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send Email #2: {email_error}")
                 # Continue - summary was saved successfully
 
         # Mark complete

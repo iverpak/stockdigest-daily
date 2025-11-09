@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>8-K Raw Content - {{ ticker }}</title>
+    <style>
+        @media only screen and (max-width: 600px) {
+            .content-padding { padding: 16px !important; }
+            .header-padding { padding: 16px 20px 25px 20px !important; }
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+
+                <table role="presentation" style="max-width: 800px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px;">
+
+                    <!-- Header -->
+                    <tr>
+                        <td class="header-padding" style="padding: 18px 24px 24px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0; border: 0;">
+                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; opacity: 0.85; font-weight: 600; color: #ffffff;">📄 8-K RAW CONTENT</div>
+                            <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.2; color: #ffffff;">{{ company_name }}</h1>
+                            <div style="font-size: 14px; margin-top: 4px; opacity: 0.9; color: #ffffff;">{{ ticker }}</div>
+                        </td>
+                    </tr>
+
+                    <!-- Metadata Card -->
+                    <tr>
+                        <td class="content-padding" style="padding: 24px;">
+                            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 6px; border-left: 4px solid #1e40af; margin-bottom: 24px;">
+                                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                    <tr>
+                                        <td style="padding: 6px 0; vertical-align: top; width: 40%; border: 0;">
+                                            <strong style="font-size: 13px; color: #495057;">Filing Date:</strong>
+                                        </td>
+                                        <td style="padding: 6px 0; font-size: 13px; color: #212529; border: 0;">
+                                            {{ filing_date }}
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 6px 0; vertical-align: top; border: 0;">
+                                            <strong style="font-size: 13px; color: #495057;">Item Codes:</strong>
+                                        </td>
+                                        <td style="padding: 6px 0; font-size: 13px; color: #212529; border: 0;">
+                                            {{ item_codes }}
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 6px 0; vertical-align: top; border: 0;">
+                                            <strong style="font-size: 13px; color: #495057;">Exhibit 99.1 URL:</strong>
+                                        </td>
+                                        <td style="padding: 6px 0; font-size: 13px; border: 0;">
+                                            <a href="{{ exhibit_url }}" style="color: #1e40af; text-decoration: none; word-break: break-all;">View on SEC.gov</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 6px 0; vertical-align: top; border: 0;">
+                                            <strong style="font-size: 13px; color: #495057;">Content Length:</strong>
+                                        </td>
+                                        <td style="padding: 6px 0; font-size: 13px; color: #212529; border: 0;">
+                                            {{ char_count }} characters
+                                        </td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            <!-- Raw Content Section -->
+                            <h2 style="font-size: 18px; font-weight: 600; color: #212529; margin: 0 0 16px 0; padding-bottom: 10px; border-bottom: 2px solid #e9ecef;">
+                                Exhibit 99.1 Content (Unfiltered)
+                            </h2>
+
+                            <!-- Formatted Raw Content -->
+                            <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #ffffff; padding: 20px; border: 1px solid #dee2e6; border-radius: 6px;">
+                                {{ raw_content_html|safe }}
+                            </div>
+
+                            <!-- Processing Notice -->
+                            <div style="margin-top: 30px; padding: 16px; background-color: #fff8e1; border-left: 4px solid #ffc107; border-radius: 6px;">
+                                <p style="margin: 0; font-size: 14px; color: #6c757d; line-height: 1.5;">
+                                    ⏳ <strong>Gemini 2.5 Flash</strong> is now processing this content to remove boilerplate and format cleanly...<br>
+                                    You will receive the formatted version in ~1-2 minutes.
+                                </p>
+                            </div>
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
+                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td>
+                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
+
+                                        <!-- Legal Disclaimer -->
+                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
+                                            For informational and educational purposes only. Not investment advice.
+                                        </div>
+
+                                        <!-- Links -->
+                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
+                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
+                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
+                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Contact</a>
+                                        </div>
+
+                                        <!-- Copyright -->
+                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
+                                            © 2025 StockDigest. All rights reserved.
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>

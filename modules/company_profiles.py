@@ -656,15 +656,15 @@ def extract_8k_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
     """
     Extract 8-K content for AI summarization.
 
-    Prioritizes Exhibit 99.1 (press releases, material announcements) and
-    includes main 8-K body as context.
+    Uses ONLY Exhibit 99.1 (the actual press release/announcement). Main 8-K body
+    contains mostly legal disclaimers and boilerplate, so it's only used as fallback.
 
     Args:
         sec_html_url: Full URL to main 8-K HTML on SEC.gov
         exhibit_99_1_url: Full URL to Exhibit 99.1 (or None if not found)
 
     Returns:
-        Clean text content for Gemini summarization
+        Clean text content for Gemini processing (Exhibit 99.1 or main body fallback)
 
     Raises:
         ValueError: If content too short or empty
@@ -674,40 +674,176 @@ def extract_8k_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
         LOG.info(f"Exhibit 99.1 URL provided: {exhibit_99_1_url}")
 
     try:
-        # Fetch main 8-K HTML
-        main_8k_text = fetch_sec_html_text(sec_html_url)
-
         # Fetch Exhibit 99.1 if URL was provided
-        exhibit_99_1 = None
         if exhibit_99_1_url:
             try:
                 exhibit_99_1 = fetch_sec_html_text(exhibit_99_1_url)
                 LOG.info(f"✅ Fetched Exhibit 99.1 ({len(exhibit_99_1)} chars)")
-            except Exception as e:
-                LOG.warning(f"Failed to fetch Exhibit 99.1: {e}")
 
-        # Build content
-        if exhibit_99_1 and len(exhibit_99_1) > 500:
-            # Exhibit 99.1 found and substantial - use it as primary content
-            content = f"EXHIBIT 99.1:\n\n{exhibit_99_1}\n\n---\n\nMAIN 8-K BODY:\n\n{main_8k_text}"
-            LOG.info(f"Using Exhibit 99.1 + main body ({len(content)} total chars)")
-        else:
-            # No Exhibit 99.1 or too short - use main body only
-            content = main_8k_text
-            LOG.info(f"Using main 8-K body only ({len(content)} chars)")
+                # Validate sufficient content
+                if len(exhibit_99_1) > 500:
+                    LOG.info(f"✅ Using Exhibit 99.1 only ({len(exhibit_99_1)} chars)")
+                    return exhibit_99_1
+                else:
+                    LOG.warning(f"Exhibit 99.1 too short ({len(exhibit_99_1)} chars), falling back to main body")
+            except Exception as e:
+                LOG.warning(f"Failed to fetch Exhibit 99.1: {e}, falling back to main body")
+
+        # Fallback: Fetch main 8-K HTML (rare - only if no Exhibit 99.1)
+        # Example: Item 5.02 (officer departure) might be in main body only
+        main_8k_text = fetch_sec_html_text(sec_html_url)
+        LOG.info(f"Using main 8-K body as fallback ({len(main_8k_text)} chars)")
 
         # Validate minimum length
-        if len(content) < 500:
+        if len(main_8k_text) < 500:
             raise ValueError(
-                f"8-K content too short ({len(content)} chars) - may be empty or malformed"
+                f"8-K content too short ({len(main_8k_text)} chars) - may be empty or malformed"
             )
 
-        LOG.info(f"✅ Extracted {len(content)} characters for summarization")
-        return content
+        return main_8k_text
 
     except Exception as e:
         LOG.error(f"Failed to extract 8-K content: {e}")
         raise
+
+
+def format_8k_raw_content_to_html(raw_text: str) -> str:
+    """
+    Convert raw 8-K text to formatted HTML for Email #1.
+
+    Applies basic HTML formatting while preserving structure:
+    - Converts line breaks to <br>
+    - Detects and styles section headers (ALL CAPS lines)
+    - Detects and formats ASCII tables with proper styling
+    - Gracefully handles malformed content
+
+    Args:
+        raw_text: Raw text from Exhibit 99.1 or main 8-K body
+
+    Returns:
+        HTML-formatted string with styled tables and headers
+    """
+    import re
+
+    if not raw_text or len(raw_text.strip()) < 100:
+        return "<p style='color: #6c757d;'>Content too short or empty</p>"
+
+    # Escape HTML special characters first
+    html = raw_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    # Detect and format section headers (ALL CAPS lines, minimum 10 chars, at start of line)
+    # Example: "CONSOLIDATED STATEMENTS OF OPERATIONS"
+    html = re.sub(
+        r'^([A-Z][A-Z\s]{10,})$',
+        r'<h3 style="font-size: 16px; font-weight: 600; color: #1e40af; margin: 24px 0 12px 0; padding-bottom: 6px; border-bottom: 2px solid #e9ecef;">\1</h3>',
+        html,
+        flags=re.MULTILINE
+    )
+
+    # Detect ASCII tables (lines with multiple spaces or tabs, appearing in groups)
+    # This is a simple heuristic - try to detect table-like structures
+    lines = html.split('\n')
+    formatted_lines = []
+    in_table = False
+    table_buffer = []
+
+    for i, line in enumerate(lines):
+        # Check if line looks like a table row (has 2+ columns separated by 2+ spaces or tabs)
+        is_table_row = bool(re.search(r'\s{2,}|\t', line)) and len(line.strip()) > 20
+
+        if is_table_row:
+            if not in_table:
+                in_table = True
+                table_buffer = []
+            table_buffer.append(line)
+        else:
+            # End of table - format it
+            if in_table and table_buffer:
+                formatted_table = _format_ascii_table(table_buffer)
+                if formatted_table:
+                    formatted_lines.append(formatted_table)
+                else:
+                    # Table formatting failed, just add as preformatted text
+                    formatted_lines.extend(table_buffer)
+                table_buffer = []
+                in_table = False
+
+            formatted_lines.append(line)
+
+    # Handle table at end of content
+    if in_table and table_buffer:
+        formatted_table = _format_ascii_table(table_buffer)
+        if formatted_table:
+            formatted_lines.append(formatted_table)
+        else:
+            formatted_lines.extend(table_buffer)
+
+    # Join lines and convert line breaks
+    html = '\n'.join(formatted_lines)
+    html = html.replace('\n', '<br>\n')
+
+    return html
+
+
+def _format_ascii_table(lines: List[str]) -> Optional[str]:
+    """
+    Helper function to format ASCII table lines into HTML table.
+
+    Args:
+        lines: List of lines that appear to be a table
+
+    Returns:
+        HTML table string, or None if formatting fails
+    """
+    if not lines or len(lines) < 2:
+        return None
+
+    try:
+        # Split each line into columns (split on 2+ spaces or tabs)
+        rows = []
+        for line in lines:
+            # Clean up line and split on whitespace (2+ spaces or tabs)
+            cols = re.split(r'\s{2,}|\t+', line.strip())
+            # Filter out empty columns
+            cols = [c.strip() for c in cols if c.strip()]
+            if cols:
+                rows.append(cols)
+
+        if not rows or len(rows) < 2:
+            return None
+
+        # First row is likely header
+        header_row = rows[0]
+        data_rows = rows[1:]
+
+        # Build HTML table with styling
+        table_html = ['<table style="border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 13px;">']
+
+        # Header
+        table_html.append('  <thead style="background: #f8f9fa;">')
+        table_html.append('    <tr>')
+        for col in header_row:
+            table_html.append(f'      <th style="padding: 12px; border: 1px solid #dee2e6; text-align: left; font-weight: 600; color: #212529;">{col}</th>')
+        table_html.append('    </tr>')
+        table_html.append('  </thead>')
+
+        # Body
+        table_html.append('  <tbody>')
+        for row_idx, row in enumerate(data_rows):
+            # Alternate row colors for readability
+            bg_color = '#ffffff' if row_idx % 2 == 0 else '#f8f9fa'
+            table_html.append(f'    <tr style="background-color: {bg_color};">')
+            for col in row:
+                table_html.append(f'      <td style="padding: 10px; border: 1px solid #dee2e6; color: #212529;">{col}</td>')
+            table_html.append('    </tr>')
+        table_html.append('  </tbody>')
+        table_html.append('</table>')
+
+        return '\n'.join(table_html)
+
+    except Exception as e:
+        LOG.warning(f"Failed to format ASCII table: {e}")
+        return None
 
 
 def generate_8k_summary_with_gemini(
@@ -719,20 +855,21 @@ def generate_8k_summary_with_gemini(
     gemini_api_key: str
 ) -> str:
     """
-    Generate 8-K summary using Gemini 2.5 Flash.
+    Format 8-K content using Gemini 2.5 Flash - NOISE FILTER not summarizer.
 
-    Simple, broad extraction prompt - focuses on "extract everything material".
+    Removes legal boilerplate (disclaimers, safe harbor warnings) while preserving
+    ~90% of meaningful content. All tables, numbers, quotes, and guidance preserved verbatim.
 
     Args:
         ticker: Stock ticker (e.g., 'AAPL', 'TSLA')
-        content: Full 8-K content (Exhibit 99.1 + main body)
+        content: Raw 8-K content (Exhibit 99.1 or main body fallback)
         config: Ticker configuration dict with company_name, etc.
         filing_date: Filing date string (e.g., "Jan 30, 2025")
         item_codes: Item codes string (e.g., "2.02, 9.01")
         gemini_api_key: Gemini API key
 
     Returns:
-        Markdown-formatted summary (800-1,500 words)
+        Clean markdown with ~90% content retention (removes only legal noise)
 
     Raises:
         Exception: If generation fails
@@ -744,36 +881,44 @@ def generate_8k_summary_with_gemini(
 
     LOG.info(f"[{ticker}] Generating 8-K summary with Gemini 2.5 Flash...")
 
-    # Build prompt
-    prompt = f"""You are analyzing an SEC 8-K filing for {ticker} ({company_name}).
+    # Build prompt - NOISE FILTER not summarizer (90% content retention)
+    prompt = f"""You are formatting an SEC 8-K filing for {ticker} ({company_name}) for readability.
 
-Extract ALL material information from this filing. Preserve tables and charts in markdown format.
+TASK: Remove legal boilerplate and disclaimers, but keep ~90% of the meaningful content.
 
-Structure your summary:
+KEEP (verbatim):
+• All numbers, figures, percentages, and metrics
+• ALL tables - output COMPLETE markdown tables with EVERY row and column (do NOT summarize or skip rows)
+• All executive quotes
+• All material events and developments
+• All business guidance and outlook (revenue targets, EPS guidance, growth plans, strategic initiatives)
+• All deal terms and transaction details
+• "About [Company]" description
 
-## Filing Overview
-- Filing Date: {filing_date}
-- Item Codes: {item_codes}
-- Event Type: [Describe the primary event]
+REMOVE ONLY:
+• Forward-looking statements safe harbor disclaimers (e.g., "Statements herein may constitute forward-looking statements subject to risks under the Private Securities Litigation Reform Act...")
+• Risk factor warnings (e.g., "Factors that could cause actual results to differ include economic conditions, competition, regulatory changes...")
+• Legal cautionary language (e.g., "We undertake no obligation to update or revise these statements...")
+• Investor relations contact information blocks
 
-## Key Details
-[Extract all material facts, figures, and developments]
+CRITICAL - TABLES:
+When you encounter a table, output the FULL table in markdown format. Include every single row and column exactly as shown - do not summarize, condense, or skip any rows.
 
-## Financial Impact
-[Any disclosed financial impacts, terms, or projections]
+Example - if original has 10 rows, your output must have 10 rows:
+| Revenue Stream | Q4 2024 | Q4 2023 | Change |
+|----------------|---------|---------|--------|
+| Products       | $96.5B  | $96.4B  | +0%    |
+| Services       | $23.1B  | $20.8B  | +11%   |
+[... all 10 rows must appear ...]
 
-## Tables & Charts
-[Preserve any financial tables or data in markdown format]
+OUTPUT: Clean markdown preserving ~90% of original content. No analysis or commentary.
 
-## Business Implications
-[What does this mean for the company?]
-
-Target: 800-1,500 words depending on complexity.
-Be thorough - capture everything material.
+Filing Date: {filing_date}
+Item Codes: {item_codes}
 
 ---
 
-8-K CONTENT:
+8-K FILING CONTENT:
 
 {content}
 """

@@ -25663,17 +25663,19 @@ async def validate_ticker_for_8k(ticker: str):
                     """, (ticker, filing['accession_number']))
                     has_summary = cur.fetchone() is not None
 
+                exhibit_url = urls.get('exhibit_99_1_url')
                 enriched_filings.append({
                     'filing_date': filing['filing_date'],
                     'accession_number': filing['accession_number'],
                     'sec_html_url': sec_html_url,
-                    'exhibit_99_1_url': urls.get('exhibit_99_1_url'),
+                    'exhibit_99_1_url': exhibit_url,
                     'title': parsed['title'],
                     'item_codes': parsed['item_codes'],
                     'has_summary': has_summary
                 })
 
                 LOG.info(f"[{ticker}] [{i+1}/{len(filings)}] Parsed: {parsed['title'][:50]}...")
+                LOG.info(f"[8K_VALIDATION_DEBUG] Returning exhibit_99_1_url in response: {exhibit_url}")
 
             except Exception as e:
                 LOG.error(f"[{ticker}] Failed to parse filing {filing['accession_number']}: {e}")

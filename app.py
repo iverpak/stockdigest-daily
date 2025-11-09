@@ -30677,41 +30677,57 @@ def get_all_8k_filings(token: str = Query(...)):
 @APP.post("/api/admin/delete-8k-filing")
 async def delete_8k_filing_api(request: Request):
     """
-    Delete 8-K filing(s) by ticker.
+    Delete specific 8-K exhibit by ticker, accession_number, and exhibit_number.
 
-    Body: {"ticker": "AAPL", "token": "..."}
+    Body: {
+        "ticker": "AAPL",
+        "accession_number": "0001193125-25-012345",
+        "exhibit_number": "99.1",
+        "token": "..."
+    }
 
-    Deletes ALL 8-K filings for the specified ticker.
+    Deletes ONLY the specified exhibit.
     """
     body = await request.json()
     token = body.get('token')
     ticker = body.get('ticker')
+    accession_number = body.get('accession_number')
+    exhibit_number = body.get('exhibit_number')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    if not all([ticker, accession_number, exhibit_number]):
+        return {"status": "error", "message": "Missing required fields: ticker, accession_number, exhibit_number"}
+
     try:
         with db() as conn, conn.cursor() as cur:
-            # Delete all 8-K filings for this ticker
+            # Delete specific exhibit only
             cur.execute("""
                 DELETE FROM sec_8k_filings
                 WHERE ticker = %s
-                RETURNING accession_number
-            """, (ticker,))
+                  AND accession_number = %s
+                  AND exhibit_number = %s
+                RETURNING exhibit_number, exhibit_description
+            """, (ticker, accession_number, exhibit_number))
 
-            deleted = cur.fetchall()
+            deleted = cur.fetchone()
             conn.commit()
 
-            count = len(deleted)
-            LOG.info(f"🗑️ Deleted {count} 8-K filing(s) for {ticker}")
-
-            return {
-                "status": "success",
-                "message": f"Deleted {count} 8-K filing(s) for {ticker}"
-            }
+            if deleted:
+                LOG.info(f"🗑️ Deleted 8-K exhibit {exhibit_number} for {ticker} ({deleted['exhibit_description']})")
+                return {
+                    "status": "success",
+                    "message": f"Deleted Exhibit {exhibit_number}: {deleted['exhibit_description']}"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Exhibit {exhibit_number} not found for {ticker}"
+                }
 
     except Exception as e:
-        LOG.error(f"Failed to delete 8-K filings: {e}")
+        LOG.error(f"Failed to delete 8-K exhibit: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -31764,6 +31780,31 @@ async def email_research_api(request: Request):
                 pr_title_display = doc['pr_title'][:60] + '...' if len(doc['pr_title']) > 60 else doc['pr_title']
                 subject = f"📰 Press Release: {ticker} - {pr_title_display}"
 
+            elif research_type == '8k_filing':
+                accession_number = body.get('accession_number')
+                exhibit_number = body.get('exhibit_number')
+
+                if not accession_number or not exhibit_number:
+                    return {"status": "error", "message": "Accession number and exhibit number required"}
+
+                cur.execute("""
+                    SELECT ticker, company_name, filing_date, filing_title, item_codes,
+                           accession_number, exhibit_number, exhibit_description,
+                           raw_content, summary_text
+                    FROM sec_8k_filings
+                    WHERE ticker = %s
+                      AND accession_number = %s
+                      AND exhibit_number = %s
+                    LIMIT 1
+                """, (ticker, accession_number, exhibit_number))
+
+                doc = cur.fetchone()
+                if not doc:
+                    return {"status": "error", "message": f"No 8-K exhibit found for {ticker}"}
+
+                content = doc['raw_content'] or doc['summary_text']
+                subject = f"📄 8-K Filing: {ticker} - Exhibit {doc['exhibit_number']}: {doc['exhibit_description']} ({doc['filing_date']})"
+
         if not content:
             return {"status": "error", "message": "No content found"}
 
@@ -31839,6 +31880,25 @@ async def email_research_api(request: Request):
             )
             html_body = email_data['html']
             subject = email_data['subject']
+
+        elif research_type == '8k_filing':
+            # Use raw 8-K email template
+            from jinja2 import Environment, FileSystemLoader
+            template_env = Environment(loader=FileSystemLoader('templates'))
+            raw_email_template = template_env.get_template('email_8k_raw_content.html')
+
+            html_body = raw_email_template.render(
+                ticker=ticker,
+                company_name=doc.get('company_name', ticker),
+                filing_date=doc['filing_date'],
+                item_codes=doc.get('item_codes', 'N/A'),
+                exhibit_number=doc['exhibit_number'],
+                exhibit_description=doc['exhibit_description'],
+                exhibit_url=f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={doc['accession_number']}",
+                char_count=f"{len(content):,}",
+                raw_content_html=content
+            )
+            # subject already set above
 
         send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
 

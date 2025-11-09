@@ -1311,9 +1311,9 @@
                 case '8k_filings':
                     return common + `
                         <th style="padding: 12px; text-align: left;">Date</th>
-                        <th style="padding: 12px; text-align: left;">Title</th>
+                        <th style="padding: 12px; text-align: center;">Exhibit</th>
+                        <th style="padding: 12px; text-align: left;">Description</th>
                         <th style="padding: 12px; text-align: center;">Items</th>
-                        <th style="padding: 12px; text-align: center;">Model</th>
                         <th style="padding: 12px; text-align: center;">Actions</th>
                     `;
             }
@@ -1410,19 +1410,14 @@
                         </td>
                     `;
                 case '8k_filings':
-                    const filingTitle = doc.filing_title ? (doc.filing_title.length > 60 ? doc.filing_title.substring(0, 60) + '...' : doc.filing_title) : '8-K Filing';
-                    const duration = doc.processing_duration_seconds ? `${(doc.processing_duration_seconds / 60).toFixed(1)}min` : 'N/A';
+                    const exhibitDesc = doc.exhibit_description || 'N/A';
 
                     return `
                         <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${formatShortDate(doc.filing_date) || 'N/A'}</td>
-                        <td style="padding: 12px; font-size: 13px; max-width: 400px;">${filingTitle}</td>
+                        <td style="padding: 12px; text-align: center; font-weight: 600; color: #1e40af; font-size: 14px;">${doc.exhibit_number || 'N/A'}</td>
+                        <td style="padding: 12px; font-size: 13px; max-width: 300px;">${exhibitDesc}</td>
                         <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${doc.item_codes || 'Unknown'}</td>
-                        <td style="padding: 12px; text-align: center;">
-                            <span style="background: #3b82f6; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px;">
-                                🟦 Gemini (${duration})
-                            </span>
-                        </td>
                         <td style="padding: 12px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
@@ -1442,6 +1437,7 @@
                 report_date: doc.report_date,
                 pr_title: doc.title,                 // For press releases (title field from doc)
                 accession_number: doc.accession_number,  // For 8-K filings
+                exhibit_number: doc.exhibit_number,      // For 8-K exhibit-level operations
                 ai_provider: doc.ai_provider         // Include ai_provider for transcript disambiguation
             }).replace(/"/g, '&quot;');
 
@@ -1488,7 +1484,7 @@
                         // Match by date AND title (multiple PRs can exist on same date)
                         return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date && d.title === docInfo.pr_title;
                     } else if (docInfo.type === '8k_filings') {
-                        return d.ticker === docInfo.ticker && d.accession_number === docInfo.accession_number;
+                        return d.ticker === docInfo.ticker && d.accession_number === docInfo.accession_number && d.exhibit_number === docInfo.exhibit_number;
                     }
                 });
 
@@ -1507,7 +1503,7 @@
                     } else if (docInfo.type === 'press_releases') {
                         title = `${doc.ticker} Press Release - ${doc.report_date}`;
                     } else if (docInfo.type === '8k_filings') {
-                        title = `${doc.ticker} 8-K Filing - ${doc.filing_date}`;
+                        title = `${doc.ticker} 8-K Filing - Exhibit ${doc.exhibit_number}: ${doc.exhibit_description} (${doc.filing_date})`;
                     }
                     document.getElementById('modal-title').textContent = title;
 
@@ -1545,8 +1541,8 @@
                 filename = `${currentProfile.ticker}_PressRelease_${currentProfile.report_date}.md`;
                 content = currentProfile.summary_text;
             } else if (type === '8k_filings') {
-                filename = `${currentProfile.ticker}_8K_${currentProfile.filing_date}.md`;
-                content = currentProfile.summary_text;
+                filename = `${currentProfile.ticker}_8K_Exhibit_${currentProfile.exhibit_number}_${currentProfile.filing_date}.md`;
+                content = currentProfile.raw_content || currentProfile.summary_text;
             }
 
             const blob = new Blob([content], { type: 'text/markdown' });
@@ -1636,7 +1632,7 @@
         async function deleteDocument(docInfo) {
             const docLabel = docInfo.type === '10q' ? `${docInfo.fiscal_quarter} ${docInfo.fiscal_year}` :
                            docInfo.type === '10k' ? `FY ${docInfo.fiscal_year}` :
-                           docInfo.type === '8k_filings' ? `8-K Filing` :
+                           docInfo.type === '8k_filings' ? `Exhibit ${docInfo.exhibit_number}` :
                            docInfo.type;
 
             if (!confirm(`Are you sure you want to delete ${docLabel} for ${docInfo.ticker}?\n\nThis action cannot be undone.`)) {
@@ -1663,7 +1659,7 @@
                     body = { token, ticker: docInfo.ticker, report_date: docInfo.report_date, pr_title: docInfo.pr_title, report_type: 'press_release' };
                 } else if (docInfo.type === '8k_filings') {
                     endpoint = '/api/admin/delete-8k-filing';
-                    body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number };
+                    body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number, exhibit_number: docInfo.exhibit_number };
                 }
 
                 const response = await fetch(endpoint, {
@@ -1718,7 +1714,8 @@
                         report_date: docInfo.report_date,
                         pr_title: docInfo.pr_title,         // Include for press release identification
                         ai_provider: docInfo.ai_provider,   // Include for transcript disambiguation
-                        accession_number: docInfo.accession_number  // Include for 8-K identification
+                        accession_number: docInfo.accession_number,  // Include for 8-K identification
+                        exhibit_number: docInfo.exhibit_number       // Include for 8-K exhibit-level identification
                     };
                 }
 

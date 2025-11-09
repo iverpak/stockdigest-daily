@@ -23663,6 +23663,8 @@ async def process_8k_summary_phase(job: dict):
         # Progress: 10% - Extracting 8-K content
         update_job_status(job_id, progress=10)
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 8-K content from SEC.gov...")
+        LOG.info(f"[8K_WORKER_DEBUG] Worker received exhibit_99_1_url from config: {exhibit_99_1_url}")
+        LOG.info(f"[8K_WORKER_DEBUG] Worker received sec_html_url from config: {sec_html_url}")
 
         content = extract_8k_content(sec_html_url, exhibit_99_1_url)
 
@@ -30537,6 +30539,8 @@ async def generate_8k_summary_api(request: Request):
 
     try:
         LOG.info(f"📋 Creating 8-K summary job for {ticker} ({filing_date})")
+        LOG.info(f"[8K_REQUEST_DEBUG] Received exhibit_99_1_url: {exhibit_99_1_url}")
+        LOG.info(f"[8K_REQUEST_DEBUG] Received sec_html_url: {sec_html_url}")
 
         # Get ticker config
         config = get_ticker_config(ticker)

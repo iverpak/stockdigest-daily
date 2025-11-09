@@ -707,8 +707,84 @@ def extract_8k_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
         raise
 
 
+def extract_8k_html_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
+    """
+    Extract 8-K content AS HTML (preserving tables and formatting).
+
+    This is the NEW approach (Option A) - keep HTML structure intact so:
+    1. Raw email shows proper tables
+    2. Gemini can convert HTML tables to markdown accurately
+
+    Args:
+        sec_html_url: Full URL to main 8-K HTML on SEC.gov
+        exhibit_99_1_url: Full URL to Exhibit 99.1 (or None if not found)
+
+    Returns:
+        Clean HTML content with tables intact (Exhibit 99.1 or main body fallback)
+
+    Raises:
+        ValueError: If content too short or empty
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    LOG.info(f"Extracting 8-K HTML content from: {sec_html_url}")
+    if exhibit_99_1_url:
+        LOG.info(f"Exhibit 99.1 URL provided: {exhibit_99_1_url}")
+
+    # SEC requires proper User-Agent
+    headers = {
+        "User-Agent": "StockDigest/1.0 (stockdigest.research@gmail.com)"
+    }
+
+    try:
+        # Try Exhibit 99.1 first if URL was provided
+        url_to_fetch = exhibit_99_1_url if exhibit_99_1_url else sec_html_url
+
+        LOG.info(f"Fetching HTML from: {url_to_fetch}")
+        response = requests.get(url_to_fetch, headers=headers, timeout=60)
+        response.raise_for_status()
+
+        LOG.info(f"✅ Fetched HTML ({len(response.text)} chars)")
+
+        # Parse HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Remove unwanted elements (but keep tables!)
+        for tag in soup(['script', 'style', 'head', 'meta', 'link', 'noscript']):
+            tag.decompose()
+
+        # Extract body content (or full soup if no body tag)
+        body = soup.find('body')
+        if body:
+            html_content = str(body)
+        else:
+            # No body tag - use everything
+            html_content = str(soup)
+
+        # Validate minimum length
+        if len(html_content) < 500:
+            # Try fallback to main 8-K if we tried Exhibit 99.1
+            if exhibit_99_1_url and url_to_fetch == exhibit_99_1_url:
+                LOG.warning(f"Exhibit 99.1 too short ({len(html_content)} chars), falling back to main body")
+                return extract_8k_html_content(sec_html_url, exhibit_99_1_url=None)
+            else:
+                raise ValueError(
+                    f"8-K HTML content too short ({len(html_content)} chars) - may be empty or malformed"
+                )
+
+        LOG.info(f"✅ Extracted clean HTML ({len(html_content)} chars, tables preserved)")
+        return html_content
+
+    except Exception as e:
+        LOG.error(f"Failed to extract 8-K HTML content: {e}")
+        raise
+
+
 def format_8k_raw_content_to_html(raw_text: str) -> str:
     """
+    DEPRECATED: Use extract_8k_html_content() instead for proper table formatting.
+
     Convert raw 8-K text to formatted HTML for Email #1.
 
     Applies basic HTML formatting while preserving structure:
@@ -855,21 +931,23 @@ def generate_8k_summary_with_gemini(
     gemini_api_key: str
 ) -> str:
     """
-    Format 8-K content using Gemini 2.5 Flash - NOISE FILTER not summarizer.
+    Convert 8-K HTML to clean Markdown using Gemini 2.5 Flash - NOISE FILTER not summarizer.
 
     Removes legal boilerplate (disclaimers, safe harbor warnings) while preserving
-    ~90% of meaningful content. All tables, numbers, quotes, and guidance preserved verbatim.
+    ~90% of meaningful content. HTML tables converted to markdown tables with ALL rows/columns.
+
+    **NEW (Option A)**: Accepts HTML input (not plain text) to preserve table structure.
 
     Args:
         ticker: Stock ticker (e.g., 'AAPL', 'TSLA')
-        content: Raw 8-K content (Exhibit 99.1 or main body fallback)
+        content: 8-K HTML content (from extract_8k_html_content()) with tables intact
         config: Ticker configuration dict with company_name, etc.
         filing_date: Filing date string (e.g., "Jan 30, 2025")
         item_codes: Item codes string (e.g., "2.02, 9.01")
         gemini_api_key: Gemini API key
 
     Returns:
-        Clean markdown with ~90% content retention (removes only legal noise)
+        Clean markdown with ~90% content retention, all HTML tables → markdown tables
 
     Raises:
         Exception: If generation fails
@@ -881,44 +959,64 @@ def generate_8k_summary_with_gemini(
 
     LOG.info(f"[{ticker}] Generating 8-K summary with Gemini 2.5 Flash...")
 
-    # Build prompt - NOISE FILTER not summarizer (90% content retention)
-    prompt = f"""You are formatting an SEC 8-K filing for {ticker} ({company_name}) for readability.
+    # Build prompt - HTML to Markdown converter with noise filtering (90% content retention)
+    prompt = f"""You are converting an SEC 8-K filing from HTML to clean Markdown.
 
-TASK: Remove legal boilerplate and disclaimers, but keep ~90% of the meaningful content.
+INPUT FORMAT: SEC.gov HTML (with <table>, <p>, <b>, etc. tags)
+OUTPUT FORMAT: Clean Markdown
+
+TASK: Convert HTML to Markdown while removing legal boilerplate. Keep ~90% of meaningful content.
 
 KEEP (verbatim):
 • All numbers, figures, percentages, and metrics
-• ALL tables - output COMPLETE markdown tables with EVERY row and column (do NOT summarize or skip rows)
-• All executive quotes
+• ALL HTML <table> elements → Convert to complete markdown tables with EVERY row and column
+• All executive quotes and statements
 • All material events and developments
 • All business guidance and outlook (revenue targets, EPS guidance, growth plans, strategic initiatives)
 • All deal terms and transaction details
-• "About [Company]" description
+• Company descriptions ("About [Company]" sections)
+• Section headers and structure
 
 REMOVE ONLY:
 • Forward-looking statements safe harbor disclaimers (e.g., "Statements herein may constitute forward-looking statements subject to risks under the Private Securities Litigation Reform Act...")
 • Risk factor warnings (e.g., "Factors that could cause actual results to differ include economic conditions, competition, regulatory changes...")
 • Legal cautionary language (e.g., "We undertake no obligation to update or revise these statements...")
 • Investor relations contact information blocks
+• Repetitive SEC filing headers/footers
 
-CRITICAL - TABLES:
-When you encounter a table, output the FULL table in markdown format. Include every single row and column exactly as shown - do not summarize, condense, or skip any rows.
+CRITICAL - HTML TABLE CONVERSION:
 
-Example - if original has 10 rows, your output must have 10 rows:
-| Revenue Stream | Q4 2024 | Q4 2023 | Change |
-|----------------|---------|---------|--------|
-| Products       | $96.5B  | $96.4B  | +0%    |
-| Services       | $23.1B  | $20.8B  | +11%   |
-[... all 10 rows must appear ...]
+When you see an HTML table like this:
+<table>
+  <tr><th>Metric</th><th>Q3 2024</th><th>Q3 2023</th></tr>
+  <tr><td>Revenue</td><td>$100M</td><td>$90M</td></tr>
+  <tr><td>Net Income</td><td>$20M</td><td>$18M</td></tr>
+</table>
 
-OUTPUT: Clean markdown preserving ~90% of original content. No analysis or commentary.
+You MUST convert it to markdown with EVERY row and column:
+| Metric | Q3 2024 | Q3 2023 |
+|--------|---------|---------|
+| Revenue | $100M | $90M |
+| Net Income | $20M | $18M |
 
+RULES FOR TABLES:
+1. Extract EVERY <tr> (table row) from the HTML
+2. Extract EVERY <td> and <th> (table cell) from each row
+3. First row with <th> tags becomes the markdown header row
+4. Add separator row with | --- | --- | after headers
+5. All data rows follow with proper | delimiter alignment
+6. Do NOT skip rows, summarize, or condense tables
+7. If a table has 50 rows, your markdown must have 50 rows
+
+OUTPUT LENGTH: Match the original filing length (minus removed boilerplate). Do NOT impose artificial word limits.
+
+Company: {ticker} ({company_name})
 Filing Date: {filing_date}
 Item Codes: {item_codes}
 
 ---
 
-8-K FILING CONTENT:
+8-K FILING HTML:
 
 {content}
 """

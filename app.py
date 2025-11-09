@@ -97,6 +97,7 @@ from modules.company_profiles import (
     get_8k_html_url,
     quick_parse_8k_header,
     extract_8k_content,
+    extract_8k_html_content,  # NEW: Option A - HTML extraction with tables
     generate_8k_summary_with_gemini
 )
 
@@ -23663,32 +23664,33 @@ async def process_8k_summary_phase(job: dict):
         exhibit_99_1_url = config.get('exhibit_99_1_url')
         item_codes = config.get('item_codes')
 
-        # Progress: 10% - Extracting 8-K content
+        # Progress: 10% - Extracting 8-K HTML content (NEW: Option A - preserve tables)
         update_job_status(job_id, progress=10)
-        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 8-K content from SEC.gov...")
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 8-K HTML content from SEC.gov...")
         LOG.info(f"[8K_WORKER_DEBUG] Worker received exhibit_99_1_url from config: {exhibit_99_1_url}")
         LOG.info(f"[8K_WORKER_DEBUG] Worker received sec_html_url from config: {sec_html_url}")
 
-        raw_content = extract_8k_content(sec_html_url, exhibit_99_1_url)
+        # NEW: Extract HTML (not plain text) to preserve table structure
+        raw_content = extract_8k_html_content(sec_html_url, exhibit_99_1_url)
 
         if not raw_content or len(raw_content) < 500:
-            raise ValueError(f"Extracted content too short ({len(raw_content)} chars)")
+            raise ValueError(f"Extracted HTML content too short ({len(raw_content)} chars)")
 
-        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(raw_content)} characters")
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(raw_content)} characters of HTML (tables preserved)")
 
         ticker_config = get_ticker_config(ticker)
 
-        # Progress: 30% - Send Email #1 (Raw Content QA)
+        # Progress: 30% - Send Email #1 (Raw HTML Content - Tables Preserved)
         if config.get('send_email', True):
             update_job_status(job_id, progress=30)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #1 (Raw Content)...")
 
             try:
-                from modules.company_profiles import format_8k_raw_content_to_html
                 from jinja2 import Environment, FileSystemLoader
 
-                # Format raw content to HTML
-                raw_content_html = format_8k_raw_content_to_html(raw_content)
+                # NEW: Pass HTML directly (no formatting needed - tables already intact)
+                # Template uses |safe to render HTML without escaping
+                raw_content_html = raw_content
 
                 # Load template
                 template_env = Environment(loader=FileSystemLoader('templates'))
@@ -23714,13 +23716,14 @@ async def process_8k_summary_phase(job: dict):
                 LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send Email #1: {email_error}")
                 # Continue - raw content extraction was successful
 
-        # Progress: 40% - Generating formatted version with Gemini (this takes 5-10 min)
+        # Progress: 40% - Converting HTML to Markdown with Gemini (5-10 min, HTML→Markdown with table conversion)
         update_job_status(job_id, progress=40)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating formatted version with Gemini 2.5 Flash (5-10 min)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Converting HTML to Markdown with Gemini 2.5 Flash (5-10 min)...")
 
+        # NEW: raw_content is now HTML (not plain text), Gemini will convert HTML tables to markdown
         summary_text = generate_8k_summary_with_gemini(
             ticker=ticker,
-            content=raw_content,
+            content=raw_content,  # HTML content with <table> tags
             config=ticker_config,
             filing_date=filing_date,
             item_codes=item_codes,

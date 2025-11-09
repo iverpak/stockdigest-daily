@@ -562,8 +562,12 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
         response = requests.get(sec_html_url, headers=headers, timeout=10)
         text = response.text
 
+        LOG.info(f"[8K_HEADER_DEBUG] Fetched {len(text)} bytes, status={response.status_code}")
+        LOG.info(f"[8K_HEADER_DEBUG] First 500 chars: {text[:500]}")
+
         # Extract item codes (format: "Item 2.02" or "Item 2.02.")
         items = re.findall(r'Item\s+(\d+\.\d+)', text, re.IGNORECASE)
+        LOG.info(f"[8K_HEADER_DEBUG] Found {len(items)} item codes: {items}")
         item_codes = ', '.join(sorted(set(items[:3])))  # Dedupe and limit to first 3
 
         # Get item description for primary item
@@ -580,6 +584,7 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
             re.IGNORECASE
         )
         parsed_title = title_match.group(0).strip() if title_match else ""
+        LOG.info(f"[8K_HEADER_DEBUG] Title match: {bool(title_match)}, parsed_title: '{parsed_title[:100] if parsed_title else 'NONE'}'...")
 
         # Option C: Both item description AND parsed title
         if parsed_title:

@@ -479,12 +479,23 @@ def get_8k_html_url(documents_url: str) -> str:
         if not table:
             raise ValueError("Documents table not found on index page")
 
+        rows = table.find_all('tr')[1:]  # Skip header
+        LOG.info(f"[8K_DOC_DEBUG] Found {len(rows)} rows in documents table")
+
         # Find the main 8-K document (usually first .htm file with "8-K" in description)
-        for row in table.find_all('tr')[1:]:  # Skip header
+        for i, row in enumerate(rows):
             cols = row.find_all('td')
+            LOG.info(f"[8K_DOC_DEBUG] Row {i}: {len(cols)} columns")
+
             if len(cols) >= 4:
+                # Show first 3 rows in detail
+                if i < 3:
+                    LOG.info(f"[8K_DOC_DEBUG] Row {i} cols: [0]='{cols[0].text.strip()[:50]}', [1]='{cols[1].text.strip()[:50]}', [2]='{cols[2].text.strip()[:50]}', [3]='{cols[3].text.strip()[:50]}'")
+
                 doc_type = cols[3].text.strip().lower()
                 description = cols[1].text.strip()
+
+                LOG.info(f"[8K_DOC_DEBUG] Row {i}: doc_type='{doc_type}', description='{description[:50]}', has_html={'text/html' in doc_type}, has_8k={'8-k' in description.lower()}")
 
                 # Look for HTML document with "8-K" in description
                 if 'text/html' in doc_type.lower() and '8-k' in description.lower():
@@ -495,10 +506,12 @@ def get_8k_html_url(documents_url: str) -> str:
                         return html_url
 
         # Fallback: First .htm file
-        for row in table.find_all('tr')[1:]:
+        LOG.info(f"[8K_DOC_DEBUG] No match found, trying fallback (first HTML file)...")
+        for i, row in enumerate(rows):
             cols = row.find_all('td')
             if len(cols) >= 4:
                 doc_type = cols[3].text.strip().lower()
+                LOG.info(f"[8K_DOC_DEBUG] Fallback row {i}: doc_type='{doc_type}', has_html={'text/html' in doc_type}")
                 if 'text/html' in doc_type:
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:

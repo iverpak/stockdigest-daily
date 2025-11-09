@@ -34,6 +34,7 @@ INPUT EXAMPLE (abbreviated structure)
   "sections": {
     "bottom_line": {
       "content": "Company reported Q3 earnings beat with revenue $10.5B exceeding consensus $10.2B per Bloomberg (Oct 28). Management raised FY guidance to $42B from $40B per earnings call. Three analysts upgraded to Buy citing margin expansion per reports (Oct 29-30).",
+      "context": "Q3 revenue $10.5B (+15% YoY) with Segment A representing 62% at 18% operating margin per Q3 10-Q; raised FY guidance to $42B from $40B marking third consecutive quarterly increase per Oct 23 call",
       "word_count": 147
     },
     "major_developments": [
@@ -60,10 +61,12 @@ INPUT EXAMPLE (abbreviated structure)
     "competitive_industry_dynamics": [...],
     "upcoming_catalysts": [...],
     "upside_scenario": {
-      "content": "Analyst projected 20% upside from margin expansion per Wedbush (Oct 29). New product launch Q1 2025 could add 5-10% revenue growth per management guidance. Supply constraints easing per industry report (Oct 30)."
+      "content": "Analyst projected 20% upside from margin expansion per Wedbush (Oct 29). New product launch Q1 2025 could add 5-10% revenue growth per management guidance. Supply constraints easing per industry report (Oct 30).",
+      "context": "New product gross margin 42% vs company average 31% per Q3 10-Q with 23% adoption in launch quarter; management targets 35-37% blended margin by 2026 per Oct 23 call"
     },
     "downside_scenario": {
-      "content": "UBS analyst raised concerns about demand sustainability per Oct 29 report. Tariff headwinds could pressure margins 200-300 bps per Goldman Sachs. Competitive pricing pressure noted by management per earnings call."
+      "content": "UBS analyst raised concerns about demand sustainability per Oct 29 report. Tariff headwinds could pressure margins 200-300 bps per Goldman Sachs. Competitive pricing pressure noted by management per earnings call.",
+      "context": "Top 3 customers represent 34% of revenue with largest at 15% per FY2024 10-K; input costs rose 8% QoQ affecting 45% of COGS per Q3 10-Q"
     },
     "key_variables": [
       {
@@ -134,7 +137,9 @@ Extraction rules:
 
 2. SCENARIO RESTRUCTURE
 
-Input: Phase 1 paragraph (80-160 words)
+Input:
+- Phase 1 paragraph (80-160 words) - article content
+- Phase 2 context (50-75 words) - filing synthesis from 10-K/10-Q/Transcript
 
 Output format:
 ## UPSIDE SCENARIO
@@ -146,7 +151,7 @@ Primary Drivers:
 - **Driver label**: [50-80 word bullet with bolding]
 - **Driver label**: [50-80 word bullet with bolding]
 
-[Optional 1-2 sentence supporting context]
+[Optional 1-2 sentence supporting context from Phase 2 context field, if present]
 
 (Date range)
 
@@ -156,11 +161,13 @@ Adaptive scaling:
 - 3+ themes: Thesis + bullets format as shown above
 
 Rules:
-- Remove inline attribution
+- Integrate Phase 2 context (if present) as 1-2 sentence closing paragraph
+- Remove inline attribution from article content
 - Keep analyst names when discussing views
 - Consolidate date range at end
 - Bold key numbers and metrics
 - Same format for Downside Scenario (use "Primary Risks:" instead of "Primary Drivers:")
+- Same format for Bottom Line (extract thesis + 3-5 key developments, include context at end if present)
 
 ───────────────────────────────────────────────────────────────────────────────
 

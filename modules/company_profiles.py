@@ -651,7 +651,14 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
                         LOG.info(f"✅ Found Exhibit {exhibit_num}: {description} ({size_bytes} bytes)")
 
         if not exhibits:
-            raise ValueError("No Exhibit 99.* files found in documents list")
+            # Provide helpful error message based on what exhibits ARE present
+            present_exhibits = [cols[1].text.strip() for row in rows for cols in [row.find_all('td')] if len(cols) >= 4]
+            exhibit_list = ', '.join(set(present_exhibits[:5]))  # Show first 5 unique types
+            raise ValueError(
+                f"No Exhibit 99.* files found in this 8-K filing. "
+                f"This appears to be a non-earnings 8-K (found: {exhibit_list}). "
+                f"Please select a different filing with Item 2.02 (Results of Operations) which typically contains Exhibit 99.1 press release."
+            )
 
         # Sort by exhibit number (99.1 before 99.2)
         exhibits.sort(key=lambda x: float(x['exhibit_number']))

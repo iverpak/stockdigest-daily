@@ -393,8 +393,10 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
             'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
         }
 
+        LOG.info(f"[8K_DEBUG] Making request to SEC for CIK {cik}...")
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
+        LOG.info(f"[8K_DEBUG] Got response, parsing HTML...")
 
         soup = BeautifulSoup(response.text, 'html.parser')
         table = soup.find('table', class_='tableFile2')
@@ -403,10 +405,12 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
             LOG.warning(f"No 8-K filings table found for CIK {cik}")
             return []
 
+        LOG.info(f"[8K_DEBUG] Found table, parsing rows...")
         filings = []
         rows = table.find_all('tr')[1:]  # Skip header row
+        LOG.info(f"[8K_DEBUG] Found {len(rows)} rows in table")
 
-        for row in rows:
+        for i, row in enumerate(rows):
             cols = row.find_all('td')
             if len(cols) >= 4:
                 filing_date = cols[3].text.strip()  # "Jan 30, 2025"
@@ -414,8 +418,10 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
                 # Find Documents link (using id='documentsbutton' to handle &nbsp; in text)
                 documents_link = cols[1].find('a', id='documentsbutton')
                 if not documents_link:
+                    LOG.warning(f"[8K_DEBUG] Row {i}: No Documents link found")
                     continue
 
+                LOG.info(f"[8K_DEBUG] Row {i}: Found Documents link")
                 documents_url = urljoin("https://www.sec.gov", documents_link['href'])
 
                 # Extract accession number from URL (format: accession_number=0001193125-25-012345)

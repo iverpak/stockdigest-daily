@@ -569,6 +569,16 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
         LOG.info(f"[8K_HEADER_DEBUG] Fetched {len(text)} bytes, status={response.status_code}")
         LOG.info(f"[8K_HEADER_DEBUG] First 500 chars: {text[:500]}")
 
+        # Check if this is iXBRL (inline XBRL) - structured data format
+        is_ixbrl = '<?xml version' in text[:200] or 'xmlns:ix=' in text[:500]
+        if is_ixbrl:
+            LOG.info("[8K_HEADER_DEBUG] Detected iXBRL format - using defaults (full extraction will parse properly)")
+            return {
+                'title': "8-K Filing",
+                'item_codes': "See filing",
+                'item_description': "Material Events"
+            }
+
         # Extract item codes (format: "Item 2.02" or "Item 2.02.")
         items = re.findall(r'Item\s+(\d+\.\d+)', text, re.IGNORECASE)
         LOG.info(f"[8K_HEADER_DEBUG] Found {len(items)} item codes: {items}")

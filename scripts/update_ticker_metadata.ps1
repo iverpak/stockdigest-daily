@@ -1,5 +1,6 @@
 # Script to update ticker metadata using Gemini 2.5 Pro (batches of 5)
-# Supports test mode (first 400 batches) and full run mode
+# Supports test mode (first 200 batches) and full run mode
+# Auto-commits to GitHub every 20 batches + final commit
 
 param(
     [switch]$TestMode = $true,
@@ -13,8 +14,9 @@ Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Updating Ticker Metadata" -ForegroundColor Cyan
 Write-Host "Using: Gemini 2.5 Pro (batches of 5)" -ForegroundColor Cyan
+Write-Host "Auto-commit: Every 20 batches + final" -ForegroundColor Cyan
 if ($TestMode -or $MaxBatches -gt 0) {
-    $batchLimit = if ($MaxBatches -gt 0) { $MaxBatches } else { 400 }
+    $batchLimit = if ($MaxBatches -gt 0) { $MaxBatches } else { 200 }
     Write-Host "Mode: TEST (first $batchLimit batches only)" -ForegroundColor Yellow
 } else {
     Write-Host "Mode: FULL RUN (all batches)" -ForegroundColor Green
@@ -34,7 +36,7 @@ try {
 
     # Add max_batches if in test mode
     if ($TestMode) {
-        $requestBody.max_batches = 400
+        $requestBody.max_batches = 200
     } elseif ($MaxBatches -gt 0) {
         $requestBody.max_batches = $MaxBatches
     }

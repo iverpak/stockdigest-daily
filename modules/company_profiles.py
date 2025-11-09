@@ -426,8 +426,8 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
                 documents_url = urljoin("https://www.sec.gov", documents_link['href'])
                 LOG.info(f"[8K_DEBUG] Row {i}: Documents URL: {documents_url}")
 
-                # Extract accession number from URL (format: accession_number=0001193125-25-012345)
-                match = re.search(r'accession_number=([\d\-]+)', documents_url)
+                # Extract accession number from URL (format: /0000320193-25-000077-index.htm)
+                match = re.search(r'/(\d{10}-\d{2}-\d{6})-index\.htm', documents_url)
                 accession = match.group(1) if match else None
                 LOG.info(f"[8K_DEBUG] Row {i}: Regex match: {match is not None}, accession: {accession}")
 

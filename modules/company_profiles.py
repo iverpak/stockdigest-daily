@@ -502,6 +502,8 @@ def get_8k_html_url(documents_url: str) -> str:
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:
                         html_url = urljoin(documents_url, link['href'])
+                        # Strip iXBRL viewer wrapper to get raw HTML
+                        html_url = html_url.replace('/ix?doc=', '')
                         LOG.info(f"✅ Found main 8-K HTML: {html_url}")
                         return html_url
 
@@ -516,6 +518,8 @@ def get_8k_html_url(documents_url: str) -> str:
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:
                         html_url = urljoin(documents_url, link['href'])
+                        # Strip iXBRL viewer wrapper to get raw HTML
+                        html_url = html_url.replace('/ix?doc=', '')
                         LOG.warning(f"Using fallback HTML file: {html_url}")
                         return html_url
 

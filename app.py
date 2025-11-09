@@ -25620,6 +25620,7 @@ async def validate_ticker_for_8k(ticker: str):
                 {
                     "filing_date": "Jan 30, 2025",
                     "accession_number": "0001193125-25-012345",
+                    "documents_url": "https://www.sec.gov/cgi-bin/viewer?action=view&cik=...",
                     "sec_html_url": "https://www.sec.gov/...",
                     "title": "Results of Operations | Apple announces Q1 2024 results",
                     "item_codes": "2.02, 9.01",
@@ -25684,6 +25685,7 @@ async def validate_ticker_for_8k(ticker: str):
                 enriched_filings.append({
                     'filing_date': filing['filing_date'],
                     'accession_number': filing['accession_number'],
+                    'documents_url': filing['documents_url'],  # For exhibit parsing
                     'sec_html_url': sec_html_url,
                     'exhibit_99_1_url': exhibit_url,
                     'title': parsed['title'],

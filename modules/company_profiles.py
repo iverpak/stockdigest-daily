@@ -607,14 +607,18 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
         rows = table.find_all('tr')[1:]  # Skip header
         exhibits = []
 
+        LOG.info(f"[EXHIBIT_DEBUG] Found {len(rows)} rows in documents table")
+
         # Find all EX-99.* files
-        for row in rows:
+        for i, row in enumerate(rows):
             cols = row.find_all('td')
 
             if len(cols) >= 4:
                 doc_type = cols[1].text.strip()  # Column 1: Type (EX-99.1, EX-99.2, etc.)
                 filename = cols[2].text.strip()  # Column 2: Filename
                 size_text = cols[3].text.strip()  # Column 3: Size
+
+                LOG.info(f"[EXHIBIT_DEBUG] Row {i}: Type='{doc_type}', Filename='{filename}'")
 
                 # Match any EX-99.* (case insensitive)
                 if 'ex-99.' in doc_type.lower() and '.htm' in filename.lower():

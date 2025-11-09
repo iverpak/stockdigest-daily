@@ -446,15 +446,17 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
         raise
 
 
-def get_8k_html_url(documents_url: str) -> str:
+def get_8k_html_url(documents_url: str) -> dict:
     """
-    Parse documents index page to find main 8-K HTML file.
+    Parse documents index page to find main 8-K HTML file and Exhibit 99.1.
 
     Args:
         documents_url: URL to SEC documents index page
 
     Returns:
-        Full URL to main 8-K HTML file
+        Dict with:
+            'main_8k_url': Full URL to main 8-K HTML file
+            'exhibit_99_1_url': Full URL to Exhibit 99.1 (or None if not found)
 
     Raises:
         ValueError: If main 8-K file not found
@@ -482,7 +484,10 @@ def get_8k_html_url(documents_url: str) -> str:
         rows = table.find_all('tr')[1:]  # Skip header
         LOG.info(f"[8K_DOC_DEBUG] Found {len(rows)} rows in documents table")
 
-        # Find the main 8-K document (usually first .htm file with "8-K" in description)
+        main_8k_url = None
+        exhibit_99_1_url = None
+
+        # Find both the main 8-K document AND Exhibit 99.1
         for i, row in enumerate(rows):
             cols = row.find_all('td')
             LOG.info(f"[8K_DOC_DEBUG] Row {i}: {len(cols)} columns")
@@ -498,14 +503,31 @@ def get_8k_html_url(documents_url: str) -> str:
                 LOG.info(f"[8K_DOC_DEBUG] Row {i}: doc_type='{doc_type}', filename='{filename[:50]}', is_htm={'.htm' in filename.lower()}, is_8k={'8-k' in doc_type.lower()}")
 
                 # Look for main 8-K HTML file (type='8-K' and filename ends with .htm)
-                if '8-k' in doc_type.lower() and '.htm' in filename.lower():
+                if not main_8k_url and '8-k' in doc_type.lower() and '.htm' in filename.lower():
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:
                         html_url = urljoin(documents_url, link['href'])
                         # Strip iXBRL viewer wrapper to get raw HTML
                         html_url = html_url.replace('/ix?doc=', '')
+                        main_8k_url = html_url
                         LOG.info(f"✅ Found main 8-K HTML: {html_url}")
-                        return html_url
+
+                # Look for Exhibit 99.1 (press release with financial data)
+                if not exhibit_99_1_url and 'ex-99.1' in doc_type.lower() and '.htm' in filename.lower():
+                    link = cols[2].find('a')
+                    if link and 'href' in link.attrs:
+                        exhibit_url = urljoin(documents_url, link['href'])
+                        # Strip iXBRL viewer wrapper to get raw HTML
+                        exhibit_url = exhibit_url.replace('/ix?doc=', '')
+                        exhibit_99_1_url = exhibit_url
+                        LOG.info(f"✅ Found Exhibit 99.1: {exhibit_url}")
+
+        # If we found the main 8-K, return both URLs
+        if main_8k_url:
+            return {
+                'main_8k_url': main_8k_url,
+                'exhibit_99_1_url': exhibit_99_1_url
+            }
 
         # Fallback: First .htm file (any type)
         LOG.info(f"[8K_DOC_DEBUG] No match found, trying fallback (first .htm file)...")
@@ -521,7 +543,10 @@ def get_8k_html_url(documents_url: str) -> str:
                         # Strip iXBRL viewer wrapper to get raw HTML
                         html_url = html_url.replace('/ix?doc=', '')
                         LOG.warning(f"Using fallback HTML file: {html_url}")
-                        return html_url
+                        return {
+                            'main_8k_url': html_url,
+                            'exhibit_99_1_url': None
+                        }
 
         raise ValueError("Could not find main 8-K HTML file in documents list")
 
@@ -627,7 +652,7 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
         }
 
 
-def extract_8k_content(sec_html_url: str) -> str:
+def extract_8k_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
     """
     Extract 8-K content for AI summarization.
 
@@ -635,7 +660,8 @@ def extract_8k_content(sec_html_url: str) -> str:
     includes main 8-K body as context.
 
     Args:
-        sec_html_url: Full URL to 8-K HTML on SEC.gov
+        sec_html_url: Full URL to main 8-K HTML on SEC.gov
+        exhibit_99_1_url: Full URL to Exhibit 99.1 (or None if not found)
 
     Returns:
         Clean text content for Gemini summarization
@@ -643,39 +669,19 @@ def extract_8k_content(sec_html_url: str) -> str:
     Raises:
         ValueError: If content too short or empty
     """
-    import re
-    import requests
-    from urllib.parse import urljoin
-
     LOG.info(f"Extracting 8-K content from: {sec_html_url}")
+    if exhibit_99_1_url:
+        LOG.info(f"Exhibit 99.1 URL provided: {exhibit_99_1_url}")
 
     try:
         # Fetch main 8-K HTML
-        html = fetch_sec_html_text(sec_html_url)
+        main_8k_text = fetch_sec_html_text(sec_html_url)
 
-        # Look for Exhibit 99.1 link (most common for material events)
+        # Fetch Exhibit 99.1 if URL was provided
         exhibit_99_1 = None
-
-        LOG.info(f"[8K_EXTRACT_DEBUG] Searching for Exhibit 99.1 link in {len(html)} chars of HTML")
-        LOG.info(f"[8K_EXTRACT_DEBUG] First 1000 chars: {html[:1000]}")
-
-        # Pattern 1: ex99-1.htm, ex991.htm, etc.
-        exhibit_match = re.search(
-            r'href="([^"]+ex99-?1[^"]*\.htm)"',
-            html,
-            re.IGNORECASE
-        )
-
-        LOG.info(f"[8K_EXTRACT_DEBUG] Exhibit regex match: {bool(exhibit_match)}")
-
-        if exhibit_match:
-            exhibit_relative_url = exhibit_match.group(1)
-            exhibit_url = urljoin(sec_html_url, exhibit_relative_url)
-
-            LOG.info(f"Found Exhibit 99.1 link: {exhibit_url}")
-
+        if exhibit_99_1_url:
             try:
-                exhibit_99_1 = fetch_sec_html_text(exhibit_url)
+                exhibit_99_1 = fetch_sec_html_text(exhibit_99_1_url)
                 LOG.info(f"✅ Fetched Exhibit 99.1 ({len(exhibit_99_1)} chars)")
             except Exception as e:
                 LOG.warning(f"Failed to fetch Exhibit 99.1: {e}")
@@ -683,11 +689,11 @@ def extract_8k_content(sec_html_url: str) -> str:
         # Build content
         if exhibit_99_1 and len(exhibit_99_1) > 500:
             # Exhibit 99.1 found and substantial - use it as primary content
-            content = f"EXHIBIT 99.1:\n\n{exhibit_99_1}\n\n---\n\nMAIN 8-K BODY:\n\n{html}"
+            content = f"EXHIBIT 99.1:\n\n{exhibit_99_1}\n\n---\n\nMAIN 8-K BODY:\n\n{main_8k_text}"
             LOG.info(f"Using Exhibit 99.1 + main body ({len(content)} total chars)")
         else:
             # No Exhibit 99.1 or too short - use main body only
-            content = html
+            content = main_8k_text
             LOG.info(f"Using main 8-K body only ({len(content)} chars)")
 
         # Validate minimum length

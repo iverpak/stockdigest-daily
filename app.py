@@ -23657,13 +23657,14 @@ async def process_8k_summary_phase(job: dict):
         filing_date = config.get('filing_date')
         filing_title = config.get('filing_title')
         sec_html_url = config.get('sec_html_url')
+        exhibit_99_1_url = config.get('exhibit_99_1_url')
         item_codes = config.get('item_codes')
 
         # Progress: 10% - Extracting 8-K content
         update_job_status(job_id, progress=10)
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 8-K content from SEC.gov...")
 
-        content = extract_8k_content(sec_html_url)
+        content = extract_8k_content(sec_html_url, exhibit_99_1_url)
 
         if not content or len(content) < 500:
             raise ValueError(f"Extracted content too short ({len(content)} chars)")
@@ -25645,8 +25646,9 @@ async def validate_ticker_for_8k(ticker: str):
 
         for i, filing in enumerate(filings):
             try:
-                # Get main 8-K HTML URL from documents index page
-                sec_html_url = get_8k_html_url(filing['documents_url'])
+                # Get main 8-K HTML URL and Exhibit 99.1 from documents index page
+                urls = get_8k_html_url(filing['documents_url'])
+                sec_html_url = urls['main_8k_url']
 
                 # Quick parse header (title + item codes) with rate limiting
                 parsed = quick_parse_8k_header(sec_html_url, rate_limit_delay=0.15)
@@ -25663,6 +25665,7 @@ async def validate_ticker_for_8k(ticker: str):
                     'filing_date': filing['filing_date'],
                     'accession_number': filing['accession_number'],
                     'sec_html_url': sec_html_url,
+                    'exhibit_99_1_url': urls.get('exhibit_99_1_url'),
                     'title': parsed['title'],
                     'item_codes': parsed['item_codes'],
                     'has_summary': has_summary
@@ -30529,6 +30532,7 @@ async def generate_8k_summary_api(request: Request):
     filing_date = body.get('filing_date')
     filing_title = body.get('filing_title')
     sec_html_url = body.get('sec_html_url')
+    exhibit_99_1_url = body.get('exhibit_99_1_url')  # NEW: Exhibit 99.1 URL
     item_codes = body.get('item_codes')
 
     try:
@@ -30547,6 +30551,7 @@ async def generate_8k_summary_api(request: Request):
             "filing_date": filing_date,
             "filing_title": filing_title,
             "sec_html_url": sec_html_url,
+            "exhibit_99_1_url": exhibit_99_1_url,  # NEW: Pass exhibit URL
             "item_codes": item_codes,
             "send_email": True
         }

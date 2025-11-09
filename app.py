@@ -96,9 +96,9 @@ from modules.company_profiles import (
     parse_sec_8k_filing_list,
     get_8k_html_url,
     quick_parse_8k_header,
-    extract_8k_content,
-    extract_8k_html_content,  # NEW: Option A - HTML extraction with tables
-    generate_8k_summary_with_gemini
+    get_all_8k_exhibits,      # NEW: Parse all EX-99.* files from documents page
+    extract_8k_html_content,  # Simplified: Single exhibit HTML extraction
+    classify_exhibit_type     # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
 )
 
 # ============================================================================
@@ -23647,7 +23647,12 @@ async def process_press_release_phase(job: dict):
 
 
 async def process_8k_summary_phase(job: dict):
-    """Process 8-K summary generation (5-10 min, Gemini 2.5 Flash)"""
+    """
+    Process 8-K exhibits - extract HTML and send separate email per exhibit.
+
+    No AI processing - just shows raw SEC content exactly as published.
+    Fast (<1 min per exhibit).
+    """
     job_id = job['job_id']
     ticker = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
@@ -23660,159 +23665,127 @@ async def process_8k_summary_phase(job: dict):
         accession_number = config.get('accession_number')
         filing_date = config.get('filing_date')
         filing_title = config.get('filing_title')
-        sec_html_url = config.get('sec_html_url')
-        exhibit_99_1_url = config.get('exhibit_99_1_url')
+        documents_url = config.get('documents_url')  # NEW: Use documents page URL
         item_codes = config.get('item_codes')
-
-        # Progress: 10% - Extracting 8-K HTML content (NEW: Option A - preserve tables)
-        update_job_status(job_id, progress=10)
-        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Extracting 8-K HTML content from SEC.gov...")
-        LOG.info(f"[8K_WORKER_DEBUG] Worker received exhibit_99_1_url from config: {exhibit_99_1_url}")
-        LOG.info(f"[8K_WORKER_DEBUG] Worker received sec_html_url from config: {sec_html_url}")
-
-        # NEW: Extract HTML (not plain text) to preserve table structure
-        raw_content = extract_8k_html_content(sec_html_url, exhibit_99_1_url)
-
-        if not raw_content or len(raw_content) < 500:
-            raise ValueError(f"Extracted HTML content too short ({len(raw_content)} chars)")
-
-        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted {len(raw_content)} characters of HTML (tables preserved)")
-
         ticker_config = get_ticker_config(ticker)
 
-        # Progress: 30% - Send Email #1 (Raw HTML Content - Tables Preserved)
-        if config.get('send_email', True):
-            update_job_status(job_id, progress=30)
-            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #1 (Raw Content)...")
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching all Exhibit 99.* files from documents page...")
 
-            try:
-                from jinja2 import Environment, FileSystemLoader
+        # Step 1: Get all Exhibit 99.* files from documents page
+        exhibits = get_all_8k_exhibits(documents_url)
 
-                # NEW: Pass HTML directly (no formatting needed - tables already intact)
-                # Template uses |safe to render HTML without escaping
-                raw_content_html = raw_content
+        if not exhibits:
+            raise ValueError("No Exhibit 99.* files found in this 8-K")
 
-                # Load template
-                template_env = Environment(loader=FileSystemLoader('templates'))
-                raw_email_template = template_env.get_template('email_8k_raw_content.html')
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Found {len(exhibits)} exhibit(s) to process")
 
-                # Render email
-                email_html = raw_email_template.render(
-                    ticker=ticker,
-                    company_name=ticker_config.get('company_name', ticker),
-                    filing_date=filing_date,
-                    item_codes=item_codes,
-                    exhibit_url=exhibit_99_1_url or sec_html_url,
-                    char_count=f"{len(raw_content):,}",
-                    raw_content_html=raw_content_html
-                )
+        # Step 2: Process each exhibit sequentially
+        for idx, exhibit in enumerate(exhibits, 1):
+            exhibit_num = exhibit['exhibit_number']
+            exhibit_desc = exhibit['description']
+            exhibit_url = exhibit['url']
 
-                subject = f"📄 8-K Raw Content: {ticker} - {item_codes} - {filing_date}"
+            LOG.info(f"[{ticker}] 📥 [JOB {job_id}] Processing Exhibit {exhibit_num}: {exhibit_desc}")
 
-                send_email(subject=subject, html_body=email_html, to=DIGEST_TO)
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #1 sent to {DIGEST_TO}")
+            # Extract HTML content for this exhibit
+            raw_content = extract_8k_html_content(exhibit_url)
 
-            except Exception as email_error:
-                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send Email #1: {email_error}")
-                # Continue - raw content extraction was successful
+            if not raw_content or len(raw_content) < 500:
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Exhibit {exhibit_num} too short ({len(raw_content)} chars), skipping")
+                continue
 
-        # Progress: 40% - Converting HTML to Markdown with Gemini (5-10 min, HTML→Markdown with table conversion)
-        update_job_status(job_id, progress=40)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Converting HTML to Markdown with Gemini 2.5 Flash (5-10 min)...")
+            char_count = len(raw_content)
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted Exhibit {exhibit_num}: {char_count:,} chars")
 
-        # NEW: raw_content is now HTML (not plain text), Gemini will convert HTML tables to markdown
-        summary_text = generate_8k_summary_with_gemini(
-            ticker=ticker,
-            content=raw_content,  # HTML content with <table> tags
-            config=ticker_config,
-            filing_date=filing_date,
-            item_codes=item_codes,
-            gemini_api_key=GEMINI_API_KEY
-        )
+            # Classify exhibit type for future filtering
+            exhibit_type = classify_exhibit_type(exhibit_num, exhibit_desc, char_count)
+            LOG.info(f"[{ticker}] 🏷️  [JOB {job_id}] Exhibit {exhibit_num} classified as: {exhibit_type}")
 
-        if not summary_text:
-            raise ValueError("Gemini formatting failed")
+            # Send separate email for this exhibit
+            if config.get('send_email', True):
+                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email for Exhibit {exhibit_num}...")
 
-        # Progress: 80% - Saving to database
-        update_job_status(job_id, progress=80)
-        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving to database (raw + formatted)...")
+                try:
+                    from jinja2 import Environment, FileSystemLoader
 
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO sec_8k_filings (
-                    ticker, company_name, cik, accession_number,
-                    filing_date, filing_title, item_codes, sec_html_url,
-                    raw_content, summary_text, ai_provider, ai_model
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, accession_number)
-                DO UPDATE SET
-                    raw_content = EXCLUDED.raw_content,
-                    summary_text = EXCLUDED.summary_text,
-                    ai_model = EXCLUDED.ai_model,
-                    generated_at = NOW()
-            """, (
-                ticker,
-                ticker_config.get('company_name', ticker),
-                cik,
-                accession_number,
-                filing_date,
-                filing_title,
-                item_codes,
-                sec_html_url,
-                raw_content,  # NEW: Store raw content
-                summary_text,
-                'gemini',
-                'gemini-2.5-flash'
-            ))
-            conn.commit()
+                    # Load template
+                    template_env = Environment(loader=FileSystemLoader('templates'))
+                    raw_email_template = template_env.get_template('email_8k_raw_content.html')
 
-        # Progress: 95% - Send Email #2 (Formatted Summary)
-        if config.get('send_email', True):
-            update_job_status(job_id, progress=95)
-            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #2 (Formatted Summary)...")
+                    # Render email (pass HTML directly, template uses |safe)
+                    email_html = raw_email_template.render(
+                        ticker=ticker,
+                        company_name=ticker_config.get('company_name', ticker),
+                        filing_date=filing_date,
+                        item_codes=item_codes,
+                        exhibit_number=exhibit_num,
+                        exhibit_description=exhibit_desc,
+                        exhibit_url=exhibit_url,
+                        char_count=f"{char_count:,}",
+                        raw_content_html=raw_content
+                    )
 
-            try:
-                # Get real-time stock data
-                stock_data = get_filing_stock_data(ticker)
+                    # Subject line includes exhibit number and description
+                    subject = f"📄 8-K Filing: {ticker} - Exhibit {exhibit_num} - {exhibit_desc[:60]} - {filing_date}"
 
-                # Generate email (reuse company profile email template)
-                email_data = generate_company_profile_email(
-                    ticker=ticker,
-                    company_name=ticker_config.get('company_name', ticker),
-                    industry=ticker_config.get('industry', 'N/A'),
-                    fiscal_year=None,  # Not applicable for 8-K
-                    filing_date=filing_date,
-                    profile_markdown=summary_text,
-                    stock_price=stock_data['stock_price'],
-                    price_change_pct=stock_data['price_change_pct'],
-                    price_change_color=stock_data['price_change_color'],
-                    ytd_return_pct=stock_data['ytd_return_pct'],
-                    ytd_return_color=stock_data['ytd_return_color'],
-                    market_status=stock_data['market_status'],
-                    return_label=stock_data['return_label'],
-                    filing_type="8-K"
-                )
+                    send_email(subject=subject, html_body=email_html, to=DIGEST_TO)
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent for Exhibit {exhibit_num}")
 
-                # Override subject line for 8-K
-                subject = f"📰 8-K Formatted: {ticker} - {filing_title[:80]}"
+                except Exception as email_error:
+                    LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email for Exhibit {exhibit_num}: {email_error}")
+                    # Continue to save to database
 
-                send_email(subject=subject, html_body=email_data['html'], to=DIGEST_TO)
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent to {DIGEST_TO}")
+            # Save to database with exhibit-level granularity
+            LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Exhibit {exhibit_num} to database...")
 
-            except Exception as email_error:
-                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send Email #2: {email_error}")
-                # Continue - summary was saved successfully
+            with db() as conn, conn.cursor() as cur:
+                # Build exhibit list string for summary_text (format: "Exhibit 99.1: Description; Exhibit 99.2: Description")
+                summary_text = f"Exhibit {exhibit_num}: {exhibit_desc}"
+
+                cur.execute("""
+                    INSERT INTO sec_8k_filings (
+                        ticker, company_name, cik, accession_number,
+                        filing_date, filing_title, item_codes, sec_html_url,
+                        exhibit_number, exhibit_description, exhibit_type,
+                        raw_content, char_count, summary_text, job_id, generated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (ticker, accession_number, exhibit_number)
+                    DO UPDATE SET
+                        raw_content = EXCLUDED.raw_content,
+                        char_count = EXCLUDED.char_count,
+                        exhibit_type = EXCLUDED.exhibit_type,
+                        generated_at = NOW()
+                """, (
+                    ticker,
+                    ticker_config.get('company_name', ticker),
+                    cik,
+                    accession_number,
+                    filing_date,
+                    filing_title,
+                    item_codes,
+                    exhibit_url,
+                    exhibit_num,
+                    exhibit_desc,
+                    exhibit_type,
+                    raw_content,
+                    char_count,
+                    summary_text,
+                    job_id
+                ))
+                conn.commit()
+
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Exhibit {exhibit_num} saved to database")
 
         # Mark complete
         update_job_status(job_id, status='completed', progress=100)
-        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] 8-K summary generation complete")
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] 8-K processing complete ({len(exhibits)} exhibit(s))")
 
         # Stop heartbeat
         stop_heartbeat_thread(job_id)
 
     except Exception as e:
-        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] 8-K summary generation failed: {str(e)}")
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] 8-K processing failed: {str(e)}")
         LOG.error(f"Stacktrace: {traceback.format_exc()}")
 
         # Stop heartbeat
@@ -30553,7 +30526,7 @@ async def debug_transcript_summary(ticker: str, token: str):
 @APP.post("/api/admin/generate-8k-summary")
 async def generate_8k_summary_api(request: Request):
     """
-    Generate AI summary for specific 8-K filing (uses job queue).
+    Generate 8-K exhibit processing (extracts all EX-99.* files, sends separate emails).
 
     Body: {
         "ticker": "AAPL",
@@ -30561,7 +30534,7 @@ async def generate_8k_summary_api(request: Request):
         "accession_number": "0001193125-25-012345",
         "filing_date": "Jan 30, 2025",
         "filing_title": "Results of Operations | Apple announces...",
-        "sec_html_url": "https://www.sec.gov/...",
+        "documents_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=...",
         "item_codes": "2.02, 9.01",
         "token": "..."
     }
@@ -30579,14 +30552,12 @@ async def generate_8k_summary_api(request: Request):
     accession_number = body.get('accession_number')
     filing_date = body.get('filing_date')
     filing_title = body.get('filing_title')
-    sec_html_url = body.get('sec_html_url')
-    exhibit_99_1_url = body.get('exhibit_99_1_url')  # NEW: Exhibit 99.1 URL
+    documents_url = body.get('documents_url')  # SEC documents index page
     item_codes = body.get('item_codes')
 
     try:
-        LOG.info(f"📋 Creating 8-K summary job for {ticker} ({filing_date})")
-        LOG.info(f"[8K_REQUEST_DEBUG] Received exhibit_99_1_url: {exhibit_99_1_url}")
-        LOG.info(f"[8K_REQUEST_DEBUG] Received sec_html_url: {sec_html_url}")
+        LOG.info(f"📋 Creating 8-K processing job for {ticker} ({filing_date})")
+        LOG.info(f"[8K_REQUEST_DEBUG] Documents URL: {documents_url}")
 
         # Get ticker config
         config = get_ticker_config(ticker)
@@ -30600,8 +30571,7 @@ async def generate_8k_summary_api(request: Request):
             "accession_number": accession_number,
             "filing_date": filing_date,
             "filing_title": filing_title,
-            "sec_html_url": sec_html_url,
-            "exhibit_99_1_url": exhibit_99_1_url,  # NEW: Pass exhibit URL
+            "documents_url": documents_url,  # NEW: Parse all exhibits from documents page
             "item_codes": item_codes,
             "send_email": True
         }
@@ -30647,7 +30617,9 @@ async def generate_8k_summary_api(request: Request):
 @APP.get("/api/admin/8k-filings")
 def get_all_8k_filings(token: str = Query(...)):
     """
-    Get all generated 8-K summaries for Research Library.
+    Get all generated 8-K exhibit filings for Research Library.
+
+    Returns exhibit-level records (multiple rows per filing if multiple exhibits).
 
     Returns: [
         {
@@ -30656,8 +30628,11 @@ def get_all_8k_filings(token: str = Query(...)):
             "filing_title": "Results of Operations | Apple announces...",
             "item_codes": "2.02, 9.01",
             "accession_number": "0001193125-25-012345",
-            "ai_model": "gemini-2.5-flash",
-            "processing_duration_seconds": 180,
+            "exhibit_number": "99.1",
+            "exhibit_description": "Supplemental Information",
+            "exhibit_type": "investor_presentation",
+            "char_count": 131002,
+            "raw_content": "...",
             "generated_at": "..."
         },
         ...
@@ -30676,14 +30651,15 @@ def get_all_8k_filings(token: str = Query(...)):
                     filing_title,
                     item_codes,
                     accession_number,
-                    sec_html_url,
+                    exhibit_number,
+                    exhibit_description,
+                    exhibit_type,
+                    char_count,
+                    raw_content,
                     summary_text,
-                    ai_provider,
-                    ai_model,
-                    processing_duration_seconds,
                     generated_at
                 FROM sec_8k_filings
-                ORDER BY filing_date DESC, generated_at DESC
+                ORDER BY filing_date DESC, exhibit_number ASC
             """)
 
             filings = cur.fetchall()
@@ -32602,6 +32578,49 @@ def db_get_latest_transcript(ticker: str) -> Optional[Dict]:
             return None
     except Exception as e:
         LOG.error(f"Error getting latest transcript for {ticker}: {e}")
+        return None
+
+
+def db_get_latest_earnings_release(ticker: str) -> Optional[Dict]:
+    """
+    Get latest earnings release from 8-K filings for future executive summary integration.
+
+    Returns: {
+        "filing_date": "2025-01-30",
+        "exhibit_description": "Earnings Release",
+        "raw_content": "...",
+        "char_count": 91692
+    }
+
+    Returns None if no earnings release found for this ticker.
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    filing_date,
+                    exhibit_description,
+                    raw_content,
+                    char_count
+                FROM sec_8k_filings
+                WHERE ticker = %s
+                  AND exhibit_type = 'earnings_release'
+                ORDER BY filing_date DESC
+                LIMIT 1
+            """, (ticker,))
+
+            result = cur.fetchone()
+            if result:
+                return {
+                    'filing_date': result['filing_date'],
+                    'description': result['exhibit_description'],
+                    'raw_content': result['raw_content'],
+                    'char_count': result['char_count']
+                }
+            return None
+
+    except Exception as e:
+        LOG.error(f"Error getting latest earnings release for {ticker}: {e}")
         return None
 
 

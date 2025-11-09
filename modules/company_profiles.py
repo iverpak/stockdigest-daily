@@ -555,6 +555,161 @@ def get_8k_html_url(documents_url: str) -> dict:
         raise
 
 
+def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
+    """
+    Parse SEC documents index page and find ALL Exhibit 99.* files.
+
+    Returns list of all exhibits sorted by number (99.1, 99.2, 99.3, etc.).
+    Each exhibit includes URL, description, and size for processing.
+
+    Args:
+        documents_url: URL to SEC documents index page
+
+    Returns:
+        [
+            {
+                "exhibit_number": "99.1",
+                "description": "Supplemental Information",
+                "url": "https://www.sec.gov/.../ex99_1.htm",
+                "size": 131002
+            },
+            {
+                "exhibit_number": "99.2",
+                "description": "Earnings Release",
+                "url": "https://www.sec.gov/.../ex99_2.htm",
+                "size": 91692
+            }
+        ]
+
+    Raises:
+        ValueError: If no Exhibit 99.* files found
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+
+    LOG.info(f"Parsing documents page for all Exhibit 99.* files: {documents_url}")
+
+    try:
+        headers = {
+            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+        }
+
+        response = requests.get(documents_url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        table = soup.find('table', class_='tableFile')
+
+        if not table:
+            raise ValueError("Documents table not found on index page")
+
+        rows = table.find_all('tr')[1:]  # Skip header
+        exhibits = []
+
+        # Find all EX-99.* files
+        for row in rows:
+            cols = row.find_all('td')
+
+            if len(cols) >= 4:
+                doc_type = cols[1].text.strip()  # Column 1: Type (EX-99.1, EX-99.2, etc.)
+                filename = cols[2].text.strip()  # Column 2: Filename
+                size_text = cols[3].text.strip()  # Column 3: Size
+
+                # Match any EX-99.* (case insensitive)
+                if 'ex-99.' in doc_type.lower() and '.htm' in filename.lower():
+                    link = cols[2].find('a')
+                    if link and 'href' in link.attrs:
+                        # Extract exhibit number (e.g., "99.1" from "EX-99.1")
+                        exhibit_num = doc_type.replace('EX-', '').replace('ex-', '')
+
+                        # Build full URL
+                        exhibit_url = urljoin(documents_url, link['href'])
+                        # Strip iXBRL viewer wrapper
+                        exhibit_url = exhibit_url.replace('/ix?doc=', '')
+
+                        # Parse size (in bytes)
+                        try:
+                            size_bytes = int(size_text)
+                        except:
+                            size_bytes = 0
+
+                        # Get description from column 0 (usually has exhibit description)
+                        description = cols[0].text.strip() or f"Exhibit {exhibit_num}"
+
+                        exhibits.append({
+                            'exhibit_number': exhibit_num,
+                            'description': description,
+                            'url': exhibit_url,
+                            'size': size_bytes
+                        })
+
+                        LOG.info(f"✅ Found Exhibit {exhibit_num}: {description} ({size_bytes} bytes)")
+
+        if not exhibits:
+            raise ValueError("No Exhibit 99.* files found in documents list")
+
+        # Sort by exhibit number (99.1 before 99.2)
+        exhibits.sort(key=lambda x: float(x['exhibit_number']))
+
+        LOG.info(f"✅ Found {len(exhibits)} exhibits total")
+        return exhibits
+
+    except Exception as e:
+        LOG.error(f"Failed to parse exhibits from documents page: {e}")
+        raise
+
+
+def classify_exhibit_type(exhibit_num: str, description: str, char_count: int) -> str:
+    """
+    Classify exhibit based on number, description, and size.
+
+    Uses heuristics to automatically categorize exhibits for easy filtering
+    and future integration with executive summary generation.
+
+    Args:
+        exhibit_num: Exhibit number (e.g., "99.1", "99.2")
+        description: Exhibit description from SEC
+        char_count: Character count of HTML content
+
+    Returns:
+        "earnings_release" | "investor_presentation" | "press_release" | "other"
+    """
+    desc_lower = description.lower()
+
+    # Earnings Release indicators
+    if any(keyword in desc_lower for keyword in [
+        'earnings release',
+        'financial results',
+        'quarterly results',
+        'quarterly earnings'
+    ]):
+        return 'earnings_release'
+
+    # Investor Presentation indicators (usually larger, slides)
+    if any(keyword in desc_lower for keyword in [
+        'supplemental',
+        'presentation',
+        'investor deck',
+        'slides',
+        'supplemental information'
+    ]):
+        # Large files are likely presentation decks
+        if char_count > 80000:  # > 80KB
+            return 'investor_presentation'
+
+    # Press Release indicators
+    if 'press release' in desc_lower:
+        return 'press_release'
+
+    # Fallback heuristic: 99.2 and smaller size likely earnings release
+    if exhibit_num == '99.2' and char_count < 100000:
+        return 'earnings_release'
+
+    # Default
+    return 'other'
+
+
 def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> Dict:
     """
     Quick parse 8-K header (first 3KB) to extract title and item codes.
@@ -707,20 +862,18 @@ def extract_8k_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
         raise
 
 
-def extract_8k_html_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
+def extract_8k_html_content(exhibit_url: str) -> str:
     """
-    Extract 8-K content AS HTML (preserving tables and formatting).
+    Extract single 8-K exhibit content AS HTML (preserving tables and formatting).
 
-    This is the NEW approach (Option A) - keep HTML structure intact so:
-    1. Raw email shows proper tables
-    2. Gemini can convert HTML tables to markdown accurately
+    Simplified for exhibit-level processing - fetches one exhibit at a time.
+    Returns raw HTML with tables intact for display in email.
 
     Args:
-        sec_html_url: Full URL to main 8-K HTML on SEC.gov
-        exhibit_99_1_url: Full URL to Exhibit 99.1 (or None if not found)
+        exhibit_url: Full URL to exhibit HTML on SEC.gov
 
     Returns:
-        Clean HTML content with tables intact (Exhibit 99.1 or main body fallback)
+        Clean HTML content with tables intact
 
     Raises:
         ValueError: If content too short or empty
@@ -728,9 +881,7 @@ def extract_8k_html_content(sec_html_url: str, exhibit_99_1_url: str = None) -> 
     import requests
     from bs4 import BeautifulSoup
 
-    LOG.info(f"Extracting 8-K HTML content from: {sec_html_url}")
-    if exhibit_99_1_url:
-        LOG.info(f"Exhibit 99.1 URL provided: {exhibit_99_1_url}")
+    LOG.info(f"Extracting 8-K exhibit HTML from: {exhibit_url}")
 
     # SEC requires proper User-Agent
     headers = {
@@ -738,11 +889,7 @@ def extract_8k_html_content(sec_html_url: str, exhibit_99_1_url: str = None) -> 
     }
 
     try:
-        # Try Exhibit 99.1 first if URL was provided
-        url_to_fetch = exhibit_99_1_url if exhibit_99_1_url else sec_html_url
-
-        LOG.info(f"Fetching HTML from: {url_to_fetch}")
-        response = requests.get(url_to_fetch, headers=headers, timeout=60)
+        response = requests.get(exhibit_url, headers=headers, timeout=60)
         response.raise_for_status()
 
         LOG.info(f"✅ Fetched HTML ({len(response.text)} chars)")
@@ -764,302 +911,15 @@ def extract_8k_html_content(sec_html_url: str, exhibit_99_1_url: str = None) -> 
 
         # Validate minimum length
         if len(html_content) < 500:
-            # Try fallback to main 8-K if we tried Exhibit 99.1
-            if exhibit_99_1_url and url_to_fetch == exhibit_99_1_url:
-                LOG.warning(f"Exhibit 99.1 too short ({len(html_content)} chars), falling back to main body")
-                return extract_8k_html_content(sec_html_url, exhibit_99_1_url=None)
-            else:
-                raise ValueError(
-                    f"8-K HTML content too short ({len(html_content)} chars) - may be empty or malformed"
-                )
+            raise ValueError(
+                f"8-K HTML content too short ({len(html_content)} chars) - may be empty or malformed"
+            )
 
         LOG.info(f"✅ Extracted clean HTML ({len(html_content)} chars, tables preserved)")
         return html_content
 
     except Exception as e:
         LOG.error(f"Failed to extract 8-K HTML content: {e}")
-        raise
-
-
-def format_8k_raw_content_to_html(raw_text: str) -> str:
-    """
-    DEPRECATED: Use extract_8k_html_content() instead for proper table formatting.
-
-    Convert raw 8-K text to formatted HTML for Email #1.
-
-    Applies basic HTML formatting while preserving structure:
-    - Converts line breaks to <br>
-    - Detects and styles section headers (ALL CAPS lines)
-    - Detects and formats ASCII tables with proper styling
-    - Gracefully handles malformed content
-
-    Args:
-        raw_text: Raw text from Exhibit 99.1 or main 8-K body
-
-    Returns:
-        HTML-formatted string with styled tables and headers
-    """
-    import re
-
-    if not raw_text or len(raw_text.strip()) < 100:
-        return "<p style='color: #6c757d;'>Content too short or empty</p>"
-
-    # Escape HTML special characters first
-    html = raw_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
-    # Detect and format section headers (ALL CAPS lines, minimum 10 chars, at start of line)
-    # Example: "CONSOLIDATED STATEMENTS OF OPERATIONS"
-    html = re.sub(
-        r'^([A-Z][A-Z\s]{10,})$',
-        r'<h3 style="font-size: 16px; font-weight: 600; color: #1e40af; margin: 24px 0 12px 0; padding-bottom: 6px; border-bottom: 2px solid #e9ecef;">\1</h3>',
-        html,
-        flags=re.MULTILINE
-    )
-
-    # Detect ASCII tables (lines with multiple spaces or tabs, appearing in groups)
-    # This is a simple heuristic - try to detect table-like structures
-    lines = html.split('\n')
-    formatted_lines = []
-    in_table = False
-    table_buffer = []
-
-    for i, line in enumerate(lines):
-        # Check if line looks like a table row (has 2+ columns separated by 2+ spaces or tabs)
-        is_table_row = bool(re.search(r'\s{2,}|\t', line)) and len(line.strip()) > 20
-
-        if is_table_row:
-            if not in_table:
-                in_table = True
-                table_buffer = []
-            table_buffer.append(line)
-        else:
-            # End of table - format it
-            if in_table and table_buffer:
-                formatted_table = _format_ascii_table(table_buffer)
-                if formatted_table:
-                    formatted_lines.append(formatted_table)
-                else:
-                    # Table formatting failed, just add as preformatted text
-                    formatted_lines.extend(table_buffer)
-                table_buffer = []
-                in_table = False
-
-            formatted_lines.append(line)
-
-    # Handle table at end of content
-    if in_table and table_buffer:
-        formatted_table = _format_ascii_table(table_buffer)
-        if formatted_table:
-            formatted_lines.append(formatted_table)
-        else:
-            formatted_lines.extend(table_buffer)
-
-    # Join lines and convert line breaks
-    html = '\n'.join(formatted_lines)
-    html = html.replace('\n', '<br>\n')
-
-    return html
-
-
-def _format_ascii_table(lines: List[str]) -> Optional[str]:
-    """
-    Helper function to format ASCII table lines into HTML table.
-
-    Args:
-        lines: List of lines that appear to be a table
-
-    Returns:
-        HTML table string, or None if formatting fails
-    """
-    if not lines or len(lines) < 2:
-        return None
-
-    try:
-        # Split each line into columns (split on 2+ spaces or tabs)
-        rows = []
-        for line in lines:
-            # Clean up line and split on whitespace (2+ spaces or tabs)
-            cols = re.split(r'\s{2,}|\t+', line.strip())
-            # Filter out empty columns
-            cols = [c.strip() for c in cols if c.strip()]
-            if cols:
-                rows.append(cols)
-
-        if not rows or len(rows) < 2:
-            return None
-
-        # First row is likely header
-        header_row = rows[0]
-        data_rows = rows[1:]
-
-        # Build HTML table with styling
-        table_html = ['<table style="border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 13px;">']
-
-        # Header
-        table_html.append('  <thead style="background: #f8f9fa;">')
-        table_html.append('    <tr>')
-        for col in header_row:
-            table_html.append(f'      <th style="padding: 12px; border: 1px solid #dee2e6; text-align: left; font-weight: 600; color: #212529;">{col}</th>')
-        table_html.append('    </tr>')
-        table_html.append('  </thead>')
-
-        # Body
-        table_html.append('  <tbody>')
-        for row_idx, row in enumerate(data_rows):
-            # Alternate row colors for readability
-            bg_color = '#ffffff' if row_idx % 2 == 0 else '#f8f9fa'
-            table_html.append(f'    <tr style="background-color: {bg_color};">')
-            for col in row:
-                table_html.append(f'      <td style="padding: 10px; border: 1px solid #dee2e6; color: #212529;">{col}</td>')
-            table_html.append('    </tr>')
-        table_html.append('  </tbody>')
-        table_html.append('</table>')
-
-        return '\n'.join(table_html)
-
-    except Exception as e:
-        LOG.warning(f"Failed to format ASCII table: {e}")
-        return None
-
-
-def generate_8k_summary_with_gemini(
-    ticker: str,
-    content: str,
-    config: Dict,
-    filing_date: str,
-    item_codes: str,
-    gemini_api_key: str
-) -> str:
-    """
-    Convert 8-K HTML to clean Markdown using Gemini 2.5 Flash - NOISE FILTER not summarizer.
-
-    Removes legal boilerplate (disclaimers, safe harbor warnings) while preserving
-    ~90% of meaningful content. HTML tables converted to markdown tables with ALL rows/columns.
-
-    **NEW (Option A)**: Accepts HTML input (not plain text) to preserve table structure.
-
-    Args:
-        ticker: Stock ticker (e.g., 'AAPL', 'TSLA')
-        content: 8-K HTML content (from extract_8k_html_content()) with tables intact
-        config: Ticker configuration dict with company_name, etc.
-        filing_date: Filing date string (e.g., "Jan 30, 2025")
-        item_codes: Item codes string (e.g., "2.02, 9.01")
-        gemini_api_key: Gemini API key
-
-    Returns:
-        Clean markdown with ~90% content retention, all HTML tables → markdown tables
-
-    Raises:
-        Exception: If generation fails
-    """
-    import time
-    from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-    company_name = config.get('company_name', ticker)
-
-    LOG.info(f"[{ticker}] Generating 8-K summary with Gemini 2.5 Flash...")
-
-    # Build prompt - HTML to Markdown converter with noise filtering (90% content retention)
-    prompt = f"""You are converting an SEC 8-K filing from HTML to clean Markdown.
-
-INPUT FORMAT: SEC.gov HTML (with <table>, <p>, <b>, etc. tags)
-OUTPUT FORMAT: Clean Markdown
-
-TASK: Convert HTML to Markdown while removing legal boilerplate. Keep ~90% of meaningful content.
-
-KEEP (verbatim):
-• All numbers, figures, percentages, and metrics
-• ALL HTML <table> elements → Convert to complete markdown tables with EVERY row and column
-• All executive quotes and statements
-• All material events and developments
-• All business guidance and outlook (revenue targets, EPS guidance, growth plans, strategic initiatives)
-• All deal terms and transaction details
-• Company descriptions ("About [Company]" sections)
-• Section headers and structure
-
-REMOVE ONLY:
-• Forward-looking statements safe harbor disclaimers (e.g., "Statements herein may constitute forward-looking statements subject to risks under the Private Securities Litigation Reform Act...")
-• Risk factor warnings (e.g., "Factors that could cause actual results to differ include economic conditions, competition, regulatory changes...")
-• Legal cautionary language (e.g., "We undertake no obligation to update or revise these statements...")
-• Investor relations contact information blocks
-• Repetitive SEC filing headers/footers
-
-CRITICAL - HTML TABLE CONVERSION:
-
-When you see an HTML table like this:
-<table>
-  <tr><th>Metric</th><th>Q3 2024</th><th>Q3 2023</th></tr>
-  <tr><td>Revenue</td><td>$100M</td><td>$90M</td></tr>
-  <tr><td>Net Income</td><td>$20M</td><td>$18M</td></tr>
-</table>
-
-You MUST convert it to markdown with EVERY row and column:
-| Metric | Q3 2024 | Q3 2023 |
-|--------|---------|---------|
-| Revenue | $100M | $90M |
-| Net Income | $20M | $18M |
-
-RULES FOR TABLES:
-1. Extract EVERY <tr> (table row) from the HTML
-2. Extract EVERY <td> and <th> (table cell) from each row
-3. First row with <th> tags becomes the markdown header row
-4. Add separator row with | --- | --- | after headers
-5. All data rows follow with proper | delimiter alignment
-6. Do NOT skip rows, summarize, or condense tables
-7. If a table has 50 rows, your markdown must have 50 rows
-
-OUTPUT LENGTH: Match the original filing length (minus removed boilerplate). Do NOT impose artificial word limits.
-
-Company: {ticker} ({company_name})
-Filing Date: {filing_date}
-Item Codes: {item_codes}
-
----
-
-8-K FILING HTML:
-
-{content}
-"""
-
-    try:
-        start_time = time.time()
-
-        # Configure Gemini
-        genai.configure(api_key=gemini_api_key)
-
-        # Use Gemini 2.5 Flash (fast, cost-effective)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-
-        # Safety settings (same as 10-K/10-Q)
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
-
-        # Generate summary
-        response = model.generate_content(
-            prompt,
-            safety_settings=safety_settings,
-            generation_config={
-                'temperature': 0.3,  # Consistent outputs
-                'max_output_tokens': 16000,  # Same as 10-K
-            }
-        )
-
-        summary_text = response.text
-        elapsed = time.time() - start_time
-
-        # Count words
-        word_count = len(summary_text.split())
-
-        LOG.info(f"[{ticker}] ✅ Generated 8-K summary ({word_count} words, {elapsed:.1f}s)")
-
-        return summary_text
-
-    except Exception as e:
-        LOG.error(f"[{ticker}] Gemini 8-K summary generation failed: {e}")
         raise
 
 

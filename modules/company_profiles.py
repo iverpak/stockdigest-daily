@@ -557,10 +557,10 @@ def get_8k_html_url(documents_url: str) -> dict:
 
 def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
     """
-    Parse SEC documents index page and find ALL Exhibit 99.* files.
+    Parse SEC documents index page and find ALL exhibit files (any number).
 
-    Returns list of all exhibits sorted by number (99.1, 99.2, 99.3, etc.).
-    Each exhibit includes URL, description, and size for processing.
+    Extracts ALL exhibits regardless of number (1.1, 4.1, 10.1, 99.1, etc.).
+    Only processes HTML files (skips images, XML, TXT).
 
     Args:
         documents_url: URL to SEC documents index page
@@ -569,26 +569,26 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
         [
             {
                 "exhibit_number": "99.1",
-                "description": "Supplemental Information",
+                "description": "Press Release",
                 "url": "https://www.sec.gov/.../ex99_1.htm",
                 "size": 131002
             },
             {
-                "exhibit_number": "99.2",
-                "description": "Earnings Release",
-                "url": "https://www.sec.gov/.../ex99_2.htm",
-                "size": 91692
+                "exhibit_number": "1.1",
+                "description": "Underwriting Agreement",
+                "url": "https://www.sec.gov/.../ex1_1.htm",
+                "size": 205000
             }
         ]
 
     Raises:
-        ValueError: If no Exhibit 99.* files found
+        ValueError: If no HTML exhibits found
     """
     import requests
     from bs4 import BeautifulSoup
     from urllib.parse import urljoin
 
-    LOG.info(f"Parsing documents page for all Exhibit 99.* files: {documents_url}")
+    LOG.info(f"Parsing documents page for all HTML exhibits: {documents_url}")
 
     try:
         headers = {
@@ -609,23 +609,32 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
 
         LOG.info(f"[EXHIBIT_DEBUG] Found {len(rows)} rows in documents table")
 
-        # Find all EX-99.* files
+        # Find ALL exhibit files (any number: 1.1, 4.1, 10.1, 99.1, etc.)
         for i, row in enumerate(rows):
             cols = row.find_all('td')
 
             if len(cols) >= 4:
-                doc_type = cols[1].text.strip()  # Column 1: Type (EX-99.1, EX-99.2, etc.)
+                doc_type = cols[1].text.strip()  # Column 1: Type (EXHIBIT 1.1, EX-99.1, etc.)
                 filename = cols[2].text.strip()  # Column 2: Filename
                 size_text = cols[3].text.strip()  # Column 3: Size
 
                 LOG.info(f"[EXHIBIT_DEBUG] Row {i}: Type='{doc_type}', Filename='{filename}'")
 
-                # Match any EX-99.* (case insensitive)
-                if 'ex-99.' in doc_type.lower() and '.htm' in filename.lower():
+                # Match ANY exhibit (not just 99.*) that's HTML (skip images, XML, TXT)
+                doc_type_upper = doc_type.upper()
+                is_exhibit = doc_type_upper.startswith('EXHIBIT') or doc_type_upper.startswith('EX-')
+                is_html = '.htm' in filename.lower()
+
+                if is_exhibit and is_html:
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:
-                        # Extract exhibit number (e.g., "99.1" from "EX-99.1")
-                        exhibit_num = doc_type.replace('EX-', '').replace('ex-', '')
+                        # Extract exhibit number (e.g., "99.1" from "EX-99.1" or "EXHIBIT 99.1")
+                        exhibit_num = (
+                            doc_type.replace('EXHIBIT', '')
+                                    .replace('EX-', '')
+                                    .replace('ex-', '')
+                                    .strip()
+                        )
 
                         # Build full URL
                         exhibit_url = urljoin(documents_url, link['href'])
@@ -651,19 +660,19 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
                         LOG.info(f"✅ Found Exhibit {exhibit_num}: {description} ({size_bytes} bytes)")
 
         if not exhibits:
-            # Provide helpful error message based on what exhibits ARE present
-            present_exhibits = [cols[1].text.strip() for row in rows for cols in [row.find_all('td')] if len(cols) >= 4]
-            exhibit_list = ', '.join(set(present_exhibits[:5]))  # Show first 5 unique types
+            # Provide helpful error message based on what document types ARE present
+            present_docs = [cols[1].text.strip() for row in rows for cols in [row.find_all('td')] if len(cols) >= 4]
+            doc_list = ', '.join(set(present_docs[:5]))  # Show first 5 unique types
             raise ValueError(
-                f"No Exhibit 99.* files found in this 8-K filing. "
-                f"This appears to be a non-earnings 8-K (found: {exhibit_list}). "
-                f"Please select a different filing with Item 2.02 (Results of Operations) which typically contains Exhibit 99.1 press release."
+                f"No HTML exhibits found in this 8-K filing. "
+                f"Found document types: {doc_list}. "
+                f"This filing may only have non-HTML attachments (images, XML, PDF) or no exhibits at all."
             )
 
-        # Sort by exhibit number (99.1 before 99.2)
+        # Sort by exhibit number (1.1, 4.1, 10.1, 99.1, 99.2, etc.)
         exhibits.sort(key=lambda x: float(x['exhibit_number']))
 
-        LOG.info(f"✅ Found {len(exhibits)} exhibits total")
+        LOG.info(f"✅ Found {len(exhibits)} HTML exhibits total")
         return exhibits
 
     except Exception as e:

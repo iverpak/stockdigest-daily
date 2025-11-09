@@ -23648,8 +23648,9 @@ async def process_press_release_phase(job: dict):
 
 async def process_8k_summary_phase(job: dict):
     """
-    Process 8-K exhibits - extract HTML and send separate email per exhibit.
+    Process 8-K exhibits - extract ALL HTML exhibits and send separate email per exhibit.
 
+    Extracts ANY exhibit type (1.1, 4.1, 10.1, 99.1, etc.), not just earnings releases.
     No AI processing - just shows raw SEC content exactly as published.
     Fast (<1 min per exhibit).
     """
@@ -23669,13 +23670,13 @@ async def process_8k_summary_phase(job: dict):
         item_codes = config.get('item_codes')
         ticker_config = get_ticker_config(ticker)
 
-        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching all Exhibit 99.* files from documents page...")
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching all HTML exhibits from documents page...")
 
-        # Step 1: Get all Exhibit 99.* files from documents page
+        # Step 1: Get ALL HTML exhibits (any number: 1.1, 4.1, 10.1, 99.1, etc.)
         exhibits = get_all_8k_exhibits(documents_url)
 
         if not exhibits:
-            raise ValueError("No Exhibit 99.* files found in this 8-K")
+            raise ValueError("No HTML exhibits found in this 8-K")
 
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Found {len(exhibits)} exhibit(s) to process")
 

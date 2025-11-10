@@ -144,7 +144,7 @@ Input:
 Output format:
 ## UPSIDE SCENARIO
 
-[Thesis sentence - synthesize upside case with selective bolding]
+[Thesis sentence - extract key claim from Phase 1 paragraph with selective bolding]
 
 Primary Drivers:
 - **Driver label**: [50-80 word bullet with bolding]
@@ -170,6 +170,31 @@ Rules:
 - Bold key numbers and metrics
 - Same format for Downside Scenario (use "Primary Risks:" instead of "Primary Drivers:")
 - Same format for Bottom Line (extract thesis + 3-5 key developments, distribute context across bullets)
+
+Thesis construction:
+✅ Extract primary claim from Phase 1 scenario paragraph (first sentence usually)
+✅ Add analyst target if mentioned: "BofA target **$137** represents **10%+** upside"
+✅ Use neutral framing: "Analysts cited factors" not "Catalysts converging"
+
+❌ Don't calculate upside percentages unless explicit in Phase 1
+❌ Don't use synthesis phrases like "validate", "converging", "tempering"
+❌ Don't create causal connections Phase 1 didn't make
+
+Driver/Risk label guidelines:
+Use neutral, descriptive labels from Phase 1 content:
+
+✅ Good labels (neutral, from content):
+- "Embedded rent growth"
+- "Demand indicators"
+- "E-commerce forecasts"
+- "Valuation concerns"
+- "Market vacancy levels"
+
+❌ Bad labels (interpretive):
+- "Demand inflection validated"
+- "Supply tailwind emerging"
+- "Secular growth supporting"
+- "Headwinds tempering upside"
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -222,12 +247,22 @@ Q3 revenue reached **$2.05B**, up 8.6% YoY per ad-hoc-news.de. Q3 rental revenue
 ✅ RIGHT (Woven):
 Q3 revenue reached **$2.05B** (rental revenue **$2,054M** vs **$1,897M** prior year per Q3 10-Q), up 8.6% YoY per ad-hoc-news.de.
 
-Example 4 - Validation Integration:
+Example 4 - Data Point Integration:
 ❌ WRONG (Appended):
-Customers increasingly advancing strategic leasing decisions per FreightWaves. Company leasing volume 62M sqft Q3 per Oct 15 call.
+Management noted customers advancing strategic leasing decisions per FreightWaves. 
+Company leasing volume 62M sqft Q3 per Oct 15 call.
 
 ✅ RIGHT (Woven):
-Customers increasingly advancing strategic leasing decisions as company leasing volume 62M sqft in Q3 per Oct 15 call validates growing confidence per FreightWaves.
+Management noted customers advancing strategic leasing decisions per FreightWaves, 
+with company leasing volume 62M sqft in Q3 per Oct 15 call.
+
+Example 5 - Avoid Causal Inference:
+❌ WRONG (Causal):
+Analyst upgraded following Q3 results, as operational beat validated demand 
+recovery thesis per Wedbush.
+
+✅ RIGHT (Neutral):
+Analyst upgraded following Q3 results, citing operational performance per Wedbush.
 
 Context filtering (apply sequentially):
 
@@ -409,6 +444,35 @@ YES filter: Discard duplicate/low-value context
 YES flag conflicts: Note discrepancies between bullet and context
 YES preserve: Each section stands independently (no cross-section deduplication)
 
+MINIMIZE INFERENCE:
+
+Avoid interpretive language:
+❌ "driving upgrades" → ✅ "following results"
+❌ "validated thesis" → ✅ "cited factors"
+❌ "catalysts converging" → ✅ "analysts cited"
+❌ "tempering upside" → ✅ "noted challenges"
+
+Use neutral labels:
+❌ "Demand inflection validated" → ✅ "Demand indicators"
+❌ "Supply tailwind emerging" → ✅ "Supply-demand dynamics"
+❌ "Secular growth supporting" → ✅ "Growth forecasts"
+
+Attribute claims:
+✅ "Company stated..."
+✅ "Management noted..."
+✅ "Analyst cited..."
+✅ "Report indicated..."
+
+Let facts speak - present data without interpreting significance.
+
+QUANTITATIVE CLAIMS:
+❌ Never calculate metrics not in Phase 1+2 (upside %, growth rates, totals)
+❌ Never extrapolate trends ("if X continues, Y will...")
+❌ Never aggregate across sources ("combined impact of...")
+
+✅ Only report numbers explicitly stated in Phase 1+2
+✅ Only perform arithmetic shown in Phase 1+2 (e.g., "vs prior year")
+
 ═══════════════════════════════════════════════════════════════════════════════
 MARKDOWN FORMATTING STANDARDS
 ═══════════════════════════════════════════════════════════════════════════════
@@ -449,19 +513,23 @@ since 2018 per Colliers (Nov 7)...
 OUTPUT (Phase 3):
 ## BOTTOM LINE
 
-**Prologis Q3 marked market inflection**, driving **three analyst upgrades**
-as **operational beat validated demand recovery thesis** with current price
-**$124** sitting midpoint of Street range.
+Prologis reported Q3 EPS **$1.49** (vs consensus **$1.44**) and revenue
+**$2.05B** (+8.6% YoY), with company stating Q3 marked inflection point as
+IBI averaged **53**; **three analysts** upgraded or raised targets following
+results (BofA **$137**, Mizuho **$118**, Scotiabank to Sector Perform).
 
 Key Developments:
-- **Demand inflection confirmed**: IBI **53** with **record 62M SF leased**,
-  occupancy **95.3%** (+20 bps), Core FFO **$1.50** beating forecast
-- **Embedded growth locked in**: **49%** rent change with **19% mark-to-market**
-  = **$900M NOI**; guidance raised to **$5.83-$5.86** Core FFO
-- **Supply tailwind emerging**: **270M SF** pipeline (**lowest since 2018**) vs
-  **60M SF** absorption (highest since Q1 2023)
-- **Secular demand**: E-commerce **23.5% CAGR** with PLD capturing **20%** of
-  new leasing
+- **Demand indicators**: IBI **53** with **record 62M SF leased**, occupancy
+  **95.3%** (+20 bps), Core FFO **$1.50** beating forecast
+- **Analyst actions**: BofA raised target to **$137** citing execution quality;
+  Scotiabank upgraded to Sector Perform; Mizuho upgraded to Outperform with
+  **$118** target
+- **Supply-demand dynamics**: Construction pipeline **270M SF** (lowest since
+  2018) vs Q3 absorption **60M SF** (highest since Q1 2023), with Colliers
+  projecting vacancy stabilization
+- **E-commerce forecasts**: Global e-commerce logistics market projected
+  **23.5% CAGR** through 2031 with US e-commerce revenue forecast **$2.9T**
+  by 2030 per Bloomberg Intelligence
 
 (Oct 15, Nov 3-8)
 
@@ -471,6 +539,10 @@ VALIDATION CHECKLIST
 
 Before outputting, verify:
 □ Bottom Line has thesis + 3-5 bullets extracted from Phase 1 paragraph
+□ Thesis sentence extracted from Phase 1 (not newly synthesized)
+□ Bullet labels are neutral/descriptive (no "validated", "confirmed", "emerging")
+□ No causal language ("driving", "validating", "tempering")
+□ No unsupported calculations (upside %, aggregations)
 □ Scenarios have thesis + bullets (or escape hatch if applicable)
 □ All bullets show: **Topic** • Sentiment (reason) [or **[Entity] Topic** • Sentiment (reason)]
 □ Sentiment/reason/entity tags displayed as-is from Phase 2 (no interpretation)

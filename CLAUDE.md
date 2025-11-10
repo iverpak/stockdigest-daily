@@ -1983,8 +1983,9 @@ python app.py check_filings
   ```
 
 **Email Display** (`modules/executive_summary_phase1.py`)
-- Email #3 Converter (lines 463-529): Appends `\nContext: {text}` (markdown)
-- Email #2 Converter (lines 571-671): Appends `<br><br>Context: {text}` (HTML)
+- Email #3 Converter: `convert_phase1_to_sections_dict()` - User-facing format (lines 465-565)
+- Email #2 Converter: `convert_phase1_to_enhanced_sections()` - QA format with hints (lines 609-713)
+- Both converters use bullet_id matching for date appending
 - Post-processing: `bold_labels=True` parameter on `build_section()` calls
 - `bold_bullet_labels()` function auto-replaces `Context:` → `<strong>Context:</strong>`
 
@@ -1994,11 +1995,11 @@ python app.py check_filings
 - Persists across email regenerations
 
 **Key Functions:**
-- `generate_phase2_enrichments_with_claude()` - Phase 2 generation (lines 200-410)
-- `_parse_phase2_json_response()` - Parsing logic (lines 412-485)
-- `merge_phase1_and_phase2()` - Merge function (lines 598-730)
-- `convert_to_email3_sections()` - Email #3 converter (lines 413-540)
-- `convert_to_email2_sections()` - Email #2 converter (lines 542-684)
+- `generate_phase2_enrichments_with_claude()` - Phase 2 generation
+- `_parse_phase2_json_response()` - Parsing logic
+- `merge_phase1_and_phase2()` - Phase 1+2 merge function
+- `convert_phase1_to_sections_dict()` - Email #3 converter (NEW - uses bullet_id matching)
+- `convert_phase1_to_enhanced_sections()` - Email #2 converter (NEW - uses bullet_id matching)
 
 **Benefits:**
 - ✅ Richer context for investment decisions
@@ -2006,6 +2007,127 @@ python app.py check_filings
 - ✅ Consistent display across Email #2 (QA) and Email #3 (user-facing)
 - ✅ Unified bold formatting via post-processing
 - ✅ Backward compatible (works even if no 10-K exists)
+
+### Phase 3: Context Integration + Length Enforcement (November 2025)
+
+**MAJOR SIMPLIFICATION:** Phase 3 now returns JSON (not markdown) with only integrated content. All restructuring logic removed.
+
+**Purpose:** Mechanically weave Phase 2 context into Phase 1 content and enforce length limits. Phase 3 is purely editorial - no new information, no restructuring.
+
+**Three-Phase Architecture (UPDATED):**
+
+**Phase 1: Article Theme Extraction**
+- Input: Article summaries by category
+- Output: JSON with 10 sections (bullets have: bullet_id, topic_label, content, filing_hints)
+- Scope: Articles ONLY
+
+**Phase 2: Filing Context Enrichment**
+- Input: Phase 1 JSON + latest 10-K/10-Q/Transcript
+- Output: Enrichments (impact, sentiment, reason, entity, context) for each bullet
+- Scope: Filing data ONLY
+- Result: Phase 1+2 merged JSON with all metadata
+
+**Phase 3: Context Integration (NEW)**
+- Input: Phase 1+2 merged JSON
+- Output: JSON with only (bullet_id, topic_label, content_integrated)
+- Scope: Context weaving + length enforcement ONLY
+- No restructuring, no thesis extraction, no new content
+
+**Unified Bullet Format (All Emails):**
+```
+**[Entity] Topic • Sentiment (reason)**
+Integrated paragraph with Phase 1 + Phase 2 context woven together (Nov 04)
+  Filing hints: 10-K (Section A)  ← Email #2 only
+  ID: bullet_id                    ← Email #2 only
+```
+
+**Key Improvements (November 2025):**
+
+1. **Bullet ID Matching System**
+   - All merging uses `bullet_id` (not index or topic_label)
+   - Robust, order-independent, safe with duplicates
+   - Function: `merge_phase3_with_phase2()` in Phase 2 module
+
+2. **Shared Utilities** (`modules/executive_summary_utils.py`)
+   - `format_bullet_header()`: Universal formatter for all bullet sections
+   - `add_dates_to_email_sections()`: Date appending via bullet_id matching
+   - Zero code duplication across Email #2, #3, #4
+
+3. **Simplified Phase 3 Prompt** (`modules/_build_executive_summary_prompt_phase3_new`)
+   - ❌ Removed: ALL restructuring (thesis extraction, bullet creation)
+   - ✅ Focus: Context integration + length enforcement ONLY
+   - 3 integration rules:
+     1. Avoid parenthetical overload (limit to 1-2 metrics, use semicolons)
+     2. Relevance upfront ("why this matters" at start, not buried)
+     3. Consolidated attribution (group sources at end)
+   - Length limits: Bottom Line ≤150w, Upside/Downside 80-160w
+
+4. **Email Converter Redesign**
+   - Both converters return `Dict[str, List[Dict]]` with `{'bullet_id': '...', 'formatted': '...'}`
+   - Use shared utilities for formatting and dates
+   - Backward compatible (HTML builder handles both old/new formats)
+
+**Implementation Details:**
+
+**Phase 3 Generation** (`modules/executive_summary_phase3.py:107-210`)
+```python
+def generate_executive_summary_phase3(ticker, phase2_merged_json, anthropic_api_key):
+    # 1. Load simplified prompt
+    # 2. Call Claude API
+    # 3. Parse JSON response (handles 3 formats: plain, markdown blocks, text+JSON)
+    # 4. merge_phase3_with_phase2(phase2_json, phase3_json)  # bullet_id matching
+    # 5. Return final merged JSON
+```
+
+**Merge Function** (`modules/executive_summary_phase2.py:865-922`)
+```python
+def merge_phase3_with_phase2(phase2_json, phase3_json):
+    # Build lookup by bullet_id from Phase 3
+    phase3_map = {b['bullet_id']: b for b in phase3_bullets}
+
+    # Overlay integrated content onto Phase 2 bullets
+    for bullet in phase2_bullets:
+        if bullet['bullet_id'] in phase3_map:
+            bullet['content'] = phase3_map[bullet['bullet_id']]['content']
+
+    # Preserves all Phase 2 metadata (impact, sentiment, dates, hints)
+```
+
+**Email Converters** (`modules/executive_summary_phase1.py`)
+- `convert_phase1_to_enhanced_sections()`: Email #2 with filing hints (lines 609-713)
+- `convert_phase1_to_sections_dict()`: Email #3 user-facing (lines 465-565)
+- Both use bullet_id matching for date appending
+
+**Data Flow:**
+```
+Articles → Phase 1 (synthesis)
+         → Phase 2 (enrichment + metadata)
+         → Phase 3 (context integration)
+         → merge_phase3_with_phase2() [bullet_id matching]
+         → Email converters [shared utilities]
+         → HTML builder [handles both formats]
+```
+
+**Benefits:**
+- ✅ Simplified Phase 3 = more predictable, reliable context integration
+- ✅ Bullet ID matching = robust merging even if bullets reordered
+- ✅ Shared utilities = zero code duplication
+- ✅ Backward compatible = safe deployment
+- ✅ 3,373 lines of redundant code flagged for deletion
+
+**Deprecated Functions (Delete After Email #2 Migration):**
+- `_build_executive_summary_prompt()` (2,609 lines) - OLD prompt system
+- `generate_claude_executive_summary()` (79 lines) - OLD generation
+- `generate_openai_executive_summary()` (54 lines) - OLD generation
+- `generate_executive_summary_with_fallback()` (36 lines) - OLD wrapper
+- `generate_ai_final_summaries()` (60 lines) - OLD async wrapper
+- Phase 3 markdown functions (415 lines) - OLD markdown-based system
+
+**Key Functions:**
+- `generate_executive_summary_phase3()` - Main Phase 3 entry point (returns merged JSON)
+- `merge_phase3_with_phase2()` - Bullet ID-based merge function
+- `format_bullet_header()` - Universal bullet formatter
+- `add_dates_to_email_sections()` - Date appending via bullet_id matching
 
 ---
 

@@ -109,10 +109,12 @@ WHAT NOT TO DO
 ❌ Don't add new information
 ❌ Don't create new connections
 ❌ Don't restructure (keep paragraphs as paragraphs, bullets as bullets)
-❌ Don't add dates (post-processing handles this)
+❌ Don't add article publication dates (post-processing appends these from date_range field)
 ❌ Don't return metadata fields (impact, sentiment, etc. already in Phase 2)
 ❌ Don't change topic_label or bullet_id
 
+✅ PRESERVE all filing attribution dates from Phase 2 context (per Oct 15 call, per Q3 10-Q, per 10-K)
+✅ Filing dates provide source credibility and MUST remain in integrated content
 ✅ Only integrate context into content
 ✅ Only enforce length limits
 ✅ Only filter weak/duplicate context
@@ -165,18 +167,23 @@ INPUT (Phase 1 + Phase 2):
 {
   "bullet_id": "amedisys_acquisition",
   "topic_label": "Amedisys acquisition",
-  "content": "Acquired Amedisys for $3.4B per Oct 28 earnings call",
-  "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q"
+  "content": "Acquired Amedisys for $3.4B",
+  "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q",
+  "date_range": "Oct 28"
 }
 
 OUTPUT (Phase 3):
 {
   "bullet_id": "amedisys_acquisition",
   "topic_label": "Amedisys acquisition",
-  "content": "Acquired Amedisys for $3.4B per Oct 28 earnings call, adding 300K patients across 38 states per Q3 10-Q"
+  "content": "Acquired Amedisys for $3.4B, adding 300K patients across 38 states per Q3 10-Q"
 }
 
-Note: Context integrated naturally (parenthetical integration), duplicate $3.4B removed.
+Notes:
+- Filing date "per Q3 10-Q" PRESERVED in integrated content (from Phase 2 context)
+- Article date "Oct 28" will be appended by post-processing from date_range field
+- Duplicate $3.4B valuation removed
+- Final display: "Acquired Amedisys for $3.4B, adding 300K patients across 38 states per Q3 10-Q (Oct 28)"
 
 ═══════════════════════════════════════════════════════════════════════════
 VALIDATION CHECKLIST
@@ -192,3 +199,5 @@ Before outputting, verify:
 □ Only bullet_id, topic_label, content in output (no metadata fields)
 □ All 10 sections present
 □ Valid JSON (parseable by json.loads())
+□ All filing dates PRESERVED (per Oct 15 call, per Q3 10-Q, per 10-K remain in content)
+□ NO article dates added to content (those come from date_range field)

@@ -172,43 +172,37 @@ DATE EXTRACTION
 
 For ALL bullet sections (major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts):
 
-- Extract dates from inline attribution in content field
-- Store in date_range field
-- Format: Natural language (e.g., "Nov 04", "Nov 04-07", "Nov 04, Nov 08")
+CRITICAL - DATE HANDLING:
+
+Article publication dates are NEVER included inline in the content field.
+Store them ONLY in the date_range field.
+
+- ❌ WRONG: "Company reported earnings per Bloomberg (Nov 04)"
+- ✅ CORRECT: "Company reported earnings per Bloomberg"
+- Article date goes to date_range field: "Nov 04"
+
+The date_range field will be appended at the end during post-processing.
+
+Extraction patterns for date_range field:
+- Single date: If articles from Nov 04 → date_range: "Nov 04"
+- Date range: If articles span Nov 04-07 → date_range: "Nov 04-07"
+- Multiple dates: If articles from Nov 04 and Nov 08 → date_range: "Nov 04, Nov 08"
+- Consecutive days: Can consolidate as range "Nov 04-08"
 - If no date found: Use empty string ""
 
-Extraction patterns:
-- Single date: "per Source (Nov 04)" → date_range: "Nov 04"
-- Date range: "per Source (Nov 04-07)" → date_range: "Nov 04-07"
-- Multiple dates: "per Source1 (Nov 04) and Source2 (Nov 08)" → date_range: "Nov 04, Nov 08"
-- Consecutive days: Can consolidate as range "Nov 04-08"
-
-DO NOT remove dates from content field - just extract and record in date_range.
-
 For bottom_line, upside_scenario, downside_scenario:
-
-- Extract ALL dates from content field
+- Extract ALL article dates
 - Consolidate into a single date range
 - Store in date_range field
 - Format: "Nov 03-08" or "Oct 28, Nov 03-08" or similar
 
-Example:
-- Content has: "per Source1 (Nov 04)... per Source2 (Nov 08)..."
-- date_range: "Nov 04-08" or "Nov 04, Nov 08"
-
-CRITICAL - DUAL WRITING REQUIREMENT:
-
-You must write dates in BOTH places:
-1. Write dates in content field (as always): "per Source (Nov 04)"
-2. Extract those same dates to date_range field: "Nov 04"
-
-This is for validation purposes. Both fields should contain the same date information.
-
-Example of correct dual writing:
+Example of correct date handling:
 {
-  "content": "Company reported Q3 earnings beat per Bloomberg (Nov 04)",
+  "content": "Company reported Q3 earnings beat per Bloomberg",
   "date_range": "Nov 04"
 }
+
+Post-processing will display as: "Company reported Q3 earnings beat per Bloomberg (Nov 04)"
 
 ═══════════════════════════════════════════════════════════════════════════════
 SECTION LENGTH LIMITS
@@ -280,26 +274,24 @@ Each bullet in sections (major_developments, financial_performance, risk_factors
    • "Good news" (editorial, not descriptive)
 
 3. CONTENT (full bullet text with attribution)
-   
+
    Requirements:
    - Full sentence(s) with complete information
-   - MUST include attribution: source + date in parentheses at end
-   - Date format: "(Oct 22)" or "(Oct 18-22)" for multi-day themes
+   - MUST include attribution: source name only (NO dates inline)
    - Information-dense: include key numbers, context, comparisons
    - For any implications or connections: MUST attribute to article author/source
-   
+   - Article dates stored in date_range field, NOT in content
+
    Single-source attribution:
-   "Tesla delivered 462,890 vehicles in Q3, exceeding consensus estimates of 455,000 per Bloomberg (Oct 22)"
-   
+   "Tesla delivered 462,890 vehicles in Q3, exceeding consensus estimates of 455,000 per Bloomberg"
+
    Multi-source attribution:
-   "Company reported Q3 revenue of $10.5B, beating consensus estimates per Bloomberg, Reuters, and WSJ (Oct 21-22)"
-   
+   "Company reported Q3 revenue of $10.5B, beating consensus estimates per Bloomberg, Reuters, and WSJ"
+
    Many sources (4+):
-   "Analysts project FY2025 revenue of $42B based on multiple reports (Oct 18-22)"
-   
-   Date guidelines:
-   • Single day: "(Oct 22)" - when one article or all articles from same day
-   • Multi-day range: "(Oct 18-22)" - when theme discussed across 3+ days
+   "Analysts project FY2025 revenue of $42B based on multiple reports"
+
+   Note: Article dates will be appended during post-processing from date_range field
    
    ATTRIBUTION CRITICAL RULE:
    Any implication, connection, or forward-looking statement MUST be attributed:
@@ -636,9 +628,11 @@ Exception: Same fact from multiple sources is fine:
 ✓ "Revenue beat consensus per Bloomberg and Reuters"
 
 DATE FORMAT BY SECTION:
-- Bottom Line: Consolidated at end "(Oct 22-24)" - NO per-sentence dates
-- Bullets: Inline with attribution "per Bloomberg (Oct 22)"
-- Upside/Downside: Consolidated at end "(Oct 28-29)" - NO per-sentence dates
+- Bottom Line: Consolidated at end "(Oct 22-24)" - stored in date_range, appended by post-processing
+- Bullets: Article dates in date_range field only, NOT inline - "per Bloomberg" (no date)
+- Upside/Downside: Consolidated at end "(Oct 28-29)" - stored in date_range, appended by post-processing
+
+NOTE: Filing dates (per Oct 15 call, per Q3 10-Q) will be added by Phase 2 and should remain inline
 
 ATTRIBUTION DENSITY:
 - Bottom Line: 100% (every claim attributed)
@@ -1838,8 +1832,8 @@ MINIMUM THRESHOLD FOR INCLUSION:
 Every bullet MUST include specific firm name. If article doesn't name firm → exclude bullet.
 
 Examples - CORRECT:
-✓ "Wedbush raised price target to $600 from $550, stating Tesla at forefront of AI-driven transformation per analyst report (Oct 20)"
-✓ "UBS maintained Sell rating with $215 target, citing concerns about sustainably higher demand following tax credit expiration (Oct 22)"
+✓ "Wedbush raised price target to $600 from $550, stating Tesla at forefront of AI-driven transformation per analyst report"
+✓ "UBS maintained Sell rating with $215 target, citing concerns about sustainably higher demand following tax credit expiration per UBS"
 
 Examples - EXCLUDE THESE:
 ✗ "Analyst downgraded UnitedHealth per The Fly report" (no firm name)
@@ -2429,7 +2423,7 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
       {
         "bullet_id": "q3_deliveries_beat",
         "topic_label": "Q3 deliveries beat",
-        "content": "Tesla delivered 462,890 vehicles in Q3 2024, exceeding consensus estimates of 455,000 and representing 6.4% increase from Q2 deliveries of 435,059 per company report; production reached 469,796 units per Bloomberg (Oct 22)",
+        "content": "Tesla delivered 462,890 vehicles in Q3 2024, exceeding consensus estimates of 455,000 and representing 6.4% increase from Q2 deliveries of 435,059 per company report; production reached 469,796 units per Bloomberg",
         "filing_hints": {
           "10-K": ["KEY OPERATIONAL METRICS (KPIs)", "INFRASTRUCTURE & ASSETS"],
           "10-Q": ["OPERATIONAL METRICS (QoQ & YoY)", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"],
@@ -2472,7 +2466,7 @@ EDGE CASES
 
 STALE DATA REFERENCES:
 When article references old data (>6 months), flag temporal context:
-"Article noted stock traded $45 CAD in March 2024 (historical reference); current trading $52 CAD per Bloomberg (Oct 22)"
+"Article noted stock traded $45 CAD in March 2024 (historical reference); current trading $52 CAD per Bloomberg"
 
 UNCERTAIN MATERIALITY:
 Default: Include development if article emphasized it. Phase 2 will assess materiality with filing data.

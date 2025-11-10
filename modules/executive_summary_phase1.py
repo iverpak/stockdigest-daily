@@ -496,6 +496,9 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     # Bottom Line (simple list, no bullet_id)
     if "bottom_line" in json_sections:
         content = json_sections["bottom_line"].get("content", "")
+        context = json_sections["bottom_line"].get("context", "")
+        if context:
+            content += f" <strong>Context:</strong> {context}"
         sections["bottom_line"] = [content]
 
     # Helper function to filter bullets for Email #3
@@ -515,8 +518,13 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
         # Use shared utility for header
         header = format_bullet_header(bullet)
 
-        # Content (already integrated by Phase 2 or Phase 3)
+        # Content (Phase 1 content)
         content = bullet['content']
+
+        # Add Phase 2 context if present (bolded "Context:" label)
+        context = bullet.get('context', '')
+        if context:
+            content += f" <strong>Context:</strong> {context}"
 
         return {
             'bullet_id': bullet['bullet_id'],
@@ -557,6 +565,9 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     ]:
         if json_key in json_sections:
             content = json_sections[json_key].get("content", "")
+            context = json_sections[json_key].get("context", "")
+            if context:
+                content += f" <strong>Context:</strong> {context}"
             sections[sections_key] = [content]
 
     # Add dates to all sections using bullet_id matching
@@ -602,6 +613,9 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dic
     # Bottom Line (simple list, no bullet_id)
     if "bottom_line" in json_sections:
         content = json_sections["bottom_line"].get("content", "")
+        context = json_sections["bottom_line"].get("context", "")
+        if context:
+            content += f" <strong>Context:</strong> {context}"
         sections["bottom_line"] = [content]
 
     # Helper function to format bullets with metadata
@@ -610,10 +624,15 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dic
         # Use shared utility for header
         header = format_bullet_header(bullet)
 
-        # Content (already integrated by Phase 2 or Phase 3)
+        # Content (Phase 1 content)
         content = bullet['content']
 
         result = f"{header}\n{content}"
+
+        # Add Phase 2 context if present (bolded "Context:" label)
+        context = bullet.get('context', '')
+        if context:
+            result += f" <strong>Context:</strong> {context}"
 
         # Add Email #2 metadata
         # Filing hints
@@ -664,6 +683,9 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dic
     ]:
         if json_key in json_sections:
             content = json_sections[json_key].get("content", "")
+            context = json_sections[json_key].get("context", "")
+            if context:
+                content += f" <strong>Context:</strong> {context}"
             sections[sections_key] = [content]
 
     # Add dates to all sections using bullet_id matching

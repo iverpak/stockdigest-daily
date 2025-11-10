@@ -462,166 +462,22 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
         return False, f"Validation exception: {str(e)}"
 
 
-def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[str]]:
+def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     """
-    Convert Phase 1 JSON to format expected by build_executive_summary_html().
-    Output IDENTICAL to what parse_executive_summary_sections() returns.
+    Convert Phase 1+2 JSON to Email #3 user-facing format with bullet_id matching.
 
-    For Email #3 (user-facing format with Phase 2 enrichments if present).
-
-    Format:
-    - topic (impact, sentiment, reason): content
-    - Context: prose paragraph
+    NEW FORMAT (same as Email #4):
+    **[Entity] Topic • Sentiment (reason)**
+    Content paragraph (Nov 04)
 
     Args:
-        phase1_json: Phase 1 JSON output (may include Phase 2 enrichments)
+        phase1_json: Phase 1+2 merged JSON (or Phase 2+3 merged JSON)
 
     Returns:
-        sections dict matching current template format
+        sections dict: {section_name: [{'bullet_id': '...', 'formatted': '...'}, ...]}
     """
-    # Helper function to filter bullets for Email #3
-    def should_include_in_email3(bullet: Dict, section_name: str) -> bool:
-        """
-        Email #3 filtering:
-        - competitive_industry_dynamics: Remove bullets with relevance = "none"
-        - All other sections: Keep all bullets
-        """
-        if section_name == "competitive_industry_dynamics":
-            return bullet.get('relevance') != 'none'
-        else:
-            return True
+    from modules.executive_summary_utils import format_bullet_header, add_dates_to_email_sections
 
-    # Helper function to format bullets for Email #3 (user-facing)
-    def format_bullet_for_email3(bullet: Dict, section_name: str = "") -> str:
-        """Format bullet with [entity, relevance] tag (for competitive_industry_dynamics) and (impact, sentiment, reason) for user-facing email"""
-        topic = bullet['topic_label']
-
-        # Add [entity, relevance] tag for competitive_industry_dynamics ONLY
-        if section_name == "competitive_industry_dynamics" and bullet.get('entity') and bullet.get('relevance'):
-            entity = bullet['entity']
-            relevance = bullet['relevance']
-            topic = f"[{entity}, {relevance}] {topic}"
-
-        # Add (impact, sentiment, reason) if Phase 2 enriched
-        if bullet.get('impact'):
-            topic += f" ({bullet['impact']}, {bullet['sentiment']}, {bullet['reason']})"
-
-        main_line = f"{topic}: {bullet['content']}"
-
-        # Add Context as prose paragraph on separate line
-        if bullet.get('context'):
-            main_line += f"\nContext: {bullet['context']}"
-
-        return main_line
-
-    sections = {
-        "bottom_line": [],
-        "major_developments": [],
-        "financial_operational": [],  # Note: different key name than JSON
-        "risk_factors": [],
-        "wall_street": [],  # Note: different key name than JSON
-        "competitive_industry": [],  # Note: different key name than JSON
-        "upcoming_catalysts": [],
-        "upside_scenario": [],
-        "downside_scenario": [],
-        "key_variables": []
-    }
-
-    json_sections = phase1_json.get("sections", {})
-
-    # Bottom Line (paragraph with Phase 2 context)
-    if "bottom_line" in json_sections:
-        content = json_sections["bottom_line"].get("content", "")
-        context = json_sections["bottom_line"].get("context", "")
-
-        if context:
-            sections["bottom_line"] = [f"{content}\nContext: {context}"]
-        else:
-            sections["bottom_line"] = [content]
-
-    # Major Developments (bullets)
-    if "major_developments" in json_sections:
-        sections["major_developments"] = [
-            format_bullet_for_email3(b) for b in json_sections["major_developments"]
-        ]
-
-    # Financial Performance → financial_operational (template expects this key)
-    if "financial_performance" in json_sections:
-        sections["financial_operational"] = [
-            format_bullet_for_email3(b) for b in json_sections["financial_performance"]
-        ]
-
-    # Risk Factors
-    if "risk_factors" in json_sections:
-        sections["risk_factors"] = [
-            format_bullet_for_email3(b) for b in json_sections["risk_factors"]
-        ]
-
-    # Wall Street Sentiment → wall_street (template key)
-    if "wall_street_sentiment" in json_sections:
-        sections["wall_street"] = [
-            format_bullet_for_email3(b) for b in json_sections["wall_street_sentiment"]
-        ]
-
-    # Competitive/Industry → competitive_industry (template key) - WITH FILTER
-    if "competitive_industry_dynamics" in json_sections:
-        sections["competitive_industry"] = [
-            format_bullet_for_email3(b, "competitive_industry_dynamics")
-            for b in json_sections["competitive_industry_dynamics"]
-            if should_include_in_email3(b, "competitive_industry_dynamics")
-        ]
-
-    # Upcoming Catalysts
-    if "upcoming_catalysts" in json_sections:
-        sections["upcoming_catalysts"] = [
-            format_bullet_for_email3(b) for b in json_sections["upcoming_catalysts"]
-        ]
-
-    # Upside Scenario (paragraph with Phase 2 context)
-    if "upside_scenario" in json_sections:
-        content = json_sections["upside_scenario"].get("content", "")
-        context = json_sections["upside_scenario"].get("context", "")
-
-        if context:
-            sections["upside_scenario"] = [f"{content}\nContext: {context}"]
-        else:
-            sections["upside_scenario"] = [content]
-
-    # Downside Scenario (paragraph with Phase 2 context)
-    if "downside_scenario" in json_sections:
-        content = json_sections["downside_scenario"].get("content", "")
-        context = json_sections["downside_scenario"].get("context", "")
-
-        if context:
-            sections["downside_scenario"] = [f"{content}\nContext: {context}"]
-        else:
-            sections["downside_scenario"] = [content]
-
-    # Key Variables
-    if "key_variables" in json_sections:
-        sections["key_variables"] = [
-            format_bullet_for_email3(b) for b in json_sections["key_variables"]
-        ]
-
-    return sections
-
-
-def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str]]:
-    """
-    Convert Phase 1 JSON with FULL structure for Email #2 QA.
-
-    Shows:
-    - Topic Label: Content
-    - 📁 Filing hints: 10-K (Section A, Section B), 10-Q (Section C)
-    - 🔖 ID: {bullet_id}
-
-    Args:
-        phase1_json: Phase 1 JSON output
-
-    Returns:
-        sections dict with enhanced formatting for Email #2
-    """
-    # Use same section structure as simple converter
     sections = {
         "bottom_line": [],
         "major_developments": [],
@@ -637,130 +493,180 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[str
 
     json_sections = phase1_json.get("sections", {})
 
-    # Bottom Line (with Phase 2 context if present)
+    # Bottom Line (simple list, no bullet_id)
     if "bottom_line" in json_sections:
         content = json_sections["bottom_line"].get("content", "")
-        context = json_sections["bottom_line"].get("context", "")
+        sections["bottom_line"] = [content]
 
-        if context:
-            sections["bottom_line"] = [f"{content}<br><br>Context: {context}"]
-        else:
-            sections["bottom_line"] = [content]
+    # Helper function to filter bullets for Email #3
+    def should_include_in_email3(bullet: Dict, section_name: str) -> bool:
+        """
+        Email #3 filtering:
+        - competitive_industry_dynamics: Remove bullets with relevance = "none"
+        - All other sections: Keep all bullets
+        """
+        if section_name == "competitive_industry_dynamics":
+            return bullet.get('relevance') != 'none'
+        return True
 
-    # Helper function to format bullets with filing hints and Phase 2 metadata
-    def format_bullet_with_hints(bullet: Dict, section_name: str = "") -> str:
-        """Format bullet with [entity, relevance] tag (for competitive_industry_dynamics), topic label, content, Phase 2 metadata, filing hints, and ID"""
-        topic_label = bullet['topic_label']
+    # Helper function to format bullets (simple, no metadata)
+    def format_bullet_simple(bullet: Dict) -> Dict:
+        """Format bullet with header and content. Returns {'bullet_id': '...', 'formatted': '...'}"""
+        # Use shared utility for header
+        header = format_bullet_header(bullet)
 
-        # Add [entity, relevance] tag for competitive_industry_dynamics ONLY
-        if section_name == "competitive_industry_dynamics" and bullet.get('entity') and bullet.get('relevance'):
-            entity = bullet['entity']
-            relevance = bullet['relevance']
-            topic_label = f"[{entity}, {relevance}] {topic_label}"
+        # Content (already integrated by Phase 2 or Phase 3)
+        content = bullet['content']
 
-        main_text = f"{topic_label}: {bullet['content']}"
+        return {
+            'bullet_id': bullet['bullet_id'],
+            'formatted': f"{header}\n{content}"
+        }
 
-        # Phase 2 enrichments (if present)
-        if bullet.get('impact'):
-            enrichment_parts = [
-                f"Impact: {bullet['impact']}",
-                f"Sentiment: {bullet['sentiment']}",
-                f"Reason: {bullet['reason']}"
+    # All bullet sections
+    section_mapping = {
+        "major_developments": "major_developments",
+        "financial_performance": "financial_operational",
+        "risk_factors": "risk_factors",
+        "wall_street_sentiment": "wall_street",
+        "competitive_industry_dynamics": "competitive_industry",
+        "upcoming_catalysts": "upcoming_catalysts",
+        "key_variables": "key_variables"
+    }
+
+    for json_key, sections_key in section_mapping.items():
+        if json_key in json_sections:
+            # Apply filter for competitive_industry_dynamics
+            if json_key == "competitive_industry_dynamics":
+                filtered_bullets = [
+                    b for b in json_sections[json_key]
+                    if should_include_in_email3(b, json_key)
+                ]
+            else:
+                filtered_bullets = json_sections[json_key]
+
+            sections[sections_key] = [
+                format_bullet_simple(b)
+                for b in filtered_bullets
             ]
-            # Only show Entity in metadata for competitive_industry_dynamics
-            if section_name == "competitive_industry_dynamics":
-                enrichment_parts.append(f"Entity: {bullet.get('entity', 'N/A')}")
-            enrichment_parts.append(f"Relevance: {bullet.get('relevance', 'direct')}")
-            main_text += f"<br>  {' | '.join(enrichment_parts)}"
 
-        if bullet.get('context'):
-            main_text += f"<br>  Context: {bullet['context']}"
+    # Scenarios (simple lists, no bullet_id)
+    for json_key, sections_key in [
+        ("upside_scenario", "upside_scenario"),
+        ("downside_scenario", "downside_scenario")
+    ]:
+        if json_key in json_sections:
+            content = json_sections[json_key].get("content", "")
+            sections[sections_key] = [content]
 
-        # Phase 1 filing hints
+    # Add dates to all sections using bullet_id matching
+    sections = add_dates_to_email_sections(sections, phase1_json)
+
+    return sections
+
+
+def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dict]]:
+    """
+    Convert Phase 1+2 JSON to Email #2 QA format with bullet_id matching.
+
+    NEW FORMAT:
+    **[Entity] Topic • Sentiment (reason)**
+    Content paragraph (Nov 04)
+      Filing hints: 10-K (Section A, B)
+      Filing keywords: ["keyword1"]
+      ID: bullet_id
+
+    Args:
+        phase1_json: Phase 1+2 merged JSON (with impact, sentiment, context, etc.)
+
+    Returns:
+        sections dict: {section_name: [{'bullet_id': '...', 'formatted': '...'}, ...]}
+    """
+    from modules.executive_summary_utils import format_bullet_header, add_dates_to_email_sections
+
+    sections = {
+        "bottom_line": [],
+        "major_developments": [],
+        "financial_operational": [],
+        "risk_factors": [],
+        "wall_street": [],
+        "competitive_industry": [],
+        "upcoming_catalysts": [],
+        "upside_scenario": [],
+        "downside_scenario": [],
+        "key_variables": []
+    }
+
+    json_sections = phase1_json.get("sections", {})
+
+    # Bottom Line (simple list, no bullet_id)
+    if "bottom_line" in json_sections:
+        content = json_sections["bottom_line"].get("content", "")
+        sections["bottom_line"] = [content]
+
+    # Helper function to format bullets with metadata
+    def format_bullet_with_metadata(bullet: Dict) -> Dict:
+        """Format bullet with header, content, and Email #2 metadata. Returns {'bullet_id': '...', 'formatted': '...'}"""
+        # Use shared utility for header
+        header = format_bullet_header(bullet)
+
+        # Content (already integrated by Phase 2 or Phase 3)
+        content = bullet['content']
+
+        result = f"{header}\n{content}"
+
+        # Add Email #2 metadata
+        # Filing hints
         hints = bullet.get("filing_hints", {})
         hint_parts = []
         for filing_type, sections_list in hints.items():
             if sections_list:
                 hint_parts.append(f"{filing_type} ({', '.join(sections_list)})")
-
         if hint_parts:
-            hints_text = "; ".join(hint_parts)
-            # Use <br> tags for HTML rendering (newlines collapse in HTML)
-            main_text += f"<br>  Filing hints: {hints_text}"
+            result += f"<br>  Filing hints: {'; '.join(hint_parts)}"
 
-        # Phase 1 filing keywords (if present)
+        # Filing keywords
         keywords = bullet.get("filing_keywords", [])
         if keywords:
-            # Format as JSON array for readability
             import json
-            keywords_text = json.dumps(keywords)
-            main_text += f"<br>  Filing keywords: {keywords_text}"
+            result += f"<br>  Filing keywords: {json.dumps(keywords)}"
 
-        # Bullet ID (always show)
-        main_text += f"<br>  ID: {bullet['bullet_id']}"
+        # Bullet ID
+        result += f"<br>  ID: {bullet['bullet_id']}"
 
-        return main_text
+        return {
+            'bullet_id': bullet['bullet_id'],
+            'formatted': result
+        }
 
-    # Major Developments
-    if "major_developments" in json_sections:
-        sections["major_developments"] = [
-            format_bullet_with_hints(b) for b in json_sections["major_developments"]
-        ]
+    # All bullet sections
+    section_mapping = {
+        "major_developments": "major_developments",
+        "financial_performance": "financial_operational",
+        "risk_factors": "risk_factors",
+        "wall_street_sentiment": "wall_street",
+        "competitive_industry_dynamics": "competitive_industry",
+        "upcoming_catalysts": "upcoming_catalysts",
+        "key_variables": "key_variables"
+    }
 
-    # Financial Performance → financial_operational
-    if "financial_performance" in json_sections:
-        sections["financial_operational"] = [
-            format_bullet_with_hints(b) for b in json_sections["financial_performance"]
-        ]
+    for json_key, sections_key in section_mapping.items():
+        if json_key in json_sections:
+            sections[sections_key] = [
+                format_bullet_with_metadata(b)
+                for b in json_sections[json_key]
+            ]
 
-    # Risk Factors
-    if "risk_factors" in json_sections:
-        sections["risk_factors"] = [
-            format_bullet_with_hints(b) for b in json_sections["risk_factors"]
-        ]
+    # Scenarios (simple lists, no bullet_id)
+    for json_key, sections_key in [
+        ("upside_scenario", "upside_scenario"),
+        ("downside_scenario", "downside_scenario")
+    ]:
+        if json_key in json_sections:
+            content = json_sections[json_key].get("content", "")
+            sections[sections_key] = [content]
 
-    # Wall Street Sentiment → wall_street
-    if "wall_street_sentiment" in json_sections:
-        sections["wall_street"] = [
-            format_bullet_with_hints(b) for b in json_sections["wall_street_sentiment"]
-        ]
-
-    # Competitive/Industry → competitive_industry
-    if "competitive_industry_dynamics" in json_sections:
-        sections["competitive_industry"] = [
-            format_bullet_with_hints(b, "competitive_industry_dynamics") for b in json_sections["competitive_industry_dynamics"]
-        ]
-
-    # Upcoming Catalysts
-    if "upcoming_catalysts" in json_sections:
-        sections["upcoming_catalysts"] = [
-            format_bullet_with_hints(b) for b in json_sections["upcoming_catalysts"]
-        ]
-
-    # Upside/Downside Scenarios (with Phase 2 context if present)
-    if "upside_scenario" in json_sections:
-        content = json_sections["upside_scenario"].get("content", "")
-        context = json_sections["upside_scenario"].get("context", "")
-
-        if context:
-            sections["upside_scenario"] = [f"{content}<br><br>Context: {context}"]
-        else:
-            sections["upside_scenario"] = [content]
-
-    if "downside_scenario" in json_sections:
-        content = json_sections["downside_scenario"].get("content", "")
-        context = json_sections["downside_scenario"].get("context", "")
-
-        if context:
-            sections["downside_scenario"] = [f"{content}<br><br>Context: {context}"]
-        else:
-            sections["downside_scenario"] = [content]
-
-    # Key Variables (no filing hints, but show ID)
-    if "key_variables" in json_sections:
-        sections["key_variables"] = [
-            f"{b['topic_label']}: {b['content']}<br>  🔖 ID: {b['bullet_id']}"
-            for b in json_sections["key_variables"]
-        ]
+    # Add dates to all sections using bullet_id matching
+    sections = add_dates_to_email_sections(sections, phase1_json)
 
     return sections

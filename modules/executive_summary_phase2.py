@@ -860,3 +860,63 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
                 merged["sections"][section_name] = sort_bullets_by_impact(section_content)
 
     return merged
+
+
+def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
+    """
+    Merge Phase 3 integrated content back into Phase 2 JSON using bullet_id matching.
+
+    Phase 2 has: All metadata (impact, sentiment, reason, entity, date_range, filing_hints, context (original))
+    Phase 3 has: Only bullet_id, topic_label, content (integrated)
+
+    Result: Phase 2 metadata + Phase 3 integrated content
+
+    Args:
+        phase2_json: Phase 1+2 merged JSON with all metadata
+        phase3_json: Phase 3 output with integrated content only
+
+    Returns:
+        Final merged JSON with Phase 2 metadata + Phase 3 integrated content
+    """
+    import copy
+
+    # Deep copy Phase 2 to preserve all metadata
+    merged = copy.deepcopy(phase2_json)
+
+    # Bullet sections to merge
+    bullet_sections = [
+        "major_developments",
+        "financial_performance",
+        "risk_factors",
+        "wall_street_sentiment",
+        "competitive_industry_dynamics",
+        "upcoming_catalysts",
+        "key_variables"
+    ]
+
+    # Overlay Phase 3 integrated content onto Phase 2 bullets using bullet_id
+    for section_name in bullet_sections:
+        if section_name not in merged.get("sections", {}):
+            continue
+
+        # Build lookup by bullet_id from Phase 3
+        phase3_bullets = phase3_json.get("sections", {}).get(section_name, [])
+        phase3_map = {b['bullet_id']: b for b in phase3_bullets}
+
+        # Overlay integrated content onto Phase 2 bullets
+        phase2_bullets = merged["sections"][section_name]
+        for bullet in phase2_bullets:
+            bullet_id = bullet['bullet_id']
+            if bullet_id in phase3_map:
+                # Overlay integrated content (keep all Phase 2 metadata)
+                bullet['content'] = phase3_map[bullet_id]['content']
+
+    # Scenarios (bottom_line, upside_scenario, downside_scenario)
+    for section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
+        if section_name in merged.get("sections", {}):
+            phase3_section = phase3_json.get("sections", {}).get(section_name, {})
+            if phase3_section and phase3_section.get("content"):
+                # Overlay integrated content (keep date_range from Phase 2)
+                merged["sections"][section_name]["content"] = phase3_section["content"]
+
+    return merged

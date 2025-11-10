@@ -16995,6 +16995,21 @@ def is_description_valuable(title: str, description: str) -> bool:
     
     return True
 
+# ============================================================================
+# DEPRECATED: OLD EXECUTIVE SUMMARY GENERATION (Email #2 only)
+# ============================================================================
+# The following 5 functions are DEPRECATED and will be removed once Email #2
+# migrates to the new Phase 1/2/3 system:
+#   1. _build_executive_summary_prompt()
+#   2. generate_claude_executive_summary()
+#   3. generate_openai_executive_summary()
+#   4. generate_executive_summary_with_fallback()
+#   5. generate_ai_final_summaries()
+#
+# Currently still used by: build_enhanced_digest_html() for Email #2
+# TODO: Remove after Email #2 migration is complete
+# ============================================================================
+
 def _build_executive_summary_prompt(ticker: str, categories: Dict[str, List[Dict]], config: Dict) -> Optional[tuple[str, str, str]]:
     """Helper: Build executive summary prompt and extract company name. Returns (system_prompt, user_content, company_name) or None."""
     company_name = config.get("name", ticker)
@@ -21123,91 +21138,6 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
 
 
 
-def parse_executive_summary_sections(summary_text: str) -> Dict[str, List[str]]:
-    """
-    Parse executive summary text into sections by emoji headers.
-    Returns dict: {section_name: [bullet1, bullet2, ...]}
-
-    Handles multi-line bullets with indented continuation lines (e.g., Context sub-bullets).
-    """
-    sections = {
-        "bottom_line": [],
-        "major_developments": [],
-        "financial_operational": [],
-        "risk_factors": [],
-        "wall_street": [],
-        "competitive_industry": [],
-        "upcoming_catalysts": [],
-        "upside_scenario": [],
-        "downside_scenario": [],
-        "key_variables": []
-    }
-
-    if not summary_text:
-        return sections
-
-    # Split by emoji headers
-    section_markers = [
-        ("📌 BOTTOM LINE", "bottom_line"),
-        ("🔴 MAJOR DEVELOPMENTS", "major_developments"),
-        ("📊 FINANCIAL/OPERATIONAL PERFORMANCE", "financial_operational"),
-        ("⚠️ RISK FACTORS", "risk_factors"),
-        ("📈 WALL STREET SENTIMENT", "wall_street"),
-        ("⚡ COMPETITIVE/INDUSTRY DYNAMICS", "competitive_industry"),
-        ("📅 UPCOMING CATALYSTS", "upcoming_catalysts"),
-        ("📈 UPSIDE SCENARIO", "upside_scenario"),
-        ("📉 DOWNSIDE SCENARIO", "downside_scenario"),
-        ("🔍 KEY VARIABLES TO MONITOR", "key_variables")
-    ]
-
-    current_section = None
-    section_marker_prefixes = tuple(marker for marker, _ in section_markers)
-
-    for line in summary_text.split('\n'):
-        line_stripped = line.strip()
-
-        # Skip horizontal rule separators (Claude sometimes adds these)
-        if line_stripped == '---':
-            continue
-
-        # Check if line is a section header
-        is_header = False
-        for marker, section_key in section_markers:
-            if line.startswith(marker):  # Use original line for emoji detection
-                current_section = section_key
-                is_header = True
-                break
-
-        if not is_header and current_section:
-            # Line is content, not a header
-
-            # Special handling for paragraphs: capture ALL text (not just bullets)
-            if current_section in ['bottom_line', 'upside_scenario', 'downside_scenario']:
-                # Skip lines that start with section markers (shouldn't happen but be safe)
-                if not line_stripped.startswith(section_marker_prefixes):
-                    # Skip empty lines at start, but keep them once content exists
-                    if line_stripped or sections[current_section]:
-                        sections[current_section].append(line_stripped)
-
-            # Standard handling for other sections: bullets + continuation lines
-            else:
-                if line_stripped.startswith('•') or line_stripped.startswith('-'):
-                    # New bullet - extract text (handle both • and - bullets)
-                    bullet_text = line_stripped.lstrip('•- ').strip()
-                    if bullet_text:
-                        sections[current_section].append(bullet_text)
-
-                elif line.startswith('  ') and sections[current_section]:
-                    # Indented continuation line (e.g., "  Context: ...")
-                    # Check original 'line' for indentation, use 'line_stripped' for content
-                    continuation = line_stripped
-                    if continuation:
-                        # Append to the last bullet with a line break
-                        sections[current_section][-1] += '\n' + continuation
-
-    return sections
-
-
 def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     """
     Parse research summary text (transcript or press release) into sections by emoji headers.
@@ -21508,12 +21438,12 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
         return text
 
-    def build_section(title: str, content: List[str], use_bullets: bool = True, bold_labels: bool = False, context_only: bool = False) -> str:
+    def build_section(title: str, content: List, use_bullets: bool = True, bold_labels: bool = False, context_only: bool = False) -> str:
         """Build section with consistent styling
 
         Args:
             title: Section title
-            content: List of bullet points or paragraphs
+            content: List of bullet points or paragraphs (can be List[Dict] with 'formatted' field or List[str])
             use_bullets: If True, format as bullet list
             bold_labels: If True, bold topic labels in format "Topic: Details"
             context_only: If True with bold_labels, ONLY bold "Context:" (for paragraphs)
@@ -21528,8 +21458,14 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             # Bullet list format
             bullet_html = ""
             for item in content:
+                # Extract formatted string if item is dict (new format)
+                if isinstance(item, dict) and 'formatted' in item:
+                    text = item['formatted']
+                else:
+                    text = item
+
                 # Apply label bolding if requested (bullets never use context_only)
-                processed_item = bold_bullet_labels(item, context_only=False) if bold_labels else item
+                processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
                 bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{processed_item}</li>'
 
             return f'''

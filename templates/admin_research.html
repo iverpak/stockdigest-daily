@@ -856,10 +856,21 @@
                         </div>
                     `;
                 } else {
+                    // Encode all parameters as JSON object (same safe pattern as has_summary section)
+                    const params = JSON.stringify({
+                        ticker: ticker,
+                        cik: cik || '',
+                        accession_number: item.accession_number,
+                        filing_date: item.filing_date,
+                        filing_title: item.title || '',
+                        documents_url: item.documents_url || '',
+                        item_codes: item.item_codes || ''
+                    }).replace(/"/g, '&quot;');
+
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>${item.filing_date}</div>
-                            <button onclick="generate8K('${ticker}', '${cik || ''}', '${item.accession_number}', '${item.filing_date}', \`${(item.title || '').replace(/`/g, '\\`')}\`, '${item.documents_url || ''}', '${item.item_codes || ''}')"
+                            <button onclick='generate8KSafe(${params})'
                                     style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
                                 Generate
                             </button>
@@ -899,6 +910,19 @@
             } catch (error) {
                 alert(`❌ Error: ${error.message}`);
             }
+        }
+
+        // Wrapper function to safely unpack JSON-encoded parameters
+        function generate8KSafe(params) {
+            generate8K(
+                params.ticker,
+                params.cik,
+                params.accession_number,
+                params.filing_date,
+                params.filing_title,
+                params.documents_url,
+                params.item_codes
+            );
         }
 
         // Generation functions (using existing backend endpoints)
